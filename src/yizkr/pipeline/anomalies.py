@@ -2,13 +2,14 @@
 
 Checks that call no model watch a run as it unfolds, for the operator and
 the run report. They run on every stage output a run stores, on every
-stored output a run reuses when it dispatches a document, and on the
-run's own events. Each finding is an alert in the run directory
-(rundir.RunDir.alert: a line of `alerts.jsonl` and an `alert` event), so
-the live monitor and the run report show it. An alert names the stage,
-the check, the document by the first SUBJECT_PREFIX hex digits of its
-SHA-1, the measured value and the threshold it crossed, and whether it is
-new or carried:
+stored output a run reuses when it dispatches a document, on the run's
+own events, and, through the write's hook (written), on what a scratch
+run's write refuses as it writes. Each finding is an alert in the run
+directory (rundir.RunDir.alert: a line of `alerts.jsonl` and an `alert`
+event), so the live monitor and the run report show it. An alert names
+the stage, the check, the document by the first SUBJECT_PREFIX hex
+digits of its SHA-1, the measured value and the threshold it crossed,
+and whether it is new or carried:
 
 * an output the run stores is `new` when the engine answered at least one
   call of the stage that made it, or the stage makes none (a text file's
@@ -61,7 +62,8 @@ are paused, never what a stage makes or what a cache key holds. Every
 dispatch checks the outputs it reuses with the thresholds as they are
 then, and `recheck` checks a run directory's stored outputs at once
 without dispatching anything, so a change of thresholds reaches every
-stored output without recomputing a stage.
+stored output without recomputing a stage. The write's check is the
+exception: a change reaches it at the next write.
 
 A rate check marked fail-fast asks for a pause of its slice when it
 fires: the stage, or the document kind (RunDir.request, with `by` BY),
@@ -683,11 +685,12 @@ def self_reference_findings(refusals: Sequence[Mapping]) -> list[Finding]:
     refused as naming their subject's item, by the identity map's
     cluster and the property (yizkr.pipeline.scratchwrite). Value, the
     count; `cluster`, the cluster's id, or None, which leaves it out of
-    the alert, for a self-loop no cluster of the map makes (one QID named
-    twice); `property`, the property's key. Ids and counts alone: no
-    label, no claim's text. An entry whose fields are not of those forms
-    is read as None (the cluster) or "?" (the property), and one that
-    counts no claim is left out."""
+    the alert, for a self-loop no cluster of the map makes (two refs that
+    name one item another way: a vocabulary item or an artifact by its
+    QID, an approved equivalence's QID); `property`, the property's key.
+    Ids and counts alone: no label, no claim's text. An entry whose
+    fields are not of those forms is read as None (the cluster) or "?"
+    (the property), and one that counts no claim is left out."""
     findings = []
     for entry in refusals:
         count = _get(entry, "claims")

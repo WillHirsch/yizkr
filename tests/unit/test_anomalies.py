@@ -2431,14 +2431,15 @@ class TestSelfReference:
 
     def test_one_alert_per_cluster_and_property(self, tmp_path):
         """The father's own `father` claim and his pet name from his son's
-        side, two properties of one cluster, and another cluster: three
-        alerts, each with its count."""
+        side, two properties of one cluster, and another cluster's
+        `father` claim, one property of two clusters: three alerts, each
+        with its count."""
         run, checks = make_checks(tmp_path)
         doc = a_doc(tmp_path, "family-history-2008.pdf", kind="pdf")
         checks.written(
             doc,
             [
-                refusal(CILLI, "spouse"),
+                refusal(CILLI, "father"),
                 refusal(EUGENS, "father", 2),
                 refusal(EUGENS, "referred_to_as"),
             ],
@@ -2447,7 +2448,7 @@ class TestSelfReference:
             (a["cluster"], a["property"], a["value"]) for a in run.alerts()
         ]
         assert raised == [
-            (CILLI, "spouse", 1),
+            (CILLI, "father", 1),
             (EUGENS, "father", 2),
             (EUGENS, "referred_to_as", 1),
         ]
@@ -2473,7 +2474,8 @@ class TestSelfReference:
         assert run.alerts() == []
 
     def test_a_self_loop_no_cluster_makes_names_none(self, tmp_path):
-        """One QID named twice: still a self-loop, with no cluster."""
+        """A vocabulary item named once by its key and once by its QID:
+        still a self-loop, with no cluster."""
         run, checks = make_checks(tmp_path)
         doc = a_doc(tmp_path, "family-history-2008.pdf", kind="pdf")
         checks.written(doc, [refusal(None)])

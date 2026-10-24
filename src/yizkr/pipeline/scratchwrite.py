@@ -918,11 +918,14 @@ def self_reference_clusters(
     `{"cluster", "property", "claims"}` for each, in the order of their
     clusters and properties. The cluster is the subject's, or else that of
     the first item value, the claim's own or a qualifier's, the map puts
-    a mention of in a cluster; None for a self-loop no cluster makes (one
-    QID named twice). The mentions are mapped as the writer maps them
-    (yizkr.pipeline.writer.mapped_clusters, from the extraction's batch
-    `extracted`): ids and counts alone, for the `self-reference` anomaly
-    check (yizkr.pipeline.anomalies)."""
+    a mention of in a cluster; None for a self-loop no cluster of the map
+    makes (two refs that name one item another way: a vocabulary item or
+    an artifact by its QID, an approved equivalence's QID). The claims
+    are taken as `refused` names them, never judged again. The mentions
+    are mapped as the writer maps them (yizkr.pipeline.writer
+    .mapped_clusters, from the extraction's batch `extracted`): ids and
+    counts alone, for the `self-reference` anomaly check
+    (yizkr.pipeline.anomalies)."""
     from yizkr.pipeline.review import claim_id
     from yizkr.pipeline.writer import mapped_clusters
 
@@ -1050,6 +1053,18 @@ def run_write(context: Any) -> list[str]:
                     f"({type(exc).__name__})"
                 )
             else:
+                # counted after the write reached the wiki, so a failure
+                # here fails no document: its loops are left uncounted
+                try:
+                    loops = self_reference_clusters(
+                        batch, extracted, identity, result.self_references
+                    )
+                except Exception as exc:
+                    loops = None
+                    context.log(
+                        f"{WRITE}: {doc.sha1[:12]} self-loops not counted "
+                        f"by cluster ({type(exc).__name__})"
+                    )
                 record["documents"][doc.sha1] = {
                     "run_qid": result.run_qid,
                     "claims": len(extracted.claims),
@@ -1058,9 +1073,7 @@ def run_write(context: Any) -> list[str]:
                     "skipped": result.skipped,
                     "refused": len(result.refused),
                     "self_references": len(result.self_references),
-                    "self_reference_clusters": self_reference_clusters(
-                        batch, extracted, identity, result.self_references
-                    ),
+                    "self_reference_clusters": loops,
                     "refused_by_reason": result.refused_by_reason(),
                     "depicts_left_out": left_out,
                     "items_minted": len(result.minted),
@@ -1072,11 +1085,7 @@ def run_write(context: Any) -> list[str]:
                 }
                 record["failed"].pop(doc.sha1, None)
                 context.driver._raise_flags(doc, result.flags)
-                anomalies.written(
-                    context.run,
-                    doc,
-                    record["documents"][doc.sha1]["self_reference_clusters"],
-                )
+                anomalies.written(context.run, doc, loops or [])
             state = save_state(client_of(context), run_id, key, epoch)
             record["revision"] = state["watermark"]["revision"]
             save_record(context.directory, record)

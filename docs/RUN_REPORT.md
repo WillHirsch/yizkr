@@ -261,7 +261,9 @@ alone: the findings count flagged writes (a document's write and a
 check, once each), the alerts each flag raised; the QIDs of the items flagged and of those
 they are flagged against appear only in a document's own alert rows in
 report.json and report.html, which are local-only (docs/ANOMALIES.md,
-"Registration").
+"Registration"). The write's `self-reference` alerts, a self-loop the
+writer refused, count here too, under their check and the stage
+`write`, as counts alone (docs/ANOMALIES.md, "The write").
 
 **Content**, from the views of the stages that completed:
 

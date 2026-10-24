@@ -379,7 +379,9 @@ with `--until clustering` (or an earlier stage) needs none.
   inferred from the run item), through the run's one identity map.
   Depicts claims are left out and counted in the run report, and so
   are the claims the writer refused, and of them those whose item value
-  the map makes their subject's item. Each run
+  the map makes their subject's item; each such self-loop raises a
+  `self-reference` alert naming its cluster, a sign of a false merge to
+  look at in the identity map (docs/ANOMALIES.md, The write). Each run
   item is marked `unratified scratch run → <run id>`, and records the
   `run manifest hash` (the run manifest's settings) and the `identity
   map hash`, each stated in the run item itself. When every document is

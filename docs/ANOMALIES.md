@@ -86,9 +86,10 @@ Each alert is a line of `alerts.jsonl` in the run directory
 
 A check adds fields of its own, listed with it. An alert is raised once
 per document, stage, check and status in an invocation (`model-mismatch`
-once per role and model). No field holds a document's words: a value is
-a number, a count, a share, a language code, a model id or `true`, and
-the other fields are names from the pipeline's vocabulary.
+once per role and model; `self-reference` once per document, cluster and
+property). No field holds a document's words: a value is a number, a
+count, a share, a language code, a model id or `true`, and the other
+fields are names from the pipeline's vocabulary, or an id.
 The monitor shows a value when it is a number or a yes or no.
 
 ## The checks
@@ -366,8 +367,9 @@ only: it pauses nothing.
 item value, the claim's own or a qualifier's, is their subject's item
 (yizkr.pipeline.writer, self_references; ADR-0035 §3.5). Validation
 refuses a claim that names its own subject before the identity map is
-read, so a self-loop the writer meets is one the map made: it put a
-claim's subject and its value, two mentions, in one cluster, as a false
+read, so a self-loop the writer meets is almost always one the map
+made: it put a claim's subject and its value, two mentions, in one
+cluster, as a false
 merge of a father and a son of one name with a `father` claim between
 them does (#491). The writer refuses the claim and writes the rest, and
 the merge stands: both people's births land on one item. The run report
@@ -382,15 +384,18 @@ scratch write (#524): as each document is written, the write record
 counts its refused self-loops by the cluster that put the two refs on
 one item, the subject's or else the first item value's the map holds,
 and by the claim's property (`self_reference_clusters` in the stage's
-`record.json`, beside `self_references`), and the check raises one
-alert for each cluster and property. Any refusal raises it: there is no
+`record.json`, beside `self_references`; null, with a line in the
+stage's log naming the exception, should counting them fail, which
+fails no document, as the write has reached the wiki by then), and the
+check raises one alert for each cluster and property. Any refusal raises it: there is no
 threshold, as one false merge is worth a look, and its only key is
 `enabled`. Stage `write`; subject, the document written; always new,
 since the write makes no model call; no `limit`. Value: the number of
 claims of the document refused for the cluster and the property;
 `cluster`, the cluster's id in the identity map (the SHA-256 of its
-members' fingerprints), left out for a self-loop no cluster makes (one
-QID named twice); `property`, the claim's property, by its key. Ids
+members' fingerprints), left out for a self-loop no cluster of the map
+makes (two refs that name one item another way: a vocabulary item or an
+artifact by its QID, an approved equivalence's QID); `property`, the claim's property, by its key. Ids
 and counts alone: no label, no claim's text. Alert only: it pauses
 nothing, and nothing written changes.
 
@@ -552,6 +557,10 @@ stage:
   stand is re-checked without a call;
 - **at once, with a recheck** (below), over a run directory's stored
   outputs, without dispatching anything.
+
+`self-reference` is the exception: it is raised by the write's hook, from
+what the write refuses as it writes, so a change of its threshold
+reaches it only at the next write, and a recheck does not check it.
 
 ## Fail-fast pauses
 
