@@ -219,9 +219,12 @@ document's transcription does not hold, over at least `min-count` (4)
 claims checked, from its coverage side output (`quotes.not_in_source`
 beside `quotes.checked`). The excerpt is compared as a mention
 record's container evidence is (core/verbatim.py, ADR-0035 §5): both
-folded (case, accents, typographic quotes and dashes), every run of
-whitespace and line breaks one space, a hyphen at a line's end joined,
-or kept, for an excerpt that crosses it, whole words only. An excerpt document (an image a PDF or a deck places,
+folded (case, accents, typographic quotes and dashes, low and angle
+quotes, the non-breaking hyphen, the figure dash and the minus sign
+among them; a soft hyphen dropped), every run of whitespace and line
+breaks one space, a hyphen at a line's end joined, or kept, with no
+space after it or with one, for an excerpt that crosses it, whole words
+only (#612). An excerpt document (an image a PDF or a deck places,
 ADR-0008) is extracted from its own transcription, and its claims'
 excerpts are compared with that. A claim with no excerpt, or one that holds no word, is not
 checked, and counted apart (`quotes.without_excerpt`). Alert only: a
