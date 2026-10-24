@@ -837,11 +837,15 @@ class TestAnExcerpt:
             (c.source.page_number, c.source.printed_page_number)
             for c in batch_of(excerpt).claims
         } == {("5", None)}
-        # only the booklet's prompts show a printed number, beside page 5
+        # only the booklet's extraction prompts show a printed number,
+        # beside page 5 (a critique prompt names no SHA-1, and carries the
+        # transcription as the extraction prompts do, #607)
         shown = [
             prompt
             for kind, prompt in reader.calls
-            if kind != "vision" and 'printed page number "' in prompt
+            if kind != "vision"
+            and 'printed page number "' in prompt
+            and not prompt.startswith("You review a genealogical extraction")
         ]
         assert shown
         assert all(doc.sha1 in prompt for prompt in shown)

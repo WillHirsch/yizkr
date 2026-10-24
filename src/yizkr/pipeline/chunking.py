@@ -1380,8 +1380,9 @@ class ChunkedClaimExtractor:
         records set aside (one record can give several reasons, and one
         whose only reasons are name parts dropped for an empty string or
         entries read as their text stands). A place's container that
-        cannot stand is dropped alone, its record standing
-        (claims.drop_containers): its evidence is looked for in `text`,
+        cannot stand, or that has the wrong shape (`malformed`), is
+        dropped alone, its record standing (claims.drop_containers): its
+        evidence is looked for in `text`,
         the transcription, when given, and each container checked is kept
         for the local audit."""
         _, item_keys = load_vocabulary()
@@ -1403,9 +1404,12 @@ class ChunkedClaimExtractor:
                     data = dict(raw)
                     data.pop("qid", None)  # resolution state, never model-set
                     data, reasons = _set_aside_note(data)
-                    data, more = set_aside_structure(data)
+                    malformed: list[dict] = []
+                    data, more = set_aside_structure(data, malformed)
                     set_aside_records += bool(more) and "structure" not in data
-                    data, checked = drop_containers(data, transcript)
+                    data, checked = drop_containers(
+                        data, transcript, malformed
+                    )
                     containers += checked
                     for reason in reasons + more:
                         category = reason.split(":", 1)[0]
@@ -2095,13 +2099,12 @@ class ChunkedClaimExtractor:
         the records given, by status, and the unsplit name forms they
         hold; the mentions recordless; the records set aside, and the
         reasons they and the notes were set aside by, by category; the
-        place containers checked, those dropped alone from records that
-        stand, by reason, and those kept whose evidence is their name
-        alone (claims.drop_containers); the
-        labels the appellation label rule replaced with a name
-        (names.appellation_label), the `name` claims dropped for
-        restating one, and the record name parts that are an
-        appellation; and the notes by category. A mention
+        place containers checked, and those dropped alone from records
+        that stand, by reason, `malformed` among them
+        (claims.drop_containers); the labels the appellation label rule
+        replaced with a name (names.appellation_label), the `name`
+        claims dropped for restating one, and the record name parts that
+        are an appellation; and the notes by category. A mention
         of a kind that takes a record but has none is recordless: its
         record was set aside, or never given. Nothing in it quotes a label."""
         subject_ids = {
@@ -2153,12 +2156,6 @@ class ChunkedClaimExtractor:
                             if found["reason"] is not None
                         ).items()
                     )
-                ),
-                # the containers kept whose evidence is their name alone,
-                # which names no place they are said to hold
-                "containers_name_only": sum(
-                    found["reason"] is None and found["name_only"]
-                    for found in self._containers
                 ),
                 "appellation_labels": self._appellations["labels"],
                 "appellation_label_names": self._appellations["label_names"],

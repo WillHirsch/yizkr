@@ -8,7 +8,8 @@ the owner's option B a failing entry is dropped alone and the record
 stands. A bare-string entry gives no evidence and is dropped as
 `no-evidence`; a stored batch's bare strings still parse. The GEDCOM
 adapter gives each entry its PLAC's value. The critic may flag
-`evidence_does_not_state`, advisory, name-only evidence among it.
+`evidence_does_not_state`, advisory, reading the evidence where it stands
+(#607). An entry of the wrong shape is dropped alone as `malformed` (#607).
 
 Every text is the fictional universe's (docs/EXAMPLES.md): the 1952
 letter's sender, "Snylsjum, gemeente Drakeradiel, Fryslân, Nederlân", and
@@ -26,6 +27,7 @@ from tests.unit.test_chunking import DOC_REF, ScriptedLlm
 from yizkr.claims import (
     EVIDENCE_DOES_NOT_NAME,
     EVIDENCE_NOT_IN_SOURCE,
+    MALFORMED,
     NO_EVIDENCE,
     ClaimBatch,
     Container,
@@ -321,6 +323,51 @@ class TestEachReason:
         ) == (None, None)
 
 
+class TestEveryOccurrence:
+    """`Transcript.spans` lists every place an excerpt occurs, `span` the
+    first, and `page` the page a line opens on (#607)."""
+
+    def test_every_occurrence_is_listed_in_order(self):
+        found = Transcript(LETTER + "\nFryslân")
+        assert found.spans("Fryslân") == [(4, 4), (5, 5)]
+        assert found.span("Fryslân") == (4, 4)
+        assert found.spans(SENDER) == [(3, 4)]
+        assert found.spans("Peiltal") == []
+        assert found.span("Peiltal") is None
+
+    def test_occurrences_on_one_line_are_one(self):
+        found = Transcript("Fryslân, Fryslân")
+        assert found.spans("Fryslân") == [(1, 1)]
+
+    def test_a_line_s_page(self):
+        from yizkr.pipeline.places import EvidencePages
+        from yizkr.pipeline.transcribe import (
+            PageProvenance,
+            TranscribedPage,
+        )
+
+        text = "[Page 1]\nBêste Sipkje,\n[Page 2]\nSnylsjum, Fryslân"
+        pages = [
+            TranscribedPage(
+                page=number,
+                start=start,
+                end=end,
+                status="transcribed",
+                provenance=PageProvenance(method="vision", engine="test"),
+            )
+            for number, start, end in ((1, 9, 22), (2, 32, 49))
+        ]
+        found = Transcript(text)
+        assert [
+            getattr(found.page(n, pages), "page", None) for n in range(0, 6)
+        ] == [None, None, 1, None, 2, None]
+        # the place stage's page of an evidence is the same helper's
+        given = Transcription(
+            artifact=DOC_REF, text=text, engine="test", pages=pages
+        )
+        assert EvidencePages(given)("Snylsjum, Fryslân") == ("2", None)
+
+
 class TestOptionB:
     """A container that fails is dropped alone: the record stands with
     its names, keys and other containers (the owner's option B)."""
@@ -358,35 +405,19 @@ class TestOptionB:
             "line": 3,
             "last_line": 4,
             "line_text": "Snylsjum, gemeente Drake-",
-            "names_place": True,
-            "name_only": False,
         }
 
-    def test_the_place_named_by_a_record_name_or_an_alias(self):
-        # the label is not in the evidence as written, but the record's
-        # name is
-        given = snylsjum(entry("Fryslân", SENDER))
-        given["label"] = "Snylsjum, Fryslân"
-        _, audit = drop_containers(given, Transcript(LETTER))
-        assert audit[0]["names_place"] is True
-        # an alias alone holds the place
-        given = snylsjum(entry("Nederlân", SENDER))
-        given["label"] = "Snylsjum, Nederlân"
-        given["structure"]["names"] = [{"written": "Snylsjum, Nederlân"}]
-        given["aliases"] = ["Snylsjum"]
-        _, audit = drop_containers(given, Transcript(LETTER))
-        assert audit[0]["names_place"] is True
-
-    def test_the_audit_tells_name_only_evidence_apart(self):
+    def test_name_only_evidence_is_kept_and_not_told_apart(self):
+        # #607: a container's name alone is a citation like any other,
+        # which the critic reads where it stands
         given = snylsjum(
             entry("Fryslân", "Fryslân"),
             entry("Nederlân", "Fryslân, Nederlân"),
         )
         _, audit = drop_containers(given, Transcript(LETTER))
         assert [found["reason"] for found in audit] == [None, None]
-        assert [found["name_only"] for found in audit] == [True, False]
-        # neither names Snylsjum itself
-        assert [found["names_place"] for found in audit] == [False, False]
+        for found in audit:
+            assert "name_only" not in found and "names_place" not in found
 
     def test_a_record_whose_containers_all_stand_is_unchanged(self):
         given = snylsjum(
@@ -528,7 +559,7 @@ class TestTheExtraction:
         _, coverage, _ = extracted
         records = coverage["records"]
         assert records["containers_checked"] == 7
-        assert records["containers_name_only"] == 1
+        assert "containers_name_only" not in records
         assert records["containers_dropped"] == {
             EVIDENCE_DOES_NOT_NAME: 1,
             EVIDENCE_NOT_IN_SOURCE: 2,
@@ -553,6 +584,241 @@ class TestTheExtraction:
         ]
         assert [found["entity"] for found in audit] == ["e1"] * 4 + ["e3"] * 3
         assert audit[2]["line_text"] == "Snylsjum, gemeente Drake-"
+
+
+class TestAMalformedEntry:
+    """An entry of `within` that cannot become a container is dropped
+    alone, as `malformed`, and the record stands (#607, ADR-0035 §5)."""
+
+    @pytest.mark.parametrize(
+        "malformed",
+        [
+            # its evidence a list: the 1952 letter's Fryslân
+            {"name": "Fryslân", "evidence": [SENDER]},
+            {"name": "Fryslân", "evidence": 1952},
+            # a key a container has not, the name part's shape among them
+            {"name": "Fryslân", "evidence": SENDER, "lines": [3]},
+            {"written": "Fryslân"},
+            # no name, or one that is no string
+            {"evidence": SENDER},
+            {"name": None, "evidence": SENDER},
+            {"name": ["Fryslân"], "evidence": SENDER},
+            # neither an object nor a string
+            None,
+            1952,
+            ["Fryslân", SENDER],
+        ],
+    )
+    def test_each_malformed_shape_is_dropped_alone(self, malformed):
+        given = snylsjum(
+            entry("gemeente Drakeradiel", SENDER),
+            malformed,
+            entry("Nederlân", SENDER),
+        )
+        taken: list[dict] = []
+        kept, reasons = set_aside_structure(given, taken)
+        assert reasons == []
+        kept, audit = drop_containers(kept, Transcript(LETTER), taken)
+        record = EntityRecord.model_validate(kept)
+        assert record.structure.containers() == [
+            "gemeente Drakeradiel",
+            "Nederlân",
+        ]
+        assert [n.written for n in record.structure.names] == ["Snylsjum"]
+        assert [(found["field"], found["reason"]) for found in audit] == [
+            ("structure.place.within.0", None),
+            ("structure.place.within.1", MALFORMED),
+            ("structure.place.within.2", None),
+        ]
+
+    def test_its_audit_keeps_the_entry_and_its_error(self):
+        given = snylsjum(
+            entry("gemeente Drakeradiel", SENDER),
+            {"name": "Fryslân", "evidence": [SENDER]},
+        )
+        taken: list[dict] = []
+        kept, _ = set_aside_structure(given, taken)
+        _, audit = drop_containers(kept, Transcript(LETTER), taken)
+        assert audit[1] == {
+            "entity": "e1",
+            "field": "structure.place.within.1",
+            "name": None,
+            "evidence": None,
+            "reason": MALFORMED,
+            "entry": json.dumps(
+                {"name": "Fryslân", "evidence": [SENDER]}, ensure_ascii=False
+            ),
+            "error": "evidence: Input should be a valid string",
+            "line": None,
+            "last_line": None,
+            "line_text": None,
+        }
+
+    def test_the_entry_kept_is_clipped(self):
+        long = {"name": "Fryslân", "evidence": [SENDER] * 20}
+        taken: list[dict] = []
+        set_aside_structure(snylsjum(long), taken)
+        assert len(taken[0]["entry"]) == 200
+        assert json.dumps(long, ensure_ascii=False).startswith(
+            taken[0]["entry"]
+        )
+
+    def test_null_evidence_stays_no_evidence(self):
+        given = snylsjum({"name": "Fryslân", "evidence": None})
+        taken: list[dict] = []
+        kept, reasons = set_aside_structure(given, taken)
+        assert (reasons, taken) == ([], [])
+        _, audit = drop_containers(kept, Transcript(LETTER), taken)
+        assert [found["reason"] for found in audit] == [NO_EVIDENCE]
+
+    def test_the_paths_keep_their_place_in_the_list(self):
+        # an empty-string entry first is dropped before the indexes count
+        given = snylsjum(
+            "",
+            entry("gemeente Drakeradiel", SENDER),
+            {"name": "Fryslân", "evidence": [SENDER]},
+            entry("Friesland", SENDER),
+        )
+        taken: list[dict] = []
+        kept, reasons = set_aside_structure(given, taken)
+        assert reasons == [
+            "dropped: structure.place.within.0: an empty string"
+        ]
+        _, audit = drop_containers(kept, Transcript(LETTER), taken)
+        assert [(found["field"], found["reason"]) for found in audit] == [
+            ("structure.place.within.0", None),
+            ("structure.place.within.1", MALFORMED),
+            ("structure.place.within.2", EVIDENCE_DOES_NOT_NAME),
+        ]
+        assert audit[2]["name"] == "Friesland"
+
+    def test_a_record_set_aside_otherwise_counts_none_of_its_containers(
+        self,
+    ):
+        given = snylsjum(
+            entry("Fryslân", SENDER), {"name": "Nederlân", "evidence": [1]}
+        )
+        given["structure"]["names"] = [{"written": "Drakeradiel"}]
+        taken: list[dict] = []
+        kept, reasons = set_aside_structure(given, taken)
+        assert [reason.split(":")[0] for reason in reasons] == ["addition"]
+        assert drop_containers(kept, Transcript(LETTER), taken) == (kept, [])
+
+    def test_a_malformed_entry_alone_leaves_the_record_standing(self):
+        given = snylsjum({"name": "Fryslân", "evidence": [SENDER]})
+        taken: list[dict] = []
+        kept, reasons = set_aside_structure(given, taken)
+        assert reasons == []
+        kept, audit = drop_containers(kept, Transcript(LETTER), taken)
+        assert EntityRecord.model_validate(kept).structure.within == []
+        assert [found["reason"] for found in audit] == [MALFORMED]
+
+    @pytest.mark.parametrize("within", [SENDER, {"name": "Fryslân"}, None])
+    def test_a_within_that_is_no_list_stays_schema(self, within):
+        given = snylsjum()
+        given["structure"]["within"] = within
+        taken: list[dict] = []
+        kept, reasons = set_aside_structure(given, taken)
+        assert "structure" not in kept and taken == []
+        assert [reason.split(":")[0] for reason in reasons] == ["schema"]
+
+    def test_empty_strings_stay_dropped(self):
+        given = snylsjum("", entry("", SENDER))
+        taken: list[dict] = []
+        kept, reasons = set_aside_structure(given, taken)
+        assert taken == []
+        assert [reason.split(":")[0] for reason in reasons] == ["dropped"] * 2
+        given = snylsjum()
+        given["structure"]["within"] = ""
+        kept, reasons = set_aside_structure(given, taken)
+        assert taken == [] and "structure" in kept
+        assert [reason.split(":")[0] for reason in reasons] == ["dropped"]
+
+    def test_a_bare_string_stays_no_evidence(self):
+        taken: list[dict] = []
+        kept, _ = set_aside_structure(snylsjum("Fryslân"), taken)
+        assert taken == []
+        _, audit = drop_containers(kept, Transcript(LETTER), taken)
+        assert [found["reason"] for found in audit] == [NO_EVIDENCE]
+
+    def test_an_entry_given_to_drop_containers_never_raises(self):
+        given = snylsjum(
+            entry("gemeente Drakeradiel", SENDER),
+            {"name": "Fryslân", "evidence": SENDER, "lines": [3]},
+            None,
+        )
+        kept, audit = drop_containers(given, Transcript(LETTER))
+        assert [(found["field"], found["reason"]) for found in audit] == [
+            ("structure.place.within.0", None),
+            ("structure.place.within.1", MALFORMED),
+            ("structure.place.within.2", MALFORMED),
+        ]
+        assert EntityRecord.model_validate(kept).structure.containers() == [
+            "gemeente Drakeradiel"
+        ]
+
+    def test_the_manifest_is_never_refused_for_one(self):
+        answer = json.dumps(
+            {
+                "entities": [
+                    snylsjum(
+                        entry("gemeente Drakeradiel", SENDER),
+                        {"name": "Fryslân", "evidence": [SENDER]},
+                        entry("Nederlân", SENDER),
+                    )
+                ]
+            },
+            ensure_ascii=False,
+        )
+        parsed, problems = ChunkedClaimExtractor._parse_entity_manifest(
+            answer, 4, LETTER
+        )
+        assert problems == []
+        (place,) = parsed.entities
+        assert place.structure.containers() == [
+            "gemeente Drakeradiel",
+            "Nederlân",
+        ]
+        assert [found["reason"] for found in parsed.containers] == [
+            None,
+            MALFORMED,
+            None,
+        ]
+        assert parsed.set_aside == {} and parsed.set_aside_records == 0
+
+    def test_it_is_counted_in_the_coverage_and_the_report(self, tmp_path):
+        from yizkr.pipeline.report import _records
+
+        manifest = {
+            "entities": [
+                snylsjum(
+                    entry("gemeente Drakeradiel", SENDER),
+                    {"name": "Fryslân", "evidence": [SENDER]},
+                )
+                | {"extract": False}
+            ]
+        }
+        state = tmp_path / "state"
+        ChunkedClaimExtractor(
+            ScriptedLlm([json.dumps(manifest)]), state_dir=state
+        ).extract(
+            Transcription(artifact=DOC_REF, text=LETTER, engine="test"),
+            DOC_REF,
+        )
+        coverage = json.loads((state / "coverage.json").read_text())
+        records = coverage["records"]
+        assert records["containers_checked"] == 2
+        assert records["containers_dropped"] == {MALFORMED: 1}
+        assert records["set_aside"] == {} and records["recordless"] == 0
+        assert _records(coverage)["records"][
+            "containers_dropped_by_reason"
+        ] == {MALFORMED: 1}
+
+    def test_the_reason_is_one_the_report_knows(self):
+        from yizkr.claims import CONTAINER_REASONS
+
+        assert MALFORMED == "malformed"
+        assert MALFORMED in CONTAINER_REASONS
 
 
 class TestTheParser:
@@ -599,7 +865,8 @@ class TestTheReport:
             OTHER: 2,
             NO_EVIDENCE: 1,
         }
-        assert counted["containers_name_only"] == 1
+        # an older coverage's name-only count is not read (#607)
+        assert "containers_name_only" not in counted
 
 
 class TestThePrompt:
@@ -684,12 +951,14 @@ class TestTheCritic:
         from yizkr.pipeline.critique import run_critique
 
         llm = CriticLlm('{"done": true}')
-        run_critique(llm, self.batch())
+        letter = Transcription(artifact=DOC_REF, text=LETTER, engine="test")
+        run_critique(llm, self.batch(), letter)
         (prompt,) = llm.prompts
+        # each evidence where it stands (#607)
         assert (
-            f'- e1 within gemeente Drakeradiel: "{SENDER}"\n'
-            "- e1 within Fryslân: -\n"
-            '- e1 within Nederlân: "Nederlân"\n'
+            f'- e1 within gemeente Drakeradiel | lines 3-4: "{SENDER}"\n'
+            "- e1 within Fryslân | -\n"
+            '- e1 within Nederlân | line 4: "Nederlân"\n'
         ) in prompt
         assert "evidence_does_not_state" in prompt
 
@@ -724,14 +993,13 @@ class TestTheCritic:
             "container 'Friesland' is not one the entity's record lists"
         ]
 
-    def test_the_prompt_asks_about_name_only_evidence(self):
-        from yizkr.pipeline.critique import CRITIQUE_PROMPT
+    def test_the_prompt_has_no_name_only_rule(self):
+        # #607: one support test replaces the special cases
+        from yizkr.pipeline.critique import CATEGORIES, CRITIQUE_PROMPT
 
-        prompt = " ".join(CRITIQUE_PROMPT.split())
-        assert (
-            "or gives only the container's name, outside a field of a form "
-            "about the place"
-        ) in prompt
+        prompt = " ".join(f"{CRITIQUE_PROMPT} {CATEGORIES}".split())
+        assert "outside a field of a form" not in prompt
+        assert "the container's name alone included" not in prompt
 
     def test_a_container_on_an_entity_with_no_place_record_is_invalid(self):
         from yizkr.claims import load_vocabulary

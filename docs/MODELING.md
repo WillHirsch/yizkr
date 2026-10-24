@@ -919,9 +919,10 @@ artifact a new QID, changes neither.
   it gives none. Neither the document's own date nor the date of an
   event the source places there is that time: a birth "in 1836 at
   Flörburg, Kreis Peiltal" gives Flörburg's `part_of` no time. The
-  extraction critic flags a `part_of` claim its excerpt does not state,
-  or a time on one that its excerpt does not state for the containment
-  (`unsupported_containment`, ADR-0023).
+  extraction critic flags a `part_of` claim whose citation, read where it
+  stands in the numbered transcription, does not convey the containment
+  or a time it carries (`unsupported_containment`; ADR-0003's test,
+  ADR-0023, amended by #607).
 
 ## Artifact coverage — cross-domain relations (planned)
 
@@ -1263,7 +1264,11 @@ language:
   Chadsk Oblast). Each container carries its evidence, a verbatim
   excerpt of the transcription that states the containment: the mention
   in running text, the field's line on a form (ADR-0035, amended by
-  #569). Each container in `within` is a place entity of the
+  #569). The evidence is a citation, a located passage: read where it
+  stands, it conveys the containment, so a container's name alone in the
+  district field of a form about the place is evidence enough, while a
+  name in a list of towns is not (ADR-0003, amended by #607; the critic
+  may flag one that does not, `evidence_does_not_state`). Each container in `within` is a place entity of the
   manifest too, with its own record, and so in turn is each of its own
   containers (*Fläckfeld, Kreis Mockburg, Hesse* gives three place
   entities; ADR-0035, amended by #572);
@@ -1279,9 +1284,11 @@ data. A record may divide and label a name, never add to it: every part
 must occur in the label or an alias, folded, as whole words (a standard
 form, an organisation's places and a place's containers aside). A
 place's container stands on its evidence instead, and one that fails
-(`no-evidence`, `evidence-not-in-source`, `evidence-does-not-name`) is
-dropped alone, its record standing; each drop is counted by reason,
-apart from the records set aside (ADR-0035 §5). An optional field the model
+(`no-evidence`, `evidence-not-in-source`, `evidence-does-not-name`), or
+that cannot become a container at all (`malformed`: its evidence a list,
+a key a container has not, no name), is dropped alone, its record
+standing; each drop is counted by reason, apart from the records set
+aside (ADR-0035 §5, amended by #607). An optional field the model
 writes as an empty string is read as absent, and a name part that is
 empty, or whose written form is, is dropped and counted (`dropped`); an
 entry of a list of strings written as an object holding only its

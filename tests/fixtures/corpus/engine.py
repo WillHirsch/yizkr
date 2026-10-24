@@ -70,7 +70,11 @@ _ADJUDICATED_MENTION = re.compile(
 ASSIGNED = "Assigned entities:"
 _SHA1 = re.compile(r"[0-9a-f]{40}")
 _ASSIGNED_ID = re.compile(r"^- (\w+): ", re.MULTILINE)
-_ENTITY_ROW = re.compile(r"^(\w+) \| [^|\n]+ \| ([^|\n]+?) \| ", re.MULTILINE)
+# an entity row (id | kind | label | aliases), four columns: a claim row,
+# which has five, is none
+_ENTITY_ROW = re.compile(
+    r"^(\w+) \| [^|\n]+ \| ([^|\n]+?) \| [^|\n]*$", re.MULTILINE
+)
 
 
 class NoAnswer(AssertionError):
@@ -195,7 +199,9 @@ class RecordedEngine:
         for mistake in mistakes_in(recorded):
             subject = ids[mistake.subject]
             listed = [
-                line.split(" | ", 2)[2]
+                # the value, the third column alone (subject | property |
+                # value | times | citation)
+                line.split(" | ", 3)[2]
                 for line in prompt.splitlines()
                 if line.startswith(f"{subject} | {mistake.property} | ")
             ]
