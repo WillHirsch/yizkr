@@ -48,6 +48,7 @@ from yizkr.pipeline.chunking import (
 from yizkr.pipeline.extract import (
     DOCUMENT_ITSELF,
     ClaimFileExtractor,
+    ExtractionFailed,
     LlmClaimExtractor,
     document_block,
     placed_by,
@@ -576,7 +577,7 @@ class TestThePrompts:
         stray.write_text(
             json.dumps({"claims": [caption(STRAY_REF.model_dump())]})
         )
-        with pytest.raises(ValueError, match=r"\[placed_subject\]"):
+        with pytest.raises(ExtractionFailed, match=r"\[placed_subject\]"):
             ClaimFileExtractor(stray).extract(booklet(), BOOKLET_REF)
 
     def test_a_chunked_extraction_keeps_its_captions(self, tmp_path):

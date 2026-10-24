@@ -116,7 +116,7 @@ HANG_GUARD = 60
 # attention reason's details can quote a document, and so can the other
 # fields below, whatever their writers mean them for
 FAILURE = (
-    "RuntimeError: 2 chunks failed after retries (c1, c2; c1: "
+    "RuntimeError: 2 chunks failed (c1, c2; c1: "
     "Hutmacherei zum Blauen Hut, gegr. 1863)"
 )
 FALLBACK = (

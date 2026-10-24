@@ -64,7 +64,7 @@ from yizkr.core.wiki import WikiClient
 from yizkr.disagreement import followed
 from yizkr.pipeline.extract import scan_json_objects
 from yizkr.pipeline.llm import CUT_OFF_AT_LIMIT, LlmClient, at_output_limit
-from yizkr.pipeline.names import NOT_PERSONS
+from yizkr.pipeline.names import NOT_PERSONS, appellations_of
 from yizkr.queries.publish import (
     load_templates,
     prefix_block,
@@ -121,9 +121,15 @@ class RosterEntity(BaseModel):
         }
 
     def facts(self) -> str:
+        """The item as the adjudicator reads it. An alias equal to one of
+        its appellations, as ``name_form_key`` compares them, shows as what
+        the item is called, never as an alias."""
         parts = [f"{self.qid} {self.label!r}"]
-        if self.aliases:
-            parts.append(f"aliases: {', '.join(self.aliases)}")
+        aliases = _not_appellations(self.aliases, self.appellations)
+        if aliases:
+            parts.append(f"aliases: {', '.join(aliases)}")
+        if self.appellations:
+            parts.append(f"called: {', '.join(self.appellations)}")
         if self.kind:
             shown = f" ({self.kind_label})" if self.kind_label else ""
             parts.append(f"kind: {self.kind}{shown}")
@@ -382,7 +388,18 @@ def _composed(record: PersonStructure) -> list[str]:
     ]
 
 
-def entity_name_keys(entity: EntityRecord) -> set[str]:
+def _not_appellations(
+    names: Iterable[str], appellations: Iterable[str]
+) -> list[str]:
+    """The names that are none of the appellations, as ``name_form_key``
+    compares them, in order."""
+    called = {name_form_key(form) for form in appellations}
+    return [name for name in names if name_form_key(name) not in called]
+
+
+def entity_name_keys(
+    entity: EntityRecord, appellations: Iterable[str] = ()
+) -> set[str]:
     """What a manifest entity blocks on: its whole name forms, read
     through its mention record (ADR-0035 §2), never split into words.
 
@@ -398,15 +415,27 @@ def entity_name_keys(entity: EntityRecord) -> set[str]:
     another of its names' toponym left out (so a camp never meets its
     town), or by its label where the record names none. Every other
     entity, and one without a record, keys by its label and aliases,
-    each whole."""
+    each whole.
+
+    ``appellations`` are the forms the entity's document gives as
+    appellations of it (``names.appellations_of``, ADR-0018). A label or
+    alias equal to one, as ``name_form_key`` compares them, keys nothing
+    for a kind that may be a person, so two grandmothers each aliased
+    "Oma" never pair by it; a record's nicknames still key. A place, an
+    organisation or a family keys on every name."""
+    if entity.kind not in NOT_PERSONS:
+        forms = _not_appellations(
+            [entity.label, *entity.aliases], appellations
+        )
+    else:
+        forms = [entity.label, *entity.aliases]
     record = entity.structure
     if isinstance(record, PersonStructure):
         if record.status != "name":
             return set()
         return _keys(
             [
-                entity.label,
-                *entity.aliases,
+                *forms,
                 *record.unsplit,
                 *record.nicknames,
                 *_composed(record),
@@ -428,7 +457,7 @@ def entity_name_keys(entity: EntityRecord) -> set[str]:
         if record.address is not None:
             names.append(record.address.written)
         return _keys(names or [entity.label])
-    return _keys([entity.label, *entity.aliases])
+    return _keys(forms)
 
 
 def roster_name_keys(roster_entity: RosterEntity) -> set[str]:
@@ -657,11 +686,14 @@ def block_candidates(
     produces (auditability).
 
     ``batch`` supplies each entity's own claims (dates, resolved kin) for
-    the impossibility filter; ``containment`` the place-containment closure.
-    Both optional — without them the filter simply prunes less."""
+    the impossibility filter, and the forms it gives as appellations of
+    each entity, which a person never blocks on; ``containment`` the
+    place-containment closure. Both optional — without them the filter
+    simply prunes less, and every alias keys."""
+    appellations = appellations_of(batch.claims) if batch is not None else {}
     candidates: dict[str, list[RosterEntity]] = {}
     for entity in entities:
-        keys = entity_name_keys(entity)
+        keys = entity_name_keys(entity, appellations.get(entity.id, ()))
         entity_pair_facts = _batch_pair_facts(entity, batch)
         matches = [
             roster_entity
@@ -818,12 +850,17 @@ def adjudicate(
         f"batch(es) of <= {batch_pairs}",
         file=sys.stderr,
     )
+    appellations = appellations_of(batch.claims)
     for index, chunk in enumerate(chunks, start=1):
         entities_block = "\n".join(
             f"- {entity.id}: {entity.label}"
             + (
-                f" (aliases: {', '.join(entity.aliases)})"
-                if entity.aliases
+                f" (aliases: {', '.join(aliases)})"
+                if (
+                    aliases := _not_appellations(
+                        entity.aliases, appellations.get(entity.id, ())
+                    )
+                )
                 else ""
             )
             + f"; kind: {entity.kind}"

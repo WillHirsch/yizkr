@@ -177,7 +177,7 @@ DECK_FAILURE = (
     "'Hutmacherei zum Blauen Hut, gegr. 1863')"
 )
 INTERVIEW_FAILURE = (
-    "RuntimeError: 2 chunks failed after retries (c1, c2; c1: Nicholas "
+    "RuntimeError: 2 chunks failed (c1, c2; c1: Nicholas "
     "Lobig, 8 Hawthorn Road, Stupfield)"
 )
 UNREADABLE = (
