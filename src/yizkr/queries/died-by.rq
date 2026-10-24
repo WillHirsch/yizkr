@@ -1,0 +1,77 @@
+# "Died by" inputs: what the shared derivation of ADR-0040 §2.4 reads to
+# work out, at view time, the date by which a person died. Nothing it
+# gives is stored: the derivation (yizkr.died_by) runs in Python over
+# these rows, and the site's person page and timeline, the disagreement
+# report and reconcile's roster all read it.
+# One row per statement, stated-in source and partner, of four kinds:
+# - "death": each date of death, dated or of unknown value ("some
+#   value", whose ?value is a blank node or the query service's skolem
+#   IRI), with its time at its stated precision and the earliest and
+#   latest dates its source gives it, and whether it is given as circa;
+# - "end": each union ended by the death of a partner, with the partner
+#   (?value) and each partner the union's participant statements name,
+#   at any rank but deprecated (?partner);
+# - "widowed": each civil status of widowed, with the point in time at
+#   which its source presents it as holding;
+# - "inception": each artifact's own date of making, a document's date.
+# Every statement is listed whatever its rank, which the derivation
+# reads: a deprecated statement gives no bound. A source that is a page
+# fragment is given as the artifact it belongs to.
+SELECT ?kind ?subject ?statement ?rank ?value
+       ?time ?timePrecision ?pointInTime ?pointInTimePrecision
+       ?earliest ?earliestPrecision ?latest ?latestPrecision
+       ?circa ?partner ?artifact
+WHERE {
+  {
+    BIND("death" AS ?kind)
+    ?subject p:{P:date_of_death} ?statement .
+    ?statement ps:{P:date_of_death} ?value .
+    OPTIONAL { wd:{P:date_of_death} wikibase:statementValue ?deathLink .
+               ?statement ?deathLink ?deathNode .
+               ?deathNode wikibase:timeValue ?time ;
+                          wikibase:timePrecision ?timePrecision . }
+  } UNION {
+    BIND("end" AS ?kind)
+    ?subject p:{P:ended_by_death_of} ?statement .
+    ?statement ps:{P:ended_by_death_of} ?value .
+    OPTIONAL { ?subject p:{P:participant} ?participation .
+               ?participation ps:{P:participant} ?partner .
+               FILTER NOT EXISTS { ?participation wikibase:rank
+                                     wikibase:DeprecatedRank } }
+  } UNION {
+    BIND("widowed" AS ?kind)
+    ?subject p:{P:civil_status} ?statement .
+    ?statement ps:{P:civil_status} wd:{Q:widowed} .
+    OPTIONAL { wd:{P:point_in_time} wikibase:qualifierValue ?pointLink .
+               ?statement ?pointLink ?pointNode .
+               ?pointNode wikibase:timeValue ?pointInTime ;
+                          wikibase:timePrecision ?pointInTimePrecision . }
+  } UNION {
+    BIND("inception" AS ?kind)
+    ?subject p:{P:inception} ?statement .
+    wd:{P:inception} wikibase:statementValue ?inceptionLink .
+    ?statement ?inceptionLink ?inceptionNode .
+    ?inceptionNode wikibase:timeValue ?time ;
+                   wikibase:timePrecision ?timePrecision .
+  }
+  ?statement wikibase:rank ?rank .
+  # the range its source states for the date
+  OPTIONAL { wd:{P:earliest_date} wikibase:qualifierValue ?earliestLink .
+             ?statement ?earliestLink ?earliestNode .
+             ?earliestNode wikibase:timeValue ?earliest ;
+                           wikibase:timePrecision ?earliestPrecision . }
+  OPTIONAL { wd:{P:latest_date} wikibase:qualifierValue ?latestLink .
+             ?statement ?latestLink ?latestNode .
+             ?latestNode wikibase:timeValue ?latest ;
+                         wikibase:timePrecision ?latestPrecision . }
+  # a date its source gives as approximate, which may lie outside any
+  # range it states, so it bounds nothing
+  OPTIONAL { ?statement pq:{P:sourcing_circumstances} wd:{Q:circa} .
+             BIND(true AS ?circa) }
+  # each stated-in source, as the artifact it belongs to
+  OPTIONAL { ?statement prov:wasDerivedFrom ?reference .
+             ?reference pr:{P:stated_in} ?source .
+             OPTIONAL { ?source wdt:{P:instance_of} wd:{Q:artifact_fragment} ;
+                                wdt:{P:part_of} ?whole . }
+             BIND(COALESCE(?whole, ?source) AS ?artifact) }
+}

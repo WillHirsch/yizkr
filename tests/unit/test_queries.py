@@ -29,6 +29,8 @@ EXPECTED_QUERIES = {
     "kinship",
     # unclassified entities by type hint, for the vocabulary round (#91)
     "unclassified-entities",
+    # what the shared "died by" derivation reads (ADR-0040 §2.4)
+    "died-by",
 }
 
 
@@ -437,3 +439,56 @@ class TestWikitext:
         text = index_wikitext(templates)
         for name in EXPECTED_QUERIES:
             assert f"Project:Queries/{name}|{name}" in text
+
+
+class TestDiedBy:
+    """The rows the shared derivation reads (ADR-0040 §2.4,
+    yizkr.died_by.from_rows)."""
+
+    @pytest.fixture(scope="class")
+    def q(self, templates) -> str:
+        return "\n".join(
+            line
+            for line in templates["died-by"].splitlines()
+            if not line.lstrip().startswith("#")
+        )
+
+    def test_it_reads_each_kind_of_input(self, q):
+        for kind, prop in (
+            ("death", "date_of_death"),
+            ("end", "ended_by_death_of"),
+            ("widowed", "civil_status"),
+            ("inception", "inception"),
+        ):
+            assert f'BIND("{kind}" AS ?kind)' in q, kind
+            assert f"p:{{P:{prop}}} ?statement" in q, kind
+
+    def test_every_rank_is_listed(self, q):
+        # a deprecated statement gives no bound, which the derivation reads
+        assert "?statement wikibase:rank ?rank" in q
+        assert "FILTER NOT EXISTS { ?statement wikibase:rank" not in q
+
+    def test_the_projection_carries_what_from_rows_reads(self, q):
+        projection = q.split("WHERE", 1)[0]
+        for name in (
+            "kind",
+            "subject",
+            "statement",
+            "rank",
+            "value",
+            "time",
+            "timePrecision",
+            "pointInTime",
+            "pointInTimePrecision",
+            "earliest",
+            "earliestPrecision",
+            "latest",
+            "latestPrecision",
+            "circa",
+            "partner",
+            "artifact",
+        ):
+            assert f"?{name}" in projection, name
+
+    def test_a_source_is_its_artifact(self, q):
+        assert "BIND(COALESCE(?whole, ?source) AS ?artifact)" in q
