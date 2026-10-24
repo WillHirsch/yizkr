@@ -241,7 +241,11 @@ def test_events_block_through_their_participants():
         "a" * 40,
         [
             person("e1", "Hildegard Löbig"),
-            {"id": "e2", "label": "Death of Hildegard", "kind": "death"},
+            {
+                "id": "e2",
+                "label": "Emigration of Hildegard",
+                "kind": "migration",
+            },
         ],
         [claim("e2", "participant", item("e1"))],
     )
@@ -249,7 +253,7 @@ def test_events_block_through_their_participants():
         "b" * 40,
         [
             person("e1", "Hildegard Löbig"),
-            {"id": "e2", "label": "Burial register", "kind": "death"},
+            {"id": "e2", "label": "Emigration", "kind": "migration"},
         ],
         [claim("e2", "participant", item("e1"))],
     )

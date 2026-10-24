@@ -19,8 +19,8 @@ stand.
 fingerprint (yizkr.pipeline.fingerprints): its artifact's SHA-1, its
 canonical label, its kind and its excerpt span, never the manifest's id.
 A batch without an entity manifest gives a mention per local id its
-claims name. The GEDCOM export's people, places, occupations, media and
-death events are mentions too. Only mentions the manifest marks for
+claims name. The GEDCOM export's people, places, occupations and media
+are mentions too. Only mentions the manifest marks for
 extraction are clustered; the others are each a cluster of their own
 ("unclustered").
 
@@ -49,11 +49,16 @@ say the same, and the couple of a union as spouses), the human
 participants of events and unions with their roles (`object_has_role`),
 the events a union is started and ended by, place containment
 (`part_of`, `location`), dates, stated sexes and stated civil statuses.
-A birth or death event is its principal's own, and its date is theirs
-too, when it has exactly one principal, and that person's own date of
-the kind (from their claims, never one an event passed them) does not
-conflict with it (ADR-0035 §3.2). A union's own date is an observation,
-never a key: its dates are its weddings'. Only what the manifests assert
+A person's deaths are their own `date_of_death` claims (an unknown value
+dates nothing) and the "died by" dates the shared derivation
+(yizkr.died_by, ADR-0040 §2.4) gives from the batch: a death of unknown
+value by its document's own date, and the late spouse of a union the
+batch ends `ended_by_death_of` them by the date it presents the survivor
+as widowed; each is open at its early end, and joins the person's
+evidence signature. No event stands for a birth or a death. A union's
+end by a partner's death is never lifted as a key, since its couple key
+it already. A union's own date is an observation, never a key: its
+dates are its weddings'. Only what the manifests assert
 is used: no containment or kinship is read from the graph, and none is
 inferred.
 
@@ -91,8 +96,7 @@ spelling is never turned back into an umlaut.
 - *A family*: each surname.
 - *Events*: the same kind (a wedding of any kind together; a divorce, an
   annulment and an end of unstated kind together), through people: a
-  birth or death its principal's own through that principal, a union
-  through its couple, a union's wedding or end through its union's
+  union through its couple, a union's wedding or end through its union's
   couple, any other event through its participants. An event without
   any keys on its whole name.
 - *Everything else*, and a recordless mention: its exact normalised name.
@@ -171,11 +175,7 @@ by deterministic evidence alone:
 - a wedding or an end of a union when their unions merged, their kinds
   can be one (a civil and a religious wedding are two ceremonies; an end
   of unstated kind meets any end) and their dates agree;
-- two births or two deaths, each its principal's own, when the
-  principals merged, with no date needed, since a person has one of each;
-  a birth or death that is nobody's own (no principal, several, or one
-  whose own date conflicts with it) never, whoever else took part;
-- any other event pair when every participant of the one with fewer is
+- an event pair when every participant of the one with fewer is
   merged into one cluster with a participant of the other, and their
   dates agree;
 - any other pair when the names match exactly;
@@ -349,6 +349,7 @@ from yizkr.claims import (
     label_container,
     name_form_key,
 )
+from yizkr.died_by import When, died_by, from_batch
 from yizkr.pipeline.fingerprints import (
     Mention,
     cluster_id,
@@ -375,7 +376,7 @@ from yizkr.pipeline.writer import stored_term
 # what cluster_corpus makes of a set of manifests: bumped whenever the same
 # manifests and thresholds would give another identity map, so that a
 # stored map is made again
-VERSION = 8
+VERSION = 9
 # the layout of identity-map.json
 FORMAT = 1
 STAGE = "clustering"
@@ -397,6 +398,9 @@ CODE = (
     "writer.py",
     "names.py",
 )
+# the modules of the yizkr package that make it: the shared "died by"
+# derivation, which dates a death its batch states without a date
+SHARED_CODE = ("died_by.py",)
 
 # what a manifest is the extraction of
 DOCUMENT = "document"
@@ -473,8 +477,6 @@ EVENT_KINDS = (
     | WEDDING_KINDS
     | END_KINDS
 )
-# the events a person takes part in once: their principals decide them
-ONE_PER_PERSON = frozenset({"birth", "death"})
 # the kinds the GEDCOM adapter makes one entity of per distinct place (its
 # PLAC's components) or occupation string:
 # two of them in one export never say that they differ
@@ -738,7 +740,7 @@ class Interval:
 
 
 def _span(value: TimeValue) -> int:
-    return {"century": 99, "decade": 9}.get(value.precision or "", 0)
+    return _span_years(value.precision)
 
 
 def date_interval(
@@ -778,6 +780,18 @@ def date_interval(
     if circa:
         start, end = start - circa_years, end + circa_years
     return Interval(start, end)
+
+
+def _bound_interval(by: When) -> Interval:
+    """The years a "died by" date allows: every year to its own, at its
+    precision (a decade ten years, a century a hundred), open at its early
+    end, so that it agrees with nothing and conflicts only with a date
+    wholly after it."""
+    return Interval(-_OPEN, by.year + _span_years(by.precision))
+
+
+def _span_years(precision: str | None) -> int:
+    return {"century": 99, "decade": 9}.get(precision or "", 0)
 
 
 def _dates(first: list[Interval], second: list[Interval], widest: int) -> str:
@@ -887,8 +901,6 @@ class _Node:
     when: list[Interval] = field(default_factory=list)
     sexes: set[str] = field(default_factory=set)
     civil: list[tuple[str, Interval]] = field(default_factory=list)
-    # a birth or death event its one principal's own (_nodes), and who
-    principal: str | None = None
     # computed once every node of the corpus is lifted (_derive): a
     # person's keys (every one, and those that may make a link
     # confident), its lone given names, and the given names a lone name
@@ -1111,11 +1123,12 @@ def _nodes(manifest: Manifest, circa_years: int) -> list[_Node]:
                 ("spouse", other) for other in couple if other != person
             )
         # its weddings date it, never its own date, an observation; they
-        # and its ends are keyed by it, save a partner's death, which
-        # stays its principal's own
+        # and its ends are keyed by it. A partner's death ends it by
+        # ended_by_death_of, which is never lifted as a key, since the
+        # couple key the union already (ADR-0040 §8)
         for event_id in sorted(union.starts | union.ends):
             event = by_id[event_id]
-            if event.kind == "death" or event.union is not None:
+            if event.union is not None:
                 continue
             event.union = union.id
         union.when = [
@@ -1123,32 +1136,15 @@ def _nodes(manifest: Manifest, circa_years: int) -> list[_Node]:
             for event_id in sorted(union.starts)
             for interval in by_id[event_id].when
         ]
-    # each person's own dates, from its claims, before any event's pass
-    own_dates = {
-        node.id: (list(node.births), list(node.deaths))
-        for node in by_local.values()
-    }
-    for node in by_local.values():
-        # a birth or death event is its principal's own, and its date is
-        # theirs, when it has one principal whose own date of the kind its
-        # date does not conflict with
-        if node.kind not in ONE_PER_PERSON:
-            continue
-        principals = [
-            person
-            for person, roles in sorted(node.roles.items())
-            if PRINCIPAL in roles
-        ]
-        if len(principals) != 1:
-            continue
-        (person_id,) = principals
-        births, deaths = own_dates[person_id]
-        if _conflict(node.when, births if node.kind == "birth" else deaths):
-            continue
-        node.principal = person_id
-        person = by_id[person_id]
-        dates = person.births if node.kind == "birth" else person.deaths
-        dates.extend(node.when)
+    # each "died by" date the shared derivation gives the batch (ADR-0040
+    # §2.4): a death of unknown value by its document's own date, the late
+    # spouse of a union the batch ends by that death by the survivor's
+    # widowhood; each open at its early end, beside the statements it
+    # comes from, and so in the person's evidence signature
+    for bound in died_by(from_batch(batch)):
+        person = by_local.get(bound.person)
+        if person is not None and person.kind == HUMAN:
+            person.deaths.append(_bound_interval(bound.by))
     return list(by_local.values())
 
 
@@ -1406,14 +1402,12 @@ def _timed(node: _Node) -> bool:
 
 def _people(node: _Node, index: Mapping[str, _Node]) -> list[str]:
     """The people an event or a union is keyed through: a union's couple,
-    the couple of the union a wedding or an end belongs to, a birth's or
-    a death's principal when it is theirs, or else every participant."""
+    the couple of the union a wedding or an end belongs to, or else every
+    participant."""
     if node.kind in UNION_KINDS:
         return node.couple
     if node.union is not None:
         return index[node.union].couple
-    if node.principal is not None:
-        return [node.principal]
     return sorted(node.participants)
 
 
@@ -1567,8 +1561,8 @@ def _block(
     anchors: dict[str, frozenset[str]] = {}
     for _group_name, members in sorted(by_group.items()):
         if any(_timed(node) for node in members):
-            # events and unions meet through their people, an export's
-            # death events among them, and never through an anchor
+            # events and unions meet through their people, and never
+            # through an anchor
             pairs |= _within(members, _Keys(members, lone=False))
             continue
         found, anchored = _block_group(
@@ -1970,14 +1964,6 @@ class _Judge:
                 and b.union is not None
                 and merged(a.union, b.union)
                 and dates == "agree"
-            )
-        elif a.kind in ONE_PER_PERSON or b.kind in ONE_PER_PERSON:
-            # a birth or death with no principal, or several, is nobody's
-            # own, and meets nothing through its other participants
-            confident = (
-                a.principal is not None
-                and b.principal is not None
-                and merged(a.principal, b.principal)
             )
         elif dates != "agree":
             confident = False
@@ -2522,13 +2508,24 @@ def batch_hash(batch: ClaimBatch) -> str:
 
 
 def code_digest() -> str:
-    """The SHA-256 of the source of CODE, the modules that make the
-    identity map, as the package holds it."""
+    """The SHA-256 of the source of CODE and SHARED_CODE, the modules that
+    make the identity map, as the package holds it."""
+    shared = files("yizkr")
     return sha256_text(
         canonical_json(
             {
-                name: hashlib.sha256((PACKAGE / name).read_bytes()).hexdigest()
-                for name in CODE
+                **{
+                    name: hashlib.sha256(
+                        (PACKAGE / name).read_bytes()
+                    ).hexdigest()
+                    for name in CODE
+                },
+                **{
+                    f"yizkr/{name}": hashlib.sha256(
+                        (shared / name).read_bytes()
+                    ).hexdigest()
+                    for name in SHARED_CODE
+                },
             }
         )
     )

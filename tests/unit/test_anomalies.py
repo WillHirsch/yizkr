@@ -1143,6 +1143,21 @@ def counted(batch: ClaimBatch, overrides=None) -> tuple[int, int] | None:
 
 
 class TestImplausibleDate:
+    def test_an_unknown_value_is_never_counted(self):
+        """A death stated without its date (ADR-0040 §2.2) has no years to
+        compare: the check skips it, and reads a burial's point in time
+        beside one as any date."""
+        unknown = {"type": "unknown"}
+        died = a_dated_claim("ursula", "date_of_death", unknown)
+        buried = a_dated_claim(
+            "ursula",
+            "burial_place",
+            unknown,
+            [("point_in_time", a_time(1, "century"))],
+        )
+        assert counted(a_dated_batch(URSULA_BORN, died)) is None
+        assert counted(a_dated_batch(URSULA_BORN, buried)) == (1, 0)
+
     def test_a_claim_dated_before_the_birth_is_counted(self):
         """A 1930s residence read as the 1st century lies wholly before
         Ursula's birth in 1911."""

@@ -510,17 +510,22 @@ class TestVerdicts:
             assert again["mentions"][member]["method"] == CONFLICTING
 
 
-def born(name: str, *, dated: bool) -> Doc:
-    """A register of Gustav's birth: the event, with Gustav its
-    principal, dated or not; its date is his own."""
-    claims = [("b1", "participant", item("e1"), role("principal"))]
+def gustav_emigrated(name: str, *, dated: bool) -> Doc:
+    """A register of Gustav's emigration in 1939, with Gustav its
+    principal, which gives his birth on 7 January 1919 when `dated`. A
+    birth is no event (ADR-0040), so an emigration stands for an event a
+    person takes part in."""
+    claims = [
+        ("b1", "participant", item("e1"), role("principal")),
+        ("b1", "point_in_time", day(1939)),
+    ]
     if dated:
-        claims.append(("b1", "point_in_time", day(1919, 1, 7)))
+        claims.append(("e1", "date_of_birth", day(1919, 1, 7)))
     return register(
         name,
-        [human("e1", "Gustav Löbig"), entity("b1", "Birth", "birth")],
+        [human("e1", "Gustav Löbig"), entity("b1", "Emigration", "migration")],
         claims,
-        {"e1": "gustav-loebig", "b1": "gustav-loebig-birth"},
+        {"e1": "gustav-loebig", "b1": "emigration-1939"},
     )
 
 
@@ -615,22 +620,25 @@ class TestRounds:
         assert "a wedding in" in wedding
 
     def test_people_are_settled_before_their_events(self):
-        """Two registers of Gustav's birth, one dated: his two mentions
-        are an ambiguous pair, and so are the births, whose principals
-        did not merge. The people are asked first; once `same` merges
-        them, each birth is its merged principal's own and links
-        confidently, so it is never asked."""
-        docs = [born("one", dated=True), born("two", dated=False)]
+        """Two registers of Gustav's emigration in 1939: his two mentions
+        are an ambiguous pair, and so are the emigrations, whose
+        principals did not merge. The people are asked first; once `same`
+        merges them, the emigrations, dated alike, link confidently, so
+        they are never asked."""
+        docs = [
+            gustav_emigrated("one", dated=True),
+            gustav_emigrated("two", dated=False),
+        ]
         before = cluster_corpus([doc.manifest for doc in docs])
         assert before["summary"]["ambiguous_pairs"] == 2
-        # one call for the people, one for the births, each group apart
+        # one call for the people, one for the emigrations, each apart
         assert (
             before["summary"]["adjudication"]["calls_ambiguous_clusters"] == 2
         )
         engine = Engine(truths(docs))
         made, _ = run(docs, engine)
         (prompt,) = engine.prompts
-        assert "a human in" in prompt and "a birth in" not in prompt
+        assert "a human in" in prompt and "a migration in" not in prompt
         assert made.counts["rounds"] == 1
         assert {e["method"] for e in made.identity["mentions"].values()} == {
             ADJUDICATED,
@@ -647,12 +655,15 @@ class TestRounds:
     def test_keeper_mode_asks_every_pending_pair_at_once(self):
         """In keeper mode one round asks every group's pairs, each group
         packed apart, as the planned count packs them."""
-        docs = [born("one", dated=True), born("two", dated=False)]
+        docs = [
+            gustav_emigrated("one", dated=True),
+            gustav_emigrated("two", dated=False),
+        ]
         engine = Engine(truths(docs))
         made, _ = run(docs, engine, merge=False)
-        people, births = engine.prompts
-        assert "a human in" in people and "a birth in" not in people
-        assert "a birth in" in births and "a human in" not in births
+        people, events = engine.prompts
+        assert "a human in" in people and "a migration in" not in people
+        assert "a migration in" in events and "a human in" not in events
         assert made.counts["asked_pairs"] == 2
         assert made.counts["rounds"] == 1
         assert made.counts["calls"] == made.counts["planned_calls"] == 2
@@ -852,12 +863,15 @@ class TestPrompt:
         run(docs, engine)
         (prompt,) = engine.prompts
         assert "aliases: 'Gustl'" in prompt
-        births = [born("one", dated=True), born("two", dated=False)]
-        engine = Engine(truths(births), verdict=UNCERTAIN)
-        run(births, engine)
+        events = [
+            gustav_emigrated("one", dated=True),
+            gustav_emigrated("two", dated=False),
+        ]
+        engine = Engine(truths(events), verdict=UNCERTAIN)
+        run(events, engine)
         assert (
-            "named as the participant of 'Birth' (birth) [role: principal]"
-            " — point_in_time: 1919-01-07" in engine.prompts[0]
+            "named as the participant of 'Emigration' (migration) [role: "
+            "principal] — point_in_time: 1939" in engine.prompts[0]
         )
         lines = adjudication._Document(family_tree().manifest).lines("e2")
         assert (
@@ -878,7 +892,10 @@ class TestPrompt:
         ]
         doc = register(
             "a register",
-            [human("e1", "Gustav Löbig"), entity("b1", "Birth", "birth")],
+            [
+                human("e1", "Gustav Löbig"),
+                entity("b1", "Emigration", "migration"),
+            ],
             claims,
             {"e1": "gustav-loebig", "b1": "gustav-loebig-birth"},
         )
@@ -2346,3 +2363,18 @@ def test_an_adjudicated_map_is_never_taken_for_clustering_s_own(tmp_path):
     assert ADJUDICATED not in {
         e["method"] for e in output.identity_map["mentions"].values()
     }
+
+
+class TestAnUnknownValue:
+    def test_a_death_without_its_date_shows_as_one(self):
+        """A register's "der selige Felix" (hypothetical): the prompt says
+        his death is stated without its date, never an empty value
+        (ADR-0040 §2.2)."""
+        doc = register(
+            "a register",
+            [human("e1", "Felix Löbig")],
+            [("e1", "date_of_death", {"type": "unknown"})],
+            {"e1": "felix-loebig"},
+        )
+        lines = adjudication._Document(doc.manifest).lines("e1")
+        assert "date_of_death: unknown value" in lines

@@ -709,9 +709,8 @@ refuses). The module docstrings are the full account; in short:
   any record of its entity's kind. No word list and no token length
   remains.
 - **Blocking** proposes pairs by those keys, never by one shared token.
-  Events and unions meet through their people: a birth or a death its
-  principal's own through that principal, a union through its couple,
-  and a union's wedding or end through its union's couple; a wedding of
+  Events and unions meet through their people: a union through its
+  couple, and a union's wedding or end through its union's couple; a wedding of
   any kind is blocked with any other, and a divorce, an annulment and an
   end of unstated kind together. A mention that key-matches the GEDCOM
   export pairs with those anchors only, and a person with no surname
@@ -723,6 +722,14 @@ refuses). The module docstrings are the full account; in short:
   person's lone given name, which only meets the export. Lookups go
   through indexes, so the work grows with the mentions and the pairs
   proposed.
+- **Deaths.** A person's deaths are their own `date_of_death` claims
+  (an unknown value dates nothing) and the "died by" dates the shared
+  derivation gives from the batch (`yizkr/died_by.py`, ADR-0040 §2.4),
+  each open at its early end: a death of unknown value by its document's
+  own date, and the late spouse of a union ended by their death by the
+  date the batch presents the survivor as widowed. No event stands for a
+  birth or a death, and a union's end by a partner's death is not lifted
+  as a key.
 - **Cannot-link.** Two ids of one manifest are kept apart (soft). The
   export's places and occupations are exempt, as the adapter mints one
   per string, and so are the refs of a batch without a manifest, which
@@ -759,11 +766,7 @@ refuses). The module docstrings are the full account; in short:
   names many; for unions a couple of two whose members merged, and
   weddings whose dates do not conflict (ADR-0036 §3); for a union's
   wedding or end, unions that merged, kinds that can be one and dates
-  that agree; for two births or two deaths, each its principal's own
-  (its date, if any, not conflicting with the date the person's own
-  claims give), principals that merged, and never for one that is
-  nobody's own (no principal, several, or one whose own date conflicts
-  with it); for other events every
+  that agree; for other events every
   participant of the one with fewer merged into one cluster with a
   participant of the other, and dates that agree; otherwise an exact
   name. A recordless mention never links confidently, nor does one of no
