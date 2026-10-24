@@ -3145,16 +3145,22 @@ class Orchestrator:
 
     def _entity_keys(self, doc: DocumentRun) -> set[str]:
         """Name keys of a document's extractable entities, for the overlap
-        sequencer — the same whole name forms reconcile blocks on."""
+        sequencer — the same whole name forms reconcile blocks on given
+        the batch: a person's appellations (ADR-0018) key nothing, while a
+        place, an organisation or a family keys on every name."""
+        from yizkr.pipeline.names import appellations_of
         from yizkr.pipeline.reconcile import entity_name_keys
 
         if not doc.batch.exists():
             return set()
         batch = ClaimBatch.model_validate_json(doc.batch.read_text())
+        appellations = appellations_of(batch.claims)
         keys: set[str] = set()
         for entity in batch.entities:
             if entity.extract:
-                keys |= entity_name_keys(entity)
+                keys |= entity_name_keys(
+                    entity, appellations.get(entity.id, ())
+                )
         return keys
 
 
