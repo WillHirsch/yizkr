@@ -8,6 +8,9 @@ accepted it as written, each owner question settled by its
 recommendation (below). It covers both kinds of container: a PDF whose
 pages place images (ADR-0008, as amended by #176 and #397) and a deck
 whose slides embed them, which #502 makes excerpts too.
+Reversed by #626, 2026-10-24: the recommendations of owner
+questions 2 and 4 are reversed, and the 2026-10-16 subject ruling is
+widened (§10).
 Amended by #554 (2026-10-23): the critic's `relation_kind_mismatch`
 category names `author` and `addressee`, as relations of authorship or
 address, with the kinds they take (a person, an organization or a
@@ -17,6 +20,20 @@ structured adapter's batch alone, §2.2's properties also take, as their
 subject, a batch entity of an artifact kind, an un-held media item
 (ADR-0021): the GEDCOM adapter gives an OBJE's own DATE as the
 `inception` of the object's media item.
+Replaced by #626, 2026-10-24: §10's general rule replaces this
+interim exception: §2.2's properties take a batch entity of an artifact
+kind as their subject on any batch, and an extraction may not name an
+artifact kind (§10.1(b), §10.6).
+Amended by #626 (2026-10-24; the owner's decision of 2026-10-24,
+accepted by the owner's merge with the owner questions it raises
+answered): a source may state a document-subject property about an
+artifact it places by bytes, or about the artifact its own structured
+record makes, cited to itself with its page and the passage as its
+transcription excerpt, where the passage, read where it stands,
+conveys the fact (ADR-0003's support test, as #607 writes it). It
+reverses owner questions 2 and 4 and widens the 2026-10-16 subject
+ruling: see §10. Each passage it reverses or widens keeps its text,
+marked with a dated line.
 
 Revised 2026-10-16 on the owner's direction on #517, quoted: "Wait, are
 these fields about a source's relevance to its container, or independent
@@ -28,6 +45,13 @@ artifact's author, addressee and date; it is now an alternative
 considered. A container gives only its own words for what it places, and
 every structured attribute is the inner source's own.
 
+Reversed by #626, 2026-10-24: the first draft's structured container
+claims are adopted in part. The caption stays one verbatim text, and
+every attribute an artifact states of itself stays its own; beside
+them, a container states the seven document-subject properties of an
+artifact it places where its passage, read where it stands, conveys
+them, each claim labelled as the container's (§10).
+
 ## In brief
 
 - **A container's claim about an artifact it places is its own words for
@@ -35,10 +59,25 @@ every structured attribute is the inner source's own.
   Family from Germany*, "Wastl to Klara, July 1939.", is written
   verbatim as one `caption` statement on the image's item, `stated in`
   the booklet with its page.
+
+  Widened by #626, 2026-10-24: the caption stays its own words, one
+  verbatim statement. Beside it, where a passage of the container, read
+  where it stands, conveys a fact of the artifact (who made it, for
+  whom, when, where, what it is about, whom it shows), the container
+  states that too, cited to itself with the passage as its excerpt
+  (§10). The caption gives `author` → Wastl and `addressee` → Klara;
+  the booklet's translation of the letter's dateline gives `inception`
+  → 28 July 1939.
 - **Every structured attribute is the inner source's own.** The letter's
   date, place and addressee are the letter's claims about itself, cited
   to the letter's image, as `issued_by` is a certificate's claim about
   itself. A container never states them about what it places.
+
+  Reversed by #626, 2026-10-24: every attribute an artifact states of
+  itself stays its own, cited to it; a source that places the artifact,
+  or whose structured record makes it, may state the same properties of
+  it where its passage conveys them, each statement with its own
+  reference, side by side (ADR-0002; §10.2).
 - **The graph joins the two on the image's item.** The booklet's caption
   and the letter's own statements stand side by side there, each
   attributed to its own source (ADR-0002).
@@ -128,11 +167,23 @@ container with its page. What an artifact is (who made it, for whom,
 when, where, what it is about, whom it shows) is the artifact's own
 claim about itself, cited to the artifact.**
 
+Widened by #626, 2026-10-24: what an artifact is stays its own claim
+about itself, and a container's passage that, read where it stands,
+conveys what the artifact is is also the container's claim about it,
+cited to the container with its page and the passage as its excerpt
+(§10).
+
 - Each source keeps its own reference (CLAUDE.md rule 1, ADR-0003): the
   caption cites the booklet, page 6; the letter's statements about
   itself cite the letter's image.
 - Nothing crosses: the caption's "July 1939" is never the letter's date,
   and the letter's "28. Juli 1939" is never the booklet's (rule 5).
+  Reversed by #626, 2026-10-24: the caption's "July 1939" is still
+  never the letter's date, now because the caption does not say what
+  its July 1939 dates (§10.4), not because a container may give no
+  date: the booklet's translation of the dateline gives the image
+  `inception` → 28 July 1939, cited to the booklet, page 6. The
+  letter's "28. Juli 1939" is still never the booklet's date.
 - They coexist on the image's item (ADR-0002), and no frontend picks one
   (rules 4 and 6).
 
@@ -174,8 +225,18 @@ claim about itself, cited to the artifact.**
   rejection. No page
   constraint applies: a commentary on page 8 may speak of the image on
   page 6.
+  Widened by #626, 2026-10-24: `caption` is no longer the only
+  property whose subject may be an artifact its source places: the
+  seven document-subject properties take one too (§2.2, §10.1(a)).
+  `caption` still takes no other subject, never the source itself, and
+  the placement check above (the record, `--placed`, the writer's
+  registered media) is the one those properties' form (a) uses.
 - The manifest marks it `placed_subject: true`, a field of its own, so
   that ADR-0035 §3.4's `document_subject` rule stays "the source itself".
+  Widened by #626, 2026-10-24: the flag stays `caption`'s alone, but
+  `document_subject` no longer means "the source itself" alone: it takes
+  the source, an artifact the source places, or a batch entity of an
+  artifact kind (§10.5).
 
 #### 2.2 A source's own attributes
 
@@ -183,6 +244,11 @@ The manifest gains six properties marked `document_subject: true`,
 beside `issued_by`. A source gives them only about itself, under ADR-0035
 §3.4's rule as it stands, widened to these properties: the subject is the
 claim's own source, and these properties take no other subject.
+
+Widened by #626, 2026-10-24: a source gives these about itself, about
+an artifact it places by bytes, and about the artifact its own
+structured record makes (a batch entity of an artifact kind), each only
+where its passage, read where it stands, conveys the fact (§10.1).
 
 | Key | What the source states of itself | Accepts | Wikidata |
 |---|---|---|---|
@@ -230,9 +296,16 @@ claim's own source, and these properties take no other subject.
   has asked for an amendment that would make this the general rule: a
   source may state these properties about an artifact it places or
   describes, cited to itself, where its passage conveys the fact.
+  Replaced by #626, 2026-10-24: §10's general rule replaces this
+  exception. A batch entity of an artifact kind may be these
+  properties' subject on any batch, and an extraction may not name an
+  artifact kind, so such an entity exists only where a structured
+  record or a hand-written batch makes one (§10.1(b), §10.6).
 - **A container never gives these about what it places.** The caption's
   facts stay its text (§2.1). From the keeper run on, a curator may
   promote one (§4).
+  Reversed by #626, 2026-10-24: a container gives these about what
+  it places where its passage conveys them, beside the caption (§10).
 
 ### 3. How extraction is asked, and how the writer resolves the subject
 
@@ -253,9 +326,19 @@ one, ADR-0006) gains, beside the `issued_by` paragraph:
   extraction read as speaking of an image where the text does not say
   so plainly, such as a slide's title over its one image.
 
+Reversed by #626, 2026-10-24: "give nothing else about the artifact"
+becomes: give a document-subject claim about a listed artifact where
+the container's passage, read where it stands, conveys it, with the
+passage as its excerpt and its page; a translation of the artifact's
+own text gives these claims and no caption (§10.5).
+
 **Every document's prompt** widens its paragraph on the document itself
 from `issued_by` to the seven document-subject properties, each given
 only where the document states it of itself.
+
+Widened by #626, 2026-10-24: the paragraph's subject sentence widens to
+the listed artifacts; "only where the document states it of itself"
+stays for the document's claims about itself (§10.5).
 
 **The caption's people** are entities of the container's batch, as now,
 with their appellations and aliases (ADR-0018, #499): the caption's
@@ -305,12 +388,37 @@ untouched, as are the booklet translation's. The caption's year and its
 "Wastl" stay its text: the letter's image carries no author statement,
 since the top of the letter does not name its writer.
 
+Widened by #626, 2026-10-24: the booklet's batch gives five
+structured statements beside its caption, on the leans of §10.4:
+
+| Subject | Property | Value | Source |
+|---|---|---|---|
+| the letter's image | `caption` | "Wastl to Klara, July 1939." (en) | booklet, page 6 (printed 4) |
+| the letter's image | `author` | Wastl (the booklet's local entity) | booklet, page 6 (printed 4), excerpt "Wastl to Klara, July 1939." |
+| the letter's image | `addressee` | Klara (the booklet's local entity) | booklet, page 6 (printed 4), excerpt "Wastl to Klara, July 1939." |
+| the letter's image | `inception` | 28 July 1939 (day) | booklet, page 6 (printed 4), the translation, `machine_assisted` |
+| the letter's image | `location_of_creation` | Brunnenring 35 (the booklet's local entity) | booklet, page 6 (printed 4), the translation, `machine_assisted` |
+| the letter's image | `addressee` | Pünktchen (the booklet's local entity) | booklet, page 6 (printed 4), the translation, `machine_assisted` |
+
+The letter's image's own statements are unchanged. The caption's "July
+1939" gives no `inception`, and the caption stays. The letter's image
+now carries an `author` statement, the booklet's; it still states none
+of itself. Which of the booklet's mentions are one person, and who
+they are, is clustering's and reconciliation's, as before.
+
 The deck's slide 2, once #502 marks its image, gives two `caption`
 statements on the photograph's item, each stated in the deck, page 2:
 "Wastl and Hilde" (with a judgement note, since a title over an image
 is read as speaking of it) and "Photograph from the family album". The
 photograph has no writing, so it is no excerpt and states nothing of
 itself.
+
+Widened by #626, 2026-10-24: slide 2's title also gives `shows` →
+Wastl and `shows` → Hilde on the photograph's item, each stated in the
+deck, page 2, with the title as its excerpt and a judgement note of
+category `relation` (§10.4). "Photograph from the family album" says
+where the photograph was kept, not what it is, and gives no structured
+claim.
 
 The studio portrait gives of itself, cited to the portrait: `author` →
 Photograph Brüsrich, and `shows` → Muckel, Cilli, Wastl, Rahel and
@@ -338,6 +446,14 @@ on, a curator may:
   1939, combined from the letter and the booklet's caption". This was
   accepted by the owner, 2026-10-16.
 
+Reversed by #626, 2026-10-24: the pipeline gives what a passage conveys
+(§10), so "never turns a caption into structured statements" no longer
+holds: a caption that conveys a fact gives the caption and the
+structured claim. From the keeper run on, a curator may still write a
+fact the extraction missed, under the same support test, with the
+curator's provenance. Combination is unchanged: the pipeline still
+never builds a value from two sources.
+
 ### 5. The container's text never reaches the excerpt's extraction
 
 ADR-0008's question 2 is answered **no** (accepted by the owner,
@@ -364,6 +480,11 @@ statements about itself (an `addressee`, a `shows`) are claims of its
 batch like any other, whose values are its mentions; being a letter's
 addressee says nothing of a person's dates or kin.
 
+Widened by #626, 2026-10-24: the deterministic rules read none of
+these properties and stay unchanged; adjudication sees them, so a
+booklet mention named as the `author` or `addressee` of the letter's
+image gains a line and its pairs are asked again (§10.5).
+
 ### 7. Privacy and display
 
 **The non-privileged export.** A `caption` is a raw source quotation
@@ -376,6 +497,12 @@ statement whose value is an item left out goes whole. They mark no one
 as a person: their values are like `depicts`'s, which mark no one
 (ADR-0020 as amended by #344), since an author may be an organisation
 and an image may show a building.
+
+Widened by #626, 2026-10-24: a document-subject statement about an
+artifact its source places may carry a caption's text as its excerpt,
+so it leaves the export whole, failing closed, on the lean of §10.5; a
+statement about an artifact a structured record makes leaves as any of
+that record's statements does.
 
 **The static site** (private; plural by default, CLAUDE.md rule 6):
 
@@ -394,6 +521,12 @@ and an image may show a building.
   source; whether a person's timeline shows the letters they wrote or
   received is left for later.
 
+Widened by #626, 2026-10-24: "What sources say about this artifact"
+also lists what other sources state of it, each value labelled by its
+source and page, every value of one property together, none first; a
+person's "Named in artifacts" labels values the same way; an un-held
+media item's page shows its `inception` (§10.2).
+
 ### 8. What this costs and checks
 
 - The manifest gains `caption` (with its `placed_subject` mark), the six
@@ -407,6 +540,15 @@ and an image may show a building.
 - The run report counts, as aggregates, the captions given, the
   document-subject claims by property, and the rejects by reason.
 - The deck half waits on #502's markers; the PDF half does not.
+
+Widened by #626, 2026-10-24: §10.5 gives what the amendment costs and
+checks: new prompt paragraphs (every chunk call and every critique
+asked again), the extraction-stage kind check, the widened subject
+rule, the report's split by subject form, the export rule and the site
+wording. Its build is a follow-up issue of its own, `stage:extraction`
+and `needs:scratch-diff`, with a live test that writes a container's
+`inception` about its placed image and an export's `inception` about an
+un-held media item.
 
 ### 9. Amendments (applied on acceptance, 2026-10-23)
 
@@ -449,6 +591,410 @@ gains them, `determination_method` and `combined_from_sources`.
 - "Living persons and privacy": captions stay out of the non-privileged
   export.
 
+### 10. What a source's passage conveys about another artifact (amended by #626, 2026-10-24)
+
+The owner asked, on 2026-10-24: "what happens to the date in the letter
+example? It seems right that the date be associated with the photo in a
+suitably expressive way. Isn't it an Inception claim made by the letter
+about the photo? Shouldn't GEDCOM be the same?" The owner then decided
+(#626):
+
+- A source may state a document-subject property (`inception`,
+  `author`, `addressee`, `location_of_creation`, `main_subject`, `shows`,
+  `issued_by`) about an artifact it places or describes.
+- The claim is cited to that source, with its page and the quoted
+  passage as its transcription excerpt, beside the extraction run
+  (CLAUDE.md rules 1 and 2).
+- It is allowed only where the passage, read where it stands in the
+  source, conveys the fact. This is the one support test the owner
+  decided on #607 (2026-10-23, Q2), which #607 writes into ADR-0003.
+  There is no test of its own (§10.4).
+- GEDCOM's OBJE DATE follows the same rule, with no adapter exception
+  (§10.6).
+- The cost is accepted. The extraction prompts change, so every chunk
+  call is asked again in the next run, which also takes #625 and any
+  manifest fix from #574 (§10.5).
+
+So two subject forms are decided, (a) and (b) below. Where this section
+follows a lean rather than a decision, the owner question that names it
+is listed under Owner questions ("Raised by #626"); the owner accepts
+this amendment by merging it, with those questions answered (AGENT_PROTOCOL
+§8, §9). The build is a follow-up issue of its own (`stage:extraction`,
+`needs:scratch-diff`), after #607's located citations; until it lands,
+the prompts, validation and the writer keep §2.2's rule and #583's
+interim exception.
+
+#### 10.1 Which subject a claim about another artifact may name
+
+**(a) An artifact its source places by bytes (decided).** This is an
+image the container's record of derived media names, the subject
+`caption` takes (§2.1).
+
+- Identity is already settled. The SHA-1 is in the record and in the
+  transcription's markers. The prompts list it (`extract.placed_lines`),
+  validation is handed it (`placed`), and the writer checks that an item
+  carries it (`resolved`).
+- Which artifact the properties describe. A placed image's
+  document-subject properties describe what the image's own claims make
+  it: the original it reproduces. The letter image's own `inception` is
+  the letter's dateline (§3), not the day the booklet scanned it, and a
+  container's `inception` of it means the same.
+- A container's words about the reproduction (who scanned or
+  photographed it, and when) give no document-subject claim. They fail
+  the support test for that artifact (§10.4), and stay a caption where
+  they speak of the image. A line the booklet does not have, "Scanned by
+  Nicholas for this booklet, 2010.", would give no `inception` → 2010
+  and no `author` → Nicholas. Otherwise `inception`, which is
+  single-valued, would list 2010 against 1939 as a false conflict.
+
+**(b) The artifact a source's own structured record makes (decided).**
+This is a GEDCOM OBJE, which the adapter makes a batch entity of an
+artifact kind: an un-held media item (ADR-0021 §2).
+
+- Identity within the export is the object's xref, so several people's
+  links share one item.
+- Across documents, the un-held item is not the held scan of the same
+  photograph. The fixture export's `@O1@` ("Studio portrait of the Löbig
+  family", `DATE BET 1890 AND 1899`) and the universe's
+  `studio-photo-1890s` stay two items until a curator links them
+  (ADR-0010 §2–3, deferred; #162). The registrar flags such a pair
+  `unhashed-title` when the scan's title is the object's label. So the
+  export's `inception` stands on the un-held item, and meets the scan's
+  own only after that link.
+- This widens the 2026-10-16 ruling ("never one it only writes about"),
+  since the export holds no bytes of the object.
+- **How (b) is keyed and enforced** (owner question; the text follows
+  the lean). Keyed on the subject's kind alone, a model's batch could
+  make an artifact-kind entity and state things about it: route (c2)
+  under another name. Nothing stops that today.
+  `claims.validate_against_manifest` refuses an entity's kind only when
+  it is no manifest item, and checks a `LocalRef`'s `instance_of` the
+  same way; `ChunkedClaimExtractor._parse_entity_manifest` checks a
+  record's kind against every manifest item, not only the kinds the
+  prompt offers. A manifest record could type the 1952 letter's
+  "portret fan dyn dochter Florence har lytse Nicholas" as `photograph`,
+  with `shows` → Nicholas on it; that would pass, and the writer would
+  mint a second artifact item. So:
+  - an extraction may not name an artifact kind
+    (`Acceptance.artifact_kinds`), whether in a manifest record or in a
+    `LocalRef`'s `instance_of`. The check sits where model output is
+    first read: `_parse_entity_manifest` treats such a kind as it treats
+    an unknown kind, and `extract.salvage_valid_claims` rejects a claim
+    whose reference names one, counted under a reason of its own;
+  - the subject rule (`claims.subject_problems`,
+    `writer.subject_refusal`) then stays keyed on the subject's kind. An
+    artifact-kind batch entity exists only where a structured record or
+    a hand-written batch makes one. The manifest prompt already says
+    that a letter or certificate a source mentions is an
+    `unclassified_entity` with a type_hint, so the check enforces what
+    the prompt asks.
+
+  The alternative: refuse every kind the prompts do not offer, not only
+  artifact kinds.
+
+**(c) An artifact the source only writes about** (owner question), such
+as an enclosure held as a scan of its own. The 1958 letter says "Вы
+просили прислать свидетельство о его смерти, посылаю." ("You asked for
+his death certificate: I enclose it."). The certificate is a document of
+its own (`death-certificate-1941`), and the letter conveys what it is
+about (`main_subject` → Rudolf's death). Today the letter's manifest
+names the certificate as an `unclassified_entity` with the type_hint
+"death certificate" (`chunking.ENTITY_MANIFEST_PROMPT`). The letter's
+extraction cannot name the held certificate: stages before write never
+read the wiki, and a prompt names no artifact by QID, only its own
+document and what that document places, by SHA-1. There are four
+routes:
+
+- **(c1) A curator's record of what a document encloses**, by the two
+  SHA-1s (`<source>=<sha1>`, as `--placed` takes a curator's placement,
+  §2.1). It needs:
+  - a local-only record kept beside the corpus, never in the
+    repository, since it identifies corpus pairs, with a CLI and an
+    input to the scratch driver;
+  - provenance for the identification. The letter never names the scan;
+    that the enclosed certificate is this scan is the curator's
+    judgement, an assertion of its own. Either each such statement
+    carries a second reference naming the curator's record, with the
+    curator's provenance (as §4's combined values carry two references),
+    or a curator-cited statement links the scan to the letter, and the
+    claims depend on it;
+  - a write order or resolution rule. (a)'s writer check works because
+    the container's write registers its placed media before its claims.
+    An enclosure is registered by its own write, so the letter's claim
+    is refused unless the enclosure was written first, or it waits and
+    is counted;
+  - a prompt paragraph of its own for the enclosures a record names: an
+    enclosure has no `[Page N, image M: sha1:…]` marker, so it is not in
+    the marker-based placed list (`extract.placed_lines`);
+  - a widening of the 2026-10-16 ruling to "an artifact a curator's
+    record says its source encloses".
+
+  Only the prompts of documents with a record change.
+- **(c2) An artifact-kind entity in the letter's batch**, linked to the
+  held scan later. It makes a second item for an artifact that already
+  has one: "A local artifact entity in the container's batch", which
+  this ADR rejected and still rejects (Alternatives). Nothing matches
+  artifacts across documents yet. (b)'s kind check keeps this route
+  shut.
+- **(c3) No claim on the enclosure's item.** The 2026-10-16 ruling stands
+  for this case. From the keeper run on, a curator links the letter's
+  local entity to the held scan. It needs no new provenance form.
+- **(c4) The claim on the letter's own mention of the enclosure.** The
+  letter's batch already names the enclosure as an `unclassified_entity`
+  with a type_hint ("death certificate", or "photograph"), and the write
+  makes it an item (ADR-0013). The letter's document-subject claim
+  (`main_subject` → Rudolf's death; for an enclosed photograph,
+  `inception` → the year the letter gives) goes on that mention item,
+  cited to the letter with its passage. A curator, or later artifact
+  matching (#162), links the mention item to the held scan; until then
+  the claim sits on the letter's own record of what it encloses.
+  - It adds no item beyond the mention item today's prompt already
+    makes, and needs no curator record before the write.
+  - It widens the 2026-10-16 ruling to an artifact the source writes
+    about, as the owner's question ("an Inception claim made by the
+    letter about the photo") suggests.
+  - Validation and the writer then accept an `unclassified_entity` (an
+    artifact-kind type_hint on one included) as a document-subject
+    subject, under the support test. (b)'s kind check is unaffected,
+    since the entity is of no artifact kind.
+  - Readers see the claim on the mention item, not on the scan, until
+    the two are linked.
+
+Lean: (c4) if the owner wants the letter's claim recorded now, since it
+is the closest to the owner's question and needs no curator record;
+(c3) if not. Either way, (c1) and its needs above are the route a later
+amendment may take, in an issue of its own. Until the owner answers,
+the rule admits forms (a) and (b) only.
+
+#### 10.2 Coexistence, disagreement and display
+
+- These claims stand beside the artifact's own, each with its own
+  reference, at normal rank (ADR-0002; CLAUDE.md rules 4 and 6). None
+  replaces another.
+- **Disagreement.** `inception` is in `disagreement.SINGLE_VALUED`, and
+  `disagreement.compared_values` already compares the inceptions
+  different sources give one artifact item: it sets aside a difference
+  of resolution and lists the rest together. No code changes; the build
+  pins this with a test. The other six properties are not compared, and
+  stay so, since a letter may have two authors.
+- **The booklet's translation.** Page 6 reads "Translation: Flörburg,
+  Brunnenring 35, 28 July 1939. Dear Pünktchen!". Read where it stands,
+  beside the letter's image, it conveys the letter's date, place and
+  addressee.
+  - It gives `inception` → 28 July 1939 (day), `location_of_creation` →
+    Brunnenring 35 and `addressee` → the booklet's Pünktchen. Each goes
+    on the letter image's item, stated in the booklet, page 6 (printed
+    4), with `sourcing_circumstances` → `machine_assisted` (ADR-0008, as
+    amended by #289).
+  - A translation of the image's own text is no caption. Page 6's only
+    caption is "Wastl to Klara, July 1939.", so the translation gives
+    the structured claims only, and §2.1's caption rule is unchanged.
+  - These claims agree with the letter's own. Had the translation
+    misread the year, as it misreads Angerring 11 as 71, the two
+    inceptions would be listed together, none first.
+  - Every translated excerpt gains such claims.
+- **The site.** `staticsite.SiteBuilder.citations` already labels a
+  statement by its source: another source is a link with its page and
+  printed page ("per *Our Family from Germany*, page 6 (printed 4)"),
+  and the artifact's own statement says "this artifact".
+  - `sources_say_html` groups by property, so every value of one
+    property is listed together. Only its sub-heading changes: it names
+    captions and what the artifact states of itself, and gains "and what
+    other sources state of it".
+  - `named_in_html` labels values the same way.
+  - An un-held media item gets an artifact page that shows its
+    `inception` with its other statements (lean; the build tests it).
+
+#### 10.3 `caption` and §4
+
+- `caption` is unchanged: one verbatim statement per passage, on the
+  placed artifact (§2.1). A caption that conveys a structured fact gives
+  both the caption and the structured claim, with the same passage as
+  the claim's excerpt. A translation gives no caption (§10.2).
+- `caption` stays the one `placed_subject` property, and it never takes
+  the source itself.
+- §4's promotion. The pipeline now gives what a passage conveys, so
+  owner question 2's "never by the pipeline" is reversed. From the
+  keeper run on, a curator may still write a fact the extraction
+  missed, under the same support test, with the curator's provenance.
+  Combination (§4's second bullet) is unchanged.
+- §5 is unchanged. The excerpt's extraction reads the excerpt alone, and
+  the container's claims never reach it.
+
+#### 10.4 The support test, calibration and the critic
+
+- **The test** is ADR-0003's, as #607 writes it: a citation supports a
+  statement when the passage, read where it stands, conveys the fact the
+  statement records. For a claim about another artifact, the fact
+  includes the subject: the passage, read where it stands, must convey
+  the fact of that artifact.
+- **Calibration** (owner question, three readings; the examples follow
+  the leans):
+  - "Wastl to Klara" under the letter's image gives `author` → Wastl and
+    `addressee` → Klara. Lean: yes. Under a letter, "X to Y" names its
+    writer and its recipient.
+  - "July 1939" in the same caption gives no `inception`. Lean: no. The
+    names fill the two roles that "X to Y" names, whatever event the
+    date marks; the date is tied to no event. It may be when the letter
+    was written, sent or received, so reading it as the date of making
+    narrows what the caption says (CLAUDE.md rule 5). The caption stays.
+    The alternative: yes, `inception` → July 1939 (month), cited to page
+    6 with the caption as its excerpt; it would agree with the letter's
+    own 28 July 1939, since a day within the month differs only in
+    resolution.
+  - Slide 2's title "Wastl and Hilde", over its one image, gives `shows`
+    → Wastl and `shows` → Hilde. Lean: yes, each with a judgement note
+    of category `relation`, as its caption already carries (§3). #607's
+    test asks whether the passage is reasonably understood to convey the
+    fact, and a title over a slide's one photograph is. The note records
+    that the reading is the extraction's.
+- **The critic.** #607's `excerpt_does_not_state` covers these claims,
+  so there is no new key, and findings stay advisory.
+  `critique._ref_id` shows an artifact subject by its content key, so
+  the critic cannot tell the image from the document. The row names the
+  source itself as "this document" and a placed artifact by its place
+  ("page 6, image 1"), as the prompt lists it; a finding that names a
+  claim this way still resolves to it (lean).
+- **Excerpt required** (owner question; the text follows the lean). A
+  document-subject claim whose subject is not its own source must carry
+  an excerpt, since without one no test can apply. Validation rejects
+  it under a new `claims.SUBJECT_REASONS` code, counted in
+  `rejects.by_reason`; the writer refuses it as `subject_rule`, with its
+  own message.
+- **GEDCOM.** No critic reads a GEDCOM batch (`orchestrate._derive`: "a
+  GEDCOM file has only its batch"). The adapter meets the test through
+  its mapping: an OBJE's DATE stands in the object's own record, so it
+  conveys that object's date of making. ADR-0035 §6's table records this
+  reading.
+
+#### 10.5 Prompts, validation, clustering, report, privacy and cost
+
+- **Prompts and manifest text.**
+  - `extract.DOCUMENT_ITSELF`: the subject sentence ("and never anything
+    else") widens to the listed images. "each only where the document
+    states it of itself, never from what another document says of it"
+    stays, for the document's claims about itself (§5).
+  - `extract.PLACED_ARTIFACTS`: "Give nothing else about an image …"
+    becomes: give a document-subject claim about a listed image where
+    THIS document's passage, read where it stands, conveys it, with the
+    passage as its excerpt and its page. A translation of the image's
+    text gives these claims and no caption. The caption's date and the
+    reproduction line are its failing examples.
+  - `chunking.LINE_ASSIGNMENT_BLOCK` and `chunking.ENTITY_ASSIGNMENT_BLOCK`
+    assign these claims as they assign captions.
+  - `model/manifest.yaml`: the seven descriptions drop "the subject is
+    the source document itself". The five "as the document itself
+    states", and `shows`' "as its own content names them", are reworded
+    to cover a source that conveys them about an artifact it places. The
+    section comments follow ("The subject is the source document itself"
+    above `issued_by`, and "a source's claims about itself").
+  - `EXTRACTION_PROMPT` gets the same paragraphs through
+    `extract.document_block`.
+- **Validation and the writer.** On a document-subject property,
+  `claims.subject_problems` and `writer.subject_refusal` accept three
+  subjects: the claim's own source; an artifact its source places
+  (`placed`, plus `resolved` in the writer); a batch entity of an
+  artifact kind (`subject_kind` in `Acceptance.artifact_kinds`). Beside
+  them:
+  - the extraction-stage kind check of §10.1(b);
+  - `claims.unplaced_captions` (renamed if need be) and
+    `claims.unplaced_hint` count every claim whose subject is an
+    artifact other than its source and whose source has no placed media
+    given, not only captions;
+  - the manifest flags keep their names: `document_subject` widens, and
+    `placed_subject` stays `caption`'s alone;
+  - the docstrings and comments follow: the module docstring of
+    `claims.py`, step 0 in `writer.py`, and in `model/schema.py` the
+    comments on `PropertySpec.document_subject` and
+    `Acceptance.document_subjects`.
+- **Clustering.** Its deterministic rules read none of these
+  properties, so they are unchanged. Adjudication does see them:
+  `adjudication._Document` puts every claim whose value is a local
+  entity into `naming`, and `lines()` renders it as "named as the
+  {property} of {subject}". So a booklet mention named as the `author`
+  or `addressee` of the letter's image gains a line, and its pairs are
+  asked again. `_Document.named` renders an `ArtifactRef` subject as "an
+  entity", and keeps doing so in the build, so no clustering-stage
+  template changes; better wording is a `stage:clustering` change of its
+  own. The scratch diff states the adjudication misses.
+- **Report.** `report._container_claims` receives a per-property count.
+  The claims fold that builds it also counts document-subject claims by
+  subject form: the source itself, an artifact it places, or an artifact
+  its record makes. Aggregates only. docs/RUN_REPORT.md documents the
+  split and any new reject reason.
+- **Privacy** (owner question; the text follows the lean).
+  - Captions stay out of the non-privileged export (§7,
+    `backup.LEFT_OUT_PROPERTIES`).
+  - A form-(a) statement's excerpt may be a caption's own text ("Wastl
+    to Klara", as an `author` excerpt). Under ADR-0020 an excerpt leaves
+    with the statement it attests, so the caption's text would leave
+    though the caption does not.
+  - Against that: every statement's excerpt already leaves with it, and
+    may name a possibly living relative. The owner was shown that
+    consequence with the rule on 2026-09-29 and did not object
+    (MODELING.md, "Living persons and privacy").
+  - Lean: fail closed. `backup.filter_nonprivileged_export` leaves out
+    whole a document-subject statement whose subject is `part of` the
+    item its reference's `stated in` names, as a placed image is of its
+    container: a per-statement test over the dump's triples, beside
+    today's by-property `left_out_pids`. The alternative: no new rule.
+  - A form-(b) statement leaves as any GEDCOM statement does, since its
+    subject is not part of the export.
+- **Cost**, from run 3's aggregates (#607):
+  - A change to the chunk prompt, or to the manifest text it embeds,
+    re-asks the 127 chunk calls and every critique (73).
+  - Manifest turns stay cached under (a) and (b), since
+    `ENTITY_MANIFEST_PROMPT` is unchanged. A cached manifest that names
+    an artifact kind now fails §10.1(b)'s check and is asked again.
+  - #625 changes `ENTITY_MANIFEST_PROMPT`, which alone re-asks every
+    extraction call (205). So in that run this change adds no extraction
+    call.
+  - Adjudication pairs whose mentions gain lines are asked again.
+  - (c1) would change only the prompts of documents that have a record.
+
+#### 10.6 What replaces the interim exception of #583
+
+- Rule (b) keys on the subject's kind, guarded by §10.1(b)'s
+  extraction-stage check, not on the run's model identifier.
+  - The build removes `claims.STRUCTURED_ADAPTERS`,
+    `claims.GEDCOM_ADAPTER` and `claims.structured_batch`, and the
+    `structured` argument of `subject_problems`, `subject_refusal` and
+    their callers.
+  - It keeps `subject_kind` and `Acceptance.artifact_kinds`.
+  - `gedcom.ADAPTER_IDENTIFIER` stays the batch's model identifier.
+- The GEDCOM's claims do not change, so this part adds nothing to the
+  scratch diff.
+- The test that a model's batch with the same entity is refused becomes
+  a pair: a model's extraction cannot make an artifact-kind entity (it
+  is rejected in `_parse_entity_manifest` and `salvage_valid_claims`,
+  before the subject rule is reached); and a batch the adapter did not
+  make passes the subject rule with an artifact-kind entity, one test on
+  a hand-written batch (`yizkr ingest extract --engine file`, model
+  identifier "manual") and one on the writer path through
+  `pre_plan_refusals`.
+- The interim text keeps its own text, with a dated line saying the
+  general rule replaces it: this ADR's #583 status line and §2.2's
+  bullet "An export's own record of an object, an interim exception";
+  ADR-0021's #583 amendment; ADR-0035's #583 line; MODELING.md's
+  `document_subject` paragraph.
+
+#### 10.7 Amendments to other records (#626, 2026-10-24)
+
+Each gets a dated line; no earlier amendment line is rewritten.
+
+- **ADR-0035**: its status header; §3.4's #456 amendment (the
+  document-subject properties take the three subjects of §10.5); the
+  #583 line (the general rule replaces the interim exception).
+- **ADR-0008**: the status header's #456 line; the #289 bullet's inline
+  #456 amendment; question 6's answer; the "Out of scope" bullet's #456
+  amendment.
+- **ADR-0021**: the OBJE DATE's subject, after the #583 amendment.
+- **MODELING.md**: the `document_subject` paragraph; the `issued_by`
+  paragraph in "Organizations"; "Compound artifacts", the caption bullet
+  and the static-site bullet; "Contradictions", a date of making; "Living
+  persons and privacy", the export rule.
+- **docs/EXAMPLES.md**: the ADR-0039 row.
+
 ## Owner questions
 
 Each was settled by its recommendation when the owner accepted this ADR,
@@ -468,6 +1014,9 @@ asked.
    with the caption's page and the caption as its excerpt, with the
    curator's provenance, beside the caption (§4).
    **Settled by its recommendation** (owner, 2026-10-23).
+   Reversed by #626, 2026-10-24: the pipeline gives a caption's fact
+   where the caption, read where it stands, conveys it; a curator may
+   still write one the extraction missed (§10.3).
 3. **Captions and the non-privileged export.** Recommended: caption
    statements stay out of it, since they may name possibly living people
    as text the export cannot check (§7).
@@ -479,6 +1028,9 @@ asked.
    a letter whose top names none) stays text on the image's item, not
    queryable data, until a curator promotes it.
    **Settled by its recommendation** (owner, 2026-10-23).
+   Reversed by #626, 2026-10-24: a container also states what its
+   passage conveys about an artifact it places, beside the verbatim
+   caption and the artifact's own attributes (§10).
 
 **Accepted by the owner, 2026-10-16:**
 
@@ -488,12 +1040,54 @@ asked.
   by bytes, never one it only writes about: a narrative recalling a
   letter gives no claim about the held letter, and a curator may link
   them;
+  Widened by #626, 2026-10-24: also the artifact a source's own
+  structured record makes, though the source holds no bytes of it
+  (§10.1(b)); whether an artifact a source only writes about may be a
+  subject is an owner question (§10.1(c));
 - combined values only by a curator, with two references and
   `determination_method` → `combined_from_sources` (§4).
 
 The first draft's questions on clustering on a shared artifact role and
 on a caption's class for an image no longer arise: a container makes no
 structured claim about what it places.
+
+Reversed by #626, 2026-10-24: a container now makes structured claims
+about what it places (§10). Clustering over a shared artifact role is
+answered in §10.5: the deterministic rules read no such property, and
+adjudication's added lines are measured by the scratch diff. A
+caption's class for an image still does not arise: `instance_of` is
+none of the seven properties, so a container gives no class to what it
+places.
+
+**Raised by #626 (2026-10-24)**, each with its lean; §10's text follows
+the leans, and the owner's merge with them answered accepts it:
+
+5. **How form (b) is keyed and enforced** (§10.1(b)). Lean: an
+   extraction may not name an artifact kind, in a manifest record or a
+   `LocalRef`'s `instance_of`, checked where model output is first read;
+   the subject rule then keys on the subject's kind. Alternative: refuse
+   every kind the prompts do not offer.
+6. **An enclosure: (c1), (c3) or (c4)** (§10.1(c)). Lean: (c4), the
+   claim on the letter's own mention of the enclosure, if the letter's
+   claim should be recorded now; (c3), no claim, if not. (c1) needs a
+   curator's local record, a provenance form for the identification
+   (a second reference naming the record, or a curator-cited link the
+   claims depend on), a write order and a prompt paragraph of its own,
+   and would be a later amendment in an issue of its own.
+7. **Calibration** (§10.4). Lean: "Wastl to Klara" gives `author` and
+   `addressee`, yes; the caption's "July 1939" gives `inception`, no
+   (alternative: yes, at month precision); slide 2's title gives `shows`
+   → Wastl and Hilde, yes, each with a `relation` judgement note.
+8. **An excerpt is required** on a document-subject claim whose subject
+   is not its own source (§10.4). Lean: yes, a counted reject in
+   validation and a `subject_rule` refusal in the writer.
+9. **The export rule** (§10.5). Lean: fail closed, leaving out whole a
+   document-subject statement whose subject is `part of` the item its
+   reference's `stated in` names. Alternative: no new rule.
+10. **The form.** AGENT_PROTOCOL §8 says reversing a ruling takes a new
+    ADR. The owner chose to amend this ADR in place, each reversed or
+    widened passage keeping its text with a dated line. Lean: confirm
+    the amendment in place for this case.
 
 ## Consequences
 
@@ -506,9 +1100,19 @@ structured claim about what it places.
   source for what it never said, no structured value about an artifact
   comes from any source but the artifact, and no excerpt's claim depends
   on a container's text.
+  Reversed by #626, 2026-10-24: a structured value about an artifact
+  may come from a source that places it or whose record makes it, cited
+  to that source with its passage, beside the artifact's own; each
+  reference still cites a source only for what it says, and no
+  excerpt's claim depends on a container's text (§10).
 - A fact only a caption gives is not queryable until a curator promotes
   it: "letters whose writer, per the compilation, is Sebastian" is a
   text search over captions, not a join.
+  Reversed by #626, 2026-10-24: a fact a caption conveys is given as
+  a structured statement by the pipeline, so "letters whose writer, per
+  the compilation, is Sebastian" is a join; a fact the caption gives
+  but does not convey of the artifact (its "July 1939", on the lean of
+  §10.4) stays text.
 - The manifest gains `caption`, six document-subject properties, a
   qualifier and its value; ADR-0035 §3.4's rule stays "the source
   itself", and one property, `caption`, takes what the source places.
@@ -528,6 +1132,16 @@ structured claim about what it places.
   and on clustering over shared roles, and asks the model to turn a
   caption into structure. The owner preferred the caption as text, with
   structure kept for the inner source itself.
+  Adopted in part by #626, 2026-10-24: a container states the seven
+  document-subject properties of an artifact it places, where its
+  passage conveys them (§10). Each cost is answered. Same standing: the
+  container's view stands beside the artifact's own, each labelled by
+  its source, values that disagree listed together (§10.2). Which
+  properties: the seven, and no other. Clustering over shared roles:
+  the deterministic rules read none of them, and adjudication's added
+  lines are measured (§10.5). Turning a caption into structure: only
+  where the passage, read where it stands, conveys the fact (§10.4),
+  with the caption kept verbatim beside it.
 - **`main_subject` for whom an image shows.** Contrived for a group
   photograph, whose five named people are not five "main subjects".
 - **The excerpt's extraction reads the caption** (ADR-0008 question 2,
@@ -536,5 +1150,7 @@ structured claim about what it places.
 - **A local artifact entity in the container's batch**, minted as an
   item and later linked to the image. It makes a second item for an
   artifact that already has one, keyed by its bytes (ADR-0010).
+  Still rejected by #626 (2026-10-24): it is route (c2) of §10.1(c),
+  which §10.1(b)'s kind check keeps shut.
 - **`depicts` from captions or inscriptions.** It would make ADR-0005's
   writer rule tell a person's confirmed depiction from a source's words.

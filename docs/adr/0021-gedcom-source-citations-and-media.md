@@ -48,6 +48,9 @@ counted: see Amendments.
 Amended by #583 (2026-10-23): an object's own DATE is when it was made,
 an `inception` claim on its media item (ADR-0039 §2.2), not a date of a
 person's `image` of it: see Amendments.
+Amended by #626 (2026-10-24): the OBJE DATE's subject stands under
+ADR-0039 §10's general rule, not an adapter exception: see Amendments
+(#583's).
 
 ## Context
 
@@ -568,3 +571,20 @@ adapter's model identifier (`STRUCTURED_ADAPTERS`, owner decision
 2026-10-24): a model's batch never gives an artifact entity a
 document-subject claim, pending an ADR-0039 amendment the owner has asked
 for.
+
+Amended by #626 (2026-10-24): **the OBJE DATE's subject stands under the
+general rule.** ADR-0039 §10 lets a source state a document-subject
+property about the artifact its own structured record makes, cited to
+itself, where its passage conveys the fact; an OBJE's DATE stands in the
+object's own record, so it conveys that object's date of making
+(ADR-0039 §10.4). The interim exception keyed on the adapter's model
+identifier (`STRUCTURED_ADAPTERS`) is replaced, once the build that #626's draft
+names lands: the subject rule keys on
+the subject's kind, an artifact kind, and an extraction may not name an
+artifact kind, so a model's batch still makes no artifact entity
+(ADR-0039 §10.1(b), §10.6). `ADAPTER_IDENTIFIER` stays the batch's
+model identifier, and the export's claims do not change. The un-held
+media item is not the held scan of the same photograph: the fixture's
+`@O1@` and the universe's `studio-photo-1890s` stay two items until a
+curator links them (ADR-0010 §2–3, deferred; #162), so the export's
+`inception` meets the scan's own only after that link.

@@ -55,6 +55,20 @@ Amended by #583 (2026-10-23): §6's OBJE DATE row. An object's own DATE is
 the `inception` of its media item (ADR-0039 §2.2), at the GEDCOM's
 precision, with its range and circa, never narrowed.
 
+Amended by #626 (2026-10-24; ADR-0039 §10): §3.4's document-subject
+properties take three subjects: the claim's own source, an artifact the
+source places by bytes, and a batch entity of an artifact kind (the
+artifact a source's own structured record makes), each only where the
+claim's passage, read where it stands, conveys the fact (ADR-0003's
+support test, as #607 writes it). An extraction may not name an
+artifact kind, in a manifest record or a `LocalRef`'s `instance_of`
+(ADR-0039 §10.1(b), on its lean). The general rule replaces #583's
+interim exception keyed on the adapter's model identifier: §6's OBJE
+DATE row needs no exception, and the adapter meets the support test
+through its mapping, since an OBJE's DATE stands in the object's own
+record and so conveys that object's date of making (ADR-0039 §10.4,
+§10.6).
+
 Amended by #386 (2026-09-29): the critic's findings are validated records
 that name their entity and claim by id and give their axis and a
 category (ADR-0023 §3), so the sweep's item on the critic's target
@@ -1192,6 +1206,14 @@ source places (the transcription's pages record them) beside the
 source's own key, and the writer the derived media registered for the source in
 the same write; a breach is a counted reject in validation and a
 refusal in the writer.
+
+Widened by #626, 2026-10-24 (ADR-0039 §10): "the subject is still the
+source artifact itself, and these properties take no other subject" no
+longer holds. The document-subject properties take the claim's own
+source, an artifact the source places (checked against the same placed
+media as `caption`), or a batch entity of an artifact kind, each only
+where the passage, read where it stands, conveys the fact; `caption`
+stays the one `placed_subject` property.
 
 - **`issued_by`** (P2378): a document → the organisation that issued it.
   The claim's subject is the source artifact itself, named by the SHA-1

@@ -43,6 +43,11 @@ Amended by #456 (2026-10-23): ADR-0039 answers questions 2 and 6 of the
 #289 amendment: the excerpt's extraction reads the excerpt alone, and a
 container's claim about an image it places is its verbatim `caption`
 only, for a PDF's images and a deck's alike: see Amendments.
+Amended by #626 (2026-10-24): ADR-0039 §10 widens the answer to
+question 6: beside its verbatim `caption`, a container states the
+document-subject properties of an image it places where its passage,
+read where it stands, conveys them, cited to the container with the
+passage: see Amendments (#289's and #502's).
 
 ## Context
 
@@ -255,6 +260,14 @@ media (MODELING.md, "Reference pattern"):
   #456 (2026-10-23): it can now, under ADR-0039 §2: a container's claim
   about an excerpt is its `caption` only, and what the excerpt is is the
   excerpt's own claim about itself.
+  Widened by #626, 2026-10-24 (ADR-0039 §10): beside its `caption`,
+  the compilation states the excerpt's author, addressee, date, place,
+  subject or whom it shows where its passage, read where it stands,
+  conveys them, cited to the compilation with its page and the passage
+  as its excerpt; the excerpt's own claims about itself stand beside
+  them. The booklet's caption gives the letter's image `author` → Wastl
+  and `addressee` → Klara, and its translation of the dateline gives
+  `inception` → 28 July 1939, `machine_assisted`.
 
 Each witness has its own transcription and its own batch: the
 compilation's transcription holds its own text only, and an excerpt's
@@ -446,6 +459,11 @@ Still to do, each keeping the two witnesses separable:
    (its author, date, place, subject) is the excerpt's own claim about
    itself. The same holds for a deck's embedded images, which #502
    marks by SHA-1.
+   Widened by #626, 2026-10-24 (ADR-0039 §10): a container's claim
+   about an excerpt is its `caption` and, where its passage, read where
+   it stands, conveys them, the excerpt's document-subject properties,
+   cited to the container; the excerpt's own claims about itself stand
+   beside them, each with its own reference.
 7. For follow-up A to settle: where an excerpt's views live, and how its
    status relates to the compilation's, given that content dedup seeds
    only from `written` documents (ADR-0010), that each document passes
@@ -844,6 +862,12 @@ only a PDF's image was read and extracted. Both now take one path
   excerpt's extraction reads the excerpt alone. Amended by #456
   (2026-10-23): ADR-0039 gives a slide's caption about its image as the
   deck's `caption` statement on the image's item.
+  Widened by #626, 2026-10-24 (ADR-0039 §10): a slide's text that,
+  read where it stands, conveys what its image is also gives the deck's
+  document-subject statements on the image's item: slide 2's title
+  "Wastl and Hilde" over its one photograph gives `shows` → Wastl and
+  `shows` → Hilde, each with a `relation` judgement note (ADR-0039
+  §10.4, on its lean).
 - **Stage change.** It changes the transcription stage of every deck
   (its pages, its image markers, its images' readings) and adds
   excerpts, which take the extraction and the critique; it is checked by
