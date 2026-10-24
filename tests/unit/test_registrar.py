@@ -2817,15 +2817,16 @@ class TestRegisterDerivedMedia:
 
     @pytest.mark.parametrize(
         "container, kept",
-        [("pdf", [IMAGE, OTHER_IMAGE]), ("presentation", [OTHER_IMAGE])],
+        [("pdf", [IMAGE, OTHER_IMAGE]), ("presentation", [])],
     )
     def test_a_glob_matches_a_pdf_s_image_by_sha1_alone(
         self, tmp_path, container, kept
     ):
         """A PDF's image is named for its place ("page 6, image 1"), no
         file's name, so the never-ingest list asks of it by its SHA-1
-        alone, as the reader does: a `page*` glob leaves it in (#525). A
-        deck's image keeps matching by its names in the archive."""
+        alone, as the reader does: a `page*` glob leaves it in (#525),
+        whichever of its places it matches. A deck's medium keeps matching
+        by its names in the archive, any of them."""
         wiki = FakeWiki()
         registrar = Registrar(wiki, exclusions=ExclusionList.parse("page*\n"))
         deck = deck_file(tmp_path, "a")
@@ -2835,8 +2836,9 @@ class TestRegisterDerivedMedia:
             deck,
             "Our Family",
             [
-                ("page 6, image 1.png", IMAGE, [6]),
-                ("image5.png", OTHER_IMAGE, [7]),
+                ("image5.png", IMAGE, [6]),
+                ("page 7, image 1.png", IMAGE, [7]),
+                ("page 8, image 1.png", OTHER_IMAGE, [8]),
             ],
         )
         record = record.model_copy(update={"container": container})

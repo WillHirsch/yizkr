@@ -1385,11 +1385,17 @@ class Orchestrator:
         (presentation.read_derived_media), made for the deck's bytes as
         they are now? A record made for other bytes, as in a directory
         two sources have shared, is made again, and so is a missing or
-        damaged one."""
+        damaged one, and one that is not a deck's: registration matches
+        the never-ingest list's globs against a deck's media's names
+        alone, and a PDF's images by their SHA-1s (ADR-0008)."""
         from yizkr.pipeline.presentation import read_derived_media
 
         record = read_derived_media(doc.dir)
-        return record is not None and record.source_sha1 == doc.sha1
+        return (
+            record is not None
+            and record.container == "presentation"
+            and record.source_sha1 == doc.sha1
+        )
 
     def _derived_media(self, doc: DocumentRun):
         """The record of the deck's derived media: the one in its
@@ -1398,7 +1404,11 @@ class Orchestrator:
         from yizkr.pipeline.presentation import read_derived_media
 
         record = read_derived_media(doc.dir)
-        if record is None or record.source_sha1 != doc.sha1:
+        if (
+            record is None
+            or record.container != "presentation"
+            or record.source_sha1 != doc.sha1
+        ):
             record = self._step_derive_media(doc)
         return record
 
