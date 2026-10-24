@@ -420,7 +420,7 @@ def claude_logged_in() -> bool:
                 encoding="utf-8-sig"
             )
         )
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return False
     return isinstance(config, dict) and bool(config.get("oauthAccount"))
 

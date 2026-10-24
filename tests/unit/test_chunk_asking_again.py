@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 
 from tests.unit.test_chunking import (
+    DOC,
     DOC_REF,
     LINE_LENGTH,
     Attempting,
@@ -36,6 +37,7 @@ from tests.unit.test_chunking import (
     side_output,
     transcription,
 )
+from yizkr.claims import ArtifactRef
 from yizkr.pipeline.chunking import (
     MISSING_FIELD_NOTE,
     ChunkedClaimExtractor,
@@ -774,6 +776,104 @@ class TestTheStageNamesTheRefusal:
         (doc,) = orchestrator.documents()
         assert doc.state.status == FAILED
         assert doc.state.error.startswith(reason)
+
+    @staticmethod
+    def one_chunk_per_person(tmp_path, monkeypatch, text, manifest, chunk):
+        """The scripted orchestrator over `text`, one chunk per person,
+        each chunk prompt answered by `chunk`, which raises or returns."""
+        from yizkr.pipeline import chunking
+
+        class OneChunkPerPerson(chunking.ChunkedClaimExtractor):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, budget=LINE_LENGTH, **kwargs)
+
+        monkeypatch.setattr(
+            chunking, "ChunkedClaimExtractor", OneChunkPerPerson
+        )
+        orchestrator = TestTheExtractionStage.orchestrator(
+            tmp_path, text, {"manifest": manifest}
+        )
+        scripted = orchestrator._llm
+
+        def llm(role, doc):
+            model = scripted(role, doc)
+            complete = model.complete
+
+            def answer(prompt, image_paths=()):
+                if not prompt.startswith("You extract source-attributed"):
+                    return complete(prompt, image_paths)
+                model.calls.append(f"chunk:{model.name}")
+                return chunk(prompt)
+
+            model.complete = answer
+            return model
+
+        orchestrator._llm = llm
+        return orchestrator
+
+    def test_a_refused_chunk_beside_an_answered_one(
+        self, tmp_path, monkeypatch
+    ):
+        """A refused chunk is never asked again, so the reason does not
+        say it failed after retries (#659); it keeps the refusal's class
+        name."""
+
+        def chunk(prompt):
+            if "- e1:" in prompt:
+                raise refused()
+            return ndjson([claim(*SEBASTIAN)])
+
+        orchestrator = self.one_chunk_per_person(
+            tmp_path, monkeypatch, DOC, entity_manifest_json(), chunk
+        )
+        assert orchestrator.run() == 1
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == FAILED
+        assert doc.state.error.startswith(
+            "RuntimeError: 1 chunk failed (c001; c001: ClassifierRefused: "
+        )
+        assert doc.state.error.endswith("); re-run to retry them")
+        assert orchestrator.calls.count("chunk:page.txt") == 2
+
+    def test_a_refused_chunk_and_a_retried_one(self, tmp_path, monkeypatch):
+        """The reason counts and lists every failed chunk, and quotes the
+        first one's error (#659)."""
+        text = f"{DOC}\nRahel Löbig, b. 1871 in Flörburg."
+        ref = ArtifactRef.from_bytes(text.encode()).model_dump()
+        manifest = json.loads(entity_manifest_json())
+        manifest["entities"].append(
+            {
+                "id": "e3",
+                "label": "Rahel Löbig",
+                "aliases": ["Rahel"],
+                "kind": "human",
+                "summary": "b. 1871 Flörburg",
+                "mention_lines": [5],
+            }
+        )
+
+        def chunk(prompt):
+            if "- e1:" in prompt:
+                raise refused()
+            if "- e2:" in prompt:
+                raise RuntimeError("engine down")
+            found = claim("e3", "Rahel Löbig", 1871)
+            found["source"]["artifact"] = ref
+            return ndjson([found])
+
+        orchestrator = self.one_chunk_per_person(
+            tmp_path, monkeypatch, text, json.dumps(manifest), chunk
+        )
+        assert orchestrator.run() == 1
+        (doc,) = orchestrator.documents()
+        assert doc.state.status == FAILED
+        assert doc.state.error.startswith(
+            "RuntimeError: 2 chunks failed (c001, c002; c001: "
+            "ClassifierRefused: "
+        )
+        assert "engine down" not in doc.state.error
+        # c001 once, c002 with its two retries, c003 once
+        assert orchestrator.calls.count("chunk:page.txt") == 5
 
 
 class TestThroughTheCache:

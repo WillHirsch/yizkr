@@ -678,6 +678,19 @@ class TestGlobalConfig:
         assert len(sleeps) == 1  # read once more before refusing
         assert cli.probes == []
 
+    def test_config_nested_too_deep_is_refused(self, cli, monkeypatch):
+        """Refused as unreadable, after one more read, rather than raising
+        RecursionError out of the check (#615)."""
+        sleeps: list[float] = []
+        monkeypatch.setattr(llm, "time", SimpleNamespace(sleep=sleeps.append))
+        path = Path(os.environ["CLAUDE_CONFIG_DIR"]) / ".claude.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("[" * 100_000)
+        with pytest.raises(CliConfigEnvironment, match="RecursionError"):
+            ClaudeCodeClient()
+        assert len(sleeps) == 1
+        assert cli.probes == []
+
     def test_empty_home_means_the_password_database_home(
         self, cli, monkeypatch, tmp_path
     ):

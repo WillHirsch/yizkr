@@ -587,7 +587,7 @@ def cmd_extract(args) -> int:
                 raw_dump=raw_dump,
                 rejects_dump=rejects_dump,
             )
-    from yizkr.pipeline.chunking import ExtractionFailed
+    from yizkr.pipeline.extract import ExtractionFailed
 
     try:
         batch = extractor.extract(transcription, transcription.artifact)
@@ -603,10 +603,11 @@ def cmd_extract(args) -> int:
             if moved:
                 print(f"{args.out} not written{moved}", file=sys.stderr)
             raise
-        # a failure, as a partial batch is, not a refusal: the same input
-        # may extract on another run, from the LLM cache at no engine cost
-        # for the calls that completed. No batch is written, so none reads
-        # as a claim-free document's.
+        # a failure, as a partial batch is, not a refusal: an engine's
+        # extraction may succeed on another run, from the LLM cache at no
+        # engine cost for the calls that completed, and a claims file once
+        # it is fixed. No batch is written, so none reads as a claim-free
+        # document's.
         print(
             f"extraction failed: {' '.join(str(exc).split())}; "
             f"{args.out} not written{moved}",
@@ -631,7 +632,7 @@ def cmd_extract(args) -> int:
     failed = getattr(extractor, "failed_chunks", None)
     if failed:
         print(
-            f"warning: {len(failed)} chunks failed after retries "
+            f"warning: {len(failed)} chunks failed "
             f"({', '.join(failed)}); batch is PARTIAL — re-run to retry "
             f"them (with --cache DIR, the calls that completed are "
             f"answered from the cache)",
@@ -729,7 +730,7 @@ def cmd_reconcile(args) -> int:
         )
     config = Config.load(args.env_file)
     roster = fetch_roster(WikiClient(config), config)
-    candidates = block_candidates(batch.entities, roster)
+    candidates = block_candidates(batch.entities, roster, batch=batch)
     print(
         f"roster: {len(roster)} graph entities; candidates for "
         f"{len(candidates)} of {len(batch.entities)} document entities"

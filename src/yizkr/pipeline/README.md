@@ -156,6 +156,18 @@ claims lack different fields, or fail for another reason, is not asked
 again. The extraction's `coverage.json` counts such chunks
 (`retried_chunks`), and the run report sums them.
 
+The readers of the entity manifest and of the chunks' answers
+(`extract.scan_json_answer`) read a single trailing comma directly
+before a closing `]` or `}`, outside any string, as JSON syntax: the
+object decodes as it would without the comma, and `coverage.json`
+counts each one so read (`trailing_commas`: the commas read anywhere in
+the manifest answer the extraction used and in each chunk's accepted
+answer, a stray object in prose included). It is a syntax
+slip, not a content repair: no value is added, changed or guessed. Any
+other defect still leaves the object unread: two commas, a comma before
+a value or after a key, a missing comma, a mismatched closer. The other
+stages' readers (`extract.scan_json_objects`) read no trailing comma.
+
 State for each document lives in `var/runs/<folder>/<doc>/`: its views
 (`transcription.json`, `batch.json`, `critique.json`, and the extractor's
 coverage, rejects and gaps under `extraction/`) and the files the later
