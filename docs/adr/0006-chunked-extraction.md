@@ -363,12 +363,18 @@ each. A `--transcription` that is missing, unreadable or not UTF-8, and a
 is reached; a `--media` whose name a never-ingest pattern matches is
 refused as listed before its bytes are read.
 
-Amended by #639 (2026-10-24): when the extraction fails, a batch an
-earlier run wrote at `--out` is moved aside to `<out>.stale` (replacing
-an older one there), and the one line says so, so no later step reads it
-as this run's. It is moved, not deleted, as it may be the one copy of an
-earlier extraction; if the move fails, the line says the batch still at
-`--out` is not this run's.
+Amended by #639 (2026-10-24): when the extraction does not complete,
+whatever ends it (an `ExtractionFailed`, another extractor error, a
+pause, Ctrl-C or a bug), a batch an earlier run wrote at `--out` is moved
+aside to the first free `<out>.stale` (or `<out>.stale.N`), never over an
+older one, and a line says where, so no later step reads it as this
+run's. An `ExtractionFailed` still ends the step in its one line; any
+other exception keeps its own handling after that line. The batch is
+moved, not deleted, as it may be the one copy of an earlier extraction;
+if the move fails, the line says the batch still at `--out` is not this
+run's. A complete extraction writes its batch over an earlier one, as
+before, and a folder at `--out` is refused in one line before any engine
+is reached.
 
 `auto` (the default) picks chunked when the transcription exceeds a
 conservative threshold (default 4,000 chars). Density — the real
