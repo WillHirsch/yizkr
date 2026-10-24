@@ -154,8 +154,9 @@ and nothing of it is kept, so listing a deck never frees what a glob
 names in it. A deck that cannot be read as an archive stops the run
 before anything is read, while the list holds a glob, since what its
 globs would name cannot be known: repair it, or take it out of the
-corpus folder. A glob does not reach a file's bytes otherwise: to keep a
-file's content out under any name, list its SHA-1.
+corpus folder (PowerPoint's `~$` lock file beside an open deck is one).
+A glob does not reach a file's bytes otherwise: to keep a file's
+content out under any name, list its SHA-1.
 
 **It fails closed.**
 

@@ -218,7 +218,7 @@ def gather_embedded(
             raise ExclusionConfigError(
                 f"cannot read the deck {deck} to find the images the "
                 f"never-ingest list's globs name in it: {exc}. Refusing to "
-                "run: repair the deck, or list it itself."
+                "run: repair the deck, or take it out of the corpus folder."
             ) from exc
     return frozenset(found)
 

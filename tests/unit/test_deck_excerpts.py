@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import random
 import re
 import struct
 import zipfile
@@ -871,7 +872,10 @@ class TestAGlobFollowsTheBytes:
         list with a glob refuses the run before anything is read, even
         when it excludes that deck itself."""
         corpus = talk_folder(tmp_path, **{"broken.pptx": b"PK not a zip"})
-        with pytest.raises(ExclusionConfigError, match="broken.pptx"):
+        with pytest.raises(
+            ExclusionConfigError,
+            match="broken.pptx.*take it out of the corpus folder",
+        ):
             run(tmp_path, corpus, RefusingReader({}), exclusions=listed)
         assert not list(tmp_path.rglob("transcription.json"))
 
@@ -902,6 +906,79 @@ class TestAGlobFollowsTheBytes:
         talk.write_bytes(bytes(data))
         with pytest.raises(ExclusionConfigError, match="talk.pptx"):
             gather_embedded(self.LISTED, [talk])
+
+    def test_a_large_member_is_hashed_whole(self, tmp_path):
+        """A member past the first block read is hashed to its end."""
+        data = random.Random(620).randbytes(3 << 19)
+        talk = tmp_path / "talk.pptx"
+        with zipfile.ZipFile(talk, "w") as archive:
+            archive.writestr(
+                zipfile.ZipInfo("ppt/media/image2.png", date_time=DECK_TIME),
+                data,
+            )
+        assert gather_embedded(self.LISTED, [talk]) == {sha1(data)}
+
+    def test_an_encrypted_member_refuses_the_run(self, tmp_path):
+        """A member the glob names that is encrypted cannot be hashed, so
+        it refuses the run as an archive that cannot be read does."""
+        talk = tmp_path / "talk.pptx"
+        with zipfile.ZipFile(talk, "w") as archive:
+            archive.writestr(
+                zipfile.ZipInfo("ppt/media/image2.png", date_time=DECK_TIME),
+                LETTER_PNG,
+            )
+        data = bytearray(talk.read_bytes())
+        # the encryption bit of the general-purpose flags, in the local
+        # header and in the central directory's record
+        data[6] |= 0x1
+        data[data.index(b"PK\x01\x02") + 8] |= 0x1
+        talk.write_bytes(bytes(data))
+        with pytest.raises(ExclusionConfigError, match="talk.pptx"):
+            gather_embedded(self.LISTED, [talk])
+
+    def test_a_glob_listed_after_a_kept_reading_drops_its_excerpt(
+        self, tmp_path
+    ):
+        """A first run with no glob reads the letter's top from the booklet
+        and both decks and keeps its reading; a second lists `image2.png`.
+        The views that mark it are set aside and made again without it,
+        nothing is read, and the reading still on disk makes no excerpt:
+        the second deck's record names the image by `image7.png`, so only
+        the gathered SHA-1 keeps it out. Nothing of it is registered or
+        uploaded."""
+        corpus = talk_folder(tmp_path, **{"booklet.pdf": booklet()})
+        deck(
+            corpus / "library-talk-2019.pptx",
+            [(LETTER_SLIDE, ["image7.png"], "")],
+            {"image7.png": LETTER_PNG},
+        )
+        first = run(
+            tmp_path,
+            corpus,
+            Reader({LETTER_SHA1: EXCERPT}),
+            exclusions=ExclusionList(),
+        )
+        assert LETTER_SHA1 in first._excerpts
+        again = run(
+            tmp_path, corpus, reader := Reader({}), exclusions=self.LISTED
+        )
+        assert reader.read == []
+        assert again._excerpts == {}
+        reasons = {event["reason"] for event in this_run(again, "set-aside")}
+        assert reasons == {
+            f"the never-ingest list names image {LETTER_SHA1[:12]}, which "
+            "it marks"
+        }
+        later = document(again, "library-talk-2019.pptx")
+        assert derived_transcription(later.dir, LETTER_SHA1).exists()
+        wiki = FakeWiki()
+        again._client = wiki
+        for doc in again.documents():
+            assert doc.state.status == AWAITING_CLAIMS, doc.state.error
+            Orchestrator._step_register(again, doc)
+        registered = again.registered_media()
+        assert not any(LETTER_SHA1 in media for media in registered.values())
+        assert LETTER_SHA1 not in wiki.files.values()
 
     def test_a_deck_this_user_cannot_read_refuses_the_run(self, tmp_path):
         """A deck whose file cannot be opened refuses the run, under a
