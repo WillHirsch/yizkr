@@ -478,12 +478,18 @@ def _lines(found: list[tuple[int, int]]) -> str:
 
 def _cited_page(page_number: str | None, transcription: Any) -> int | None:
     """The physical page a claim cites, when its `page_number` names one
-    by its digits alone and the transcription has pages; else None, and
-    the claim is read wherever its excerpt occurs."""
-    if transcription is None or not (transcription.pages or ()):
+    by its digits alone and the transcription has that page; else None,
+    and the claim is read wherever its excerpt occurs. An image excerpt's
+    claims cite the page of the container it was found on, which its own
+    transcription does not number so."""
+    if transcription is None:
         return None
     match = re.fullmatch(r"0*([0-9]{1,9})", (page_number or "").strip())
-    return int(match.group(1)) if match else None
+    if match is None:
+        return None
+    page = int(match.group(1))
+    held = {given.page for given in transcription.pages or ()}
+    return page if page in held else None
 
 
 class _Located:

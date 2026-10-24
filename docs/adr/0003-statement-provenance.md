@@ -31,7 +31,8 @@ of the same form rendered one field a line. It fails: a passage that
 only names both places (a list of towns), and a bare "Fläckfeld" beside
 "Flörburg, Kreis Peiltal", where "Kreis Peiltal" is about Flörburg. The
 location the reference names counts: a claim that gives a page is read
-at its occurrences on that page. Presence comes first: an excerpt the
+at its occurrences on that page, where the transcription numbers it (an
+image excerpt's claims cite the page of the container it was found on). Presence comes first: an excerpt the
 transcription does not hold stands nowhere (the excerpt check of #580,
 ADR-0023). The page the place stage writes on a link is that of the
 evidence's first occurrence (`places.evidence_page`), an approximation

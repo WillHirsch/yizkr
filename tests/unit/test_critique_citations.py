@@ -355,6 +355,18 @@ class TestPages:
             '"Beerdigungsbuch 1909"'
         ]
 
+    def test_a_page_the_transcription_has_not_is_read_everywhere(self):
+        # an image excerpt's claims cite the container's page, which the
+        # excerpt's own transcription does not number so
+        prompt = prompt_of(
+            eugen_batch(place_of_death("Beerdigungsbuch 1909", page="5")),
+            self.paged(),
+        )
+        assert rows(prompt) == [
+            "e01 | place_of_death | e02 | times: - | line 2: "
+            '"Beerdigungsbuch 1909"'
+        ]
+
     def test_a_transcription_without_pages_reads_a_page_everywhere(self):
         prompt = prompt_of(
             eugen_batch(place_of_death("Flörburg", page="2")),
