@@ -12,9 +12,10 @@ no-addition check (§5) no longer reads containers, which a form gives in
 fields of their own and so never in the place's label; each container is
 checked on its own, with three reasons each counted apart: `no-evidence`,
 `evidence-not-in-source` (compared folded, typographic punctuation read
-plain, every run of whitespace and line breaks made one space, a hyphen
-at a line's end joined, or kept, for an excerpt that crosses the
-hyphen, where the name is hyphenated, and whole words only; `core/verbatim.py`, the comparison claims' excerpts can
+plain, a soft hyphen dropped, every run of whitespace and line breaks
+made one space, a hyphen at a line's end joined, or kept, with no space
+after it or with one, for an excerpt that crosses the hyphen, and whole
+words only; `core/verbatim.py`, the comparison claims' excerpts can
 share) and
 `evidence-does-not-name` (the evidence does not hold the container's
 name, folded, as whole words). By the owner's option B, a container that
@@ -1513,12 +1514,18 @@ surname types, roles, classes and note categories. Beyond the schema:
   string, a name alone, among them); `evidence-not-in-source`, the
   evidence does not occur in the transcription as whole words, the two
   compared folded, typographic quotes, apostrophes and dashes read
-  plain, with every run of whitespace and line breaks made one space and
-  a hyphen at a line's end joined, or, where the joined reading finds
-  nothing, kept, for an excerpt that crosses the hyphen, as a hyphenated
-  name a line breaks at its own hyphen is quoted; an excerpt that stops
-  at such a hyphen or starts after it quotes part of a word and is no
-  match (`core/verbatim.py`); `evidence-does-not-name`, the evidence does not
+  plain (low and angle quotes, the non-breaking hyphen, the figure dash
+  and the minus sign among them) and a soft hyphen dropped, with every
+  run of whitespace and line breaks made one space and a hyphen at a
+  line's end joined (a soft hyphen at a line's end too), or, where the
+  joined reading finds nothing, kept, for an excerpt that crosses the
+  hyphen, as a hyphenated name a line breaks at its own hyphen is
+  quoted, and then kept with a space after it, as a quote that copies
+  the line's end, or a suspended hyphen a line breaks ("Hut-" then "und
+  Mützenmacherei"), is (amended by #612); an excerpt that stops at such
+  a hyphen or starts after it quotes part of a word and is no match
+  (`core/verbatim.py`); the evidence's own words are read the same
+  three ways when its name is looked for; `evidence-does-not-name`, the evidence does not
   hold the container's name, folded, as whole words; and `malformed`, the
   entry cannot become a container at all (neither an object nor a
   string, a key a container has not, no name or a name that is no

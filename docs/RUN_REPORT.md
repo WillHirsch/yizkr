@@ -286,8 +286,10 @@ report.json and report.html, which are local-only (docs/ANOMALIES.md,
 - excerpts not in their source (#580): the claims each extraction kept
   whose `transcription_excerpt` its transcription does not hold,
   compared as core/verbatim.py compares a container's evidence (folded,
+  typographic quotes and dashes read plain, a soft hyphen dropped,
   whitespace and line breaks collapsed, a hyphen at a line's end joined,
-  or kept, for an excerpt that crosses it, whole words only), from each
+  or kept, with or without a space after it, for an excerpt that
+  crosses it, whole words only; #612), from each
   coverage's `quotes`. A miss is a flag, never a reject: the claim is
   kept and written. The aggregate gives the
   claims checked, those with no excerpt, the misses and their rate among
