@@ -2,7 +2,6 @@
 
 import json
 import re
-import urllib.parse
 
 import pytest
 
@@ -14,6 +13,7 @@ from yizkr.claims import (
     PlaceStructure,
     QidRef,
 )
+from yizkr.core import sparql
 from yizkr.pipeline.reconcile import (
     GRAPH_ADJUDICATION_PROMPT,
     PairFacts,
@@ -107,6 +107,29 @@ def spouse_claim() -> dict:
         },
         "source": {"artifact": SCAN.model_dump()},
     }
+
+
+def post_only(rows: list[dict], queries: list[str]):
+    """A stand-in for the query service that answers a POST with `rows`,
+    records the query its form body carries, and refuses a GET, whose
+    request line a roster query outgrows (ADR-0033)."""
+    import io
+    import urllib.error
+
+    def urlopen(request, timeout):
+        if not isinstance(request, urllib.request.Request) or (
+            request.get_method() != "POST"
+        ):
+            raise urllib.error.HTTPError(
+                str(request), 431, "Request Header Fields Too Large", {}, None
+            )
+        assert timeout == 120
+        (query,) = urllib.parse.parse_qs(request.data.decode())["query"]
+        queries.append(query)
+        body = json.dumps({"results": {"bindings": rows}})
+        return io.BytesIO(body.encode())
+
+    return urlopen
 
 
 class ScriptedLlm:
@@ -1464,7 +1487,6 @@ class TestRosterKinds:
             return properties, items
 
     def test_kinds_map_by_qid(self, monkeypatch):
-        import io
 
         from yizkr.core.config import Config
         from yizkr.pipeline import reconcile
@@ -1485,12 +1507,9 @@ class TestRosterKinds:
         ]
         queries = []
 
-        def urlopen(url, timeout):
-            queries.append(urllib.parse.unquote_plus(url))
-            body = json.dumps({"results": {"bindings": rows}})
-            return io.BytesIO(body.encode())
-
-        monkeypatch.setattr(reconcile.urllib.request, "urlopen", urlopen)
+        monkeypatch.setattr(
+            sparql.urllib.request, "urlopen", post_only(rows, queries)
+        )
         # a graph check run before the roster where one is, read here as
         # finding nothing
         monkeypatch.setattr(
@@ -1580,19 +1599,15 @@ class TestDatesAtTheirPrecision:
 
     @staticmethod
     def fetch(monkeypatch, rows):
-        import io
 
         from yizkr.core.config import Config
         from yizkr.pipeline import reconcile
 
         queries = []
 
-        def urlopen(url, timeout):
-            queries.append(urllib.parse.unquote_plus(url))
-            body = json.dumps({"results": {"bindings": rows}})
-            return io.BytesIO(body.encode())
-
-        monkeypatch.setattr(reconcile.urllib.request, "urlopen", urlopen)
+        monkeypatch.setattr(
+            sparql.urllib.request, "urlopen", post_only(rows, queries)
+        )
         monkeypatch.setattr(
             reconcile, "unsupported_in_graph", lambda *args, **kwargs: None
         )
@@ -1904,7 +1919,6 @@ class TestAppellationAliases:
         ]
 
     def test_fetch_roster_reads_each_referred_to_as_value(self, monkeypatch):
-        import io
 
         from yizkr.core.config import Config
         from yizkr.pipeline import reconcile
@@ -1920,12 +1934,9 @@ class TestAppellationAliases:
         ]
         queries = []
 
-        def urlopen(url, timeout):
-            queries.append(urllib.parse.unquote_plus(url))
-            body = json.dumps({"results": {"bindings": rows}})
-            return io.BytesIO(body.encode())
-
-        monkeypatch.setattr(reconcile.urllib.request, "urlopen", urlopen)
+        monkeypatch.setattr(
+            sparql.urllib.request, "urlopen", post_only(rows, queries)
+        )
         monkeypatch.setattr(
             reconcile, "unsupported_in_graph", lambda *a, **k: None
         )
@@ -1958,3 +1969,32 @@ class TestAppellationAliases:
             " AS ?itemAppellations)"
         ) in flat
         assert "(SAMPLE(?itemAppellations) AS ?appellations)" in flat
+
+
+def test_fetch_roster_sends_its_query_in_a_post_body(monkeypatch):
+    """The roster query outgrows the request line a GET may have (the
+    live query service answered 431, #523): fetch_roster sends it in a
+    POST body, with its 120 s timeout. The stand-in refuses a GET."""
+    from yizkr.core.config import Config
+    from yizkr.pipeline import reconcile
+
+    queries: list[str] = []
+    monkeypatch.setattr(
+        sparql.urllib.request, "urlopen", post_only([], queries)
+    )
+    monkeypatch.setattr(
+        reconcile, "unsupported_in_graph", lambda *a, **k: None
+    )
+    config = Config(
+        wikibase_url="http://wikibase.example",
+        concept_uri="http://wikibase.example",
+        wdqs_url="http://query.example",
+        sparql_url="http://query.example/sparql",
+        admin_name="x",
+        admin_pass="x",
+        env_file=None,
+    )
+    assert reconcile.fetch_roster(TestRosterKinds.Vocabulary(), config) == []
+    (query,) = queries
+    assert query.startswith("PREFIX wd: <http://wikibase.example/entity/>")
+    assert "GROUP BY ?item ?itemLabel ?kind ?kindLabel" in query

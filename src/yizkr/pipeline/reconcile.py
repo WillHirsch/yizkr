@@ -36,10 +36,7 @@ such a date is never put to the adjudicator.
 from __future__ import annotations
 
 import csv
-import json
 import sys
-import urllib.parse
-import urllib.request
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -291,13 +288,9 @@ def fetch_roster(client: WikiClient, config: Config) -> list[RosterEntity]:
         birth_item=items["birth"],
         death_item=items["death"],
     )
-    url = (
-        config.sparql_url
-        + "?"
-        + urllib.parse.urlencode({"query": query, "format": "json"})
-    )
-    with urllib.request.urlopen(url, timeout=120) as response:
-        bindings = json.load(response)["results"]["bindings"]
+    # sent in a POST body: the query is longer than a GET's request line
+    # may be (ADR-0033)
+    bindings = sparql.runner(config, timeout=120)(query)
 
     def field(binding: dict, name: str) -> str:
         return binding.get(name, {}).get("value", "")
