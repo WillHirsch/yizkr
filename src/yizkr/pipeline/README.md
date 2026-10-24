@@ -969,18 +969,17 @@ Two Anthropic-backed providers, differing in how usage is billed:
   entity manifest's or segmentation's second attempt asks again too; a
   failed document's reason names `ClassifierRefused`). The run report
   and the monitor count it under its own name, in the call errors and
-  the failure labels. A refusal a
-  fallback model then answered ends on a result that reports no error,
-  and is the answer. The answer never takes text from an API-error
-  assistant event (one with an `error` or marked `is_api_error_message`),
-  so a refusal frame left in a stream the CLI asked again and the model
-  then answered is no part of the answer, nor of its cache entry (#622);
-  such text is the answer only when the stream holds no other assistant
-  text and no result.
-  The pinned CLI may ask a refused turn again once on its own; pinning
-  that retry off changes the config hash, and so every cache key, and
-  waits for the next deliberate engine config change. A call that exits with any other failure keeps the
-  hint that the CLI may not be logged in.
+  the failure labels. A refusal a fallback model then answered ends on
+  a result that reports no error, and is the answer. The answer never
+  takes text from an API-error assistant event (one with an `error` or
+  marked `is_api_error_message`), so a refusal frame left in a stream
+  the CLI asked again and the model then answered is no part of the
+  answer, nor of its cache entry (#622); such text is the answer only
+  when the stream holds no other assistant text and no result. A call
+  that exits with any other failure keeps the hint that the CLI may not
+  be logged in. The pinned CLI may ask a refused turn again once on its
+  own; pinning that retry off changes the config hash, and so every
+  cache key, and waits for the next deliberate engine config change.
 
   A pass runs on one **pinned** CLI version (#133): the one installed
   when its first client starts. Install 2.1.309, which `claude-opus-5-5`

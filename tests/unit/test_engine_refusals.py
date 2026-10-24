@@ -560,10 +560,35 @@ class TestRetried:
         events[-1]["result"] = "answer"
         assert ClaudeCodeClient._assemble_stream(stream(events)) == "answer"
 
+    def test_a_frame_between_answer_turns_is_no_part_of_the_answer(self):
+        """A frame after the model has begun its answer is skipped too."""
+        frame, answer, result = retried_events("s1")
+        first = json.loads(json.dumps(answer))
+        first["message"]["content"] = [{"type": "text", "text": "[1, 2, "}]
+        events = [INIT, first, frame, answer, result]
+        assembled = ClaudeCodeClient._assemble_stream(stream(events))
+        assert NOTICE not in assembled
+        assert assembled == "[1, 2, " + RETRIED_ANSWER
+
     def test_with_no_result_the_frame_comes_before_raw_stdout(self):
-        """A stream cut off after the frame alone answers with the frame's
-        text, as before, never with the raw event stream."""
+        """The assembler answers a stream cut off after the frame alone
+        with the frame's text, as before, never with the raw event stream
+        (through complete(), the frame raises ClassifierRefused first)."""
         events = [INIT, retried_events("s1")[0]]
+        assert ClaudeCodeClient._assemble_stream(stream(events)) == NOTICE
+
+    def test_every_frames_text_is_the_fallback(self):
+        frame = retried_events("s1")[0]
+        other = json.loads(json.dumps(frame))
+        other["message"]["content"] = [{"type": "text", "text": " again"}]
+        events = [INIT, frame, other]
+        assert ClaudeCodeClient._assemble_stream(stream(events)) == (
+            NOTICE + " again"
+        )
+
+    def test_an_empty_result_gives_way_to_the_frame(self):
+        frame, _, result = retried_events("s1")
+        events = [INIT, frame, {**result, "result": ""}]
         assert ClaudeCodeClient._assemble_stream(stream(events)) == NOTICE
 
     def test_the_answer_and_its_cache_entry_hold_no_notice(
