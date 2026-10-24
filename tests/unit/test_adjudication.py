@@ -1997,13 +1997,15 @@ class TestCoupleHeldApart:
             p["same_merges"] for p in entry["pairs"] if p["link"] == AMBIGUOUS
         } == {False}
 
-    def test_one_member_of_a_spouse_cluster_contradicts(self):
-        """The register's Agnes, born 1912, merges confidently with a
-        letter's Agnes Nertler, born 1912 and named with no kin. Only the
-        register's Agnes kin-conflicts with the postcard's (their
-        Leopolds born 1930 and 1910); the letter's does not. One member's
-        contradiction is enough: with every pair `same`, the postcard's
-        marriage stays apart from the register's."""
+    @pytest.mark.parametrize("side", ["register", "postcard"])
+    def test_one_member_of_a_spouse_cluster_contradicts(self, side):
+        """One side's Agnes, born 1912, merges confidently with a
+        letter's Agnes Nertler, born 1912 and named with no kin. Only
+        that side's own Agnes kin-conflicts with the other side's (their
+        Leopolds born 1930 on the postcard and 1910 in the register); the
+        letter's does not. One member's contradiction is enough: with
+        every pair `same`, the postcard's marriage stays apart from the
+        register's, whichever side holds the letter's Agnes."""
         letter = register(
             "letter",
             [
@@ -2014,8 +2016,9 @@ class TestCoupleHeldApart:
             [("e2", "date_of_birth", day(1912))],
             {"e2": "agnes-loebig"},
         )
-        postcard = wed("postcard", 1930)
-        register_ = wed("register", 1910, agnes_born=1912)
+        born = {side: 1912}
+        postcard = wed("postcard", 1930, agnes_born=born.get("postcard"))
+        register_ = wed("register", 1910, agnes_born=born.get("register"))
         docs = [postcard, register_, letter]
         settled = verdicts_by_name(docs, lambda pair: SAME)
 
@@ -2023,7 +2026,8 @@ class TestCoupleHeldApart:
             fingerprint = doc.fingerprint(local_id, settled)
             return settled["mentions"][fingerprint]["cluster"]
 
-        assert cluster(register_, "e2") == cluster(letter, "e2")
+        joined = postcard if side == "postcard" else register_
+        assert cluster(joined, "e2") == cluster(letter, "e2")
         assert cluster(postcard, "e2") != cluster(register_, "e2")
         assert cluster(postcard, "e1") == cluster(register_, "e1")
         assert cluster(postcard, "m1") != cluster(register_, "m1")
