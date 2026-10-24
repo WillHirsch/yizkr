@@ -542,11 +542,8 @@ class TestTheDriver:
         class Client:
             config_hash = "-"
 
-        extractor = _Extractor(
-            Client(), _Keyed(Client()), _Tally(), pointer="Rahel was born"
-        )
+        extractor = _Extractor(Client(), _Keyed(Client()), _Tally())
         assert extractor.read_preparation is True
-        assert extractor.pointer == "Rahel was born"
 
 
 class TestTheRunReport:
