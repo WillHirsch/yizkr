@@ -356,7 +356,21 @@ keeps apart. Unions
 are settled after people, so a part of unions whose `same` verdicts
 join two such unions does not merge and falls back to its confident
 components, and a candidate cluster of two such unions is one no `same`
-could merge. In
+could merge. Couple members kept apart by a contradiction count too
+(amended by #663, 2026-10-24, the owner's option (b) there): two unions
+also contradict when their couple members ended in two clusters of one
+candidate cluster, a member of one and a member of the other whose
+evidence says they differ by more than their own dates, which no
+verdict excuses. Kin that conflict are such evidence: the kin rule
+reads what each source says of a person's kin, here the spouses' own
+births, not the clusters those kin ended in, so two Agneses whose
+Leopolds' births conflict stay apart even when a `same` merged the
+Leopolds, and the unions holding them fall back to their confident
+components rather than merge. The narrower reading was chosen over
+reading kin through their clusters: it fails towards fewer merges, and
+the kin rule keeps reading what each source says. Two couple members of
+two candidate clusters were never set against each other, and do not
+count. In
 a development-stage run a candidate cluster of two whose one pair no
 `same` could merge is not asked, since no verdict on it changes a
 cluster, and is counted; in keeper mode it is asked, for the review

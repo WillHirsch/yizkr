@@ -243,14 +243,17 @@ two other members whose evidence says they differ (_Judge.contradicts),
 two events with principals (participants in the principal role) that
 ended in clusters held apart, a member of one said `different` from a
 member of the other (evidence `principals_apart`), or two unions with
-couple members (spouses or partners) that ended so (`couple_apart`;
-both people_apart): one event cannot happen to two people the identity
-map keeps apart, nor one union's spouse or partner be two people it
-keeps apart. A verdict excuses a date conflict on its own pair and
-nothing else: never stated sexes or civil statuses that cannot both
-hold, kin that conflict, a place's containers that differ, an
-organisation's places that differ, event kinds that cannot be one, or
-principals or couple members held apart. Each ambiguous review pair
+couple members (spouses or partners) that ended so, or that ended in
+two clusters of one candidate cluster a contradiction keeps apart, a
+member of one and a member of the other whose evidence says they
+differ by more than their own dates, as kin that conflict do
+(`couple_apart`; both people_apart): one event cannot happen to two
+people the identity map keeps apart, nor one union's spouse or partner
+be two people it keeps apart. A verdict excuses a date conflict on its
+own pair and nothing else: never stated sexes or civil statuses that
+cannot both hold, kin that conflict, a place's containers that differ,
+an organisation's places that differ, event kinds that cannot be one,
+or principals or couple members held apart. Each ambiguous review pair
 records whether a `same` could merge it (`same_merges`); a candidate
 cluster of two whose one pair could not (cannot_merge) is not pending
 in a run whose verdicts merge. Any other
@@ -364,7 +367,7 @@ from yizkr.pipeline.writer import stored_term
 # what cluster_corpus makes of a set of manifests: bumped whenever the same
 # manifests and thresholds would give another identity map, so that a
 # stored map is made again
-VERSION = 7
+VERSION = 8
 # the layout of identity-map.json
 FORMAT = 1
 STAGE = "clustering"
@@ -2260,8 +2263,9 @@ def _adjudicated(
     closure joined another way, a `same` pair whose evidence says they
     differ by more than their own dates (stated sexes, civil statuses,
     kin), any other two members whose evidence says they differ, or two
-    events with principals or two unions with couple members held apart
-    (`apart`, which no verdict excuses); then it falls back to its
+    events with principals or two unions with couple members held apart,
+    couple members also by a contradiction (`apart`, which no verdict
+    excuses); then it falls back to its
     confident `components`, each merged or apart as it is without
     verdicts. A merged part's method is `adjudicated` when a `same` pair
     is among its links, `confident_component` when its confident links
@@ -2656,10 +2660,12 @@ def cluster_corpus(
     links: dict[Pair, tuple[str, str]] = {}
     settled: list[_Settled] = []
     together: dict[str, str] = {}
-    # the cluster each settled mention ended in, merged or apart, and the
-    # mentions an adjudicator said each is `different` from
+    # the cluster each settled mention ended in, merged or apart, the
+    # mentions an adjudicator said each is `different` from, and the
+    # candidate cluster each is in
     ended: dict[str, frozenset[str]] = {}
     said_different: dict[str, set[str]] = {}
+    candidate_of: dict[str, int] = {}
     for (first, second), verdict in settling.items():
         if verdict == DIFFERENT:
             said_different.setdefault(first, set()).add(second)
@@ -2680,23 +2686,47 @@ def cluster_corpus(
             said_different.get(member, frozenset()) & other for member in one
         )
 
+    # read only once the people are settled, so its answers hold
+    @functools.cache
+    def contradicted(one: frozenset[str], other: frozenset[str]) -> bool:
+        """Whether two clusters of one candidate cluster hold a member
+        each whose evidence says they differ by more than their own dates
+        (_Judge.contradicts without them), which no verdict excuses: no
+        `same` could merge the two."""
+        if candidate_of[min(one)] != candidate_of[min(other)]:
+            return False
+        return any(
+            judge.contradicts(index[first], index[second], dates_count=False)
+            is not None
+            for first in sorted(one)
+            for second in sorted(other)
+        )
+
+    def kept_apart(first: str, second: str) -> bool:
+        """Whether two mentions ended in two clusters held apart
+        (held_apart) or kept apart by a contradiction (contradicted)."""
+        one, other = ended.get(first), ended.get(second)
+        if one is None or other is None or one == other:
+            return False
+        return held_apart(first, second) or contradicted(one, other)
+
     def people_apart(a: _Node, b: _Node) -> str | None:
         """PRINCIPALS_APART when two events have principals that ended in
         clusters held apart (held_apart), COUPLE_APART when two unions
-        have couple members that did, which no verdict on the events or
-        unions excuses: one event cannot happen to two people the
-        clusters keep apart, nor one union's spouse or partner be two
+        have couple members that ended in clusters held apart or kept
+        apart by a contradiction (kept_apart), which no verdict on the
+        events or unions excuses: one event cannot happen to two people
+        the clusters keep apart, nor one union's spouse or partner be two
         people they keep apart. None for any other pair."""
         if a.kind in EVENT_KINDS and b.kind in EVENT_KINDS:
             ones, others = _principals(a), _principals(b)
-            evidence = PRINCIPALS_APART
+            evidence, apart = PRINCIPALS_APART, held_apart
         elif a.kind in UNION_KINDS and b.kind in UNION_KINDS:
-            ones, others, evidence = a.couple, b.couple, COUPLE_APART
+            ones, others = a.couple, b.couple
+            evidence, apart = COUPLE_APART, kept_apart
         else:
             return None
-        if any(
-            held_apart(first, second) for first in ones for second in others
-        ):
+        if any(apart(first, second) for first in ones for second in others):
             return evidence
         return None
 
@@ -2715,6 +2745,11 @@ def cluster_corpus(
             people_apart,
         )
         links.update(found)
+        candidate_of.update(
+            (member, len(settled) + position)
+            for position, entry in enumerate(entries)
+            for member in entry.members
+        )
         settled.extend(entries)
         ended.update(
             (member, frozenset(part))
