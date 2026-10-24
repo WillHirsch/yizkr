@@ -2236,8 +2236,8 @@ class TestTheExtractionStage:
 
         class Model(ScriptedModel):
             """Answers the manifest, the segmentation and the chunks from
-            `answers` where it holds them, and as the scripted model does
-            otherwise."""
+            `answers` where it holds them, raising an answer that is an
+            exception, and as the scripted model does otherwise."""
 
             def complete(self, prompt, image_paths=()):
                 if "manifest of EVERY distinct entity" in prompt:
@@ -2251,6 +2251,8 @@ class TestTheExtractionStage:
                 if role not in answers:
                     return super().complete(prompt, image_paths)
                 self.calls.append(f"{role}:{self.name}")
+                if isinstance(answers[role], Exception):
+                    raise answers[role]
                 return answers[role]
 
         class Orchestrator(ScriptedOrchestrator):

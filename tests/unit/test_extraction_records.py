@@ -1172,6 +1172,10 @@ class TestTheManifestsRecords:
             "fallback",
             # each claim's excerpt looked for in the transcription (#580)
             "quotes",
+            # chunks asked again for a missing required field (#501), and
+            # calls the safety classifier refused, by turn (#621)
+            "retried_chunks",
+            "refused",
         }
 
 

@@ -1149,6 +1149,10 @@ def _read_views(document: Document, directory: Path, state: dict) -> None:
             fallback = coverage.get("fallback")
             views["coverage"] = {
                 "chunks": _count(coverage.get("chunks")),
+                # the chunks asked again for a required field every claim
+                # of their answer lacked; None for a coverage that predates
+                # the count
+                "retried_chunks": _counted(coverage.get("retried_chunks")),
                 "rejected_claims": _count(coverage.get("rejected_claims")),
                 "rejected_by_reason": _tally(
                     coverage.get("rejected_by_reason")
@@ -1168,6 +1172,22 @@ def _read_views(document: Document, directory: Path, state: dict) -> None:
         )
         if findings is not None:
             views["critique"] = _critique(findings)
+
+
+def _retried_line(retried: Mapping[str, int]) -> str:
+    """The chunks asked again because every claim of their answer lacked
+    the same required field, as the report's Content section gives them."""
+    line = (
+        f"Chunks asked again for a missing required field: "
+        f"{_n(retried['chunks'])}, in {_n(retried['extractions'])} "
+        "extractions"
+    )
+    if retried["absent"]:
+        line += (
+            f" (extractions whose coverage predates the count: "
+            f"{_n(retried['absent'])})"
+        )
+    return line + "."
 
 
 def _quotes(coverage: dict) -> dict[str, Any] | None:
@@ -2566,6 +2586,9 @@ def _aggregate_content(
     quote_documents = quotes_absent = quotes_not_in_source = 0
     batches = not_extracted = zero_entities = 0
     extractions = chunks = rejected = unread = with_rejects = given = 0
+    # the chunks asked again for a missing required field, the extractions
+    # that asked one, and those whose coverage predates the count
+    retried = retried_extractions = retried_absent = 0
     failed_rejecting = critiques = with_findings = findings = invalid = 0
     for document in documents.values():
         if not document.planned:
@@ -2585,6 +2608,11 @@ def _aggregate_content(
         if coverage is not None and batch is not None:
             extractions += 1
             chunks += coverage["chunks"]
+            if coverage.get("retried_chunks") is None:
+                retried_absent += 1
+            else:
+                retried += coverage["retried_chunks"]
+                retried_extractions += bool(coverage["retried_chunks"])
             rejected += coverage["rejected_claims"]
             unread += coverage["unread_objects"]
             given += batch["claims"].total()
@@ -2705,6 +2733,11 @@ def _aggregate_content(
         },
         "zero_entities": zero_entities,
         "chunks": chunks,
+        "retried_chunks": {
+            "chunks": retried,
+            "extractions": retried_extractions,
+            "absent": retried_absent,
+        },
         "fallbacks": _by_count(fallbacks),
         "records": {
             "extractions": record_extractions,
@@ -3381,7 +3414,8 @@ def _content_sections(content: Mapping[str, Any]) -> list[_Section]:
             [
                 f"{_n(content['batches'])} batches read, from completed "
                 f"extractions and GEDCOM adapters; {_n(content['chunks'])} "
-                "chunks."
+                "chunks.",
+                _retried_line(content["retried_chunks"]),
             ],
         ),
         _Section(
@@ -4269,8 +4303,12 @@ def _html_document(document: Mapping[str, Any]) -> str:
         items.append(f"Claims: {_listed(_by_count(batch['claims']))}")
     coverage = document["coverage"]
     if coverage:
+        retried = coverage.get("retried_chunks")
         items.append(
-            f"Chunks: {coverage['chunks']}; rejected claims: "
+            f"Chunks: {coverage['chunks']} (asked again for a missing "
+            "required field: "
+            + ("not counted" if retried is None else str(retried))
+            + "); rejected claims: "
             f"{coverage['rejected_claims']}; unread objects: "
             f"{coverage['unread_objects']}; fallback tiers: "
             f"{', '.join(coverage['fallback']) or 'none'}"
