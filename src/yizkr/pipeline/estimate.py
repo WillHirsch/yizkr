@@ -75,8 +75,10 @@ fails, is read again and counted. A container whose transcription
 stands reads nothing again: its excerpts are those its directory holds, read
 from files as the driver reads them (ScratchDriver._known_excerpts), and
 each counts the stages whose views do not stand, as the driver rechecks
-them (its transcription against the check, its critique's entries), and
-every stage after the first of them. An image of a container whose
+them (its transcription against the check, its critique's entries): a
+transcription made again from its container's reading, with the content
+its batch was made from, leaves the views after it standing; otherwise
+every stage after the first of them counts too. An image of a container whose
 transcription is made again counts every excerpt stage, though an excerpt
 the run holds for it may have views that stand. An excerpt stage left to
 make starts its role's engine client, as the run does, so a client the run
@@ -1102,15 +1104,16 @@ class Estimator(ScratchDriver):
         self, excerpt: DocumentRun, planned: list[str]
     ) -> list[str]:
         """The planned stages of an excerpt the run holds already whose
-        views it makes: the first whose view does not stand (_stands), with
-        the driver's rechecks (Orchestrator._transcription, _critique), and
-        every one after it."""
-        checked = self._route(excerpt) in (
-            "vision",
-            PAGED,
-            "text-file",
-            EXCERPT,
-        )
+        views it makes, as the driver tells (_stands, with its rechecks:
+        Orchestrator._transcription, _critique). A transcription that does
+        not stand is made again as the driver makes it, from the reading a
+        container keeps, which reads files only: when its content is the
+        one the excerpt's batch was made from, the views after it are
+        judged as they stand; otherwise, or when it cannot be made (the
+        excerpt fails there), it is the first stage made, and every one
+        after it is made too."""
+        route = self._route(excerpt)
+        checked = route in ("vision", PAGED, "text-file", EXCERPT)
         views = {
             "transcription": (
                 excerpt.transcription,
@@ -1126,11 +1129,25 @@ class Estimator(ScratchDriver):
             ),
             "critique": (excerpt.critique, _findings, _unreadable_critique),
         }
-        fresh = self._fresh(excerpt)
+        if self._fresh(excerpt):
+            return list(planned)
+        left: list[str] = []
         for at, stage in enumerate(planned):
-            if fresh or self._stands(excerpt, *views[stage]) is None:
+            if self._stands(excerpt, *views[stage]) is not None:
+                continue
+            if stage != "transcription":
+                return left + planned[at:]
+            try:
+                remade, _resolution = self._transcribe(excerpt, route)
+            except Exception:
+                return [stage]
+            if content_hash(
+                remade.model_dump(mode="json"),
+                volatile=TRANSCRIPTION_VOLATILE,
+            ) != excerpt.derivations.content(excerpt.transcription.name):
                 return planned[at:]
-        return []
+            left.append(stage)
+        return left
 
     def _excerpt_measures(self) -> dict[tuple[str, str], int]:
         """(excerpt SHA-1, stage) -> the calls the latest invocation to

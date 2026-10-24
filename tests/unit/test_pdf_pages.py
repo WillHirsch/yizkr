@@ -1350,10 +1350,12 @@ class TestTheCallEstimateCountsExcerpts:
         tmp_path,
         engine,  # noqa: F811
     ):
-        """A held excerpt whose transcription view is gone makes it again,
-        and every stage after it, though their views stand, each by the
-        resumed run's own measure: eleven people make the extraction an
-        entity manifest and two chunks, where typical is one chunk."""
+        """A held excerpt whose transcription view is gone, while the
+        booklet's reading of its image now reads otherwise, makes it again
+        with other content: every stage after it is made too, though their
+        views stand, each by the resumed run's own measure (eleven people
+        make the extraction an entity manifest and two chunks, where
+        typical is one chunk), as the driver makes them (#494)."""
         engine.people = 11
         corpus = the_booklet(tmp_path)
         run_scratch(tmp_path, corpus, engine)
@@ -1361,6 +1363,7 @@ class TestTheCallEstimateCountsExcerpts:
         transcription = excerpt / "transcription.json"
         assert transcription.is_file()
         transcription.unlink()
+        reread_the_letter(tmp_path)
         counted = estimate_of(tmp_path, corpus, engine, resume=LATEST)
         assert counted.stages["transcription"].reused == 1
         assert counted.excerpts.images == 1
@@ -1370,6 +1373,68 @@ class TestTheCallEstimateCountsExcerpts:
             "critique": 1,
         }
         assert counted.excerpts.measured_stages["extraction"] == 1
+        before = len(engine.calls)
+        run_scratch(tmp_path, corpus, engine, resume=LATEST)
+        assert excerpt_calls(engine, before) == [
+            "manifest",
+            "chunk",
+            "chunk",
+            "critique",
+        ]
+
+    def test_an_excerpt_transcription_made_again_unchanged(
+        self,
+        tmp_path,
+        engine,  # noqa: F811
+    ):
+        """A held excerpt whose transcription view is gone makes it again
+        from the booklet's reading, with the content its batch was made
+        from: its extraction and critique stand, as the driver reuses
+        them, and no engine starts for it, so another CLI is no refusal,
+        whatever --until says (#494)."""
+        corpus = the_booklet(tmp_path)
+        run_scratch(tmp_path, corpus, engine)
+        (excerpt,) = runs_dir(tmp_path).glob("*/excerpts/*")
+        (excerpt / "transcription.json").unlink()
+        engine.cli = "9.9.10"
+        closed = engine.closed
+        for until in ("transcription", None):
+            counted = estimate_of(
+                tmp_path, corpus, engine, resume=LATEST, until=until
+            )
+            assert counted.excerpts.stale["transcription"] == 1
+            assert counted.cli_version is None
+        assert counted.excerpts.stale == {
+            "transcription": 1,
+            "extraction": 0,
+            "critique": 0,
+        }
+        assert counted.excerpts.total == 0
+        assert engine.closed == closed
+
+    def test_two_excerpts_of_one_container_with_other_stages_left(
+        self,
+        tmp_path,
+        engine,  # noqa: F811
+    ):
+        """Of the album's two gray images, one has its critique left to
+        make and the other its extraction: the estimate starts the
+        extract and the critique roles' clients (#494)."""
+        corpus = compilations(tmp_path)
+        run_scratch(tmp_path, corpus, engine)
+        held = runs_dir(tmp_path).glob("*/excerpts/*")
+        excerpts = {path.name: path for path in held}
+        for path in excerpts[gray_sha1(1)].glob("critique*"):
+            path.unlink()
+        (excerpts[gray_sha1(2)] / "batch.json").unlink()
+        closed = engine.closed
+        counted = estimate_of(tmp_path, corpus, engine, resume=LATEST)
+        assert counted.excerpts.stale == {
+            "transcription": 0,
+            "extraction": 1,
+            "critique": 2,
+        }
+        assert engine.closed - closed == 2
 
     @pytest.mark.parametrize("measured", [True, False])
     def test_a_held_excerpt_counts_only_the_stages_left(
@@ -1521,7 +1586,9 @@ class TestTheCallEstimateCountsExcerpts:
     ):
         """The letter's excerpt holds a vision transcription with no
         record, which the check fails: the driver sets it aside and makes
-        every stage again, and the estimate counts them (#494)."""
+        it again from the booklet's reading, with the content its batch was
+        made from, so its extraction and critique stand; the estimate
+        counts the transcription alone (#494)."""
         corpus = the_booklet(tmp_path)
         run_scratch(tmp_path, corpus, engine)
         (excerpt,) = runs_dir(tmp_path).glob("*/excerpts/*")
@@ -1531,11 +1598,13 @@ class TestTheCallEstimateCountsExcerpts:
         counted = estimate_of(tmp_path, corpus, engine, resume=LATEST)
         assert counted.excerpts.stale == {
             "transcription": 1,
-            "extraction": 1,
-            "critique": 1,
+            "extraction": 0,
+            "critique": 0,
         }
+        before = len(engine.calls)
         run_scratch(tmp_path, corpus, engine, resume=LATEST)
         assert set_aside_stages(tmp_path) == [("excerpt", "transcription")]
+        assert excerpt_calls(engine, before) == []
 
     def test_a_critique_of_an_earlier_format_is_made_again(
         self,
@@ -1565,6 +1634,27 @@ class TestTheCallEstimateCountsExcerpts:
             ("excerpt", "critique"),
             ("pdf", "critique"),
         ]
+
+
+def reread_the_letter(tmp_path: Path) -> None:
+    """Make the booklet's kept reading of the letter's image read one
+    house number otherwise, as a reading made again may: the check passes
+    it, and the excerpt's transcription made from it differs."""
+    (container,) = runs_dir(tmp_path).glob("*/booklet")
+    reading = derived_transcription(container, LETTER_SHA1)
+    text = reading.read_text()
+    assert text.count("Angerring 11") == 1
+    reading.write_text(text.replace("Angerring 11", "Angerring 71"))
+
+
+def excerpt_calls(fake, before: int) -> list[str]:
+    """What the engine was asked for an excerpt since `before` calls:
+    its extraction's calls name its image, and a critique names none."""
+    return [
+        what
+        for what, name in fake.calls[before:]
+        if (name or "").endswith(".png") or what == "critique"
+    ]
 
 
 def lose_the_excerpts_critique(tmp_path: Path) -> None:

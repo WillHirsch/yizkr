@@ -208,8 +208,10 @@ and `yizkr.reset` for the reset.
     invoked again, a container (PDF or deck) whose transcription stands is not
     read again: its excerpts are those its directory holds, and each counts the
     stages whose views do not stand, as the driver rechecks them (its
-    transcription against the check, its critique's entries), and every
-    stage after the first of them.
+    transcription against the check, its critique's entries): a
+    transcription made again from its container's reading (no model call)
+    with the content its batch was made from leaves the views after it
+    standing; otherwise every stage after the first of them counts too.
     An image of a container whose transcription is made again counts every
     excerpt stage, though an excerpt the run holds for it may have views that
     stand. An excerpt stage left to make starts its role's engine client, as
