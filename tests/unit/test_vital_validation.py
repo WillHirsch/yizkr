@@ -198,6 +198,20 @@ class TestTheUnknownValue:
         late = claim("felix", "date_of_death", UNKNOWN, (bound, value))
         assert codes(late) == [UNKNOWN_VALUE]
 
+    @pytest.mark.parametrize(
+        "dated", ["point_in_time", "start_time", "end_time"]
+    )
+    def test_a_date_of_death_carries_no_date(self, dated):
+        # an unknown date of death states none (ADR-0040 §2.2); an unknown
+        # place of burial keeps its burial's own date (Q3, above)
+        late = claim(
+            "felix",
+            "date_of_death",
+            UNKNOWN,
+            (dated, {"type": "time", "year": 1909}),
+        )
+        assert codes(late) == [UNKNOWN_VALUE]
+
     def test_no_qualifier_takes_one(self):
         dated = claim(
             "wedding", "location", item("friedhof"), ("point_in_time", UNKNOWN)
@@ -273,7 +287,91 @@ class TestAKindOnlyACuratorMakes:
         assert [p[-12:] for p in problems[0]] == [f"[{VITAL_KIND}]"]
 
 
+class TestAQidSubject:
+    """A subject a curator confirmed as an existing item keeps the kind
+    of the mention it was confirmed from (Q11)."""
+
+    def test_a_confirmed_wedding_takes_no_date_of_death(self):
+        from yizkr.pipeline.reconcile import apply_equivalences
+
+        dated = claim(
+            "wedding", "date_of_death", {"type": "time", "year": 1909}
+        )
+        confirmed = apply_equivalences(batch(dated), {"wedding": "Q500"})
+        assert confirmed.claims[0].subject.qid == "Q500"
+        assert reject_reasons(validate_against_manifest(confirmed)) == [
+            VITAL_SUBJECT
+        ]
+        assert pre_plan_refusals(confirmed, {})[0][0] == "vital_rule"
+
+    def test_a_confirmed_person_takes_one(self):
+        from yizkr.pipeline.reconcile import apply_equivalences
+
+        dated = claim("eugen", "date_of_death", {"type": "time", "year": 1909})
+        confirmed = apply_equivalences(batch(dated), {"eugen": "Q501"})
+        assert reject_reasons(validate_against_manifest(confirmed)) == []
+
+    def test_a_qid_subject_of_an_entity_record_has_its_kind(self):
+        dated = {
+            **claim(
+                "wedding", "date_of_death", {"type": "time", "year": 1909}
+            ),
+            "subject": {"kind": "qid", "qid": "Q502"},
+        }
+        entities = [
+            *ENTITIES,
+            {
+                "id": "w2",
+                "label": "a wedding",
+                "kind": "wedding",
+                "qid": "Q502",
+            },
+        ]
+        assert codes(dated, entities=entities) == [VITAL_SUBJECT]
+
+
+class TestAClassingClaim:
+    @pytest.mark.parametrize("prop", ["instance_of", "subclass_of"])
+    @pytest.mark.parametrize("kind", ["birth", "death"])
+    def test_it_names_no_kind_only_a_curator_makes(self, prop, kind):
+        # an event typed only `event` in its record, made a death by a
+        # claim (Q8)
+        entities = [
+            *ENTITIES,
+            {"id": "e9", "label": "Death of Rudolf", "kind": "event"},
+        ]
+        typed = claim("e9", prop, vocab(kind))
+        assert codes(typed, entities=entities) == [VITAL_KIND]
+        assert (
+            pre_plan_refusals(batch(typed, entities=entities), {})[0][0]
+            == "vital_rule"
+        )
+
+
 class TestUnionEnds:
+    def test_a_witness_is_none_of_the_couple(self):
+        # a wedding's witness takes part in the union too, but only the
+        # spouses are its couple (ADR-0036)
+        witness = claim(
+            "marriage",
+            "participant",
+            item("felix"),
+            ("object_has_role", vocab("witness")),
+        )
+        ended = claim("marriage", "ended_by_death_of", item("felix"))
+        assert codes(spouse("eugen"), spouse("caecilie"), witness, ended) == [
+            END_NOT_PARTNER
+        ]
+
+    def test_with_no_roles_every_participant_is_of_the_couple(self):
+        given = [
+            claim("marriage", "participant", item(person))
+            for person in ("eugen", "caecilie")
+        ]
+        assert codes(*given, ENDED) == []
+        stranger = claim("marriage", "ended_by_death_of", item("felix"))
+        assert codes(*given, stranger) == [END_NOT_PARTNER]
+
     def test_the_burial_registers_line(self):
         # "Witwer der Cäcilie": the union ended by her death, his status
         assert codes(spouse("eugen"), spouse("caecilie"), ENDED, WIDOWED) == []
@@ -343,6 +441,29 @@ class TestALeftOutPerson:
             "subject": {"kind": "artifact", "sha1": BURIAL},
         }
         assert codes(signed) == [LEFT_OUT_PERSON]
+
+    @pytest.mark.parametrize("prop", ["author", "residence", "relative"])
+    def test_nor_once_a_curator_confirms_them_as_an_item(self, prop):
+        from yizkr.pipeline.reconcile import apply_equivalences
+
+        named = claim("eugen", prop, item("pastor"))
+        if prop == "author":
+            named["subject"] = {"kind": "artifact", "sha1": BURIAL}
+        confirmed = apply_equivalences(batch(named), {"pastor": "Q600"})
+        assert confirmed.claims[0].value.value.qid == "Q600"
+        assert LEFT_OUT_PERSON in reject_reasons(
+            validate_against_manifest(confirmed)
+        )
+        assert pre_plan_refusals(confirmed, {})[0][0] == "vital_rule"
+
+    def test_nor_as_a_qualifiers_value(self):
+        named = claim(
+            "eugen",
+            "residence",
+            item("friedhof"),
+            ("said_to_be_the_same_as", item("pastor")),
+        )
+        assert LEFT_OUT_PERSON in codes(named)
 
 
 class TestTheManifestParse:
