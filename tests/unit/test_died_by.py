@@ -490,3 +490,198 @@ class TestFromTheGraph:
             deprecated,
         ]
         assert d.died_by(d.from_rows(rows)) == []
+
+
+class TestMixedPrecisions:
+    def test_bounds_in_one_year_at_different_precisions_sort(self):
+        # a document dated 1938 and one dated 19 August 1938 both bound
+        # "der selige Felix" (hypothetical): every reader sorts them
+        inputs = d.Inputs(
+            deaths=(d.DeathStatement("felix", None, frozenset({"a", "b"})),),
+            inceptions={
+                "a": (d.Dating(d.When(1938, precision="year")),),
+                "b": (d.Dating(day(1938, 8, 19)),),
+            },
+        )
+        found = d.died_by(inputs)
+        assert [b.by for b in found] == [
+            d.When(1938, precision="year"),
+            day(1938, 8, 19),
+        ]
+        assert sorted([day(1938, 8, 19), d.When(1938, 8, precision="month")])
+
+
+class TestEveryQualifierValue:
+    """A statement with several values of one date qualifier keeps them
+    all, never narrower than any, whatever order they come in (ADR-0040
+    §2.4): the hypothetical batch presenting Eugen as widowed on 15
+    December 1905 and on 16 March 1909."""
+
+    RUN = {
+        "model_identifier": "fake",
+        "pipeline_version": "0.1",
+        "started_at": "2026-10-24T10:00:00+00:00",
+    }
+    SHA1 = "b" * 40
+
+    @staticmethod
+    def time(year, month, day_):
+        return {"type": "time", "year": year, "month": month, "day": day_}
+
+    def batch(self, qualifiers, prop="civil_status") -> ClaimBatch:
+        source = {
+            "artifact": {"kind": "artifact", "sha1": self.SHA1},
+            "transcription_excerpt": {"text": "Witwer", "language": "de"},
+        }
+
+        def local(local_id):
+            return {"kind": "local", "local_id": local_id}
+
+        claims = [
+            {
+                "subject": local("m"),
+                "property": "participant",
+                "value": {"type": "item", "value": local(person)},
+                "source": source,
+            }
+            for person in ("eugen", "caecilie")
+        ] + [
+            {
+                "subject": local("m"),
+                "property": "ended_by_death_of",
+                "value": {"type": "item", "value": local("caecilie")},
+                "source": source,
+            },
+            {
+                "subject": local("eugen"),
+                "property": "civil_status",
+                "value": {
+                    "type": "item",
+                    "value": {"kind": "vocab", "key": "widowed"},
+                },
+                "qualifiers": [
+                    {"property": key, "value": value}
+                    for key, value in qualifiers
+                ],
+                "source": source,
+            },
+        ]
+        return ClaimBatch.model_validate(
+            {"extraction_run": self.RUN, "claims": claims}
+        )
+
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_a_batch_keeps_every_point_in_time(self, reverse):
+        points = [
+            ("point_in_time", self.time(1905, 12, 15)),
+            ("point_in_time", self.time(1909, 3, 16)),
+        ]
+        if reverse:
+            points.reverse()
+        (bound,) = d.died_by(d.from_batch(self.batch(points)))
+        assert bound.by == day(1909, 3, 16)
+
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_a_batch_keeps_every_latest_date(self, reverse):
+        # a death "before 15 December 1905" and "before 16 March 1909" in
+        # one claim: its bound is the later, never the narrower
+        qualifiers = [
+            ("latest_date", self.time(1905, 12, 15)),
+            ("latest_date", self.time(1909, 3, 16)),
+        ]
+        if reverse:
+            qualifiers.reverse()
+        claim = (
+            self.batch([])
+            .claims[0]
+            .model_copy(update={"property": "date_of_death"})
+        )
+        dated = ClaimBatch.model_validate(
+            {
+                "extraction_run": self.RUN,
+                "claims": [
+                    {
+                        **claim.model_dump(mode="json", exclude_none=True),
+                        "subject": {"kind": "local", "local_id": "eugen"},
+                        "value": self.time(1904, 1, 1),
+                        "qualifiers": [
+                            {"property": k, "value": v} for k, v in qualifiers
+                        ],
+                    }
+                ],
+            }
+        )
+        (death,) = d.from_batch(dated).deaths
+        assert death.dating.bound() == day(1909, 3, 16)
+        assert death.dating.span()[1] == day(1909, 3, 16).period()[1]
+
+    def rows(self, kind, column, values, reverse):
+        E = TestFromTheGraph.E
+        found = [
+            {
+                "kind": {"type": "literal", "value": kind},
+                "subject": {"type": "uri", "value": E + "Q2"},
+                "statement": {"type": "uri", "value": E + "s3"},
+                "rank": {
+                    "type": "uri",
+                    "value": "http://wikiba.se/ontology#NormalRank",
+                },
+                "artifact": {"type": "uri", "value": E + "Q90"},
+                **{
+                    name: {"type": "literal", "value": cell}
+                    for name, cell in cells.items()
+                },
+            }
+            for cells in values
+        ]
+        return list(reversed(found)) if reverse else found
+
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_the_graph_keeps_every_point_in_time(self, reverse):
+        E = TestFromTheGraph.E
+        ends = [
+            TestFromTheGraph().row(
+                "end",
+                "Q5",
+                "s1",
+                value={"type": "uri", "value": E + "Q3"},
+                partner={"type": "uri", "value": E + p},
+            )
+            for p in ("Q2", "Q3")
+        ]
+        widowed = self.rows(
+            "widowed",
+            "pointInTime",
+            [
+                {
+                    "pointInTime": "1905-12-15T00:00:00Z",
+                    "pointInTimePrecision": "11",
+                },
+                {
+                    "pointInTime": "1909-03-16T00:00:00Z",
+                    "pointInTimePrecision": "11",
+                },
+            ],
+            reverse,
+        )
+        (bound,) = d.died_by(d.from_rows([*ends, *widowed]))
+        assert bound.by == day(1909, 3, 16)
+
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_the_graph_keeps_every_latest_date(self, reverse):
+        rows = self.rows(
+            "death",
+            "time",
+            [
+                {
+                    "time": "1904-01-01T00:00:00Z",
+                    "timePrecision": "9",
+                    "latest": stamp,
+                    "latestPrecision": "11",
+                }
+                for stamp in ("1905-12-15T00:00:00Z", "1909-03-16T00:00:00Z")
+            ],
+            reverse,
+        )
+        (death,) = d.from_rows(rows).deaths
+        assert death.dating.bound() == day(1909, 3, 16)

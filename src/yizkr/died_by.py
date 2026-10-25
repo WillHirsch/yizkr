@@ -44,6 +44,7 @@ import math
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from functools import total_ordering
 
 from yizkr.claims import (
     ArtifactRef,
@@ -78,16 +79,34 @@ DEPRECATED = "http://wikiba.se/ontology#DeprecatedRank"
 Span = tuple[float, float]
 
 
-@dataclass(frozen=True, order=True)
+@total_ordering
+@dataclass(frozen=True)
 class When:
     """A date at its stated precision: its first year for a decade or a
     century (1890 for the 1890s, 1801 for the 19th century, as Wikibase
-    counts centuries)."""
+    counts centuries). Dates order by year, month and day, a part a date
+    does not state before any it does (1938 before 19 August 1938), then
+    by precision, so that dates of mixed precisions sort."""
 
     year: int
     month: int | None = None
     day: int | None = None
     precision: str = "day"
+
+    def _order(self) -> tuple[int, int, int, int]:
+        return (
+            self.year,
+            self.month or 0,
+            self.day or 0,
+            PRECISIONS.index(self.precision)
+            if self.precision in PRECISIONS
+            else -1,
+        )
+
+    def __lt__(self, other: object) -> bool:
+        if not isinstance(other, When):
+            return NotImplemented
+        return self._order() < other._order()
 
     @classmethod
     def of(cls, value: TimeValue) -> When:
@@ -162,6 +181,30 @@ class Dating:
     earliest: When | None = None
     latest: When | None = None
     circa: bool = False
+
+    @classmethod
+    def widest(
+        cls,
+        values: Iterable[When],
+        earliest: Iterable[When] = (),
+        latest: Iterable[When] = (),
+        circa: bool = False,
+    ) -> Dating | None:
+        """One dating from every value a statement gives of each part,
+        never narrower than any of them (rule 5): the value that ends
+        latest (of several points in time, the latest), the earliest date
+        that starts first and the latest date that ends last. None when
+        no value is given. The order the values come in changes
+        nothing."""
+        values = list(values)
+        if not values:
+            return None
+        return cls(
+            _ending_last(values),
+            _starting_first(earliest),
+            _ending_last(latest),
+            circa,
+        )
 
     def bound(self) -> When | None:
         """The latest it allows, never narrower than it: its latest date
@@ -334,6 +377,16 @@ def by_person(found: Iterable[DiedBy]) -> dict[str, list[DiedBy]]:
     return grouped
 
 
+def _ending_last(whens: Iterable[When]) -> When | None:
+    """Of `whens`, the one whose period ends last; None for none."""
+    return max(whens, key=lambda w: (w.period()[1], w), default=None)
+
+
+def _starting_first(whens: Iterable[When]) -> When | None:
+    """Of `whens`, the one whose period starts first; None for none."""
+    return min(whens, key=lambda w: (w.period()[0], w), default=None)
+
+
 def death_span(
     person: str, deaths: Iterable[DeathStatement], derived: Iterable[DiedBy]
 ) -> Span | None:
@@ -424,24 +477,20 @@ def _key(ref) -> str:
 
 def _claim_dating(claim, point_in_time: bool = False) -> Dating | None:
     """A claim's dating: its value (or, with `point_in_time`, its point in
-    time qualifier) with its earliest and latest dates; None when it has
-    no date to give."""
-    qualifiers = {
-        q.property: q.value
-        for q in claim.qualifiers
-        if isinstance(q.value, TimeValue)
-    }
-    value = (
-        qualifiers.get("point_in_time")
+    time qualifiers) with every earliest and latest date it gives, made
+    one never narrower than any (Dating.widest); None when it has no date
+    to give."""
+    qualifiers: dict[str, list[When]] = {}
+    for q in claim.qualifiers:
+        if isinstance(q.value, TimeValue):
+            qualifiers.setdefault(q.property, []).append(When.of(q.value))
+    values = (
+        qualifiers.get("point_in_time", [])
         if point_in_time
-        else claim.value
+        else [When.of(claim.value)]
         if isinstance(claim.value, TimeValue)
-        else None
+        else []
     )
-    if value is None:
-        return None
-    earliest = qualifiers.get("earliest_date")
-    latest = qualifiers.get("latest_date")
     circa = any(
         q.property == "sourcing_circumstances"
         and isinstance(q.value, ItemValue)
@@ -449,10 +498,10 @@ def _claim_dating(claim, point_in_time: bool = False) -> Dating | None:
         and q.value.value.key == "circa"
         for q in claim.qualifiers
     )
-    return Dating(
-        When.of(value),
-        When.of(earliest) if earliest is not None else None,
-        When.of(latest) if latest is not None else None,
+    return Dating.widest(
+        values,
+        qualifiers.get("earliest_date", []),
+        qualifiers.get("latest_date", []),
         circa,
     )
 
@@ -569,15 +618,24 @@ def _when(row: Mapping[str, Mapping[str, str]], name: str) -> When | None:
     return When.parse(stamp, precision)
 
 
-def _row_dating(row, name: str) -> Dating | None:
-    value = _when(row, name)
-    if value is None:
-        return None
-    return Dating(
-        value,
-        _when(row, "earliest"),
-        _when(row, "latest"),
-        _cell(row, "circa") == "true",
+def _row_dates(rows, name: str) -> list[When]:
+    """Every distinct date the rows give in the column `name`."""
+    return list(
+        dict.fromkeys(
+            when for row in rows if (when := _when(row, name)) is not None
+        )
+    )
+
+
+def _rows_dating(rows, name: str) -> Dating | None:
+    """One statement's dating from all of its rows: a statement with
+    several values of one qualifier gives a row for each, and every one
+    is kept (Dating.widest)."""
+    return Dating.widest(
+        _row_dates(rows, name),
+        _row_dates(rows, "earliest"),
+        _row_dates(rows, "latest"),
+        any(_cell(row, "circa") == "true" for row in rows),
     )
 
 
@@ -596,16 +654,12 @@ def from_rows(rows: Iterable[Mapping[str, Mapping[str, str]]]) -> Inputs:
                 "subject": _cell(row, "subject"),
                 "value": row.get("value"),
                 "deprecated": _cell(row, "rank") == DEPRECATED,
-                "dating": None,
+                "rows": [],
                 "sources": set(),
                 "partners": set(),
             },
         )
-        kind = entry["kind"]
-        if entry["dating"] is None:
-            entry["dating"] = _row_dating(
-                row, "pointInTime" if kind == "widowed" else "time"
-            )
+        entry["rows"].append(row)
         if _cell(row, "artifact"):
             entry["sources"].add(_cell(row, "artifact"))
         if _cell(row, "partner"):
@@ -613,6 +667,10 @@ def from_rows(rows: Iterable[Mapping[str, Mapping[str, str]]]) -> Inputs:
     deaths, ends, widowhoods = [], [], []
     inceptions: dict[str, list[Dating]] = {}
     for entry in entries.values():
+        entry["dating"] = _rows_dating(
+            entry["rows"],
+            "pointInTime" if entry["kind"] == "widowed" else "time",
+        )
         sources = frozenset(entry["sources"])
         deprecated = entry["deprecated"]
         kind, subject = entry["kind"], entry["subject"]
