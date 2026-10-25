@@ -1013,7 +1013,7 @@ class SiteBuilder:
         people: list[dict],
         releases: list[dict],
         sources: list[dict],
-        kinds: dict[str, str],
+        kinds: dict[str, set[str]],
     ) -> dict:
         """The run record's possibly-living count and its releases by
         cause (ADR-0040 §7): each released person counts once under every
@@ -1024,18 +1024,19 @@ class SiteBuilder:
         releases; the principal of a death event; and the birth cutoff,
         for a person released with no death evidence. Families are left
         out, as the export leaves them. ``kinds`` gives each artifact's
-        type, for the derived "died by" dates by the type of the document
-        each rests on, and the type of each source of an unknown date of
-        death (``sources``, RELEASE_SOURCES_QUERY's rows: a fragment by its
-        whole). A source's type is its manifest key, UNSTATED_KIND for none,
-        and OTHER_KIND for a class the manifest does not hold."""
+        types, every one it has, for the derived "died by" dates by the type
+        of the document each rests on, and the types of each source of an
+        unknown date of death (``sources``, RELEASE_SOURCES_QUERY's rows: a
+        fragment by its whole); a document of two types counts under each.
+        A source's type is its manifest key, UNSTATED_KIND for none, and
+        OTHER_KIND for a class the manifest does not hold."""
         causes: dict[str, set[str]] = defaultdict(set)
         unknown_by_kind: dict[str, set[str]] = defaultdict(set)
         source_kinds: dict[str, set[str]] = defaultdict(set)
         for row in sources:
             artifact = qid_of(row, "whole") or qid_of(row, "source")
-            source_kinds[cell(row, "statement")].add(
-                kinds.get(artifact) or UNSTATED_KIND
+            source_kinds[cell(row, "statement")].update(
+                kinds.get(artifact) or {UNSTATED_KIND}
             )
         for row in releases:
             qid = qid_of(row, "person")
@@ -1081,7 +1082,8 @@ class SiteBuilder:
         derived: dict[str, int] = defaultdict(int)
         for bound in self._derived:
             source = bound.source.rsplit("/", 1)[-1]
-            derived[kinds.get(source) or UNSTATED_KIND] += 1
+            for kind in kinds.get(source) or {UNSTATED_KIND}:
+                derived[kind] += 1
         return {
             "people": len(persons),
             "possibly_living": len(living),
@@ -1103,22 +1105,20 @@ class SiteBuilder:
         try:
             releases = self.run(self._instance_query(RELEASES_QUERY))
             sources = self.run(self._instance_query(RELEASE_SOURCES_QUERY))
-        except sparql.SparqlError as error:
+        except (sparql.SparqlError, OSError, ValueError) as error:
+            # a refusal, a transport failure (a timeout, an unreachable
+            # service: OSError) or an answer that does not decode
+            # (ValueError, which JSONDecodeError is)
             logger.warning(
                 "the releases by cause are not counted: the query service "
                 "did not answer their query (%s)",
                 str(error)[:300],
             )
             return None
-        return self.privacy_record(
-            people,
-            releases,
-            sources,
-            {
-                qid_of(row, "artifact"): self._kind_key(row, "kind")
-                for row in artifacts
-            },
-        )
+        kinds: dict[str, set[str]] = defaultdict(set)
+        for row in artifacts:
+            kinds[qid_of(row, "artifact")].add(self._kind_key(row, "kind"))
+        return self.privacy_record(people, releases, sources, kinds)
 
     def _kind_key(self, row: dict, name: str) -> str:
         """The manifest key of the class a row's ``name`` gives."""

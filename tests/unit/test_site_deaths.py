@@ -727,8 +727,15 @@ class TestThePrivacyRecord:
         ended=("Q9", "Q7"),
         sources=None,
         kind="certificate",
+        also=None,
     ):
         typed = vocabulary[1].get(kind, kind)
+        artifacts = [{**each, "kind": uri(typed)} for each in ARTIFACTS]
+        if also is not None:
+            # a second type of each artifact, its row first or last
+            second = vocabulary[1].get(also[0], also[0])
+            more = [{**each, "kind": uri(second)} for each in ARTIFACTS]
+            artifacts = more + artifacts if also[1] else artifacts + more
         _, summary = build(
             tmp_path,
             vocabulary,
@@ -744,9 +751,7 @@ class TestThePrivacyRecord:
                 **responses(),
                 "GROUP_CONCAT(DISTINCT ?alias": people,
                 # every artifact typed a certificate
-                "?kind wdt:": [
-                    {**each, "kind": uri(typed)} for each in ARTIFACTS
-                ],
+                "?kind wdt:": artifacts,
             },
         )
         return summary["privacy"]
@@ -779,6 +784,66 @@ class TestThePrivacyRecord:
             "no type stated": 1
         }
 
+    @pytest.mark.parametrize("first", [True, False])
+    def test_a_source_of_two_types_counts_under_each(
+        self, tmp_path, vocabulary, first
+    ):
+        # the register typed a certificate and a letter, in either order
+        record = self.record(tmp_path, vocabulary, also=("letter", first))
+        assert record["unknown_date_of_death_by_source"] == {
+            "certificate": 1,
+            "letter": 1,
+        }
+        assert record["derived_by_source"] == {"certificate": 2, "letter": 2}
+
+    def test_every_source_of_a_statement_and_no_other_statements(
+        self, tmp_path, vocabulary
+    ):
+        # Felix's unknown death stated in the register (Q23) and in a
+        # second, untyped document (Q29); a source row of a statement the
+        # releases do not hold (s9) counts for no one
+        record = self.record(
+            tmp_path,
+            vocabulary,
+            sources=[
+                stated_in("s2", "Q23"),
+                stated_in("s2", "Q29"),
+                stated_in("s9", "Q23"),
+            ],
+        )
+        assert record["unknown_date_of_death_by_source"] == {
+            "certificate": 1,
+            "no type stated": 1,
+        }
+
+    def test_an_unrelated_statements_source_counts_for_no_one(
+        self, tmp_path, vocabulary
+    ):
+        # only s9 has a source: Felix's s2 has none
+        record = self.record(
+            tmp_path, vocabulary, sources=[stated_in("s9", "Q23")]
+        )
+        assert record["unknown_date_of_death_by_source"] == {
+            "no type stated": 1
+        }
+
+    def test_a_persons_repeated_unknown_deaths_count_once(
+        self, tmp_path, vocabulary
+    ):
+        rows = [
+            release("Q7", "date_of_death", "s1"),
+            release("Q11", "date_of_death", "s2", unknown=True),
+            release("Q11", "date_of_death", "s6", unknown=True),
+        ]
+        record = self.record(
+            tmp_path,
+            vocabulary,
+            rows=rows,
+            sources=[stated_in("s2", "Q23"), stated_in("s6", "Q23")],
+        )
+        assert record["releases"]["unknown_date_of_death"] == 1
+        assert record["unknown_date_of_death_by_source"] == {"certificate": 1}
+
     def test_a_fragment_is_typed_by_its_whole(self, tmp_path, vocabulary):
         # the register's page 4 (Q30), part of the register (Q23)
         record = self.record(
@@ -799,20 +864,37 @@ class TestThePrivacyRecord:
         assert "COALESCE" not in RELEASES_QUERY
         assert "OPTIONAL" not in RELEASES_QUERY
 
+    @pytest.mark.parametrize(
+        "marker", ["?releaseKey", "SELECT ?statement ?source ?whole"]
+    )
+    @pytest.mark.parametrize(
+        "failure", ["refused", "timeout", "unreachable", "undecodable"]
+    )
     def test_a_query_service_failure_leaves_the_site_standing(
-        self, tmp_path, vocabulary, caplog
+        self, tmp_path, vocabulary, caplog, marker, failure
     ):
+        import json
+        import urllib.error
+
         from tests.unit.test_staticsite import config
         from yizkr.core.sparql import SparqlError
         from yizkr.staticsite import SiteBuilder
 
         given = responses()
+        error = {
+            "refused": SparqlError("HTTP 500: QueryEvaluationException"),
+            "timeout": TimeoutError("timed out"),
+            "unreachable": urllib.error.URLError("connection refused"),
+            "undecodable": json.JSONDecodeError(
+                "Invalid control character", "{", 0
+            ),
+        }[failure]
 
         def run(query: str):
-            if "?releaseKey" in query:
-                raise SparqlError("HTTP 500: QueryEvaluationException")
-            for marker, rows in given.items():
-                if marker in query:
+            if marker in query:
+                raise error
+            for given_marker, rows in given.items():
+                if given_marker in query:
                     return rows
             return []
 
