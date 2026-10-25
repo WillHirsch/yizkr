@@ -88,8 +88,10 @@ class RosterEntity(BaseModel):
     # an unrecognized kind's label, shown beside its QID to the
     # adjudicator and never read
     kind_label: str = ""
-    # each date as text at the precision its statement states ("the 19th
-    # century", "1919-01-07"), one sampled per item
+    # a birth as text at the precision its statement states ("the 19th
+    # century", "1919-01-07"), one sampled per item; a death as every
+    # reading the shared inputs give, each with its bounds, then the
+    # derived dates, "; "-separated (roster_death)
     birth: str = ""
     death: str = ""
     spouses: list[str] = []
