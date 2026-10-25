@@ -4,6 +4,9 @@ Checked-in SPARQL for the W1 exploration tier (ADR-0004): queries are
 published to wiki pages with run/embed links into the query service UI
 (`Project:Queries` on the instance).
 
+The [query architecture diagram](../../../docs/ARCHITECTURE.md#queries-and-private-exploration)
+shows how these templates feed the query UI and the private static site.
+
 The `.rq` files are **templates**: they reference the model vocabulary
 by manifest key (`wdt:{P:instance_of}`, `wd:{Q:human}`), because local
 P/Q ids differ per instance and never live in this repo.

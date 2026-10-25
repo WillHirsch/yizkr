@@ -1,5 +1,8 @@
 # Views, the LLM cache and the run directory
 
+The [reuse diagram](ARCHITECTURE.md#persisted-views-and-model-response-reuse)
+shows the separate decisions to reuse a document view or a model response.
+
 Development runs the whole corpus through the pipeline again and again
 (ADR-0025). Two things make that affordable and stable (ADR-0032):
 
