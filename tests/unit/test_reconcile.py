@@ -2362,10 +2362,76 @@ class TestRosterDeaths:
             lambda query: rows, properties, items, "http://wikibase.example"
         )
         assert deaths == {
-            "Q11": ["by 1909-03-20 (derived)", reconcile.UNDATED]
+            "Q11": reconcile.DeathReadings(
+                (), ("by 1909-03-20 (derived)", reconcile.UNDATED)
+            )
         }
+        # a curator's death event's date stands in for no dated statement
         assert reconcile.roster_death("1941-03-06", deaths["Q11"]) == (
             "1941-03-06; by 1909-03-20 (derived); date not stated"
+        )
+
+    def test_every_dated_reading_keeps_its_bounds(self):
+        from yizkr.pipeline import reconcile
+
+        E = "http://wikibase.example/entity/"
+
+        def cell(value):
+            return {"type": "literal", "value": value}
+
+        def death(statement, **cells):
+            found = {
+                "kind": cell("death"),
+                "subject": {"type": "uri", "value": E + "Q7"},
+                "statement": {"type": "uri", "value": E + statement},
+                "rank": {
+                    "type": "uri",
+                    "value": "http://wikiba.se/ontology#NormalRank",
+                },
+                "artifact": {"type": "uri", "value": E + "Q23"},
+            }
+            found.update({name: cell(v) for name, v in cells.items()})
+            return found
+
+        rows = [
+            # Eugen's death "before 16 March 1909" (hypothetically), and
+            # the register's 16 March 1909: both, each with its bounds
+            death(
+                "s1",
+                time="1909-03-16T00:00:00Z",
+                timePrecision="11",
+                latest="1909-03-16T00:00:00Z",
+                latestPrecision="11",
+            ),
+            death("s2", time="1909-03-16T00:00:00Z", timePrecision="11"),
+            death(
+                "s3",
+                time="1909-01-01T00:00:00Z",
+                timePrecision="9",
+                earliest="1908-01-01T00:00:00Z",
+                earliestPrecision="9",
+                latest="1910-01-01T00:00:00Z",
+                latestPrecision="9",
+            ),
+        ]
+        properties = {
+            key: f"P{n}" for n, key in enumerate(load_manifest_keys()[0], 1)
+        }
+        items = {
+            key: f"Q{n}" for n, key in enumerate(load_manifest_keys()[1], 1)
+        }
+        deaths = reconcile.roster_deaths(
+            lambda query: rows, properties, items, "http://wikibase.example"
+        )
+        assert deaths["Q7"].stated == (
+            "1909 (between 1908 and 1910)",
+            "1909-03-16",
+            "1909-03-16 (no later than 1909-03-16)",
+        )
+        # a dated statement wins over a curator's event's date
+        assert reconcile.roster_death("1890", deaths["Q7"]) == (
+            "1909 (between 1908 and 1910); 1909-03-16; "
+            "1909-03-16 (no later than 1909-03-16)"
         )
 
     def test_a_vocabulary_without_its_keys_gives_nothing(self):
@@ -2379,7 +2445,7 @@ class TestRosterDeaths:
                 items,
                 "http://wikibase.example",
             )
-            == {}
+            is None
         )
 
 

@@ -352,12 +352,17 @@ def fetch_roster(client: WikiClient, config: Config) -> list[RosterEntity]:
                     "" if kind_qid in kind_key else field(binding, "kindLabel")
                 ),
                 # direct statements win; event-derived dates fill gaps;
-                # each at the precision its statement states, and beside
-                # them what the shared derivation gives (roster_deaths)
+                # each at the precision its statement states. A death is
+                # every reading the shared inputs give (roster_deaths),
+                # with its bounds, where the vocabulary lets them be read
                 birth=date(binding, "birth", "eventBirth"),
                 death=roster_death(
-                    date(binding, "death", "eventDeath"),
-                    deaths.get(field(binding, "item").rsplit("/", 1)[-1]),
+                    date(binding, "eventDeath")
+                    if deaths is not None
+                    else date(binding, "death", "eventDeath"),
+                    (deaths or {}).get(
+                        field(binding, "item").rsplit("/", 1)[-1]
+                    ),
                 ),
                 spouses=split(binding, "spouses"),
                 fathers=split(binding, "fathers"),
@@ -382,48 +387,93 @@ def fetch_roster(client: WikiClient, config: Config) -> list[RosterEntity]:
 UNDATED = "date not stated"
 
 
+@dataclass(frozen=True)
+class DeathReadings:
+    """An item's deaths as the roster reads them from the shared inputs:
+    each non-deprecated dated death statement, with the bounds its source
+    states (``stated``), and what the shared derivation gives (``shown``:
+    each "died by" date, and UNDATED for a date of death of unknown
+    value)."""
+
+    stated: tuple[str, ...] = ()
+    shown: tuple[str, ...] = ()
+
+
+def _when_text(when: died_by.When, where: str) -> str:
+    stamp = (
+        f"{when.year:04d}-{when.month or 1:02d}-{when.day or 1:02d}T00:00:00Z"
+    )
+    return time_text(stamp, died_by.WIKIBASE_PRECISION[when.precision], where)
+
+
+def reading_text(dating: died_by.Dating) -> str:
+    """A dated death statement as the adjudicator reads it: its value at
+    its precision, with the earliest and latest dates its source states,
+    and circa where it says so; never narrower than the source."""
+    where = "a roster's date of death"
+    text = _when_text(dating.value, where)
+    if dating.circa:
+        text = f"c. {text}"
+    earliest = _when_text(dating.earliest, where) if dating.earliest else None
+    latest = _when_text(dating.latest, where) if dating.latest else None
+    if earliest and latest:
+        text += f" (between {earliest} and {latest})"
+    elif latest:
+        text += f" (no later than {latest})"
+    elif earliest:
+        text += f" (no earlier than {earliest})"
+    return text
+
+
 def roster_deaths(
     run, properties, items, concept_uri: str
-) -> dict[str, list[str]]:
-    """What the shared derivation gives each item's death, by its QID
-    (ADR-0040 §2.4): each "died by" date, as "by 25 December 1958
-    (derived)" at its precision, and UNDATED for a date of death of unknown
-    value a curator has not deprecated, read with the library query
-    ``died-by.rq`` and `run`. An instance whose vocabulary lacks what that
-    query names gives nothing."""
+) -> dict[str, DeathReadings] | None:
+    """Each item's deaths, by its QID, read with the library query
+    ``died-by.rq`` and `run` through the shared inputs: every
+    non-deprecated dated death statement (``reading_text``), each "died
+    by" date the derivation gives, as "by 25 December 1958 (derived)" at
+    its precision, and UNDATED for a date of death of unknown value a
+    curator has not deprecated (ADR-0040 §2.4, §8). None for an instance
+    whose vocabulary lacks what that query names."""
     template = load_templates()[died_by.QUERY]
     keys = placeholder_keys(template)
     if not (keys[0] <= properties.keys() and keys[1] <= items.keys()):
-        return {}
+        return None
     inputs = died_by.from_rows(
         run(render_for_instance(template, properties, items, concept_uri))
     )
-    found: dict[str, list[str]] = {}
+    stated: dict[str, list[str]] = {}
+    shown: dict[str, list[str]] = {}
+    for death in inputs.deaths:
+        if death.deprecated:
+            continue
+        qid = death.person.rsplit("/", 1)[-1]
+        if death.dating is None:
+            shown.setdefault(qid, []).append(UNDATED)
+        elif death.dating.value is not None:
+            stated.setdefault(qid, []).append(reading_text(death.dating))
     for bound in died_by.died_by(inputs):
-        stamp = (
-            f"{bound.by.year:04d}-{bound.by.month or 0:02d}-"
-            f"{bound.by.day or 0:02d}T00:00:00Z"
-        )
-        text = time_text(
-            stamp,
-            died_by.WIKIBASE_PRECISION[bound.by.precision],
-            "a roster's derived date",
-        )
-        found.setdefault(bound.person.rsplit("/", 1)[-1], []).append(
+        text = _when_text(bound.by, "a roster's derived date")
+        shown.setdefault(bound.person.rsplit("/", 1)[-1], []).append(
             f"by {text} (derived)"
         )
-    for death in inputs.deaths:
-        if death.dating is None and not death.deprecated:
-            found.setdefault(death.person.rsplit("/", 1)[-1], []).append(
-                UNDATED
-            )
-    return {qid: sorted(set(shown)) for qid, shown in found.items()}
+    return {
+        qid: DeathReadings(
+            tuple(sorted(set(stated.get(qid, ())))),
+            tuple(sorted(set(shown.get(qid, ())))),
+        )
+        for qid in {*stated, *shown}
+    }
 
 
-def roster_death(dated: str, derived: list[str] | None) -> str:
-    """An item's death as the adjudicator reads it: its dated death, then
-    what the shared derivation gives it, "; "-separated."""
-    return "; ".join(part for part in (dated, *(derived or ())) if part)
+def roster_death(dated: str, readings: DeathReadings | None) -> str:
+    """An item's death as the adjudicator reads it, "; "-separated: every
+    dated death statement, or else `dated` (a curator's death event's
+    date, or the roster query's own reading where the shared inputs cannot
+    be read), then what the shared derivation gives."""
+    readings = readings or DeathReadings()
+    first = readings.stated or ((dated,) if dated else ())
+    return "; ".join((*first, *readings.shown))
 
 
 def _keys(names: Iterable[str]) -> set[str]:
