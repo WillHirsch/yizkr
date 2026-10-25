@@ -360,9 +360,11 @@ class UnknownValue(StrictModel):
     stated without its place. Written as Wikibase's "some value". Only
     `date_of_death` and `burial_place` take it, as the claim's own value,
     never a qualifier's; it carries the words that state the death or the
-    burial as its excerpt, and no earliest date, latest date or circa,
-    since the source states no limit (ADR-0040 §2.2). A blank field, "d. ?"
-    or "date unknown" gives no claim at all."""
+    burial as its excerpt. An unknown date of death carries no date, and
+    no earliest date, latest date or circa, since the source states no
+    limit (ADR-0040 §2.2); an unknown place of burial keeps its burial's
+    own date, with the range or circa its source gives that date (Q3). A
+    blank field, "d. ?" or "date unknown" gives no claim at all."""
 
     type: Literal["unknown"] = "unknown"
 

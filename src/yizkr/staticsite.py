@@ -486,14 +486,13 @@ OTHER_KIND = "other"
 # subclass of one, typed at any rank but deprecated: each partner its
 # participant statements name, at any rank but deprecated, and each
 # stated end, an `ended by` event or an `ended by death of` partner, at
-# any rank but deprecated, with each source it is stated in, and an end
-# event's best-ranked points in time (?endTime, ?endPrecision). The person
+# any rank but deprecated, with each source it is stated in. The person
 # page shows each union a person takes part in with its stated end, or,
 # where none is stated, the end the shared derivation gives (ADR-0040
-# §2.6); the timeline shows an end event at its dates.
+# §2.6); the timeline shows an end event at its dates (UNION_END_DATES).
 UNIONS_QUERY = """\
 SELECT ?union ?unionLabel ?partner ?partnerLabel ?endProp ?end ?endLabel
-       ?endStatement ?source ?sourceLabel ?endTime ?endPrecision
+       ?endStatement ?source ?sourceLabel
 WHERE {{
   ?union p:{instance_of} ?typing .
   ?typing ps:{instance_of}/wdt:{subclass_of}* wd:{partnership} ;
@@ -519,19 +518,81 @@ WHERE {{
     }}
     OPTIONAL {{ ?end rdfs:label ?endLabel . FILTER(LANG(?endLabel) = "en") }}
     OPTIONAL {{
-      ?end p:{point_in_time} ?endDated .
-      ?endDated a wikibase:BestRank .
-      wd:{point_in_time} wikibase:statementValue ?endTimeLink .
-      ?endDated ?endTimeLink ?endNode .
-      ?endNode wikibase:timeValue ?endTime ;
-               wikibase:timePrecision ?endPrecision .
-    }}
-    OPTIONAL {{
       ?endStatement prov:wasDerivedFrom/pr:{stated_in} ?source .
       OPTIONAL {{
         ?source rdfs:label ?sourceLabel . FILTER(LANG(?sourceLabel) = "en")
       }}
     }}
+  }}
+}}
+"""
+
+# every date a union's end event states (a divorce's), one row for each
+# partner, each point-in-time statement of the event at any rank but
+# deprecated and each source that statement is stated in, in the
+# person-timeline query's form: the date at its stated precision, the
+# earliest and latest dates its source states for it (named by ?low and
+# ?high), its sourcing circumstances folded into ?circumstances, and the
+# date statement's own source. So every attributed date shows, each with
+# its own source, and none is picked (ADR-0002, rule 6). ?endedBy is the
+# union's end statement; its own sources are UNIONS_QUERY's.
+UNION_END_DATES_QUERY = """\
+SELECT ?union ?end ?dateStatement ?person ?personLabel ?date ?precision
+       ?low ?earliest ?earliestPrecision ?high ?latest ?latestPrecision
+       ?circumstances ?source ?sourceLabel
+WHERE {{
+  ?union p:{ended_by} ?endedBy .
+  ?endedBy ps:{ended_by} ?end .
+  FILTER NOT EXISTS {{ ?endedBy wikibase:rank wikibase:DeprecatedRank }}
+  ?union p:{participant} ?participation .
+  ?participation ps:{participant} ?person .
+  FILTER NOT EXISTS {{
+    ?participation wikibase:rank wikibase:DeprecatedRank
+  }}
+  ?end p:{point_in_time} ?dateStatement .
+  FILTER NOT EXISTS {{
+    ?dateStatement wikibase:rank wikibase:DeprecatedRank
+  }}
+  wd:{point_in_time} wikibase:statementValue ?dateLink .
+  ?dateStatement ?dateLink ?dateNode .
+  ?dateNode wikibase:timeValue ?date ;
+            wikibase:timePrecision ?precision .
+  BIND(wd:{earliest_date} AS ?low)
+  BIND(wd:{latest_date} AS ?high)
+  OPTIONAL {{
+    wd:{earliest_date} wikibase:qualifierValue ?lowLink .
+    ?dateStatement ?lowLink ?lowNode .
+    ?lowNode wikibase:timeValue ?earliest ;
+             wikibase:timePrecision ?earliestPrecision .
+  }}
+  OPTIONAL {{
+    wd:{latest_date} wikibase:qualifierValue ?highLink .
+    ?dateStatement ?highLink ?highNode .
+    ?highNode wikibase:timeValue ?latest ;
+              wikibase:timePrecision ?latestPrecision .
+  }}
+  OPTIONAL {{
+    SELECT ?dateStatement
+           (GROUP_CONCAT(DISTINCT ?circumstanceCell; separator="|")
+            AS ?circumstances)
+    WHERE {{
+      ?dateStatement pq:{sourcing_circumstances} ?circumstance .
+      OPTIONAL {{ ?circumstance rdfs:label ?circumstanceName .
+                 FILTER(LANG(?circumstanceName) = "en") }}
+      BIND(ENCODE_FOR_URI(COALESCE(?circumstanceName,
+                                   REPLACE(STR(?circumstance), "^.*/", "")))
+           AS ?circumstanceCell)
+    }}
+    GROUP BY ?dateStatement
+  }}
+  OPTIONAL {{
+    ?dateStatement prov:wasDerivedFrom/pr:{stated_in} ?source .
+    OPTIONAL {{
+      ?source rdfs:label ?sourceLabel . FILTER(LANG(?sourceLabel) = "en")
+    }}
+  }}
+  OPTIONAL {{
+    ?person rdfs:label ?personLabel . FILTER(LANG(?personLabel) = "en")
   }}
 }}
 """
@@ -823,16 +884,14 @@ class UnionShown:
     """A union as the person page shows it (UNIONS_QUERY): its QID and
     label, each partner by QID with their label, and each stated end, as
     (the end's property key, the end's QID, its label, its sources as
-    (QID, label) pairs); and each end event's points in time, by its QID,
-    as (time, precision) pairs."""
+    (QID, label) pairs); and the rows of each end event's dates
+    (UNION_END_DATES_QUERY), by the event's QID."""
 
     qid: str
     label: str
     partners: dict[str, str]
     ends: tuple[tuple[str, str, str, tuple[tuple[str, str], ...]], ...]
-    end_dates: dict[str, tuple[tuple[str, str], ...]] = field(
-        default_factory=dict
-    )
+    end_dates: dict[str, tuple[dict, ...]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -1211,7 +1270,10 @@ class SiteBuilder:
             self.run(self._instance_query(UNDATED_DEATHS_QUERY))
         )
         deaths = died_by.from_rows(self.run(self._library_query("died-by")))
-        unions = self.unions(self.run(self._instance_query(UNIONS_QUERY)))
+        unions = self.unions(
+            self.run(self._instance_query(UNIONS_QUERY)),
+            self.run(self._instance_query(UNION_END_DATES_QUERY)),
+        )
         releases = self.run(self._instance_query(RELEASES_QUERY))
         self.people = {qid_of(row, "person"): row for row in people}
         self.artifact_qids = {qid_of(row, "artifact") for row in artifacts}
@@ -1456,11 +1518,20 @@ class SiteBuilder:
             )
         return dict(deaths)
 
-    def unions(self, rows: list[dict]) -> list[UnionShown]:
+    def unions(
+        self, rows: list[dict], date_rows: list[dict] | None = None
+    ) -> list[UnionShown]:
         """UNIONS_QUERY's rows as unions, in the order of their QIDs: each
         partner, and each stated end with its sources in the order of
         their QIDs. An end whose property the manifest does not know is
-        left out."""
+        left out. ``date_rows`` (UNION_END_DATES_QUERY's) give each end
+        event's dates, every row kept: each is a date statement's, for
+        one partner and one source."""
+        dates: dict[str, dict[str, list[dict]]] = {}
+        for row in date_rows or []:
+            dates.setdefault(qid_of(row, "union"), {}).setdefault(
+                qid_of(row, "end"), []
+            ).append(row)
         found: dict[str, dict] = {}
         for row in rows:
             union = found.setdefault(
@@ -1489,10 +1560,6 @@ class SiteBuilder:
                 end["sources"][qid_of(row, "source")] = cell(
                     row, "sourceLabel"
                 )
-            if cell(row, "endTime"):
-                union.setdefault("dates", {}).setdefault(end["end"], {})[
-                    (cell(row, "endTime"), cell(row, "endPrecision"))
-                ] = None
         return [
             UnionShown(
                 qid=qid,
@@ -1513,8 +1580,8 @@ class SiteBuilder:
                     for end in found[qid]["ends"].values()
                 ),
                 end_dates={
-                    end: tuple(sorted(dates))
-                    for end, dates in found[qid].get("dates", {}).items()
+                    end: tuple(found_dates)
+                    for end, found_dates in (dates or {}).get(qid, {}).items()
                 },
             )
             for qid in sorted(found, key=natural_order)
@@ -1651,14 +1718,15 @@ class SiteBuilder:
             )
         return found
 
-    def other_ends(
-        self, union: UnionShown
-    ) -> list[tuple[str, tuple[str, str] | None, str]]:
+    def other_ends(self, union: UnionShown) -> list[tuple[str, dict | None]]:
         """A union's ends by an event (`ended by`: a divorce, an
-        annulment), as the timeline shows them: for each listed partner
-        and each of the end event's points in time (None for an undated
-        one), the entry's HTML, the end with its sources; as (the
-        partner's QID, the date, the HTML)."""
+        annulment), as the timeline shows them, for each listed partner:
+        each row of the end event's dates (UNION_END_DATES_QUERY), each a
+        date statement's with its own range, circumstances and source, or
+        None where the event states no date; each row carries, under
+        ``_what``, the end with the sources of the union's end statement,
+        which are kept apart from the date's own; as (the partner's QID,
+        the row)."""
         found = []
         for key, end, label, sources in union.ends:
             if key == "ended_by_death_of":
@@ -1667,11 +1735,21 @@ class SiteBuilder:
             entry = f"{esc(union.label)}, ended by {esc(label)}" + (
                 f'<span class="source">{links}</span>' if links else ""
             )
+            rows = union.end_dates.get(end, ())
             for partner in sorted(union.partners, key=natural_order):
                 if partner not in self.people:
                     continue
-                for date in union.end_dates.get(end) or (None,):
-                    found.append((partner, date, entry))
+                mine = [r for r in rows if qid_of(r, "person") == partner]
+                if not mine:
+                    found.append((partner, {"_what": entry}))
+                    continue
+                for row in mine:
+                    found.append(
+                        (
+                            partner,
+                            {**row, "_what": entry, "_dated": True},
+                        )
+                    )
         return found
 
     def union_html(self, qid: str, unions: list[UnionShown]) -> str:
@@ -2250,11 +2328,11 @@ class SiteBuilder:
         for union in unions or []:
             for qid, entry in self.union_ends(union):
                 beside[qid].append(entry)
-            for qid, date, entry in self.other_ends(union):
-                if date is None:
+            for qid, row in self.other_ends(union):
+                if "_dated" not in row:
                     undated_ends.append(
                         f'<a href="people/{esc(qid)}.html">'
-                        f"{esc(self._name(qid))}</a>: {entry}"
+                        f"{esc(self._name(qid))}</a>: {row['_what']}"
                     )
         died = disagreement.property_labels()["date_of_death"]
         death_type = load_manifest().items["death"].label
@@ -2277,8 +2355,9 @@ class SiteBuilder:
         current_year = None
 
         def is_death(row: dict) -> bool:
-            # a derived date is no source's, so nothing stands beside it
-            if "_html" in row:
+            # a derived date is no source's, so nothing stands beside it;
+            # nor anything beside a union's end
+            if "_html" in row or "_what" in row:
                 return False
             if cell(row, "what") == died:
                 return True
@@ -2323,10 +2402,14 @@ class SiteBuilder:
                     if source_label and source_qid.startswith("Q")
                     else ""
                 )
+                what = esc(self.timeline_what(row))
+                if "_what" in row:
+                    # a union's end, with its own sources, then its date's
+                    what = row["_what"] + ("; its date" if source else "")
                 body.append(
                     f'<div class="entry">{shown_date}'
                     f"{qualifier_span(self.timeline_qualifiers(row))} — "
-                    f"{link}{esc(self.timeline_what(row))}" + source + "</div>"
+                    f"{link}{what}" + source + "</div>"
                 )
             if is_death(row):
                 # a death its source states without its date, and a union
@@ -2410,9 +2493,9 @@ class SiteBuilder:
                     self.died_by_html(bound, root=""),
                 )
         for union in unions:
-            for qid, date, entry in self.other_ends(union):
-                if date is not None:
-                    add(qid, *date, entry)
+            for qid, row in self.other_ends(union):
+                if "_dated" in row:
+                    pending[qid].append(row)
         for found in pending.values():
             found.sort(key=lambda row: _day(cell(row, "date")))
 

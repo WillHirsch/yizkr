@@ -384,9 +384,11 @@ class TestTheTimelinesDerivedDates:
             or "Q11.html" not in text[text.index("<h2>No date stated</h2>") :]
         )
 
-    def divorce(self, tmp_path, vocabulary, dated=True):
+    def divorce(self, tmp_path, vocabulary, dates=None):
         # the Landgericht Rekau's 1957 judgment: Leopold and Agnes's
-        # marriage ended by their divorce of 2 January 1957
+        # marriage ended by their divorce, each of whose date statements
+        # (`dates`, by default one of 2 January 1957 in the court's
+        # register, Q24) gives a row for each partner
         people = [
             *PEOPLE,
             *(
@@ -414,15 +416,30 @@ class TestTheTimelinesDerivedDates:
                 "endStatement": uri("d9"),
                 "source": uri("Q23"),
                 "sourceLabel": literal("divorce judgment"),
-                **(
-                    {
-                        "endTime": time_literal("+1957-01-02T00:00:00Z"),
-                        "endPrecision": literal("11"),
-                    }
-                    if dated
-                    else {}
-                ),
             }
+            for partner, label in (
+                ("Q12", "Leopold Löbig"),
+                ("Q13", "Agnes Löbig"),
+            )
+        ]
+        if dates is None:
+            dates = [("t1", "+1957-01-02T00:00:00Z", {}, "Q24")]
+        date_rows = [
+            {
+                "union": uri("Q41"),
+                "end": uri("Q42"),
+                "dateStatement": uri(statement),
+                "person": uri(partner),
+                "personLabel": literal(label),
+                "date": time_literal(stamp),
+                "precision": literal("11"),
+                "low": uri(property_id("earliest_date")),
+                "high": uri(property_id("latest_date")),
+                "source": uri(source),
+                "sourceLabel": literal(f"court register {source}"),
+                **{name: literal(value) for name, value in cells.items()},
+            }
+            for statement, stamp, cells, source in dates
             for partner, label in (
                 ("Q12", "Leopold Löbig"),
                 ("Q13", "Agnes Löbig"),
@@ -432,6 +449,7 @@ class TestTheTimelinesDerivedDates:
             tmp_path,
             vocabulary,
             {
+                "?dateStatement": date_rows,
                 **responses(unions=unions),
                 "GROUP_CONCAT(DISTINCT ?alias": people,
             },
@@ -446,14 +464,76 @@ class TestTheTimelinesDerivedDates:
             "Q13",
         }
         for entry in dated:
+            # the union's end with its own source, then the date's
             assert (
                 "marriage of Leopold and Agnes Löbig, ended by divorce of "
-                'Leopold and Agnes Löbig<span class="source">' in entry
+                'Leopold and Agnes Löbig<span class="source">'
+                '<a href="artifacts/Q23.html">' in entry
             )
-            assert '<a href="artifacts/Q23.html">' in entry
+            assert entry.endswith(
+                '; its date<span class="source">'
+                '<a href="artifacts/Q24.html">court register Q24</a>'
+                "</span>"
+            )
+
+    def test_every_date_statement_shows_with_its_own_uncertainty(
+        self, tmp_path, vocabulary
+    ):
+        # two sources date the divorce, one of them twice: the court's
+        # register on 2 January 1957, and a letter (Q25) "about 1957" and
+        # "between 1956 and 1958"; none is picked, whatever its rank
+        dates = [
+            ("t1", "+1957-01-02T00:00:00Z", {}, "Q24"),
+            (
+                "t2",
+                "+1957-01-02T00:00:00Z",
+                {"circumstances": "circa"},
+                "Q25",
+            ),
+            (
+                "t3",
+                "+1957-01-02T00:00:00Z",
+                {
+                    "earliest": "1956-01-01T00:00:00Z",
+                    "earliestPrecision": "9",
+                    "latest": "1958-01-01T00:00:00Z",
+                    "latestPrecision": "9",
+                },
+                "Q25",
+            ),
+        ]
+        found = entries(self.divorce(tmp_path, vocabulary, dates))
+        dated = [e for e in found if "ended by divorce" in e]
+        assert len(dated) == 6
+        leopold = [e for e in dated if "people/Q12.html" in e]
+        assert sum("court register Q24" in e for e in leopold) == 1
+        assert sum("court register Q25" in e for e in leopold) == 2
+        assert any("sourcing circumstances: circa" in e for e in leopold)
+        assert any("1956" in e and "1958" in e for e in leopold)
+
+    def test_the_dates_are_every_date_statement_of_the_end(self):
+        from yizkr.staticsite import UNION_END_DATES_QUERY
+
+        query = " ".join(UNION_END_DATES_QUERY.split())
+        # every point in time at any rank but deprecated, never the best
+        # ranked alone
+        assert "?end p:{point_in_time} ?dateStatement ." in query
+        assert "BestRank" not in query
+        assert (
+            "FILTER NOT EXISTS {{ ?dateStatement wikibase:rank "
+            "wikibase:DeprecatedRank }}" in query
+        )
+        # each with its own bounds, circumstances and source
+        for read in (
+            "?lowNode wikibase:timeValue ?earliest",
+            "?highNode wikibase:timeValue ?latest",
+            "?dateStatement pq:{sourcing_circumstances} ?circumstance",
+            "?dateStatement prov:wasDerivedFrom/pr:{stated_in} ?source",
+        ):
+            assert read in query, read
 
     def test_an_undated_divorce_has_no_date_stated(self, tmp_path, vocabulary):
-        text = self.divorce(tmp_path, vocabulary, dated=False)
+        text = self.divorce(tmp_path, vocabulary, dates=[])
         foot = text[text.index("<h2>No date stated</h2>") :]
         assert foot.count("ended by divorce of Leopold and Agnes Löbig") == 2
 
