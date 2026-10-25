@@ -1,0 +1,1 @@
+Your earlier answer to this assignment could not be used: none of its {count} claims gives `{field}`, which the claim schema requires. Answer the whole assignment again, as asked above, and give `{field}` on every claim.

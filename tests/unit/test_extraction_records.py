@@ -257,7 +257,7 @@ class TestTheChunkPrompt:
         )
 
     def test_kinship_classes_beside_the_term(self):
-        assert "`kinship_class`: its class, one of the kin_ items" in (
+        assert "`kinship_class`: its class, one of the `kin_` items" in (
             self.prompt
         )
         assert (

@@ -317,7 +317,9 @@ class TestExtract:
         gated nothing (#7)."""
         llm = FakeLlm(json.dumps({"claims": CLAIMS}))
         LlmClaimExtractor(llm).extract(self.transcription(), MEDIA_REF)
-        assert 'final line:\n{"done": true}\n' in llm.prompts[0]
+        assert (
+            'final line:\n\n```text\n{"done": true}\n```\n' in llm.prompts[0]
+        )
         assert "emitted" not in llm.prompts[0]
 
     @pytest.mark.parametrize(

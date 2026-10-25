@@ -60,158 +60,10 @@ from yizkr.pipeline.llm import (
     at_output_limit,
     reject_response,
 )
+from yizkr.pipeline.prompts import load_prompt
 from yizkr.pipeline.transcribe import DECK_ENGINE, Transcription
 
-EXTRACTION_PROMPT = """\
-You extract source-attributed genealogical claims from transcriptions of
-historical documents.
-
-Rules — these mirror the archive's non-negotiable conventions:
-- Record exactly what the source asserts. Never round dates, never guess,
-  never narrow a vague statement. Use precision (year/month/day/decade/
-  century), earliest_date/latest_date qualifiers for ranges, and the
-  sourcing_circumstances qualifier with the "circa" vocabulary item for
-  approximate values.
-- A year alone is year precision, never a full date: "1905" is never
-  1 January 1905 at day precision. A century or a decade the source
-  implies ("in the thirties", "в тридцатые годы") is read in the
-  document's own context (the 1930s, in a letter of 1958), never as a
-  literal "1st century" or the year 30.
-- Every claim MUST include the source reference: the artifact
-  {{"kind": "artifact", "sha1": "{artifact_sha1}"}}, plus page number and a
-  short verbatim transcription excerpt supporting it, written
-  "transcription_excerpt": {{"text": "<verbatim>", "language": "<code>"}}
-  on every claim, the language inside the excerpt and never on source:
-  the language of the excerpt's own words, {language} (the
-  transcription's) unless it is written in another. The page number is
-  the N of the [Page N] (or [Slide N]) marker the text stands under,
-  never a printed page number shown beside that marker.
-- Refer to people, places, and events the document mentions with "local"
-  references (stable local_id per entity within this batch, label as
-  written, instance_of from: {kinds}).
-- A kinship word is never the label of a person the document names:
-  take the name, never the kinship word. "Aunt Pünktchen" is labelled
-  "Pünktchen", or a fuller name the document gives her, and a writer's
-  "Dein Vater" ("your father") takes the father's name where the
-  document gives it. Only a person the document never
-  names is labelled with its kinship words ("Mem").
-- Every form the document uses to name or address a person that is no
-  plain name form (a name, or a spelling, a shortening, a diminutive or
-  an initial of one) is an appellation: a kinship term with a name
-  ("Tante Rahel") or alone ("Omama"), a pet name ("Pünktchen") or a
-  courtesy name ("Nana Maisie"). Give each as ONE `referred_to_as` claim,
-  the form verbatim, with a `perspective` qualifier naming the ego only
-  where the source gives it as an entity; a literal kinship term also
-  gives the kinship ("Tante Rahel", where Rahel is the aunt, also gives
-  `relative` with the kinship_type "Tante" and the kinship_class
-  kin_aunt_or_uncle). A description that is no
-  form of address ("the deceased", "my husband") gives none.
-- Kinds: a group of people is never one human. "The Löbig children" is
-  a family where the source presents a family or household, else each
-  child it names. A count of children the source states is the parent's
-  `number_of_children`, whether or not it names them. A year or a date
-  alone is no entity and no event: it dates the event it belongs to.
-  `unclassified_entity` is right only where no kind fits: an agency, an
-  office or a firm's department is an organization, unless the source
-  names it only as where something happened, which makes it a place; a
-  cemetery or a building is a place; a named ship a vessel. A named
-  aircraft is no vessel: it is `unclassified_entity` with the type_hint
-  "aircraft".
-- Give a place's containment (`part_of`, its country among them) only
-  where the source states it: in the place's mention ("Fläckfeld, Kreis
-  Mockburg"), in the fields a form gives that place, or in a chain of
-  containers, which states each link ("Snylsjum, gemeente Drakeradiel,
-  Fryslân" also puts gemeente Drakeradiel in Fryslân). Never infer it
-  from what you know of a place, and never carry it over from another
-  place the document names. Give it the time the source gives it for
-  the containment, and none where it gives none: `start_time` or
-  `end_time` where the source dates when the place came into or left
-  the container ("Kaldovsky District, in Chadsk Oblast from 1937"),
-  `point_in_time` where it presents the place as in the container at a
-  date ("in 1941 Koshnovka belonged to Kaldovsky District"), each with
-  its range and circa as a period's are. The document's own date is
-  never the containment's time, nor is the date of an event the source
-  places there: a birth "in 1836 at Flörburg, Kreis Peiltal" gives
-  Flörburg's `part_of` no time.
-- Use ONLY these property keys (property key: datatype — what it means),
-  for claims and qualifiers alike — a claim naming any other key is
-  discarded. The description is authoritative: it says what the VALUE
-  must be, and so which way a relation points. If the document asserts
-  something no listed property expresses, skip it:
-{property_keys}
-- Vocabulary item keys available for "vocab" references:
-{item_keys}
-- Marriages and partnerships are entities bounded by events (ADR-0036);
-  no property links two spouses directly: the couple are each a
-  `participant` of the `marriage` (or `partnership`) with the
-  `object_has_role` `spouse` (or `partner`), and the union is
-  `started_by` its wedding and `ended_by` a divorce or an annulment that
-  ends it, each an event with its own date and place. A partner's death
-  ends it by `ended_by_death_of` that partner, and ONLY where the source
-  states the couple were married when that partner died: a survivor's
-  widow's or widower's word that names the late spouse ("Witwer der
-  Cäcilie Löbig", "вдова Вашего покойного брата Рудольфа"), or a death
-  record that calls the deceased the survivor's spouse ("Ehefrau des
-  Eugen"). A marriage and a partner's death stated apart ("dessen
-  verstorbener Ehefrau", "Husband: Felix LÖBIG, died 1931") give no end
-  of any kind. A marriage whose start the source dates or places,
-  at any precision, gets its wedding, as a stated divorce gets its
-  divorce. A marriage the source only names, a partnership, or an
-  observation (a directory or census that lists the couple as married,
-  with no start) gets no wedding.
-- A birth and a death are statements on the person, never events or
-  entities (ADR-0040): `date_of_birth`, `place_of_birth`, `father` and
-  `mother` on the child; `date_of_death`, `place_of_death`,
-  `cause_of_death` and `age_at_death` (each verbatim where text) and
-  `burial_place` (its `point_in_time` the burial's own date) on the
-  deceased. A death the source states without its date ("the late",
-  "der selige", "покойный", "sillige") gives a `date_of_death` of unknown
-  value, "value": {{"type": "unknown"}}, with the words that state it as
-  its excerpt and no date qualifiers, beside any place, cause or age it
-  gives; a burial stated without its place gives `burial_place` of
-  unknown value. A blank field, "d. ?" or "date unknown" gives no claim.
-  A widow's or widower's marker gives the survivor's `civil_status`
-  `widowed`; one that names the late spouse also gives their marriage,
-  `ended_by_death_of` that spouse, and no death statement for the
-  spouse, and so does one phrase that is both markers ("вдова Вашего
-  покойного брата Рудольфа"). A parent's kind is `parentage` on
-  `father`, `mother` or `child` only where the source's words state it
-  ("Adoptivvater"), with the word in `kinship_type`.
-- A person who only certifies, registers, officiates, examines, reports
-  or witnesses a record, with no other role in it (kin of someone it is
-  about, or a party to it), is no claim's subject or value; a person the
-  record gives only by such a role, with no name ("Informant: husband"),
-  is no entity at all.
-{document_block}
-- Dating a period: a residence, an occupation or a membership is dated
-  by its `start_time` and `end_time` qualifiers, a move in and a move out
-  as its start and end. `point_in_time` on such a claim only records a
-  date at which the source presents it as holding (a census, a
-  directory entry). A marriage has no dates of its own: its wedding, and
-  a divorce or an annulment that ends it, are events, each with its own
-  `point_in_time`, and an end by a partner's death takes no date of its
-  own. A range bounds
-  one end: a start takes `earliest_date` and `latest_start_date`, an end
-  takes `earliest_end_date` and `latest_date`. Moved in "between X and
-  Y" is start_time X with earliest_date X and latest_start_date Y; moved
-  out "before Z" is end_time Z with latest_date Z. These pairs bound
-  `start_time` and `end_time` qualifiers; an entity's own `start_time` or
-  `end_time` claim (a firm's founding, a detention's start) is a date
-  value that `earliest_date` and `latest_date` bound.
-- Set confidence (0-1) per claim: how certain you are the source asserts it.
-
-Output NDJSON: one complete claim JSON object per line — no wrapper
-object, no code fences, no prose. Each claim matches the "Claim"
-definition of the JSON Schema below. After the last claim, end with
-exactly one final line:
-{{"done": true}}
-
-{schema}
-
-Transcription of artifact sha1:{artifact_sha1} (language: {language}):
-
-{text}
-"""
+EXTRACTION_PROMPT = load_prompt("extraction.md")
 
 
 # The paragraph on what a document is, in both extraction prompts
@@ -219,88 +71,14 @@ Transcription of artifact sha1:{artifact_sha1} (language: {language}):
 # each given about the document itself only where it states it of itself,
 # and about an image it places or a document it mentions only where its
 # passage conveys it, with that passage as the excerpt.
-DOCUMENT_ITSELF = """\
-- What a document is: these properties state who made a document, for
-  whom, when, where, what it is about, whom it shows and who issued it.
-  Their subject is THIS document, given exactly as the source's
-  artifact: {{"kind": "artifact", "sha1": "{artifact_sha1}"}}; an image
-  this document places, by its artifact reference exactly as listed
-  below; or a document this text mentions (a letter's enclosure), by its
-  local reference, an `unclassified_entity` whose type_hint (in the
-  entity manifest) or label says what it is ("death certificate",
-  "photograph"); and never anything else. Never
-  give an entity an artifact kind (`photograph`, `letter`, `certificate`
-  and the like): a document the text mentions is an
-  `unclassified_entity` with a type_hint.
-  * `issued_by`: the organization that issued it, where the source shows
-    it issuing (the register office of a certificate, the court of a
-    judgment);
-  * `author`: who wrote, drew or made it, where it names them (a
-    letter's signature, a studio's name on a photograph's mount); a
-    signature that only certifies or registers (a registrar's, a
-    notary's) is no authorship;
-  * `addressee`: whom it is addressed to (a letter's greeting, an
-    envelope's address);
-  * `inception`: when it was made (a letter's dateline), at the
-    precision it gives;
-  * `location_of_creation`: where it was made (a letter's heading);
-  * `main_subject`: what it is about (a letter's topic, the district a
-    map covers);
-  * `shows`: whom or what an image shows, as its content or the passage
-    names them (an inscription on a print: one claim per name, no
-    position read into their order); never `depicts`, which only the
-    faces flow gives.
-  About THIS document, give each only where the document states it of
-  itself, never from what another document says of it. About an image it
-  places or a document it mentions, give one only where a passage of
-  THIS document, read where it stands, conveys that fact of that image or
-  document, with that passage as the claim's transcription excerpt and
-  its page number the page the passage stands on: a claim about another
-  document always carries its excerpt. A letter that says it encloses a
-  man's death certificate conveys what the certificate is about: its
-  `main_subject` is that man. No other property takes a document as its
-  subject."""
+DOCUMENT_ITSELF = load_prompt("document-itself.md").rstrip("\n")
 
 # The paragraph on what the document places (ADR-0039 §3, §10.5), in both
 # extraction prompts: the images its pages or slides place, each by its
 # artifact reference and its place, or that it places none.
-PLACED_ARTIFACTS = """\
-- What this document places: the images below stand on its pages or
-  slides, each marked where it sits by the SHA-1 of its bytes
-  ("[Page 6, image 1: sha1:…]"):
-{placed_lines}
-  Give each passage of THIS document's own text that speaks of one of
-  them (a caption, a heading over it, a sentence of commentary) as ONE
-  `caption` claim: its subject that image's artifact reference exactly
-  as listed, its value the passage exactly as written, in the
-  container's language, never cut, corrected or translated, its page
-  number the page the passage stands on. A passage that speaks of two
-  images gives one claim for each. Where the text does not say plainly
-  that the passage speaks of the image (a slide's title over its one
-  image), add a judgement note of category `relation`.
-  Where a passage of THIS document, read where it stands, conveys what a
-  listed image is, give that too, by the properties on what a document
-  is, its subject the image's artifact reference, the passage its
-  excerpt, with the same judgement note where the caption has one: the
-  image stands for the original it reproduces, so "Wastl to Klara" under
-  a letter's image gives the letter's `author` (Wastl) and `addressee`
-  (Klara), and a slide's title over its one photograph gives one `shows`
-  per person it names. Give none the passage does not convey: the
-  caption's "July 1939" does not say whether the letter was written,
-  sent or received then, so it gives no `inception`; a line on the
-  reproduction ("Scanned by Nicholas for this booklet, 2010.") says who
-  copied the image and when, not who made the original or when, so it
-  gives none of these properties; where it speaks of the image it stays a
-  caption. A translation of the image's own text is no caption: it conveys
-  what that text states (its dateline, its place, its greeting), so it
-  gives those claims, its subject the image, and no `caption`. The people
-  a passage names are entities of this document, with what it says of
-  them, as anywhere else."""
+PLACED_ARTIFACTS = load_prompt("placed-artifacts.md").rstrip("\n")
 
-NO_PLACED_ARTIFACTS = """\
-- This document places no image read on its own: give no `caption`
-  claim, and no claim whose subject is an artifact reference other than
-  this document's."""
+NO_PLACED_ARTIFACTS = load_prompt("no-placed-artifacts.md").rstrip("\n")
 
 
 def placed_lines(transcription: Transcription) -> list[str]:

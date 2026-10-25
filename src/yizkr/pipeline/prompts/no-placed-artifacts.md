@@ -1,0 +1,1 @@
+- This document places no image read on its own: give no `caption` claim, and no claim whose subject is an artifact reference other than this document's.

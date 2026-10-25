@@ -485,7 +485,7 @@ class TestThePrompts:
     def test_the_document_itself_names_every_document_subject(self):
         paragraph = DOCUMENT_ITSELF.format(artifact_sha1=LETTER_REF.sha1)
         for key in load_acceptance().document_subjects:
-            assert f"* `{key}`:" in paragraph, key
+            assert f"- `{key}`:" in paragraph, key
         assert "never `depicts`" in paragraph
         assert f'"sha1": "{LETTER_REF.sha1}"' in paragraph
 

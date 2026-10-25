@@ -9,8 +9,7 @@ Examples come only from the fictional universe (docs/EXAMPLES.md). Cite
 people by QID, and give metrics as aggregates only.
 -->
 
-**Exec label:** <!-- exec:local-agent | exec:cloud-agent-ok | exec:owner -->
-**Requirement:** <!-- R1 to R6, R7-privacy, or "none: infrastructure/governance" -->
+**Exec label:** <!-- exec:local-agent | exec:cloud-agent-ok | exec:owner --> **Requirement:** <!-- R1 to R6, R7-privacy, or "none: infrastructure/governance" -->
 
 ## Summary
 
@@ -20,7 +19,7 @@ people by QID, and give metrics as aggregates only.
 
 <!--
 Commands run and their results, aggregates only:
-- `uv run ruff check .`, `uv run ruff format --check .`, and the full
+- `make lint` (Ruff and Prettier checks), and the full
   `uv run pytest -q` once before the push that opens the PR for review,
   and once per fix round (docs/TESTING.md)
 - needs:live-test: `make test-live` results from the central live run,
@@ -29,6 +28,7 @@ Commands run and their results, aggregates only:
 -->
 
 **Mutation evidence:**
+
 <!--
 For each new or changed test: the regression it guards, and the Markdown
 table from `uv run python scripts/mutate.py SPEC` showing its mutant
@@ -40,6 +40,7 @@ Or write "no new or changed tests".
 -->
 
 **Edge cases:**
+
 <!--
 The edge cases considered, each with the test that covers it or the
 reason none is needed.
@@ -79,37 +80,13 @@ checklist (docs/AGENT_PROTOCOL.md §4). A fix round runs it again over
 what its own commits change.
 -->
 
-- [ ] Docs move with code (ADRs, MODELING.md, READMEs, docs/). A
-  CLAUDE.md change needs the owner's approval, so its proposed wording
-  goes under Owner actions, not into the diff.
-- [ ] **Tests fail under their regressions.** Each new or changed test
-  is shown, with `scripts/mutate.py`, to fail under the regression it
-  guards (Mutation evidence above). A new or changed live test's spec
-  (`live = true`) is given above, and the central live run runs it.
+- [ ] Docs move with code (ADRs, MODELING.md, READMEs, docs/). A CLAUDE.md change needs the owner's approval, so its proposed wording goes under Owner actions, not into the diff.
+- [ ] **Tests fail under their regressions.** Each new or changed test is shown, with `scripts/mutate.py`, to fail under the regression it guards (Mutation evidence above). A new or changed live test's spec (`live = true`) is given above, and the central live run runs it.
 - [ ] The edge cases considered are listed above.
-- [ ] **Current with main.** If origin/main had moved on, it is merged
-  in: a merge commit, never a rebase.
-- [ ] Every example comes from the fictional universe
-  (docs/EXAMPLES.md), in code, tests, docs, commit messages and this
-  text.
-- [ ] Comments and docstrings in `src/yizkr/` describe how the code
-  works now, with no development history (no issue or PR numbers,
-  "previously" notes or bug-hunt accounts); ADR references are fine.
-- [ ] **Stages.** This PR changes no stage before write, or only in ways
-  that cannot change its outputs (a comment, a rename, a refactor). Or it
-  can change them (its code, a prompt, the manifest, a model, effort or
-  parameters), and this PR and its issue carry the matching `stage:*`
-  label, plus `needs:scratch-diff` if the stage already runs. Until the
-  first whole-corpus scratch run (#145) starts, no PR carries
-  `needs:scratch-diff` (the pre-baseline exception,
-  docs/AGENT_PROTOCOL.md §2).
-- [ ] **Test runs.** Targeted tests while iterating, then the full
-  `uv run pytest -q` once before the push that opens the PR for review,
-  and once per fix round.
-- [ ] **No real data (self-reviewed, docs/AGENT_PROTOCOL.md §7).** I
-  re-read the whole commit range (`git log -p origin/main..HEAD`) and
-  this text. Nothing quotes, paraphrases or identifies corpus content.
-  Issues are cited by #number and decisions by ADR number, with no
-  plan-internal codes.
-- [ ] Owner actions, if any, are listed in one place, under Owner
-  actions above.
+- [ ] **Current with main.** If origin/main had moved on, it is merged in: a merge commit, never a rebase.
+- [ ] Every example comes from the fictional universe (docs/EXAMPLES.md), in code, tests, docs, commit messages and this text.
+- [ ] Comments and docstrings in `src/yizkr/` describe how the code works now, with no development history (no issue or PR numbers, "previously" notes or bug-hunt accounts); ADR references are fine.
+- [ ] **Stages.** This PR changes no stage before write, or only in ways that cannot change its outputs (a comment, a rename, a refactor). Or it can change them (its code, a prompt, the manifest, a model, effort or parameters), and this PR and its issue carry the matching `stage:*` label, plus `needs:scratch-diff` if the stage already runs. Until the first whole-corpus scratch run (#145) starts, no PR carries `needs:scratch-diff` (the pre-baseline exception, docs/AGENT_PROTOCOL.md §2).
+- [ ] **Test runs.** Targeted tests while iterating, then the full `uv run pytest -q` once before the push that opens the PR for review, and once per fix round.
+- [ ] **No real data (self-reviewed, docs/AGENT_PROTOCOL.md §7).** I re-read the whole commit range (`git log -p origin/main..HEAD`) and this text. Nothing quotes, paraphrases or identifies corpus content. Issues are cited by #number and decisions by ADR number, with no plan-internal codes.
+- [ ] Owner actions, if any, are listed in one place, under Owner actions above.

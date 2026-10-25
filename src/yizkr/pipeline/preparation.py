@@ -54,6 +54,7 @@ from yizkr.claims import (
     VocabRef,
 )
 from yizkr.core.verbatim import Transcript
+from yizkr.pipeline.prompts import load_prompt
 
 # the manifest item the marker names, as the sourcing circumstances
 # qualifier's value
@@ -67,49 +68,9 @@ KEY = "preparation"
 
 # Appended to the entity manifest's prompt, after the transcription, when
 # the extraction reads the statement.
-MANIFEST_BLOCK = """
-One more thing to read, from the same transcription: what the document
-says about how its own text was prepared. Look for a statement in which
-the document says that its own text, or part of it, was prepared with
-machine assistance: that its translations were made with translation
-software or a machine translator, that its text was recognised by a
-machine (OCR) and not checked, or that a computer program or an AI tool
-wrote or translated it.
-- Only the document's own words count. Never judge from how its text
-  reads: a text that reads like a machine translation, or holds the
-  errors one makes, but says nothing of how it was made, has no such
-  statement.
-- A statement about some other text is not about the document's own
-  text: a letter it quotes that says it was typed, a program it writes
-  about, a note on how a photograph was scanned or restored.
-- The statement must say that a machine took part. A translation the
-  document says its compiler made, or a text it says was retyped, says
-  nothing of a machine.
-- When there is such a statement, quote it verbatim, as a short passage
-  the transcription holds word for word, and say what it covers: "all"
-  when it names no part of the text, or names all of it; otherwise each
-  passage it names (each translation, say), by the first and the last of
-  the numbered lines that hold that passage's text. A line that holds
-  only other text (a caption, the compiler's own commentary, the
-  statement itself) is not part of a passage the statement names.
-{pointer}
-Give it as the key "preparation" of the same JSON object as "entities",
-one of:
-"preparation": {{"statement": null}}
-"preparation": {{"statement": "<the statement, verbatim>", "covers": "all"}}
-"preparation": {{"statement": "<the statement, verbatim>",
-                "covers": [{{"first_line": 4, "last_line": 6}}]}}
-"""
+MANIFEST_BLOCK = "\n" + load_prompt("preparation-manifest.md")
 
-POINTER_BLOCK = """
-A curator has pointed to the passage below as the place where the
-document speaks of how its text was prepared. Read that passage alone:
-quote from it, or give {{"statement": null}} when it does not say that a
-machine took part. The words are the document's; the curator only
-points to them.
-
-{pointer}
-"""
+POINTER_BLOCK = "\n" + load_prompt("preparation-pointer.md")
 
 
 def manifest_block(pointer: str | None = None) -> str:

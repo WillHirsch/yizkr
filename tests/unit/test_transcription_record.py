@@ -641,11 +641,8 @@ class TestTheTranscriber:
         # with the empty cells kept as empty fields
         lines = TRANSCRIPTION_PROMPT.splitlines()
         header = lines.index("  Name | Alter | ledig | verh. | verw.")
-        end = next(
-            n
-            for n in range(header + 1, len(lines))
-            if lines[n].startswith("- ")
-        )
+        assert lines[header - 1].strip() == "```text"
+        end = lines.index("  ```", header + 1)
         example = lines[header:end]
         assert example[1:] == ["  Löbig, Eugen | 73 |  |  | x"]
         columns = example[0].strip().split(" | ")

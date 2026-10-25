@@ -8,6 +8,7 @@ ROADMAP (the word itself, or an ``item N`` / ``task N`` number) in:
 
 * Python comments, docstrings and prompt templates (string constants
   named ``*PROMPT``);
+* packaged Markdown prompt templates;
 * SPARQL comments in the packaged ``.rq`` queries;
 * YAML comments and string values in the model manifest, whose
   descriptions are rendered into prompts and onto the wiki.
@@ -144,11 +145,17 @@ def yaml_texts(source: str) -> Iterator[Found]:
         yield 0, "value", text
 
 
+def markdown_texts(source: str) -> Iterator[Found]:
+    """The whole Markdown prompt, including its examples."""
+    yield 1, "prompt", source
+
+
 SCANNERS = {
     ".py": python_texts,
     ".rq": sparql_texts,
     ".yaml": yaml_texts,
     ".yml": yaml_texts,
+    ".md": markdown_texts,
 }
 
 
@@ -157,7 +164,7 @@ def tree_violations(root: Path) -> list[str]:
     problems = []
     for path in sorted(root.rglob("*")):
         scan = SCANNERS.get(path.suffix)
-        if scan is None or not path.is_file():
+        if scan is None or not path.is_file() or path.name == "README.md":
             continue
         where = path.relative_to(root.parent)
         for line, kind, text in scan(path.read_text(encoding="utf-8")):
@@ -188,7 +195,7 @@ def test_every_source_kind_is_scanned():
             len(list(SCANNERS[suffix](path.read_text(encoding="utf-8"))))
             for path in SRC.rglob(f"*{suffix}")
         )
-        for suffix in (".py", ".rq", ".yaml")
+        for suffix in (".py", ".rq", ".yaml", ".md")
     }
     assert all(counts.values()), counts
 
@@ -283,18 +290,29 @@ def test_planted_yaml_violation_is_caught():
     ]
 
 
-def test_planted_violation_fails_the_tree_and_readmes_are_exempt(tmp_path):
+@pytest.mark.parametrize(
+    "relative, addition",
+    [
+        ("pipeline/places.py", "\n\n# fixed in #189 (ROADMAP, item 18)\n"),
+        (
+            "pipeline/prompts/review.md",
+            "Review the claims.\n\nSee #189 (ROADMAP, item 18).\n",
+        ),
+    ],
+)
+def test_planted_violation_fails_the_tree_and_readmes_are_exempt(
+    tmp_path, relative, addition
+):
     tree = tmp_path / "yizkr"
     shutil.copytree(SRC, tree, ignore=shutil.ignore_patterns("__pycache__"))
     (tree / "README.md").write_text("Development docs may cite #189.\n")
     assert tree_violations(tree) == []
 
-    target = tree / "pipeline" / "places.py"
-    target.write_text(
-        target.read_text() + "\n\n# fixed in #189 (ROADMAP, item 18)\n"
-    )
+    target = tree / relative
+    source = target.read_text() if target.exists() else ""
+    target.write_text(source + addition)
     problems = tree_violations(tree)
     assert len(problems) == 3
     assert all(
-        problem.startswith("yizkr/pipeline/places.py:") for problem in problems
+        problem.startswith(f"yizkr/{relative}:") for problem in problems
     )

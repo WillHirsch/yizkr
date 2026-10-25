@@ -922,7 +922,9 @@ class TestTheSentinel:
         none."""
         llm = ScriptedLlm(TestAdjudication().response())
         assert len(self.adjudicate(llm)) == 2
-        assert 'final line:\n{"done": true}\n' in llm.prompts[0]
+        assert (
+            'final line:\n\n```text\n{"done": true}\n```\n' in llm.prompts[0]
+        )
         assert "emitted" not in llm.prompts[0]
 
     def test_a_count_on_the_done_line_is_not_read(self):
@@ -950,7 +952,9 @@ class TestTheSentinel:
             propose_graph_pairs(llm, NAMESAKES)
         llm = ScriptedLlm(json.dumps({"done": True}))
         assert propose_graph_pairs(llm, NAMESAKES) == []
-        assert 'final line:\n{"done": true}\n' in llm.prompts[0]
+        assert (
+            'final line:\n\n```text\n{"done": true}\n```\n' in llm.prompts[0]
+        )
         assert "emitted" not in llm.prompts[0]
 
 

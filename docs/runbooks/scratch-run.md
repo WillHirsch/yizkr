@@ -1,48 +1,19 @@
 # Runbook: a whole-corpus scratch run
 
-See the [scratch-run diagram](../ARCHITECTURE.md#whole-corpus-scratch-runs)
-for the document stages, corpus barrier and write-side sequence.
-The [stage and data-product guide](../SCRATCH_WORKFLOW.md) expands each
-stage's inputs, outputs and model/deterministic/instance processing.
+See the [scratch-run diagram](../ARCHITECTURE.md#whole-corpus-scratch-runs) for the document stages, corpus barrier and write-side sequence. The [stage and data-product guide](../SCRATCH_WORKFLOW.md) expands each stage's inputs, outputs and model/deterministic/instance processing.
 
-A scratch run takes every non-excluded source of the corpus through every
-stage, unattended, from fresh state directories (ADR-0025, ADR-0032).
-`yizkr scratch run` is the one command that runs it; this page is how to
-count the calls one is to make, run it, follow it, pause, abort and
-resume it, read what it did, and reset the instance for it. The parts
-have their own references: the live monitor in
-[docs/MONITOR.md](../MONITOR.md), the views, the LLM cache and the run
-directory in [docs/LLM_CACHE.md](../LLM_CACHE.md), and `run.json` in
-[docs/RUN_MANIFEST.md](../RUN_MANIFEST.md). Code:
-`yizkr.pipeline.scratch`, `yizkr.pipeline.estimate` for the estimate,
-and `yizkr.reset` for the reset.
+A scratch run takes every non-excluded source of the corpus through every stage, unattended, from fresh state directories (ADR-0025, ADR-0032). `yizkr scratch run` is the one command that runs it; this page is how to count the calls one is to make, run it, follow it, pause, abort and resume it, read what it did, and reset the instance for it. The parts have their own references: the live monitor in [docs/MONITOR.md](../MONITOR.md), the views, the LLM cache and the run directory in [docs/LLM_CACHE.md](../LLM_CACHE.md), and `run.json` in [docs/RUN_MANIFEST.md](../RUN_MANIFEST.md). Code: `yizkr.pipeline.scratch`, `yizkr.pipeline.estimate` for the estimate, and `yizkr.reset` for the reset.
 
 ## Before a run
 
-- **One at a time.** A scratch run holds the claude-code subscription for
-  its model calls, and only one LLM-heavy task runs at a time
-  (docs/AGENT_PROTOCOL.md §3). The driver holds its runs directory while
-  it runs, and a second `yizkr scratch run` is refused at once, naming
-  the holder. The monitor and the control commands never take that hold.
-- **Configuration in the environment or `deploy/.env`** (or the file
-  `--env-file` names):
+- **One at a time.** A scratch run holds the claude-code subscription for its model calls, and only one LLM-heavy task runs at a time (docs/AGENT_PROTOCOL.md §3). The driver holds its runs directory while it runs, and a second `yizkr scratch run` is refused at once, naming the holder. The monitor and the control commands never take that hold.
+- **Configuration in the environment or `deploy/.env`** (or the file `--env-file` names):
   - `$YIZKR_CORPUS_DIR`, the corpus folder (or `--corpus`);
-  - `$YIZKR_EXCLUDE_FILE`, the never-ingest list. There is no run without
-    one; an empty file is an explicit, allowed list.
-- **Configuration in the environment only.** These are read from the
-  process's environment and never from `deploy/.env`: a model set only
-  there makes the preflight refuse, and a pacing setting there is
-  ignored.
-  - `$YIZKR_LLM_MODEL`, a full model id (`claude-opus-5-5`, never an alias
-    such as `opus`): the model of the transcription and the critique.
-    Extraction runs `--extract-model`, `claude-sonnet-5` by default
-    (`inherit` for `$YIZKR_LLM_MODEL`). Every role must name a model: the
-    LLM cache's keys cannot name the engine's own default;
-  - `$YIZKR_CLAUDE_RESERVE` and `$YIZKR_CLAUDE_MAX_WAIT`, the engine's
-    pacing (docs/LLM_CACHE.md, Subscription limits).
-- **Keep the claude CLI still.** A run keeps the claude CLI version it
-  started on. The pinned version is 2.1.309 (`claude-opus-5-5` needs
-  2.1.280 or newer); install exactly that one, with the updater off:
+  - `$YIZKR_EXCLUDE_FILE`, the never-ingest list. There is no run without one; an empty file is an explicit, allowed list.
+- **Configuration in the environment only.** These are read from the process's environment and never from `deploy/.env`: a model set only there makes the preflight refuse, and a pacing setting there is ignored.
+  - `$YIZKR_LLM_MODEL`, a full model id (`claude-opus-5-5`, never an alias such as `opus`): the model of the transcription and the critique. Extraction runs `--extract-model`, `claude-sonnet-5` by default (`inherit` for `$YIZKR_LLM_MODEL`). Every role must name a model: the LLM cache's keys cannot name the engine's own default;
+  - `$YIZKR_CLAUDE_RESERVE` and `$YIZKR_CLAUDE_MAX_WAIT`, the engine's pacing (docs/LLM_CACHE.md, Subscription limits).
+- **Keep the claude CLI still.** A run keeps the claude CLI version it started on. The pinned version is 2.1.309 (`claude-opus-5-5` needs 2.1.280 or newer); install exactly that one, with the updater off:
 
   ```sh
   export DISABLE_AUTOUPDATER=1
@@ -50,216 +21,29 @@ and `yizkr.reset` for the reset.
   claude --version   # 2.1.309 (Claude Code)
   ```
 
-  Keep `DISABLE_AUTOUPDATER=1` set in every shell and Claude Code
-  session on the machine for the length of the run. The `claude` on the
-  run's `PATH` must be that install: the binary an editor bundles with
-  its Claude Code extension is no pin, since it moves with the editor's
-  own updates.
-- **Archived transcriptions** (optional). `uv run yizkr scratch
-  import-transcriptions <archive> [--leave-out SHA1]...` adopts the
-  vision transcriptions of an earlier `ingest run`'s state directory in
-  the LLM cache, each checked by the transcription check, so the run's
-  calls for those scans are answered from the cache, as hits whose
-  reason is `adopted`, rather than by the engine. Run it just before the
-  run, with the run's `--cache`, `--extract-effort`, `$YIZKR_LLM_MODEL`
-  and claude CLI, which its keys name: after a CLI update, run it again.
-  A transcription the check fails is rejected and the run reads its scan
-  afresh. The vision engine now answers the transcription record
-  (ADR-0037), with a prompt no archived transcription was made with, so
-  an archive an `ingest run` left before the record gives nothing to
-  adopt, and the run transcribes the corpus afresh; `--leave-out` gives the start of the SHA-1 of each scan to read
-  afresh anyway, and withdraws, for good, any adoption the cache serves
-  for it. It prints what it did with each scan's transcriptions and the
-  counts (imported, rejected, excluded, left out, skipped): local output,
-  which names the corpus's files and quotes what the check matched. What
-  it adopts, what it reads of the archive, and when an adoption stops
-  applying: docs/LLM_CACHE.md, Seeding.
-- **Preflight.** Before anything is written or called, the driver checks
-  the claude CLI and its login, a full model id for every role, the
-  pacing settings, the anomaly thresholds (`anomalies.yaml`, with the
-  file `$YIZKR_ANOMALIES` names over it: one that cannot be read, a key
-  the defaults do not have, or a value out of range is refused in one
-  line; docs/ANOMALIES.md, Thresholds), 2 GiB free on the run
-  directory's and the cache's filesystems (`--min-free`), and the PDF
-  renderer when the corpus holds a PDF. A stage that touches the wiki is
-  checked for too: the stack must answer and the instance must carry no
-  kept-state marker. The write side's stages are such stages (The write
-  side, below), so a run to the end needs the stack up; one that stops
-  at clustering or before needs none. A refusal lists every problem it
-  found.
+  Keep `DISABLE_AUTOUPDATER=1` set in every shell and Claude Code session on the machine for the length of the run. The `claude` on the run's `PATH` must be that install: the binary an editor bundles with its Claude Code extension is no pin, since it moves with the editor's own updates.
 
-  Once those checks pass, the settings are checked against those a
-  resumed run recorded: other settings are refused as
-  `RunSettingsConflict` before any call. Then the LLM cache's folder is
-  checked, without making or changing anything, as its runs directory
-  is: a folder the cache would refuse to open (one a git work tree would
-  track, one open to other users, one this user cannot write in or make,
-  or a lock file in it this user cannot open) is refused in one line,
-  before the preflight's calls and before `run.json`, a document's
-  directory or an event is written, and the driver exits 1 (#327;
-  docs/LLM_CACHE.md, The cache folder). It is checked for every
-  invocation whose range holds a per-document stage, or a corpus stage
-  that may call the engine, a resume that reuses every view included;
-  an invocation past the barrier only, whose corpus stages call no
-  engine, opens no cache, and its folder is not checked.
+- **Archived transcriptions** (optional). `uv run yizkr scratch import-transcriptions <archive> [--leave-out SHA1]...` adopts the vision transcriptions of an earlier `ingest run`'s state directory in the LLM cache, each checked by the transcription check, so the run's calls for those scans are answered from the cache, as hits whose reason is `adopted`, rather than by the engine. Run it just before the run, with the run's `--cache`, `--extract-effort`, `$YIZKR_LLM_MODEL` and claude CLI, which its keys name: after a CLI update, run it again. A transcription the check fails is rejected and the run reads its scan afresh. The vision engine now answers the transcription record (ADR-0037), with a prompt no archived transcription was made with, so an archive an `ingest run` left before the record gives nothing to adopt, and the run transcribes the corpus afresh; `--leave-out` gives the start of the SHA-1 of each scan to read afresh anyway, and withdraws, for good, any adoption the cache serves for it. It prints what it did with each scan's transcriptions and the counts (imported, rejected, excluded, left out, skipped): local output, which names the corpus's files and quotes what the check matched. What it adopts, what it reads of the archive, and when an adoption stops applying: docs/LLM_CACHE.md, Seeding.
+- **Preflight.** Before anything is written or called, the driver checks the claude CLI and its login, a full model id for every role, the pacing settings, the anomaly thresholds (`anomalies.yaml`, with the file `$YIZKR_ANOMALIES` names over it: one that cannot be read, a key the defaults do not have, or a value out of range is refused in one line; docs/ANOMALIES.md, Thresholds), 2 GiB free on the run directory's and the cache's filesystems (`--min-free`), and the PDF renderer when the corpus holds a PDF. A stage that touches the wiki is checked for too: the stack must answer and the instance must carry no kept-state marker. The write side's stages are such stages (The write side, below), so a run to the end needs the stack up; one that stops at clustering or before needs none. A refusal lists every problem it found.
 
-  Then, still before any document is dispatched or anything written, the
-  driver makes **one trivial call per distinct (model, effort) pair**
-  that the roles of the invocation's range run, through the engine as
-  the run calls it: the same engine, model and effort as the first role
-  that runs the pair, and the claude CLI it would use, but not through
-  the LLM cache, so the call reaches the engine. The roles are those of
-  the per-document stages within `--until` (`transcribe` for
-  transcription, `extract` for extraction and GEDCOM, `critique`), and
-  every role when a corpus stage in range may call the engine. Two roles
-  on one model at one effort make one call; at two efforts, two. The
-  preflight reads no run state: **a resume makes these calls even when
-  it will reuse every view**, a few trivial calls accepted as the cost
-  of a check that never predicts what the run will reuse. An invocation
-  past the barrier only makes them too, since clustering adjudicates
-  its ambiguous pairs through the engine (#106). Every invocation whose
-  range holds a per-document stage, or a corpus stage that may call the
-  engine, makes them, the driver's own after a subscription limit
-  included, unless the installed claude CLI is not the run's (below).
+  Once those checks pass, the settings are checked against those a resumed run recorded: other settings are refused as `RunSettingsConflict` before any call. Then the LLM cache's folder is checked, without making or changing anything, as its runs directory is: a folder the cache would refuse to open (one a git work tree would track, one open to other users, one this user cannot write in or make, or a lock file in it this user cannot open) is refused in one line, before the preflight's calls and before `run.json`, a document's directory or an event is written, and the driver exits 1 (#327; docs/LLM_CACHE.md, The cache folder). It is checked for every invocation whose range holds a per-document stage, or a corpus stage that may call the engine, a resume that reuses every view included; an invocation past the barrier only, whose corpus stages call no engine, opens no cache, and its folder is not checked.
 
-  When the installed claude CLI is not the one the run recorded, the
-  preflight checks no model, refuses nothing, and says so in one line.
-  The refusal stays with the run's own engine client, as for any other
-  setting: a resume with a stage left to make is refused as
-  `RunSettingsConflict` when that stage starts the engine, and one with
-  nothing left for the engine goes on.
+  Then, still before any document is dispatched or anything written, the driver makes **one trivial call per distinct (model, effort) pair** that the roles of the invocation's range run, through the engine as the run calls it: the same engine, model and effort as the first role that runs the pair, and the claude CLI it would use, but not through the LLM cache, so the call reaches the engine. The roles are those of the per-document stages within `--until` (`transcribe` for transcription, `extract` for extraction and GEDCOM, `critique`), and every role when a corpus stage in range may call the engine. Two roles on one model at one effort make one call; at two efforts, two. The preflight reads no run state: **a resume makes these calls even when it will reuse every view**, a few trivial calls accepted as the cost of a check that never predicts what the run will reuse. An invocation past the barrier only makes them too, since clustering adjudicates its ambiguous pairs through the engine (#106). Every invocation whose range holds a per-document stage, or a corpus stage that may call the engine, makes them, the driver's own after a subscription limit included, unless the installed claude CLI is not the run's (below).
 
-  A call that fails with an error that is not a subscription limit or
-  an overload refuses the run, naming the model, the role, the effort
-  and the engine's reason: a claude CLI too old for the model (an API
-  400 that names the dotted version the model requires, or has the CLI
-  as the subject of "requires a newer" or "does not support"), or any
-  other API error. The pairs after an unsupported one are listed as not
-  tried. For the claude-code engine, a limit or an overload is the
-  engine's to wait out; a limit it would wait longer for pauses the run
-  as a document's call would, and the driver waits it out before it
-  writes anything. Such a wait shows **only in the driver's output**:
-  on a new run nothing has started yet, so `yizkr scratch watch` and
-  the status page show no run, `yizkr scratch abort` cannot reach it,
-  and only Ctrl-C stops the wait (the driver says so). Every wait, and
-  every invocation after one, honours the pauses and aborts asked since
-  this invocation of `scratch run` began, never those of an earlier
-  one. For the anthropic engine, a 429 or 529 its own retries did not
-  get past refuses the run, to be tried again later.
-- **A model the CLI stops supporting mid-run.** Should the API refuse a
-  call in the middle of a run because the CLI does not support its
-  model (a model changed under a pinned CLI), the engine takes it as a
-  pause of the pass, never a document's failure: the invocation ends
-  `paused` (reason `ModelUnsupported`), the driver exits with status 2
-  without waiting, since nothing says when it clears, and the message
-  names the model and the CLI's reason. `yizkr scratch watch` shows it
-  as `paused   ModelUnsupported; no time to go on`. No document fails
-  for it and no further call is made. Both remedies, a CLI that runs
-  the model or another model, change the settings the run recorded, so
-  start a new run (`yizkr scratch run --new`).
-- **The kept-state marker** is the page `Project:Kept state` on the
-  instance and the file `kept.json` in the record of the instance:
-  keeper mode (#118) writes both, and `yizkr scratch reset` refuses while
-  either is there (Reset the instance, below). The driver takes the same
-  reader (`yizkr.core.instance.instance_is_kept`) before every stage of
-  the write side, and refuses the stage when it says kept or cannot
-  tell.
-- **The estimate.** `uv run yizkr scratch estimate`, with the options
-  the run is to take, counts the engine calls that `yizkr scratch run`
-  would make now, per stage and in all: the calls of the stages whose
-  views do not stand that the LLM cache cannot answer. It plans the same
-  run, a new one or the one the command would invoke again, and says
-  which. The table gives, per stage, the documents whose views are made
-  and reused, the calls the cache answers, and the engine calls, of
-  which some are estimated:
-  - **known**: the estimate takes each stale stage through the
-    pipeline's own code with a client that keys every call as the run
-    does (the same prompts, files, models, efforts and claude CLI) and
-    answers it from the cache alone. So it knows each call the cache
-    answers and each it cannot, a kept answer the run would reject and
-    ask again (a reading the transcription check fails, a critique cut
-    off) included, and a call another document asks earlier in the run
-    counts once. The replay of a conversation whose session was not
-    kept, for its forks, is a known call too;
-  - **estimated**: a call whose key waits on an answer the engine is yet
-    to give: the extraction after a reading the engine makes, the chunks
-    after an entity manifest it answers, the forks after a replay, and
-    the critique of a batch with chunks it answers. An extraction is
-    counted as the latest run to make the same document measured it,
-    else by the mean for its kind over the runs measured, else by its
-    text's length; the forks after a replay as the chunks the cache kept
-    leave them unanswered; a critique as one call;
-  - **up to more**: an entity manifest the engine answers, a replay's
-    among them, may be refused, and then its second attempt and the
-    segmentation's two are asked (3 more for an extraction at most); a
-    replayed conversation that answers differently starts its extraction
-    over and asks its forks again, the ones the cache answered too, and
-    their number can change. These are estimates, not ceilings: the
-    chunks an entity manifest makes follow its entities, which a text's
-    length only approaches, so a dense document can take more;
-  - **up to more for excerpts**: an image a PDF places within a
-    text-layer page, or a deck embeds on a slide, read on its own,
-    becomes a document of its own, an excerpt (ADR-0008), found only as
-    its container is transcribed. The container's transcription stage,
-    which the estimate takes through the pipeline's own code, reads it
-    page by page from the file itself (a PDF with pypdfium2, a deck from
-    its XML, no model call), so the estimate knows each image it places:
-    once however many PDFs and decks place it, and none that the
-    never-ingest list names or whose bytes a document of the corpus has.
-    An image whose kept reading (one that passed the check, which the
-    cache answers) calls every page blank or not a document page is left
-    out, as the run makes no excerpt of it; an image whose earlier
-    reading failed the check is read again, and counted. In a run
-    invoked again, a container (PDF or deck) whose transcription stands is not
-    read again: its excerpts are those its directory holds, and each counts the
-    stages whose views do not stand, as the driver rechecks them (its
-    transcription against the check, its critique's entries): a
-    transcription made again from its container's reading (no model call)
-    with the content its batch was made from leaves the views after it
-    standing; otherwise every stage after the first of them counts too.
-    An image of a container whose transcription is made again counts every
-    excerpt stage, though an excerpt the run holds for it may have views that
-    stand. An excerpt stage left to make starts its role's engine client, as
-    the run does, so another claude CLI than the run's refuses the estimate
-    for it too. Each excerpt stage (as `--until` plans them) is
-    counted by the mean for excerpts over every run in the runs
-    directory that measured the stage for one, pooled, so a run made
-    under older prompts or models counts too, else as typical (none, an
-    entity manifest and a chunk, one), rounded up; the line says for
-    each stage which. They are given as up to so many: an image the
-    engine reads blank, or as no document page, makes no excerpt, and
-    the cache may answer an excerpt's calls;
-  - **not counted**: calls asked again after an engine error or a chunk
-    answer cut off (up to 2 for a chunk), the preflight's one trivial
-    call per (model, effort) pair of the roles within the invocation's
-    `--until` range, which every invocation whose range holds a stage
-    that may call the engine makes, a resume that reuses every view
-    included, unless the installed claude CLI is not the run's; and
-    waits for the subscription, which make no call. A slice the anomaly
-    checks pause as the run unfolds (docs/ANOMALIES.md) makes fewer
-    calls than counted.
+  When the installed claude CLI is not the one the run recorded, the preflight checks no model, refuses nothing, and says so in one line. The refusal stays with the run's own engine client, as for any other setting: a resume with a stage left to make is refused as `RunSettingsConflict` when that stage starts the engine, and one with nothing left for the engine goes on.
 
-  It writes nothing, and takes no lock: it runs beside a running driver,
-  counting what the run and the cache hold as it reads them, and names
-  who holds the runs directory and the cache. It makes no model call and
-  asks the wiki nothing. It refuses what the run would refuse before its
-  first call: no never-ingest list, a deck that cannot be read as an
-  archive while the list holds a glob, a runs directory the driver refuses
-  (open to others, tracked by git, a file, one it cannot write), a model
-  that is no full id, a pacing setting the engine refuses, a PDF without
-  the renderer, anomaly thresholds the checks cannot load, other
-  settings or another claude CLI for a run invoked again, and a cache
-  folder the cache refuses, where the run's preflight checks it (What
-  stays local, below). It lists what the run's preflight would still
-  refuse (the login, disk space); a stage that touches the wiki is left
-  to the run's own preflight. A corpus with no document is no call,
-  whatever the settings, as it is to the run. Like the driver, it starts
-  a role's engine client when the role's first stale stage needs it,
-  which for the claude CLI runs `claude --version`, for the version
-  every key names: a client that cannot start, or pauses as it starts,
-  stops the estimate as it would stop the run, and nothing stale starts
-  none. How the LLM cache keys a call, and what a run's events count:
-  docs/LLM_CACHE.md.
+  A call that fails with an error that is not a subscription limit or an overload refuses the run, naming the model, the role, the effort and the engine's reason: a claude CLI too old for the model (an API 400 that names the dotted version the model requires, or has the CLI as the subject of "requires a newer" or "does not support"), or any other API error. The pairs after an unsupported one are listed as not tried. For the claude-code engine, a limit or an overload is the engine's to wait out; a limit it would wait longer for pauses the run as a document's call would, and the driver waits it out before it writes anything. Such a wait shows **only in the driver's output**: on a new run nothing has started yet, so `yizkr scratch watch` and the status page show no run, `yizkr scratch abort` cannot reach it, and only Ctrl-C stops the wait (the driver says so). Every wait, and every invocation after one, honours the pauses and aborts asked since this invocation of `scratch run` began, never those of an earlier one. For the anthropic engine, a 429 or 529 its own retries did not get past refuses the run, to be tried again later.
+
+- **A model the CLI stops supporting mid-run.** Should the API refuse a call in the middle of a run because the CLI does not support its model (a model changed under a pinned CLI), the engine takes it as a pause of the pass, never a document's failure: the invocation ends `paused` (reason `ModelUnsupported`), the driver exits with status 2 without waiting, since nothing says when it clears, and the message names the model and the CLI's reason. `yizkr scratch watch` shows it as `paused   ModelUnsupported; no time to go on`. No document fails for it and no further call is made. Both remedies, a CLI that runs the model or another model, change the settings the run recorded, so start a new run (`yizkr scratch run --new`).
+- **The kept-state marker** is the page `Project:Kept state` on the instance and the file `kept.json` in the record of the instance: keeper mode (#118) writes both, and `yizkr scratch reset` refuses while either is there (Reset the instance, below). The driver takes the same reader (`yizkr.core.instance.instance_is_kept`) before every stage of the write side, and refuses the stage when it says kept or cannot tell.
+- **The estimate.** `uv run yizkr scratch estimate`, with the options the run is to take, counts the engine calls that `yizkr scratch run` would make now, per stage and in all: the calls of the stages whose views do not stand that the LLM cache cannot answer. It plans the same run, a new one or the one the command would invoke again, and says which. The table gives, per stage, the documents whose views are made and reused, the calls the cache answers, and the engine calls, of which some are estimated:
+  - **known**: the estimate takes each stale stage through the pipeline's own code with a client that keys every call as the run does (the same prompts, files, models, efforts and claude CLI) and answers it from the cache alone. So it knows each call the cache answers and each it cannot, a kept answer the run would reject and ask again (a reading the transcription check fails, a critique cut off) included, and a call another document asks earlier in the run counts once. The replay of a conversation whose session was not kept, for its forks, is a known call too;
+  - **estimated**: a call whose key waits on an answer the engine is yet to give: the extraction after a reading the engine makes, the chunks after an entity manifest it answers, the forks after a replay, and the critique of a batch with chunks it answers. An extraction is counted as the latest run to make the same document measured it, else by the mean for its kind over the runs measured, else by its text's length; the forks after a replay as the chunks the cache kept leave them unanswered; a critique as one call;
+  - **up to more**: an entity manifest the engine answers, a replay's among them, may be refused, and then its second attempt and the segmentation's two are asked (3 more for an extraction at most); a replayed conversation that answers differently starts its extraction over and asks its forks again, the ones the cache answered too, and their number can change. These are estimates, not ceilings: the chunks an entity manifest makes follow its entities, which a text's length only approaches, so a dense document can take more;
+  - **up to more for excerpts**: an image a PDF places within a text-layer page, or a deck embeds on a slide, read on its own, becomes a document of its own, an excerpt (ADR-0008), found only as its container is transcribed. The container's transcription stage, which the estimate takes through the pipeline's own code, reads it page by page from the file itself (a PDF with pypdfium2, a deck from its XML, no model call), so the estimate knows each image it places: once however many PDFs and decks place it, and none that the never-ingest list names or whose bytes a document of the corpus has. An image whose kept reading (one that passed the check, which the cache answers) calls every page blank or not a document page is left out, as the run makes no excerpt of it; an image whose earlier reading failed the check is read again, and counted. In a run invoked again, a container (PDF or deck) whose transcription stands is not read again: its excerpts are those its directory holds, and each counts the stages whose views do not stand, as the driver rechecks them (its transcription against the check, its critique's entries): a transcription made again from its container's reading (no model call) with the content its batch was made from leaves the views after it standing; otherwise every stage after the first of them counts too. An image of a container whose transcription is made again counts every excerpt stage, though an excerpt the run holds for it may have views that stand. An excerpt stage left to make starts its role's engine client, as the run does, so another claude CLI than the run's refuses the estimate for it too. Each excerpt stage (as `--until` plans them) is counted by the mean for excerpts over every run in the runs directory that measured the stage for one, pooled, so a run made under older prompts or models counts too, else as typical (none, an entity manifest and a chunk, one), rounded up; the line says for each stage which. They are given as up to so many: an image the engine reads blank, or as no document page, makes no excerpt, and the cache may answer an excerpt's calls;
+  - **not counted**: calls asked again after an engine error or a chunk answer cut off (up to 2 for a chunk), the preflight's one trivial call per (model, effort) pair of the roles within the invocation's `--until` range, which every invocation whose range holds a stage that may call the engine makes, a resume that reuses every view included, unless the installed claude CLI is not the run's; and waits for the subscription, which make no call. A slice the anomaly checks pause as the run unfolds (docs/ANOMALIES.md) makes fewer calls than counted.
+
+  It writes nothing, and takes no lock: it runs beside a running driver, counting what the run and the cache hold as it reads them, and names who holds the runs directory and the cache. It makes no model call and asks the wiki nothing. It refuses what the run would refuse before its first call: no never-ingest list, a deck that cannot be read as an archive while the list holds a glob, a runs directory the driver refuses (open to others, tracked by git, a file, one it cannot write), a model that is no full id, a pacing setting the engine refuses, a PDF without the renderer, anomaly thresholds the checks cannot load, other settings or another claude CLI for a run invoked again, and a cache folder the cache refuses, where the run's preflight checks it (What stays local, below). It lists what the run's preflight would still refuse (the login, disk space); a stage that touches the wiki is left to the run's own preflight. A corpus with no document is no call, whatever the settings, as it is to the run. Like the driver, it starts a role's engine client when the role's first stale stage needs it, which for the claude CLI runs `claude --version`, for the version every key names: a client that cannot start, or pauses as it starts, stops the estimate as it would stop the run, and nothing stale starts none. How the LLM cache keys a call, and what a run's events count: docs/LLM_CACHE.md.
 
 ## Run
 
@@ -267,225 +51,26 @@ and `yizkr.reset` for the reset.
 uv run yizkr scratch run
 ```
 
-- **A new run, or the unfinished one.** The command starts a new run in
-  `var/scratch/<run id>/` (`--runs` for another runs directory), with
-  fresh state directories, unless the latest run there did not go to the
-  end: then it invokes that run again, so running the same command again
-  resumes it. `--new` always starts a new run; `--resume [RUN]` invokes
-  a given run again (the latest when none is named), even one that went
-  to the end. A run is invoked only from its own runs directory, which
-  one driver at a time holds: for a run elsewhere, name its directory,
-  `--runs <its runs directory> --resume <run id>`, as the driver's own
-  resume line does.
-- **Failed documents.** A run that went to the end with failed documents
-  is complete: the bare command then starts a new run, and only `--resume`
-  tries the failed documents again in the same run.
-- **The order.** One document of each kind (text file, image, PDF,
-  deck, GEDCOM file), the first by name, goes through all its stages
-  first: the canaries. A misalignment of any kind shows within the first
-  calls, and the monitor has a rate for each kind early. The rest follow
-  stage by stage: every transcription, then every extraction and GEDCOM
-  adapter, then every critique.
-- **The barrier.** When every document's stages have ended, done or
-  failed, the run is at the barrier, and the driver runs each corpus
-  stage registered with it over the documents whose stages all
-  completed. It runs every one in each invocation that goes past the
-  barrier, so a corpus stage keeps its outputs in `corpus/<stage>/` in
-  the run directory and reuses them while their inputs stand, as the
-  documents' views are reused. The first is clustering (#105): it
-  clusters the documents' batches, with no wiki, merging the confident
-  components of each ambiguous cluster (#568), then asks the model about
-  the ambiguous pairs between them (#106), through
-  the LLM cache in the `critique` role's engine, model and effort, its
-  calls named `adjudication` in the events, the report and the monitor
-  (src/yizkr/pipeline/README.md, "Corpus clustering"). In a
-  development-stage run the `same` verdicts merge unattended, with the
-  method `adjudicated`; a conflicting cluster never merges, and one with
-  an `uncertain` pair stays as it is, its components merged. It writes the corpus's identity map to
-  `corpus/clustering/identity-map.json`, and the verdicts with their
-  reasons, each call's pairs and raw answer, and the counts to
-  `corpus/clustering/adjudication.json`, both local-only data, and
-  reuses both while their inputs stand. Its log line and `done` event
-  carry its counts: the pairs asked and the calls, the verdicts, the
-  clusters merged on verdicts, the ambiguous and conflicting clusters
-  left apart, and the pairs left without a verdict and the answers
-  refused, which need a look. The write side follows (below, The write
-  side).
-- **Options.** `--until STAGE` stops after a stage (`transcription`,
-  `extraction`, `critique`, or a corpus stage; `gedcom` stops with
-  `extraction`). `--cache DIR` names the LLM cache (default
-  `var/llm-cache`), which every model call goes through. The rest are as
-  for `ingest run`.
-- **`--refresh ROLE`** makes the role's views again, asking the engine
-  afresh for each call even where the cache holds an answer, once in the
-  run: a later invocation that refreshes the role again, the driver's
-  own after a subscription limit or yours with the same `--refresh`,
-  reuses the views the refresh has made and saved already, and makes the
-  rest. One without `--refresh` makes the views not made yet from the
-  cache's answers, unrefreshed. So resume a refresh with its `--refresh`.
-- **The end.** The driver prints how the invocation ended, the states of
-  the stages, and the commands that show the run and resume it. It exits
-  0 when it finished and no document failed; 1 when a document or a
-  corpus stage failed, or it refused to start; 2 when it stopped short
-  (an abort, or a pause of the engine it could not wait out); 130 on
-  Ctrl-C. A usage error (an unknown or malformed option) exits 3, as it
-  does for every `yizkr` command (`yizkr --help`).
+- **A new run, or the unfinished one.** The command starts a new run in `var/scratch/<run id>/` (`--runs` for another runs directory), with fresh state directories, unless the latest run there did not go to the end: then it invokes that run again, so running the same command again resumes it. `--new` always starts a new run; `--resume [RUN]` invokes a given run again (the latest when none is named), even one that went to the end. A run is invoked only from its own runs directory, which one driver at a time holds: for a run elsewhere, name its directory, `--runs <its runs directory> --resume <run id>`, as the driver's own resume line does.
+- **Failed documents.** A run that went to the end with failed documents is complete: the bare command then starts a new run, and only `--resume` tries the failed documents again in the same run.
+- **The order.** One document of each kind (text file, image, PDF, deck, GEDCOM file), the first by name, goes through all its stages first: the canaries. A misalignment of any kind shows within the first calls, and the monitor has a rate for each kind early. The rest follow stage by stage: every transcription, then every extraction and GEDCOM adapter, then every critique.
+- **The barrier.** When every document's stages have ended, done or failed, the run is at the barrier, and the driver runs each corpus stage registered with it over the documents whose stages all completed. It runs every one in each invocation that goes past the barrier, so a corpus stage keeps its outputs in `corpus/<stage>/` in the run directory and reuses them while their inputs stand, as the documents' views are reused. The first is clustering (#105): it clusters the documents' batches, with no wiki, merging the confident components of each ambiguous cluster (#568), then asks the model about the ambiguous pairs between them (#106), through the LLM cache in the `critique` role's engine, model and effort, its calls named `adjudication` in the events, the report and the monitor (src/yizkr/pipeline/README.md, "Corpus clustering"). In a development-stage run the `same` verdicts merge unattended, with the method `adjudicated`; a conflicting cluster never merges, and one with an `uncertain` pair stays as it is, its components merged. It writes the corpus's identity map to `corpus/clustering/identity-map.json`, and the verdicts with their reasons, each call's pairs and raw answer, and the counts to `corpus/clustering/adjudication.json`, both local-only data, and reuses both while their inputs stand. Its log line and `done` event carry its counts: the pairs asked and the calls, the verdicts, the clusters merged on verdicts, the ambiguous and conflicting clusters left apart, and the pairs left without a verdict and the answers refused, which need a look. The write side follows (below, The write side).
+- **Options.** `--until STAGE` stops after a stage (`transcription`, `extraction`, `critique`, or a corpus stage; `gedcom` stops with `extraction`). `--cache DIR` names the LLM cache (default `var/llm-cache`), which every model call goes through. The rest are as for `ingest run`.
+- **`--refresh ROLE`** makes the role's views again, asking the engine afresh for each call even where the cache holds an answer, once in the run: a later invocation that refreshes the role again, the driver's own after a subscription limit or yours with the same `--refresh`, reuses the views the refresh has made and saved already, and makes the rest. One without `--refresh` makes the views not made yet from the cache's answers, unrefreshed. So resume a refresh with its `--refresh`.
+- **The end.** The driver prints how the invocation ended, the states of the stages, and the commands that show the run and resume it. It exits 0 when it finished and no document failed; 1 when a document or a corpus stage failed, or it refused to start; 2 when it stopped short (an abort, or a pause of the engine it could not wait out); 130 on Ctrl-C. A usage error (an unknown or malformed option) exits 3, as it does for every `yizkr` command (`yizkr --help`).
 
 ## The write side
 
-After clustering come five corpus stages that touch the wiki (#200,
-#201; `yizkr.pipeline.scratchwrite`, ADR-0025 §1 and §2): `reset`,
-`register`, `write`, `places` and `site`. Of them only `places` makes
-model calls, through the LLM cache. The driver runs each only while
-the stack answers and the instance carries no kept-state marker, which
-the preflight checks before anything is dispatched and the driver checks
-again before each of them. So a run to the end needs the stack up; a run
-with `--until clustering` (or an earlier stage) needs none.
+After clustering come five corpus stages that touch the wiki (#200, #201; `yizkr.pipeline.scratchwrite`, ADR-0025 §1 and §2): `reset`, `register`, `write`, `places` and `site`. Of them only `places` makes model calls, through the LLM cache. The driver runs each only while the stack answers and the instance carries no kept-state marker, which the preflight checks before anything is dispatched and the driver checks again before each of them. So a run to the end needs the stack up; a run with `--until clustering` (or an earlier stage) needs none.
 
-- **reset.** The run's write key names what the write would put on the
-  instance: the identity map's hash, each document's SHA-1 with the
-  content hash of its batch and what registration reads of it (its kind,
-  its title, its file name, its derived media's record, an excerpt's
-  PDFs and decks), the never-ingest list's hash, the writer's version
-  and the source of the whole package but the modules that only read,
-  and the model manifest's hash. A batch's run stamps are in it, so
-  every new run resets and writes again; only a later invocation of the
-  run that wrote skips. The run's place key adds to it the place stage's
-  version, its prompt, the batch size it asks in, and the engine, model
-  and effort of the role it calls (`extract`); since the place stage
-  writes after the write, the key the instance holds is the place key.
-  When the instance-contents record still stands for that key (no other
-  write has voided it, and nothing has cleared it), the instance holds
-  what the key makes: the stage resets nothing, and register, write and
-  places skip. When this run reset the instance in an earlier
-  invocation, for this key, and nothing but this run has written to it
-  since, the run goes on where it stopped. Otherwise it resets the
-  instance as `yizkr scratch reset --yes` does (below, Reset the
-  instance), under the live-stack lock: **a run to the end resets the
-  instance unattended**, which takes minutes and discards everything on
-  it. The reset refuses a kept instance itself too. It then records, in
-  the instance's write-phase state (`scratch-run.json`, which every
-  reset clears), the run, the key, an epoch it draws for this reset and
-  the instance's newest revision and log entry, under the same hold of
-  the lock as the reset, so no session that takes the lock writes
-  between them. The records register, write, places and site kept of an
-  earlier reset are removed, and so are the place stage's raw answers.
-- **register** registers each document as `ingest run` does at its
-  write: the artifact item by the SHA-1 of its bytes, a deck's slides
-  and images, a PDF's placed images, with registration's flags raised as
-  alerts of the write. A batch the writer would refuse whole (a mention
-  the identity map does not hold, an unsupported date, a run item's
-  term the instance may keep in another form) is refused first, before
-  anything of its document is registered, and counted. Nothing of a
-  refused batch is written; a refused PDF's or deck's artifact may still be
-  registered as the container of an excerpt whose batch was not refused.
-- **write** writes every claim of each registered document's batch,
-  with no review and no approval file, at normal rank, with both
-  references (stated in the artifact or fragment with its locator,
-  inferred from the run item), through the run's one identity map.
-  Depicts claims are left out and counted in the run report, and so
-  are the claims the writer refused, and of them those whose item value
-  the map makes their subject's item; each such self-loop raises a
-  `self-reference` alert naming its cluster, a sign of a false merge to
-  look at in the identity map (docs/ANOMALIES.md, The write). Each run
-  item is marked `unratified scratch run → <run id>`, and records the
-  `run manifest hash` (the run manifest's settings) and the `identity
-  map hash`, each stated in the run item itself. When every document is
-  written, the instance-contents record takes the write key.
-- **places** asks which existing place each container a written place's
-  mention record states means, and writes the links the sources state
-  (ADR-0009, ADR-0038 §3 and §8.5), unattended, after the write and
-  before the site, so the site shows them. It waits for a complete
-  write: while a document's registration or write has failed, it does
-  nothing and records nothing, and the next invocation that completes
-  the write asks over all of it. Once the query service shows the
-  write, it reads the graph's places, their containment and
-  descriptions, and takes, link by link, the chains of containers the
-  written documents' mention records state, each link with the time a
-  claim of its document gives it, and none where the record alone
-  states it. It asks of a link whose container names more than one
-  existing place, or that no claim of its document gives; a link whose
-  container names no place is left out and counted. It asks in batches
-  of 40, in the role `extract`, through the LLM cache; the run's events,
-  the monitor and the report name these calls `places`. Its prompt names
-  each place by its label and description (with the labels of the
-  places the graph puts it in and the containers its records state, and
-  [1], [2], ... for namesakes nothing else tells apart) and each
-  question and candidate by its number, and orders nothing by a QID, so
-  a run on the same batches after another reset asks the engine
-  nothing. The answer names a candidate, or none (`uncertain`), which
-  writes nothing. An answer the cache kept that does not parse is
-  rejected and asked once more; one the engine gave in this run is
-  rejected and fails the stage. The answers, the links they decide and
-  the counts go in `corpus/places/record.json`, and the raw answers in
-  `corpus/places/responses.json`, both for this reset; a reset removes
-  both. Each answered link is written with no review CSV, as a
-  `part_of` statement at normal rank, to the item the answer names,
-  with the time the document's claim gives (none for a link a record
-  alone states), `stated in` the document's artifact with the
-  container's evidence as its excerpt, with its page (and printed page)
-  where the transcription has pages, and `inferred from` the stage's
-  run item, `place-hierarchy run <model> <key>`, marked as the write's
-  run items are. A link already written, stated in the same artifact
-  with the same time (and, for a link a record alone states, the same
-  excerpt), is not written again; an equal statement another source
-  states gains the link's references, and a record-only link's earlier
-  bare block gains the excerpt's block beside it, never changed
-  (ADR-0038 §8.5). A link that would close a cycle (through the graph's
-  containment, another link, or both, at any time), a question answered
-  twice differently (a conflict) and an answer line outside the
-  answer's schema are refused and counted, never written; the local
-  report names each refused cycle. It holds the live-stack lock for the
-  whole stage, its model calls included, and refuses as register and
-  write do (the guard, below). A subscription limit met while the stage
-  asks leaves nothing recorded: the driver waits, invokes the run again,
-  and the stage reads the graph and asks again, the batches already
-  answered coming from the LLM cache. A stage cut short after asking
-  (Ctrl-C between two writes, say) writes the rest of its links without
-  asking again; one cut short inside a write the wiki took leaves a
-  revision the state does not record, and the next invocation resets.
-  It clears the instance-contents record before its first write, and
-  once it has written every link the record takes the place key. A run
-  invoked `--until write` leaves the write key recorded, not the place
-  key: invoking the same run again goes on where it stopped, and another
-  run resets and writes again. A run whose write failed a document ends
-  complete (exit 0), with the write's and the place stage's attention
-  labels; `yizkr scratch run --resume <run>` invokes it again, which
-  retries the write and then asks of the places, while the bare command
-  starts a new run. The stages before the write never read this
-  containment: they use only what the manifests assert.
-- **The guard.** Register, write and places each refuse, before they
-  write anything, unless the write-phase state names this run and this
-  key, and the instance's newest revision and log entry are still those
-  this run's last write left. So they write only to an instance this run
-  reset, which has taken no other write since: a live test session, a
-  manual edit or another tool in between refuses them, and the next
-  invocation's reset stage resets again. Each holds the live-stack lock
-  for the whole of its writes, so no live test session writes meanwhile:
-  **a scratch write keeps `make test-live` waiting while it lasts**, and
-  no live session should be started during one. A write cut short in the
-  middle of a document (Ctrl-C) leaves the instance a revision the state
-  does not record, so the next invocation resets and writes everything
-  again.
-- **site** builds the LAN site from the instance, as `yizkr
-  publish-site` does, into `corpus/site/site/` in the run directory,
-  once the query service shows the run items of the run whose writes the
-  instance holds and has taken in the newest revision the write or the
-  place stage left (it waits up to five minutes). Every page's header
-  says the instance holds a development-stage scratch run and names it.
-  Serve it on the LAN only (`python -m http.server -d <that
-  directory>`): it holds possibly-living people.
-- **Records.** Each stage keeps what it did in
-  `corpus/<stage>/record.json` in the run directory: local-only, like
-  the rest of it. The run report counts the write's and the place
-  stage's (docs/RUN_REPORT.md, Write and Place hierarchy).
-- **Progress.** While they run, the stages tell the run's events how far
-  they have got, with counts only (`progress` events): reset its steps,
-  register and write each document, places each question batch and each
-  link, and places and site when they wait for the query service. The
-  monitor shows each corpus stage's state and progress, with a rate and
-  a time to go (Watch, below), so a stage need not be followed by reading
-  its record.
+- **reset.** The run's write key names what the write would put on the instance: the identity map's hash, each document's SHA-1 with the content hash of its batch and what registration reads of it (its kind, its title, its file name, its derived media's record, an excerpt's PDFs and decks), the never-ingest list's hash, the writer's version and the source of the whole package but the modules that only read, and the model manifest's hash. A batch's run stamps are in it, so every new run resets and writes again; only a later invocation of the run that wrote skips. The run's place key adds to it the place stage's version, its prompt, the batch size it asks in, and the engine, model and effort of the role it calls (`extract`); since the place stage writes after the write, the key the instance holds is the place key. When the instance-contents record still stands for that key (no other write has voided it, and nothing has cleared it), the instance holds what the key makes: the stage resets nothing, and register, write and places skip. When this run reset the instance in an earlier invocation, for this key, and nothing but this run has written to it since, the run goes on where it stopped. Otherwise it resets the instance as `yizkr scratch reset --yes` does (below, Reset the instance), under the live-stack lock: **a run to the end resets the instance unattended**, which takes minutes and discards everything on it. The reset refuses a kept instance itself too. It then records, in the instance's write-phase state (`scratch-run.json`, which every reset clears), the run, the key, an epoch it draws for this reset and the instance's newest revision and log entry, under the same hold of the lock as the reset, so no session that takes the lock writes between them. The records register, write, places and site kept of an earlier reset are removed, and so are the place stage's raw answers.
+- **register** registers each document as `ingest run` does at its write: the artifact item by the SHA-1 of its bytes, a deck's slides and images, a PDF's placed images, with registration's flags raised as alerts of the write. A batch the writer would refuse whole (a mention the identity map does not hold, an unsupported date, a run item's term the instance may keep in another form) is refused first, before anything of its document is registered, and counted. Nothing of a refused batch is written; a refused PDF's or deck's artifact may still be registered as the container of an excerpt whose batch was not refused.
+- **write** writes every claim of each registered document's batch, with no review and no approval file, at normal rank, with both references (stated in the artifact or fragment with its locator, inferred from the run item), through the run's one identity map. Depicts claims are left out and counted in the run report, and so are the claims the writer refused, and of them those whose item value the map makes their subject's item; each such self-loop raises a `self-reference` alert naming its cluster, a sign of a false merge to look at in the identity map (docs/ANOMALIES.md, The write). Each run item is marked `unratified scratch run → <run id>`, and records the `run manifest hash` (the run manifest's settings) and the `identity map hash`, each stated in the run item itself. When every document is written, the instance-contents record takes the write key.
+- **places** asks which existing place each container a written place's mention record states means, and writes the links the sources state (ADR-0009, ADR-0038 §3 and §8.5), unattended, after the write and before the site, so the site shows them. It waits for a complete write: while a document's registration or write has failed, it does nothing and records nothing, and the next invocation that completes the write asks over all of it. Once the query service shows the write, it reads the graph's places, their containment and descriptions, and takes, link by link, the chains of containers the written documents' mention records state, each link with the time a claim of its document gives it, and none where the record alone states it. It asks of a link whose container names more than one existing place, or that no claim of its document gives; a link whose container names no place is left out and counted. It asks in batches of 40, in the role `extract`, through the LLM cache; the run's events, the monitor and the report name these calls `places`. Its prompt names each place by its label and description (with the labels of the places the graph puts it in and the containers its records state, and [1], [2], ... for namesakes nothing else tells apart) and each question and candidate by its number, and orders nothing by a QID, so a run on the same batches after another reset asks the engine nothing. The answer names a candidate, or none (`uncertain`), which writes nothing. An answer the cache kept that does not parse is rejected and asked once more; one the engine gave in this run is rejected and fails the stage. The answers, the links they decide and the counts go in `corpus/places/record.json`, and the raw answers in `corpus/places/responses.json`, both for this reset; a reset removes both. Each answered link is written with no review CSV, as a `part_of` statement at normal rank, to the item the answer names, with the time the document's claim gives (none for a link a record alone states), `stated in` the document's artifact with the container's evidence as its excerpt, with its page (and printed page) where the transcription has pages, and `inferred from` the stage's run item, `place-hierarchy run <model> <key>`, marked as the write's run items are. A link already written, stated in the same artifact with the same time (and, for a link a record alone states, the same excerpt), is not written again; an equal statement another source states gains the link's references, and a record-only link's earlier bare block gains the excerpt's block beside it, never changed (ADR-0038 §8.5). A link that would close a cycle (through the graph's containment, another link, or both, at any time), a question answered twice differently (a conflict) and an answer line outside the answer's schema are refused and counted, never written; the local report names each refused cycle. It holds the live-stack lock for the whole stage, its model calls included, and refuses as register and write do (the guard, below). A subscription limit met while the stage asks leaves nothing recorded: the driver waits, invokes the run again, and the stage reads the graph and asks again, the batches already answered coming from the LLM cache. A stage cut short after asking (Ctrl-C between two writes, say) writes the rest of its links without asking again; one cut short inside a write the wiki took leaves a revision the state does not record, and the next invocation resets. It clears the instance-contents record before its first write, and once it has written every link the record takes the place key. A run invoked `--until write` leaves the write key recorded, not the place key: invoking the same run again goes on where it stopped, and another run resets and writes again. A run whose write failed a document ends complete (exit 0), with the write's and the place stage's attention labels; `yizkr scratch run --resume <run>` invokes it again, which retries the write and then asks of the places, while the bare command starts a new run. The stages before the write never read this containment: they use only what the manifests assert.
+- **The guard.** Register, write and places each refuse, before they write anything, unless the write-phase state names this run and this key, and the instance's newest revision and log entry are still those this run's last write left. So they write only to an instance this run reset, which has taken no other write since: a live test session, a manual edit or another tool in between refuses them, and the next invocation's reset stage resets again. Each holds the live-stack lock for the whole of its writes, so no live test session writes meanwhile: **a scratch write keeps `make test-live` waiting while it lasts**, and no live session should be started during one. A write cut short in the middle of a document (Ctrl-C) leaves the instance a revision the state does not record, so the next invocation resets and writes everything again.
+- **site** builds the LAN site from the instance, as `yizkr publish-site` does, into `corpus/site/site/` in the run directory, once the query service shows the run items of the run whose writes the instance holds and has taken in the newest revision the write or the place stage left (it waits up to five minutes). Every page's header says the instance holds a development-stage scratch run and names it. Serve it on the LAN only (`python -m http.server -d <that directory>`): it holds possibly-living people.
+- **Records.** Each stage keeps what it did in `corpus/<stage>/record.json` in the run directory: local-only, like the rest of it. The run report counts the write's and the place stage's (docs/RUN_REPORT.md, Write and Place hierarchy).
+- **Progress.** While they run, the stages tell the run's events how far they have got, with counts only (`progress` events): reset its steps, register and write each document, places each question batch and each link, and places and site when they wait for the query service. The monitor shows each corpus stage's state and progress, with a rate and a time to go (Watch, below), so a stage need not be followed by reading its record.
 
 ## Watch
 
@@ -494,15 +79,7 @@ uv run yizkr scratch watch            # the latest run
 uv run yizkr scratch watch <run>      # a run id, or a run directory
 ```
 
-The live monitor ([docs/MONITOR.md](../MONITOR.md)): per stage, what is
-pending, running, done, reused (and why), needs attention or failed;
-past the barrier, each corpus stage's state and progress, with a rate
-and a time to go; the engine's calls and the cache's answers, and what is
-still to go, the corpus stages included; what is in flight; the slices
-and who stopped them; the latest alerts. It never quotes a document.
-`--once` prints one view; `--serve ADDRESS:PORT` serves the status page,
-and nothing else, to another device. Quitting the monitor never stops
-the run.
+The live monitor ([docs/MONITOR.md](../MONITOR.md)): per stage, what is pending, running, done, reused (and why), needs attention or failed; past the barrier, each corpus stage's state and progress, with a rate and a time to go; the engine's calls and the cache's answers, and what is still to go, the corpus stages included; what is in flight; the slices and who stopped them; the latest alerts. It never quotes a document. `--once` prints one view; `--serve ADDRESS:PORT` serves the status page, and nothing else, to another device. Quitting the monitor never stops the run.
 
 ## Pause, resume and abort
 
@@ -512,119 +89,42 @@ uv run yizkr scratch resume [<run>] [--stage NAME | --kind NAME] [--reason TEXT]
 uv run yizkr scratch abort  [<run>] [--stage NAME | --kind NAME] [--reason TEXT]
 ```
 
-The monitor's command line (`:` or Enter) asks the same. A request names
-the whole run, a stage (`transcription`, `extraction`, `critique`,
-`gedcom`, or a corpus stage) or a kind (`text`, `media` for a photograph or
-an image read whole, `pdf`, `presentation`, `gedcom`, `excerpt`), and
-goes into the run's control file, which the driver reads
-before each stage of each document and before each corpus stage. With no
-run named, the command takes the latest, and says which run it wrote to.
+The monitor's command line (`:` or Enter) asks the same. A request names the whole run, a stage (`transcription`, `extraction`, `critique`, `gedcom`, or a corpus stage) or a kind (`text`, `media` for a photograph or an image read whole, `pdf`, `presentation`, `gedcom`, `excerpt`), and goes into the run's control file, which the driver reads before each stage of each document and before each corpus stage. With no run named, the command takes the latest, and says which run it wrote to.
 
-- **Pause** holds its slice until a resume. The stage in flight finishes;
-  the rest of the run goes on, and the driver waits only when nothing
-  else can go on.
-- **Abort** holds its slice for the rest of the invocation. Once nothing
-  else can go on, the invocation ends `stopped`. A run whose documents'
-  stages are held does not go past the barrier. `resume` does not lift an
-  abort: invoke the run again.
-- **An abort outranks a pause.** A stage an abort covers stays stopped
-  whatever else is resumed, so a pause of its stage, its kind or the run
-  that also covers it makes the driver wait for nothing: when an abort
-  holds every stage left, the invocation ends `stopped` at once.
-- **Ctrl-C** stops the invocation at once, with the engine's calls in
-  flight; it ends `interrupted`.
-- **Anomaly checks** (#196) pause or abort a slice on their own, through
-  the same control file, and the driver honours them as it does yours.
+- **Pause** holds its slice until a resume. The stage in flight finishes; the rest of the run goes on, and the driver waits only when nothing else can go on.
+- **Abort** holds its slice for the rest of the invocation. Once nothing else can go on, the invocation ends `stopped`. A run whose documents' stages are held does not go past the barrier. `resume` does not lift an abort: invoke the run again.
+- **An abort outranks a pause.** A stage an abort covers stays stopped whatever else is resumed, so a pause of its stage, its kind or the run that also covers it makes the driver wait for nothing: when an abort holds every stage left, the invocation ends `stopped` at once.
+- **Ctrl-C** stops the invocation at once, with the engine's calls in flight; it ends `interrupted`.
+- **Anomaly checks** (#196) pause or abort a slice on their own, through the same control file, and the driver honours them as it does yours.
 
-Nothing completed is lost: every call answered is in the cache, and
-every view made is in its document's directory.
+Nothing completed is lost: every call answered is in the cache, and every view made is in its document's directory.
 
-**Subscription limits.** A call the subscription refuses never fails a
-document: the engine waits, or pauses the pass with the time it can go
-on. Then the invocation ends `paused`, and the driver waits until a
-minute past that time, and never less than a minute when that time has
-passed already (the engine can hold its pause past the time it
-reported). It reads the control file as it waits: an abort of the run
-ends the wait, and a pause of the run keeps it waiting until a resume.
-It then invokes the run again by itself, and every request in force as
-the new invocation starts stays in force, the whole run's included, one
-made while the driver got ready again too. A wait can last a window's
-length, days for a weekly window, and all the while the process holds
-the runs directory and the LLM cache, so no other scratch run or
-cache user can start; Ctrl-C or `yizkr scratch abort` ends the wait. A
-pause with no such time ends the driver, which prints the engine's
-reason and what to do: a call reported to have run on usage credits
-(turn extra usage off on the account, then run the command again), a
-claude CLI that changed during the run, an LLM cache another process
-holds, or a cache folder the LLM cache refuses (What stays local,
-below).
+**Subscription limits.** A call the subscription refuses never fails a document: the engine waits, or pauses the pass with the time it can go on. Then the invocation ends `paused`, and the driver waits until a minute past that time, and never less than a minute when that time has passed already (the engine can hold its pause past the time it reported). It reads the control file as it waits: an abort of the run ends the wait, and a pause of the run keeps it waiting until a resume. It then invokes the run again by itself, and every request in force as the new invocation starts stays in force, the whole run's included, one made while the driver got ready again too. A wait can last a window's length, days for a weekly window, and all the while the process holds the runs directory and the LLM cache, so no other scratch run or cache user can start; Ctrl-C or `yizkr scratch abort` ends the wait. A pause with no such time ends the driver, which prints the engine's reason and what to do: a call reported to have run on usage credits (turn extra usage off on the account, then run the command again), a claude CLI that changed during the run, an LLM cache another process holds, or a cache folder the LLM cache refuses (What stays local, below).
 
 ## Resume
 
-Run the same command again: `yizkr scratch run` invokes the latest run
-again when it did not go to the end (`--resume RUN` for another). Every
-view that stands is reused, with a `reused` event, so nothing completed
-is made again, and a stage cut short is made again with its answered
-calls from the cache.
+Run the same command again: `yizkr scratch run` invokes the latest run again when it did not go to the end (`--resume RUN` for another). Every view that stands is reused, with a `reused` event, so nothing completed is made again, and a stage cut short is made again with its answered calls from the cache.
 
-- **A run keeps its settings.** An invocation with other settings (an
-  effort, a model, the corpus folder, the never-ingest list, the code) is
-  refused before anything is written, naming each difference. A claude
-  CLI updated between invocations is refused the same way: install the
-  recorded version, with auto-update off, or start a new run.
-- **A fix to a stage before the barrier** means a new run
-  (`yizkr scratch run --new`): its fresh state directories make every
-  view again with the fix, and the LLM cache answers every call the fix
-  leaves the same, so only the calls it changes reach the engine.
-- **A corpus stage registered after the run reached the barrier**: once
-  every document has ended its stages, done or failed (a failed stage
-  leaves the ones after it undispatched), an invocation on other code
-  goes past the barrier alone, dispatching no document's stage:
-  `yizkr scratch run --resume <run>`. Its code is recorded beside the
-  run's (docs/RUN_MANIFEST.md).
+- **A run keeps its settings.** An invocation with other settings (an effort, a model, the corpus folder, the never-ingest list, the code) is refused before anything is written, naming each difference. A claude CLI updated between invocations is refused the same way: install the recorded version, with auto-update off, or start a new run.
+- **A fix to a stage before the barrier** means a new run (`yizkr scratch run --new`): its fresh state directories make every view again with the fix, and the LLM cache answers every call the fix leaves the same, so only the calls it changes reach the engine.
+- **A corpus stage registered after the run reached the barrier**: once every document has ended its stages, done or failed (a failed stage leaves the ones after it undispatched), an invocation on other code goes past the barrier alone, dispatching no document's stage: `yizkr scratch run --resume <run>`. Its code is recorded beside the run's (docs/RUN_MANIFEST.md).
 - **A refresh** is resumed with its `--refresh` (Run, above).
 
 ## Reading what a run did
 
-- `yizkr stages state <run dir>`: per stage, the documents per state, and
-  what the LLM cache did for each role.
-- `yizkr stages manifest <run dir>`: what shaped the run, one setting per
-  line.
-- `yizkr scratch watch <run> --once`: the monitor's view, at any time,
-  finished runs included.
+- `yizkr stages state <run dir>`: per stage, the documents per state, and what the LLM cache did for each role.
+- `yizkr stages manifest <run dir>`: what shaped the run, one setting per line.
+- `yizkr scratch watch <run> --once`: the monitor's view, at any time, finished runs included.
 - `yizkr scratch report <run>`: the run report (docs/RUN_REPORT.md).
-- `yizkr gaps rollup [<run>]`: the relation gaps every document's
-  extraction logged, one row per normalised predicate, with its
-  frequency, the documents that logged it and an empty `decision`
-  column, written to `gaps-rollup.csv` in the run directory for
-  OpenRefine (ADR-0013 §B). It quotes evidence, so it stays local; what
-  to mint or defer is the owner's decision.
-- `yizkr scratch recheck [<run>] [--config FILE]`: the run's stored
-  outputs checked again with the anomaly thresholds as they are now (or
-  the file `--config` names), without recomputing any stage; it appends
-  the alerts they raise to the run's alerts, all carried, and prints how
-  many, by check (docs/ANOMALIES.md, Recheck). Thresholds that cannot be
-  used are refused in one line, with nothing appended.
-- `yizkr scratch diff [<baseline>] [<run>]`: what changed between a run
-  and a baseline, by default the latest completed run on main, and why,
-  with the reviewer checklist a scratch-diff is read by
-  (docs/RUN_DIFF.md). Its `diff.md` may be posted; its `diff.json` stays
-  local.
+- `yizkr gaps rollup [<run>]`: the relation gaps every document's extraction logged, one row per normalised predicate, with its frequency, the documents that logged it and an empty `decision` column, written to `gaps-rollup.csv` in the run directory for OpenRefine (ADR-0013 §B). It quotes evidence, so it stays local; what to mint or defer is the owner's decision.
+- `yizkr scratch recheck [<run>] [--config FILE]`: the run's stored outputs checked again with the anomaly thresholds as they are now (or the file `--config` names), without recomputing any stage; it appends the alerts they raise to the run's alerts, all carried, and prints how many, by check (docs/ANOMALIES.md, Recheck). Thresholds that cannot be used are refused in one line, with nothing appended.
+- `yizkr scratch diff [<baseline>] [<run>]`: what changed between a run and a baseline, by default the latest completed run on main, and why, with the reviewer checklist a scratch-diff is read by (docs/RUN_DIFF.md). Its `diff.md` may be posted; its `diff.json` stays local.
 
-In the monitor's counts, **done** is a view made in this run, **reused**
-a view that stood or one whose every call the cache answered (by the
-answers' reason: `key match`, or an adoption's), **needs attention** a
-view made or reused with reasons to look at it (a fallback tier, no
-claims), and **failed** a document's stage that failed, with the reason
-in the run's events and the document's `state.json`. `yizkr stages
-state` counts done and reused views together, as done.
+In the monitor's counts, **done** is a view made in this run, **reused** a view that stood or one whose every call the cache answered (by the answers' reason: `key match`, or an adoption's), **needs attention** a view made or reused with reasons to look at it (a fallback tier, no claims), and **failed** a document's stage that failed, with the reason in the run's events and the document's `state.json`. `yizkr stages state` counts done and reused views together, as done.
 
 ## Reset the instance
 
-`yizkr scratch reset` takes the one instance back to a fresh start and
-repopulates it for a scratch run (ADR-0025 §1). In the development stage
-it is the only sanctioned way to reset the instance. Code:
-`yizkr.reset`, and `yizkr.core.instance` for the record of the instance.
+`yizkr scratch reset` takes the one instance back to a fresh start and repopulates it for a scratch run (ADR-0025 §1). In the development stage it is the only sanctioned way to reset the instance. Code: `yizkr.reset`, and `yizkr.core.instance` for the record of the instance.
 
 ```sh
 uv run yizkr scratch reset          # asks you to type "reset" first
@@ -632,124 +132,34 @@ uv run yizkr scratch reset --yes    # confirmed; needed without a terminal
 make scratch-reset                  # the same; ARGS="--yes" confirms it
 ```
 
-Either way it first says which instance, compose project and volumes it
-is about to reset.
+Either way it first says which instance, compose project and volumes it is about to reset.
 
-- **The steps.** Each one prints how long it took, and the end lists
-  them all:
-  1. check the kept-state marker, and refuse on a kept instance
-     (Guards, below);
-  2. clear the write-phase state: the recorded instance-contents key is
-     cleared, and the write stage's state set aside (The record of the
-     instance, below);
-  3. stop the stack: `docker compose down`, which keeps the volumes,
-     after recording where the stack runs from (`stack.json`, below);
-  4. remove the graph volumes: the database (`mysql-data`), the search
-     index (`elasticsearch-data`), the query service (`wdqs-data`), and
-     the wiki's uploaded media (`wikibase-image-data`), which only the
-     database refers to. Kept, the media would leave each run's uploads
-     beside the last run's files, and a thumbnail of a file of the same
-     name could show the last run's bytes. QuickStatements' volume and
-     traefik's certificates stay;
-  5. set `LocalSettings.php` aside: the wiki's settings belong to the
-     database just removed, and the Wikibase image installs MediaWiki
-     afresh only when there are none, as on a first boot;
-  6. start the stack, `docker compose up --detach --wait`, and wait for
-     its API, up to `--start-timeout` seconds (default 900);
-  7. bootstrap the manifest, 8. publish the queries, and 9. run the
-     smoke test (`--smoke-timeout`, default 300 s), as `yizkr bootstrap`,
-     `yizkr publish-queries` and `yizkr smoke-test` do.
-- **No backup.** It takes none (ADR-0024 §7): everything written to the
-  instance is lost. It never touches the LLM cache, a run directory or
-  its reports, or the corpus.
-- **Local settings.** Every reset installs a fresh `LocalSettings.php`,
-  so keep the wiki's local settings in `deploy/config/Extensions.php` or
-  `deploy/config/Uploads.php`, which the compose file mounts into
-  `LocalSettings.d`, never in `LocalSettings.php`.
-- **The stack.** One env file gives the reset its connection settings
-  and the compose files their variables: `--env-file`, else
-  `$YIZKR_ENV_FILE`, else `deploy/.env`, as for every command. The
-  compose files are in its directory (`--deploy-dir` names another):
-  `docker-compose.yml`, unless `--compose-file` names the ones the stack
-  was started with. The compose project and the volume names are read
-  from `docker compose config`, and no file in `deploy/` changes but
-  `config/LocalSettings.php`, which is moved. From a worktree, point
-  `$YIZKR_ENV_FILE` at the main checkout's `deploy/.env`: the stack runs
-  from that checkout's deploy directory, and the reset refuses any
-  other. While the stack has containers, stopped ones included, their
-  labels say where it was started from; with none, the reset checks the
-  deploy directory and compose files that the last reset recorded in
-  `stack.json`.
+- **The steps.** Each one prints how long it took, and the end lists them all:
+  1. check the kept-state marker, and refuse on a kept instance (Guards, below);
+  2. clear the write-phase state: the recorded instance-contents key is cleared, and the write stage's state set aside (The record of the instance, below);
+  3. stop the stack: `docker compose down`, which keeps the volumes, after recording where the stack runs from (`stack.json`, below);
+  4. remove the graph volumes: the database (`mysql-data`), the search index (`elasticsearch-data`), the query service (`wdqs-data`), and the wiki's uploaded media (`wikibase-image-data`), which only the database refers to. Kept, the media would leave each run's uploads beside the last run's files, and a thumbnail of a file of the same name could show the last run's bytes. QuickStatements' volume and traefik's certificates stay;
+  5. set `LocalSettings.php` aside: the wiki's settings belong to the database just removed, and the Wikibase image installs MediaWiki afresh only when there are none, as on a first boot;
+  6. start the stack, `docker compose up --detach --wait`, and wait for its API, up to `--start-timeout` seconds (default 900);
+  7. bootstrap the manifest, 8. publish the queries, and 9. run the smoke test (`--smoke-timeout`, default 300 s), as `yizkr bootstrap`, `yizkr publish-queries` and `yizkr smoke-test` do.
+- **No backup.** It takes none (ADR-0024 §7): everything written to the instance is lost. It never touches the LLM cache, a run directory or its reports, or the corpus.
+- **Local settings.** Every reset installs a fresh `LocalSettings.php`, so keep the wiki's local settings in `deploy/config/Extensions.php` or `deploy/config/Uploads.php`, which the compose file mounts into `LocalSettings.d`, never in `LocalSettings.php`.
+- **The stack.** One env file gives the reset its connection settings and the compose files their variables: `--env-file`, else `$YIZKR_ENV_FILE`, else `deploy/.env`, as for every command. The compose files are in its directory (`--deploy-dir` names another): `docker-compose.yml`, unless `--compose-file` names the ones the stack was started with. The compose project and the volume names are read from `docker compose config`, and no file in `deploy/` changes but `config/LocalSettings.php`, which is moved. From a worktree, point `$YIZKR_ENV_FILE` at the main checkout's `deploy/.env`: the stack runs from that checkout's deploy directory, and the reset refuses any other. While the stack has containers, stopped ones included, their labels say where it was started from; with none, the reset checks the deploy directory and compose files that the last reset recorded in `stack.json`.
 - **Guards.** Before it changes anything, the reset refuses:
-  - `COMPOSE_PROJECT_NAME`: docker compose would take the stack for
-    another project than its compose files name, with other volumes,
-    which the reset would remove;
-  - `DOCKER_HOST` or `DOCKER_CONTEXT`, or a docker context other than
-    `default`: the reset moves a file beside the compose files, so it
-    works on the local Docker engine only. It reads these settings in the
-    environment, and in the env file in each form docker compose reads
-    there (`NAME=value`, `export NAME=value`, `NAME: value`), whatever
-    the value;
-  - compose files that do not declare the four volumes under the keys
-    Wikibase Suite Deploy gives them, or declare one external;
-  - a stack whose containers, stopped ones included, were made from
-    another directory or other compose files, or, with no container,
-    that the last reset ran from elsewhere, as another project or on
-    another Docker engine (`stack.json`): starting it from here would
-    swap its config directory, and its `LocalSettings.php`, for another
-    checkout's, and after a restart another engine can answer behind the
-    local socket, with none of the stack's volumes. A record from before
-    engines were recorded names none, and only a record that names
-    another engine is refused on that count;
-  - a volume of one of those names that Docker Compose did not make for
-    this project as that volume: it removes the stack's own volumes and
-    nothing else;
+  - `COMPOSE_PROJECT_NAME`: docker compose would take the stack for another project than its compose files name, with other volumes, which the reset would remove;
+  - `DOCKER_HOST` or `DOCKER_CONTEXT`, or a docker context other than `default`: the reset moves a file beside the compose files, so it works on the local Docker engine only. It reads these settings in the environment, and in the env file in each form docker compose reads there (`NAME=value`, `export NAME=value`, `NAME: value`), whatever the value;
+  - compose files that do not declare the four volumes under the keys Wikibase Suite Deploy gives them, or declare one external;
+  - a stack whose containers, stopped ones included, were made from another directory or other compose files, or, with no container, that the last reset ran from elsewhere, as another project or on another Docker engine (`stack.json`): starting it from here would swap its config directory, and its `LocalSettings.php`, for another checkout's, and after a restart another engine can answer behind the local socket, with none of the stack's volumes. A record from before engines were recorded names none, and only a record that names another engine is refused on that count;
+  - a volume of one of those names that Docker Compose did not make for this project as that volume: it removes the stack's own volumes and nothing else;
   - a stack that docker cannot read;
-  - a reset that is not confirmed: at a terminal, by typing `reset`;
-    otherwise by `--yes`.
+  - a reset that is not confirmed: at a terminal, by typing `reset`; otherwise by `--yes`.
 
-  It then takes the live-stack lock (docs/TESTING.md), waiting while a
-  live test session holds it, and holds it to the end, so no live
-  session uses the instance while it is reset. Under the lock it reads
-  the stack again under these guards, since it may have changed while
-  the reset waited, and refuses one that names another project, other
-  volumes or another config directory than the one it confirmed. Then it
-  reads the kept-state marker (below), and refuses a kept instance. It
-  asks the wiki first. A wiki that answers must be served by this
-  engine's stack, with the project's database volume and a running
-  `wikibase` container: otherwise it is served from elsewhere (another
-  Docker engine behind the local socket, say), and the reset cannot tell
-  which instance it would reset. A wiki that answers as another wiki
-  than the env file names is refused too. With the database volume
-  there and no answer, the reset starts the stack to read the marker,
-  and refuses if it still cannot. Only no answer and no database volume
-  mean the instance holds no graph to guard.
-- **The kept-state marker** is kept twice, and the reset refuses if
-  either says the instance is kept: the page `Project:Kept state` on the
-  instance, which goes wherever its database goes, into backups and
-  through a restore; and the file `kept.json` in the record of the
-  instance, which holds when the instance cannot be read, or another
-  engine answers for it. Keeper mode (#118) writes both once the keeper
-  run's write completes (ADR-0025 §6). Removing them is a deliberate
-  owner step, taken only to give up the kept state: delete the page as
-  the wiki's admin, and remove `kept.json` by hand.
-- **What it deletes**: the four volumes, and nothing else. The rest of
-  what it clears it sets aside, in `reset/<UTC time>/` in the record of
-  the instance: the write stage's state, and `LocalSettings.php`, which
-  holds the wiki's secret key and database password. The folder is
-  private to you; clear old ones by hand when you no longer want them.
-- **Again.** Every step is safe to repeat, so a reset that failed or
-  was interrupted is finished by running it again: it removes only the
-  volumes there are and sets aside only what is there, and the
-  bootstrap, the queries and the smoke test are idempotent.
-- **When the stack cannot start.** A reset cut short while the stack
-  installed MediaWiki can leave a half-installed database, whose wiki
-  never answers; the reset then refuses, since it cannot tell whether
-  the instance is kept. If you are sure it is not kept, and there is no
-  `kept.json` in the record of the instance, finish by hand in the
-  deploy directory, with the compose files the stack was started with (a
-  `-f` for each, as the reset's refusal names them), then run
-  `yizkr scratch reset` again:
+  It then takes the live-stack lock (docs/TESTING.md), waiting while a live test session holds it, and holds it to the end, so no live session uses the instance while it is reset. Under the lock it reads the stack again under these guards, since it may have changed while the reset waited, and refuses one that names another project, other volumes or another config directory than the one it confirmed. Then it reads the kept-state marker (below), and refuses a kept instance. It asks the wiki first. A wiki that answers must be served by this engine's stack, with the project's database volume and a running `wikibase` container: otherwise it is served from elsewhere (another Docker engine behind the local socket, say), and the reset cannot tell which instance it would reset. A wiki that answers as another wiki than the env file names is refused too. With the database volume there and no answer, the reset starts the stack to read the marker, and refuses if it still cannot. Only no answer and no database volume mean the instance holds no graph to guard.
+
+- **The kept-state marker** is kept twice, and the reset refuses if either says the instance is kept: the page `Project:Kept state` on the instance, which goes wherever its database goes, into backups and through a restore; and the file `kept.json` in the record of the instance, which holds when the instance cannot be read, or another engine answers for it. Keeper mode (#118) writes both once the keeper run's write completes (ADR-0025 §6). Removing them is a deliberate owner step, taken only to give up the kept state: delete the page as the wiki's admin, and remove `kept.json` by hand.
+- **What it deletes**: the four volumes, and nothing else. The rest of what it clears it sets aside, in `reset/<UTC time>/` in the record of the instance: the write stage's state, and `LocalSettings.php`, which holds the wiki's secret key and database password. The folder is private to you; clear old ones by hand when you no longer want them.
+- **Again.** Every step is safe to repeat, so a reset that failed or was interrupted is finished by running it again: it removes only the volumes there are and sets aside only what is there, and the bootstrap, the queries and the smoke test are idempotent.
+- **When the stack cannot start.** A reset cut short while the stack installed MediaWiki can leave a half-installed database, whose wiki never answers; the reset then refuses, since it cannot tell whether the instance is kept. If you are sure it is not kept, and there is no `kept.json` in the record of the instance, finish by hand in the deploy directory, with the compose files the stack was started with (a `-f` for each, as the reset's refusal names them), then run `yizkr scratch reset` again:
 
   ```sh
   docker compose -f docker-compose.yml down
@@ -760,75 +170,29 @@ is about to reset.
       ~/.local/state/yizkr/instances/<host>/reset/LocalSettings.php.$(date -u +%Y%m%dT%H%M%SZ)
   ```
 
-  The volume names are the project's (`yizkr-wikibase`, from the
-  compose file's `name`) and each volume's key;
-  `docker compose config --volumes` lists the keys.
-- **Exit status**: 0 when it finished; 1 when it was refused or a step
-  failed, saying which; 3 on a usage error (an unknown or malformed
-  option), as for every `yizkr` command; 130 on Ctrl-C.
+  The volume names are the project's (`yizkr-wikibase`, from the compose file's `name`) and each volume's key; `docker compose config --volumes` lists the keys.
 
-**The record of the instance.** What a scratch run needs to know about
-the instance, outside it, is kept per user, apart from any checkout, so
-that every checkout and worktree on the machine shares it as they share
-the instance: in `$YIZKR_INSTANCE_STATE` (default
-`~/.local/state/yizkr/instances`, under `$XDG_STATE_HOME` when that is
-set), in a private folder named after the instance's host.
+- **Exit status**: 0 when it finished; 1 when it was refused or a step failed, saying which; 3 on a usage error (an unknown or malformed option), as for every `yizkr` command; 130 on Ctrl-C.
 
-- `contents.json`, the instance-contents record: the key of what the
-  scratch write stage wrote (#200), the run that wrote it, and the
-  instance's newest revision and newest log entry as the write finished.
-  It stands only while those stay the same, so any other write, by a
-  live test, a command or a hand in the wiki, voids it, and the next
-  scratch run resets first. The live-test harness (as each session
-  starts and ends), `yizkr bootstrap` and the reset also clear it
-  outright, and the cleared record names who cleared it, when, and from
-  which process.
+**The record of the instance.** What a scratch run needs to know about the instance, outside it, is kept per user, apart from any checkout, so that every checkout and worktree on the machine shares it as they share the instance: in `$YIZKR_INSTANCE_STATE` (default `~/.local/state/yizkr/instances`, under `$XDG_STATE_HOME` when that is set), in a private folder named after the instance's host.
+
+- `contents.json`, the instance-contents record: the key of what the scratch write stage wrote (#200), the run that wrote it, and the instance's newest revision and newest log entry as the write finished. It stands only while those stay the same, so any other write, by a live test, a command or a hand in the wiki, voids it, and the next scratch run resets first. The live-test harness (as each session starts and ends), `yizkr bootstrap` and the reset also clear it outright, and the cleared record names who cleared it, when, and from which process.
 - `kept.json`: the host-side kept-state marker (above).
-- `stack.json`: the deploy directory, compose files, project and Docker
-  engine (its id, from `docker info`) that the last reset stopped the
-  stack from. When it cannot be read, the reset refuses, and says to
-  remove it by hand once you know where the stack runs from.
-- `write/`: the write side's state between its invocations (#200),
-  `scratch-run.json`: the run that reset the instance, its write key,
-  the epoch of that reset and the instance's newest revision and log
-  entry as the run's last write left them. The reset sets it aside.
+- `stack.json`: the deploy directory, compose files, project and Docker engine (its id, from `docker info`) that the last reset stopped the stack from. When it cannot be read, the reset refuses, and says to remove it by hand once you know where the stack runs from.
+- `write/`: the write side's state between its invocations (#200), `scratch-run.json`: the run that reset the instance, its write key, the epoch of that reset and the instance's newest revision and log entry as the run's last write left them. The reset sets it aside.
 - `reset/`: what each reset set aside.
 
 It is local-only data (docs/AGENT_PROTOCOL.md §6).
 
 ## What stays local
 
-Everything a run writes is under `var/`, and is local-only data
-(docs/AGENT_PROTOCOL.md §6): the run directory (every document's views,
-`run.json`, `events.jsonl`, `alerts.jsonl`, `control.jsonl` and the
-status page) and the LLM cache (model answers and session transcripts).
-Nothing from them goes into the repository, GitHub or a cloud session.
+Everything a run writes is under `var/`, and is local-only data (docs/AGENT_PROTOCOL.md §6): the run directory (every document's views, `run.json`, `events.jsonl`, `alerts.jsonl`, `control.jsonl` and the status page) and the LLM cache (model answers and session transcripts). Nothing from them goes into the repository, GitHub or a cloud session.
 
-- Only a run's aggregate report and diff summary (`report.md`,
-  `diff.md`) may leave the machine.
-  In an issue or a PR, cite a document by its SHA-1 prefix and a generic
-  descriptor, and give metrics as aggregates.
-- Serve the status page with `watch --serve` alone: never serve the run
-  directory, which holds every document's views.
-- **The runs directory is private, and never tracked.** The driver makes
-  the runs directory mode 700 when it makes it, and refuses one that
-  exists and is open to other users, leaving its mode alone. It refuses
-  a runs directory inside a git work tree unless git ignores it, as this
-  repository ignores `var/`: `--runs .`, or any other path git would
-  track, is refused before anything is written.
-- **So is the LLM cache's folder.** The cache makes its folders mode
-  700. The driver's preflight, before anything is written, and the cache
-  as it opens, before any call, refuse a `--cache` folder a git work
-  tree would track, one there already that is open to other users,
-  whose mode they leave alone, and one this user cannot write in
-  (docs/LLM_CACHE.md, The cache folder).
+- Only a run's aggregate report and diff summary (`report.md`, `diff.md`) may leave the machine. In an issue or a PR, cite a document by its SHA-1 prefix and a generic descriptor, and give metrics as aggregates.
+- Serve the status page with `watch --serve` alone: never serve the run directory, which holds every document's views.
+- **The runs directory is private, and never tracked.** The driver makes the runs directory mode 700 when it makes it, and refuses one that exists and is open to other users, leaving its mode alone. It refuses a runs directory inside a git work tree unless git ignores it, as this repository ignores `var/`: `--runs .`, or any other path git would track, is refused before anything is written.
+- **So is the LLM cache's folder.** The cache makes its folders mode 700. The driver's preflight, before anything is written, and the cache as it opens, before any call, refuse a `--cache` folder a git work tree would track, one there already that is open to other users, whose mode they leave alone, and one this user cannot write in (docs/LLM_CACHE.md, The cache folder).
 
 ## Not yet
 
-- The estimate counts the per-document stages' calls, and clustering's
-  adjudication calls as up to the count the newest identity map planned
-  (this run's, or else the latest run's in the runs directory; not
-  estimated before any run has one), since its pairs depend on the
-  batches the run makes. It says which corpus stages make none (the
-  write side but the place stage) and names the one it does not count:
-  `places`, whose questions depend on the graph the write makes.
+- The estimate counts the per-document stages' calls, and clustering's adjudication calls as up to the count the newest identity map planned (this run's, or else the latest run's in the runs directory; not estimated before any run has one), since its pairs depend on the batches the run makes. It says which corpus stages make none (the write side but the place stage) and names the one it does not count: `places`, whose questions depend on the graph the write makes.

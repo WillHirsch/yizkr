@@ -1,351 +1,96 @@
 # ADR-0023: Machine uncertainty is process, not graph data — a general four-axis reappraisal mechanism
 
-Status: **accepted** — design settled through an adversarial design panel (three
-approaches, each critiqued, synthesised); implemented: a `Finding.axis` field,
-a review-CSV column, an `accept-all` disposition + writer edit summary, and the
-`under-witnessed-statements.rq` query, live-validated on a fictional fixture
-(#23; see §5 for the two row-shape fixes that validation made). Renumbered
-from local ADR-0022 when reconciling with origin (#18). **Amends ADR-0022** (its §6 per-name uncertainty
-treatment is *generalised*, not overturned) and **ADR-0013** (the extraction
-critic's `Finding` gains an `axis`). Sibling to **ADR-0020** ("don't store a
-derived inference"). Cites ADR-0002 (coexistence), ADR-0003 (dual provenance),
-and MODELING.md (a human decision's process is the MediaWiki edit history).
-Amended by #136 (2026-09-27): the disagreement report now pairs only values
-from different artifacts (§4).
-Amended by #386 (2026-09-29): a critic finding is a validated record that names
-its entity, claim and alias by id and gives its `axis` itself, with a category
-from a fixed list; nothing is derived from a `target` string any more (§3).
-Amended by #465 (2026-10-05): the fixed list gains `unsupported_containment`,
-a place's `part_of` claim that its excerpt does not state for that place
-(ADR-0009); the critic sees each `part_of` claim's excerpt beside the claims to
-check it (§3).
-Amended by #515 (2026-10-23, ADR-0038 §8.3): `unsupported_containment` also
-covers a time on a `part_of` claim (a point in time, a start or end time, a
-bound of one, or circa) that its excerpt does not state for the containment,
-such as the document's own date or the date of an event at the place; the
-critic sees each `part_of` claim's time beside its excerpt (§3).
-Amended by #569 (2026-10-23, ADR-0035 §5): the fixed list gains
-`evidence_does_not_state`, a container in a place's mention record whose
-evidence names both places but does not state that one is within the
-other (a list of towns), or gives only the container's name, outside a
-field of a form about the place; the critic sees each container with its
-evidence, and a finding names the container by its name (`container`).
-It is advisory, as every finding is, and counted with the critic's
-categories, apart from the deterministic reasons a container is dropped
-by (§3).
-Amended by #580 (2026-10-23, the owner's choice of a flag first): beside
-the critic, a deterministic check looks for each claim's
-`transcription_excerpt` in its document's transcription, compared as a
-container's evidence is (`core/verbatim.py`, ADR-0035 §5). A miss is
-process data, never graph data and never a reject: the claim is kept
-and written, the miss is counted in the extraction's coverage
-(`quotes`), the run report (by property) and the run diff, raised by
-the `excerpt-not-in-source` anomaly check (docs/ANOMALIES.md), and kept
-with the transcription line nearest to it in the extraction's local
-`quotes.json`. Whether a miss becomes a reject is the owner's to
-decide once a scratch run shows how often a legitimate excerpt misses.
-Amended by #607 (2026-10-24, the owner's decision of 2026-10-23): the
-support rules of #465, #515 and #569 give way to ADR-0003's test, written
-once in the critique prompt: read where it stands in the source, does
-the passage convey the fact the claim or container states, its value and
-any time it carries? The critic reads the document's whole transcription,
-each line numbered, and each claim's row gives its times and its
-citation with the lines (and page) where it occurs, as each container's
-row gives its evidence; the separate containment block goes. The fixed
-list gains `excerpt_does_not_state`, any claim other than a `part_of`
-whose excerpt fails the test, on its value or its times; one with no
-excerpt is not judged (the excerpt check counts it).
-`unsupported_containment` is a `part_of` claim whose citation fails the
-test, or that cites no excerpt; `evidence_does_not_state` a container whose evidence fails it.
-A suggestion re-cites a passage that conveys the fact by its lines, and
-says drop only when the source conveys it nowhere. A finding names a
-claim by its row's first three columns (§3), and a finding of either
-claim key that names no claim fails its checks.
-Amended by ADR-0040 (2026-10-24, the owner's decisions of 2026-10-24):
-the fixed list gains `vital_not_on_person`, a birth or a
-death the page states whose date and place no claim gives to that
-person, judged on the numbered transcription the critic reads; it is
-advisory, as every finding is, and counted with the critic's
-categories (§3).
-Superseded in part by [ADR-0035](0035-mention-records.md) (owner
-decision 2026-09-29, #385): §2 and Ruling 1 no longer keep every machine
-judgement out of the graph. An extraction's judgement note, a category
-and one sentence, is written inside the extraction-run reference of the
-statement it concerns, as process provenance. It is never used to rank,
-order or filter a value; a statement without one is not thereby certain;
-the public export leaves notes out as free text. The graph still holds no
-confidence number, epistemic qualifier, or per-statement trust or
-acceptance marker. §1, §3–§6 and Rulings 2–6 stand. The consequence "zero
-graph / export / privacy delta" no longer holds.
+Status: **accepted** — design settled through an adversarial design panel (three approaches, each critiqued, synthesised); implemented: a `Finding.axis` field, a review-CSV column, an `accept-all` disposition + writer edit summary, and the `under-witnessed-statements.rq` query, live-validated on a fictional fixture (#23; see §5 for the two row-shape fixes that validation made). Renumbered from local ADR-0022 when reconciling with origin (#18). **Amends ADR-0022** (its §6 per-name uncertainty treatment is _generalised_, not overturned) and **ADR-0013** (the extraction critic's `Finding` gains an `axis`). Sibling to **ADR-0020** ("don't store a derived inference"). Cites ADR-0002 (coexistence), ADR-0003 (dual provenance), and MODELING.md (a human decision's process is the MediaWiki edit history). Amended by #136 (2026-09-27): the disagreement report now pairs only values from different artifacts (§4). Amended by #386 (2026-09-29): a critic finding is a validated record that names its entity, claim and alias by id and gives its `axis` itself, with a category from a fixed list; nothing is derived from a `target` string any more (§3). Amended by #465 (2026-10-05): the fixed list gains `unsupported_containment`, a place's `part_of` claim that its excerpt does not state for that place (ADR-0009); the critic sees each `part_of` claim's excerpt beside the claims to check it (§3). Amended by #515 (2026-10-23, ADR-0038 §8.3): `unsupported_containment` also covers a time on a `part_of` claim (a point in time, a start or end time, a bound of one, or circa) that its excerpt does not state for the containment, such as the document's own date or the date of an event at the place; the critic sees each `part_of` claim's time beside its excerpt (§3). Amended by #569 (2026-10-23, ADR-0035 §5): the fixed list gains `evidence_does_not_state`, a container in a place's mention record whose evidence names both places but does not state that one is within the other (a list of towns), or gives only the container's name, outside a field of a form about the place; the critic sees each container with its evidence, and a finding names the container by its name (`container`). It is advisory, as every finding is, and counted with the critic's categories, apart from the deterministic reasons a container is dropped by (§3). Amended by #580 (2026-10-23, the owner's choice of a flag first): beside the critic, a deterministic check looks for each claim's `transcription_excerpt` in its document's transcription, compared as a container's evidence is (`core/verbatim.py`, ADR-0035 §5). A miss is process data, never graph data and never a reject: the claim is kept and written, the miss is counted in the extraction's coverage (`quotes`), the run report (by property) and the run diff, raised by the `excerpt-not-in-source` anomaly check (docs/ANOMALIES.md), and kept with the transcription line nearest to it in the extraction's local `quotes.json`. Whether a miss becomes a reject is the owner's to decide once a scratch run shows how often a legitimate excerpt misses. Amended by #607 (2026-10-24, the owner's decision of 2026-10-23): the support rules of #465, #515 and #569 give way to ADR-0003's test, written once in the critique prompt: read where it stands in the source, does the passage convey the fact the claim or container states, its value and any time it carries? The critic reads the document's whole transcription, each line numbered, and each claim's row gives its times and its citation with the lines (and page) where it occurs, as each container's row gives its evidence; the separate containment block goes. The fixed list gains `excerpt_does_not_state`, any claim other than a `part_of` whose excerpt fails the test, on its value or its times; one with no excerpt is not judged (the excerpt check counts it). `unsupported_containment` is a `part_of` claim whose citation fails the test, or that cites no excerpt; `evidence_does_not_state` a container whose evidence fails it. A suggestion re-cites a passage that conveys the fact by its lines, and says drop only when the source conveys it nowhere. A finding names a claim by its row's first three columns (§3), and a finding of either claim key that names no claim fails its checks. Amended by ADR-0040 (2026-10-24, the owner's decisions of 2026-10-24): the fixed list gains `vital_not_on_person`, a birth or a death the page states whose date and place no claim gives to that person, judged on the numbered transcription the critic reads; it is advisory, as every finding is, and counted with the critic's categories (§3). Superseded in part by [ADR-0035](0035-mention-records.md) (owner decision 2026-09-29, #385): §2 and Ruling 1 no longer keep every machine judgement out of the graph. An extraction's judgement note, a category and one sentence, is written inside the extraction-run reference of the statement it concerns, as process provenance. It is never used to rank, order or filter a value; a statement without one is not thereby certain; the public export leaves notes out as free text. The graph still holds no confidence number, epistemic qualifier, or per-statement trust or acceptance marker. §1, §3–§6 and Rulings 2–6 stand. The consequence "zero graph / export / privacy delta" no longer holds.
 
 ## Context
 
-A reviewer needs to find and re-appraise the machine's most contentious
-decisions — above all the ones that entered with little human scrutiny
-(auto-/bulk-accepted through `accept-all`). ADR-0022 §6 proposed surfacing this as
-a per-*name* uncertainty self-report across bespoke axes (spelling / type /
-composition / identity). That was rightly challenged as **hand-crafted treatment
-of one corner of the schema**: those axes are nothing but the universal parts of
-*any* statement — **subject / predicate / value / existence** — so a name-specific
-vector is redundant. The real question became whether there is a **fully
-generalised** representation of equal-or-greater expressiveness, and whether it
-should be **graph-resident** so downstream reappraisal is a SPARQL query.
+A reviewer needs to find and re-appraise the machine's most contentious decisions — above all the ones that entered with little human scrutiny (auto-/bulk-accepted through `accept-all`). ADR-0022 §6 proposed surfacing this as a per-_name_ uncertainty self-report across bespoke axes (spelling / type / composition / identity). That was rightly challenged as **hand-crafted treatment of one corner of the schema**: those axes are nothing but the universal parts of _any_ statement — **subject / predicate / value / existence** — so a name-specific vector is redundant. The real question became whether there is a **fully generalised** representation of equal-or-greater expressiveness, and whether it should be **graph-resident** so downstream reappraisal is a SPARQL query.
 
-The current model draws a deliberate line, which this ADR makes explicit and
-keeps:
+The current model draws a deliberate line, which this ADR makes explicit and keeps:
 
-- `Claim.confidence` is a single float and is **never written to the graph**
-  (claims.py): ephemeral extractor metadata for review *ordering* only. The graph
-  is deliberately machine-confidence-free.
-- The graph **does** record the *source's own* uncertainty as **qualifiers**:
-  `sourcing_circumstances` (e.g. `circa`), `earliest_date`/`latest_date`, and
-  Wikibase time precision. The principle: **source vagueness is data; machine
-  doubt is process.**
-- Writes are always **normal rank** — the claim contract has no rank field
-  (ADR-0002). Rank is an optional curator overlay, and rule 4 forbids any feature
-  *requiring* preferred; confidence must never auto-drive rank.
-- **Neutral coexistence** (ADR-0002): contradictory statements coexist at normal
-  rank as the healthy resting state — but for *cross-source* multiplicity. The
-  disagreement report (`disagreement-report.rq`) lists `date_of_birth` (and the
-  other single-value properties) in its `VALUES`, so two *same-source* candidate
-  readings written as coexisting statements would surface there as a **fabricated
-  cross-source contradiction** (rules 5/6).
-- **Dual provenance** (ADR-0003): machine writes already carry graph-resident
-  *process* metadata — an `inferred from → extraction run` reference. So some
-  machine metadata is already in the graph; the question is whether machine
-  *epistemics* should join it.
-- **Identity** uncertainty already has its own gate (the equivalences CSV:
-  verdict/confidence/evidence), separate from claim review.
-- The extraction critic (ADR-0013) emits `Finding{target, issue, suggestion}`,
-  and its `target` grammar is *already* statement-part-addressable: a bare id
-  (`e01`) targets the subject, `e01 alias: X` a value, `claim: e01 occupation` a
-  predicate.
+- `Claim.confidence` is a single float and is **never written to the graph** (claims.py): ephemeral extractor metadata for review _ordering_ only. The graph is deliberately machine-confidence-free.
+- The graph **does** record the _source's own_ uncertainty as **qualifiers**: `sourcing_circumstances` (e.g. `circa`), `earliest_date`/`latest_date`, and Wikibase time precision. The principle: **source vagueness is data; machine doubt is process.**
+- Writes are always **normal rank** — the claim contract has no rank field (ADR-0002). Rank is an optional curator overlay, and rule 4 forbids any feature _requiring_ preferred; confidence must never auto-drive rank.
+- **Neutral coexistence** (ADR-0002): contradictory statements coexist at normal rank as the healthy resting state — but for _cross-source_ multiplicity. The disagreement report (`disagreement-report.rq`) lists `date_of_birth` (and the other single-value properties) in its `VALUES`, so two _same-source_ candidate readings written as coexisting statements would surface there as a **fabricated cross-source contradiction** (rules 5/6).
+- **Dual provenance** (ADR-0003): machine writes already carry graph-resident _process_ metadata — an `inferred from → extraction run` reference. So some machine metadata is already in the graph; the question is whether machine _epistemics_ should join it.
+- **Identity** uncertainty already has its own gate (the equivalences CSV: verdict/confidence/evidence), separate from claim review.
+- The extraction critic (ADR-0013) emits `Finding{target, issue, suggestion}`, and its `target` grammar is _already_ statement-part-addressable: a bare id (`e01`) targets the subject, `e01 alias: X` a value, `claim: e01 occupation` a predicate.
 
 ## Decision
 
 ### 1. The four universal axes each route to an existing home
 
-Uncertainty about any statement decomposes into **subject/identity,
-predicate/property, value/reading, existence/interpretation** — the general parts
-of a statement, of which the name axes are exact instances (spelling = value,
-type = predicate, composition = value-structure, identity = subject). Each routes
-to a home that already exists; **no per-attribute confidence vector is added**:
+Uncertainty about any statement decomposes into **subject/identity, predicate/property, value/reading, existence/interpretation** — the general parts of a statement, of which the name axes are exact instances (spelling = value, type = predicate, composition = value-structure, identity = subject). Each routes to a home that already exists; **no per-attribute confidence vector is added**:
 
-- **subject/identity** → the equivalences reconciliation gate; only the *outcome*
-  (a resolved reference, a minted item, or `said_to_be_the_same_as`) is
-  graph-resident. Never a per-claim identity flag.
-- **predicate/property** → **no faithful graph home** (§4). Handled by the
-  lower-commitment layers where they exist (the alias bag for a name's type;
-  `unclassified_entity` + `type_hint` for an entity's kind, ADR-0013;
-  `gaps.ndjson` for a relation the schema cannot frame, never written) plus a
-  single best predicate the critic may flag. Deliberately **not**
-  SPARQL-reappraisable.
-- **value/reading** → source vagueness is **data** via the existing qualifiers;
-  genuine cross-source multiplicity is **coexistence**; a machine's reading-doubt
-  of a *clear* source is handled by ephemeral confidence-ordering, a precision
-  downgrade, or deferral to a curator — never two same-source coexisting
-  statements (§4).
-- **existence/interpretation** → the transcription excerpt and the
-  statement→reference→region verification affordance; a source that itself hedges
-  is source vagueness; a thing the schema cannot frame is the ADR-0013 escape
-  hatch / `gaps`.
+- **subject/identity** → the equivalences reconciliation gate; only the _outcome_ (a resolved reference, a minted item, or `said_to_be_the_same_as`) is graph-resident. Never a per-claim identity flag.
+- **predicate/property** → **no faithful graph home** (§4). Handled by the lower-commitment layers where they exist (the alias bag for a name's type; `unclassified_entity` + `type_hint` for an entity's kind, ADR-0013; `gaps.ndjson` for a relation the schema cannot frame, never written) plus a single best predicate the critic may flag. Deliberately **not** SPARQL-reappraisable.
+- **value/reading** → source vagueness is **data** via the existing qualifiers; genuine cross-source multiplicity is **coexistence**; a machine's reading-doubt of a _clear_ source is handled by ephemeral confidence-ordering, a precision downgrade, or deferral to a curator — never two same-source coexisting statements (§4).
+- **existence/interpretation** → the transcription excerpt and the statement→reference→region verification affordance; a source that itself hedges is source vagueness; a thing the schema cannot frame is the ADR-0013 escape hatch / `gaps`.
 
 ### 2. Machine epistemics stay out of the graph
 
-**No graph-resident machine confidence, contentiousness, or doubt.** The
-SPARQL-reappraisal payoff does **not** justify reversing the standing "confidence
-never in the graph" principle, for three convergent reasons:
+**No graph-resident machine confidence, contentiousness, or doubt.** The SPARQL-reappraisal payoff does **not** justify reversing the standing "confidence never in the graph" principle, for three convergent reasons:
 
-1. **ADR-0020 precedent.** ADR-0020 just removed a *stored derived inference* (the
-   living flag) precisely because a stored derived fact fights source-first,
-   freezes a time-varying inference that goes stale, and taxes review for
-   something the system can already recover. A machine-confidence scalar is the
-   same shape; storing it would overturn a decision the project has now made twice
-   (claims.py and ADR-0020).
-2. **A stored self-report is the wrong instrument.** An LLM's confidence is
-   uncalibrated, non-re-derivable (so unfalsifiable on reappraisal), and — by
-   construction — **blind to confident-but-wrong**, the hardest error class and
-   the exact one the critic exists to catch. It buys little on the cases that
-   matter.
-3. **Rank governance (rules 4, 6).** A per-statement confidence invites a frontend
-   to "prefer the confident value" — a governance hazard fenced only by
-   discipline. Keeping it out honors rule 4 *by construction*.
+1. **ADR-0020 precedent.** ADR-0020 just removed a _stored derived inference_ (the living flag) precisely because a stored derived fact fights source-first, freezes a time-varying inference that goes stale, and taxes review for something the system can already recover. A machine-confidence scalar is the same shape; storing it would overturn a decision the project has now made twice (claims.py and ADR-0020).
+2. **A stored self-report is the wrong instrument.** An LLM's confidence is uncalibrated, non-re-derivable (so unfalsifiable on reappraisal), and — by construction — **blind to confident-but-wrong**, the hardest error class and the exact one the critic exists to catch. It buys little on the cases that matter.
+3. **Rank governance (rules 4, 6).** A per-statement confidence invites a frontend to "prefer the confident value" — a governance hazard fenced only by discipline. Keeping it out honors rule 4 _by construction_.
 
-Process metadata that is *already* graph-resident (the `inferred from → extraction
-run` reference) stays; no new epistemic snak, qualifier, or node is added.
+Process metadata that is _already_ graph-resident (the `inferred from → extraction run` reference) stays; no new epistemic snak, qualifier, or node is added.
 
-**This is a principled loss, not a redundancy.** Machine contentiousness is a
-*real* quantity that provenance structure cannot recover — under-corroboration is
-a different measure and can invert the true ranking (a crisp single-source reading
-looks "under-witnessed"; two mutually-corroborating coin-flip readings look
-"witnessed"). We accept not storing it because the only faithful in-graph
-realisation — an uncalibrated float — is worse than the loss.
+**This is a principled loss, not a redundancy.** Machine contentiousness is a _real_ quantity that provenance structure cannot recover — under-corroboration is a different measure and can invert the true ranking (a crisp single-source reading looks "under-witnessed"; two mutually-corroborating coin-flip readings look "witnessed"). We accept not storing it because the only faithful in-graph realisation — an uncalibrated float — is worse than the loss.
 
 ### 3. Generalise the critic (this replaces ADR-0022 §6's per-name framing)
 
-Add `axis: Literal["subject", "predicate", "value", "existence"] | None` to
-`critique.Finding`, derived mechanically from the existing `target` grammar
-(`e01` → subject; `e01 alias: X` → value; `claim: e01 occupation` → predicate).
-Surface it as an `axis` column beside the existing `confidence` column in the
-review CSV (or as a structured prefix within `critique_notes`).
+Add `axis: Literal["subject", "predicate", "value", "existence"] | None` to `critique.Finding`, derived mechanically from the existing `target` grammar (`e01` → subject; `e01 alias: X` → value; `claim: e01 occupation` → predicate). Surface it as an `axis` column beside the existing `confidence` column in the review CSV (or as a structured prefix within `critique_notes`).
 
-*As amended by #386:* the `target` grammar is gone. Each finding is a record,
-`{entity, claim?, alias?, axis, category, issue, suggestion}`: `entity` is a
-manifest id; `claim` is one claim as the prompt lists it (subject id, property
-key, value, an item value by its id); `alias` is one of the entity's; `axis` is
-one of the four, given by the critic, so the existence axis is expressible;
-`category` is a key of the fixed list kept with the critic prompt
-(`critique.CATEGORIES`); `suggestion` is `{kind?, property?, note}`, where a
-kind or property is a manifest key. Code checks every id against the batch the
-critic reviewed and every key against the model manifest. A record that fails
-is kept verbatim in `critique.json`, with the reasons, beside the valid ones
-(`{"invalid": ..., "why": [...]}`), and counted; it is never repaired. The
-review sheet shows it on its first row, marked `unchecked`, with why it failed
-(the owner's default, 2026-09-29). Each valid finding goes on exactly one
-review row, as a structured prefix within `critique_notes` (`critique [axis,
-category] entity: issue`): its claim's row, else the row of the first claim
-whose subject (then value, then a qualifier's value) is the entity, else the
-first row, with the entity id in the note. The review rows are matched to the
-reviewed batch's claims by replaying the equivalence step exactly (the
-approved entities are those whose `qid` resolution set, and a claim it makes
-identical to an earlier one maps to that one's row), then checking the
-label-by-label step claim by claim, so a finding on an entity resolved to a
-QID keeps its row. A critique view whose entries are neither findings nor
-invalid ones, such as one in the `target` format, is set aside and made again
-when reused. The categories are the issue's nine plus `implausible_value` (a
-value the source is unlikely to say as read), the owner's default of the same
-date. The run report counts findings by axis and by category. This **is** the
-general form of §6 — the same review-layer mechanism, now inherited uniformly by
-every property, with the name axes as instances. `Claim.confidence` stays
-ephemeral and unchanged; the critic still only flags, never rewrites
-(advisory-only, ADR-0013).
+_As amended by #386:_ the `target` grammar is gone. Each finding is a record, `{entity, claim?, alias?, axis, category, issue, suggestion}`: `entity` is a manifest id; `claim` is one claim as the prompt lists it (subject id, property key, value, an item value by its id); `alias` is one of the entity's; `axis` is one of the four, given by the critic, so the existence axis is expressible; `category` is a key of the fixed list kept with the critic prompt (`critique.CATEGORIES`); `suggestion` is `{kind?, property?, note}`, where a kind or property is a manifest key. Code checks every id against the batch the critic reviewed and every key against the model manifest. A record that fails is kept verbatim in `critique.json`, with the reasons, beside the valid ones (`{"invalid": ..., "why": [...]}`), and counted; it is never repaired. The review sheet shows it on its first row, marked `unchecked`, with why it failed (the owner's default, 2026-09-29). Each valid finding goes on exactly one review row, as a structured prefix within `critique_notes` (`critique [axis, category] entity: issue`): its claim's row, else the row of the first claim whose subject (then value, then a qualifier's value) is the entity, else the first row, with the entity id in the note. The review rows are matched to the reviewed batch's claims by replaying the equivalence step exactly (the approved entities are those whose `qid` resolution set, and a claim it makes identical to an earlier one maps to that one's row), then checking the label-by-label step claim by claim, so a finding on an entity resolved to a QID keeps its row. A critique view whose entries are neither findings nor invalid ones, such as one in the `target` format, is set aside and made again when reused. The categories are the issue's nine plus `implausible_value` (a value the source is unlikely to say as read), the owner's default of the same date. The run report counts findings by axis and by category. This **is** the general form of §6 — the same review-layer mechanism, now inherited uniformly by every property, with the name axes as instances. `Claim.confidence` stays ephemeral and unchanged; the critic still only flags, never rewrites (advisory-only, ADR-0013).
 
 ### 4. Predicate uncertainty has no graph home; coexistence is cross-source only
 
-A Wikibase qualifier is scoped *under* a statement's committed property and cannot
-doubt it; recording two predicates from one source fabricates a second assertion
-(rule 5). So predicate uncertainty is deliberately **not** graph-representable and
-not SPARQL-reappraisable — the critic flag is its only surfacing. Likewise,
-**there is no "two coexisting candidate statements from one source" fallback**:
-because `date_of_birth` (and the other single-value properties) are in
-`disagreement-report.rq`'s `VALUES`, same-source candidates would appear as a fake
-contradiction in the flagship R2 view. Coexistence is reserved for genuine
-cross-source value multiplicity.
+A Wikibase qualifier is scoped _under_ a statement's committed property and cannot doubt it; recording two predicates from one source fabricates a second assertion (rule 5). So predicate uncertainty is deliberately **not** graph-representable and not SPARQL-reappraisable — the critic flag is its only surfacing. Likewise, **there is no "two coexisting candidate statements from one source" fallback**: because `date_of_birth` (and the other single-value properties) are in `disagreement-report.rq`'s `VALUES`, same-source candidates would appear as a fake contradiction in the flagship R2 view. Coexistence is reserved for genuine cross-source value multiplicity.
 
-Amended by #136 (2026-09-27): the disagreement report now enforces this
-structurally. It pairs only values whose sources are not all one artifact (a page
-fragment counts as its artifact), so a curator's correction beside the machine
-reading it corrects, or any two readings of one artifact, no longer surface there
-as a contradiction; it also leaves out deprecated statements. The ruling stands:
-a second statement from one source still fabricates an assertion the source never
-made (rule 5), so the "two coexisting candidates" fallback stays rejected.
+Amended by #136 (2026-09-27): the disagreement report now enforces this structurally. It pairs only values whose sources are not all one artifact (a page fragment counts as its artifact), so a curator's correction beside the machine reading it corrects, or any two readings of one artifact, no longer surface there as a contradiction; it also leaves out deprecated statements. The ruling stands: a second statement from one source still fabricates an assertion the source never made (rule 5), so the "two coexisting candidates" fallback stays rejected.
 
-Amended by #266 (2026-09-28): the report now fetches attributed values with a flat
-query and compares them in Python, where this rule is `from_different_artifacts`
-(ADR-0033). The ruling stands.
+Amended by #266 (2026-09-28): the report now fetches attributed values with a flat query and compares them in Python, where this rule is `from_different_artifacts` (ADR-0033). The ruling stands.
 
 ### 5. Reappraisal is a structural SPARQL query, honestly labelled
 
-Ship `queries/under-witnessed-statements.rq` (rendered by `publish.py`) —
-machine-written statements (`?st prov:wasDerivedFrom/pr:{inferred_from_extraction_run}`)
-with exactly one distinct `stated_in` source and no coexisting curator
-(run-reference-free) sibling on the same subject+property. It is the **structural
-complement** of `disagreement-report.rq`: that view finds *over*-witnessed
-contention; this finds *under*-witnessed machine calls. The name-reappraisal §6
-could not previously express becomes one `VALUES` filter on the four typed-name
-properties. Its header must state — ADR-0002 style — that this is a **queue, not a
-defect report**, and it must be labelled **"under-witnessed / low-scrutiny," not
-"contentious":** it measures under-witnessing (which can invert true
-contentiousness) and it cannot see the predicate axis.
+Ship `queries/under-witnessed-statements.rq` (rendered by `publish.py`) — machine-written statements (`?st prov:wasDerivedFrom/pr:{inferred_from_extraction_run}`) with exactly one distinct `stated_in` source and no coexisting curator (run-reference-free) sibling on the same subject+property. It is the **structural complement** of `disagreement-report.rq`: that view finds _over_-witnessed contention; this finds _under_-witnessed machine calls. The name-reappraisal §6 could not previously express becomes one `VALUES` filter on the four typed-name properties. Its header must state — ADR-0002 style — that this is a **queue, not a defect report**, and it must be labelled **"under-witnessed / low-scrutiny," not "contentious":** it measures under-witnessing (which can invert true contentiousness) and it cannot see the predicate axis.
 
-Amended by #23 (2026-09-27), from its live validation: the queue returns **one
-row per statement** (it projects the statement node, the reviewer's handle for
-re-appraisal), so two same-value statements that differ only by a qualifier —
-distinct assertions under ADR-0002 — are no longer collapsed into one row; and a
-time value carries its **stated precision**, so a year-precision date is not
-displayed as 1 January of that year (rule 5). The selection criteria above are
-unchanged.
+Amended by #23 (2026-09-27), from its live validation: the queue returns **one row per statement** (it projects the statement node, the reviewer's handle for re-appraisal), so two same-value statements that differ only by a qualifier — distinct assertions under ADR-0002 — are no longer collapsed into one row; and a time value carries its **stated precision**, so a year-precision date is not displayed as 1 January of that year (rule 5). The selection criteria above are unchanged.
 
 ### 6. Capture the bulk-accept subset off-graph
 
-`accept_all` (claims branch) writes `decision="bulk-accept"` to the durable
-reviewed CSV — add `bulk-accept` to the APPROVE token set — so the disposition is
-distinguishable from a per-row human `approve`; `apply_review` threads the mode so
-the writer emits a distinct edit summary (e.g. `ingest: bulk-accepted claim`).
-MediaWiki RecentChanges/history plus the ADR-0019 reviewed CSVs are then the
-bulk-accept reappraisal queue — matching ADR-0020's "read where it matters, don't
-store," and MODELING.md's assignment of a human decision's *process* to the edit
-history. No graph node, no export surface, no staleness.
+`accept_all` (claims branch) writes `decision="bulk-accept"` to the durable reviewed CSV — add `bulk-accept` to the APPROVE token set — so the disposition is distinguishable from a per-row human `approve`; `apply_review` threads the mode so the writer emits a distinct edit summary (e.g. `ingest: bulk-accepted claim`). MediaWiki RecentChanges/history plus the ADR-0019 reviewed CSVs are then the bulk-accept reappraisal queue — matching ADR-0020's "read where it matters, don't store," and MODELING.md's assignment of a human decision's _process_ to the edit history. No graph node, no export surface, no staleness.
 
 ## Rulings
 
-1. **No graph-resident machine confidence, contentiousness, or doubt** — the graph
-   stays machine-confidence-free.
+1. **No graph-resident machine confidence, contentiousness, or doubt** — the graph stays machine-confidence-free.
 2. **Four axes → existing homes** (§1); no per-attribute confidence vector.
-3. **The critic gains an `axis`**, generalising ADR-0022 §6 into a per-property
-   review-layer channel.
-4. **Coexistence is cross-source value multiplicity only** — never predicate
-   hedging or single-source value-doubt (either would corrupt
-   `disagreement-report.rq`).
-5. **Reappraisal = a structural query + an off-graph bulk-accept signal**; the
-   query is a low-scrutiny *queue*, not a contentiousness ranking, and the
-   predicate axis is not queryable.
-6. **Any future graph-resident acceptance fact is a run-item `ratification_mode`
-   only, behind its own ADR** — never a per-statement marker or a confidence
-   number.
+3. **The critic gains an `axis`**, generalising ADR-0022 §6 into a per-property review-layer channel.
+4. **Coexistence is cross-source value multiplicity only** — never predicate hedging or single-source value-doubt (either would corrupt `disagreement-report.rq`).
+5. **Reappraisal = a structural query + an off-graph bulk-accept signal**; the query is a low-scrutiny _queue_, not a contentiousness ranking, and the predicate axis is not queryable.
+6. **Any future graph-resident acceptance fact is a run-item `ratification_mode` only, behind its own ADR** — never a per-statement marker or a confidence number.
 
 ## Consequences
 
-- **Zero graph / export / privacy delta.** No new property, item, qualifier, node,
-  or reference snak. The confidence-free graph is the safest ADR-0020 export
-  surface — nothing new for the possibly-living sweep to reason about, no
-  machine-epistemic leakage.
-- **Rank rule 4 and ADR-0020 honored by construction** — no stored scalar can
-  shadow rank or go stale.
-- **One general mechanism**, not a name corner: the critic `axis` covers every
-  property; the reappraisal query covers every machine write; the name case is a
-  `VALUES` filter.
-- **A genuine, accepted loss**: no stored ranking of how contentious the machine
-  *felt* an item to be. Documented, not hidden.
-- **Reliance on durable `var/` artifacts** (ADR-0019) for the bulk-accept audit
-  dimension — if those are lost, that provenance is unrecoverable (unlike a graph
-  fact); this is the accepted trade of the no-new-node design.
+- **Zero graph / export / privacy delta.** No new property, item, qualifier, node, or reference snak. The confidence-free graph is the safest ADR-0020 export surface — nothing new for the possibly-living sweep to reason about, no machine-epistemic leakage.
+- **Rank rule 4 and ADR-0020 honored by construction** — no stored scalar can shadow rank or go stale.
+- **One general mechanism**, not a name corner: the critic `axis` covers every property; the reappraisal query covers every machine write; the name case is a `VALUES` filter.
+- **A genuine, accepted loss**: no stored ranking of how contentious the machine _felt_ an item to be. Documented, not hidden.
+- **Reliance on durable `var/` artifacts** (ADR-0019) for the bulk-accept audit dimension — if those are lost, that provenance is unrecoverable (unlike a graph fact); this is the accepted trade of the no-new-node design.
 
 ## Rejected and deferred alternatives
 
-- **A per-statement `confidence` float in the graph** — uncalibrated,
-  non-re-derivable, confident-but-wrong-blind; the ADR-0020 stored-stale-inference
-  antipattern; a rank-governance hazard. Rejected.
-- **A `contested_axis` / `assessment_confidence` *reference* snak** — a quantity
-  reference snak materialises `prv:` value-node triples that `backup.py`'s
-  predicate-suffix strip does not remove cleanly (it would rely on the orphan
-  sweep), an added export-correctness cost the core design avoids by adding
-  nothing. Rejected.
-- **A per-statement `provisional_acceptance` marker** — puts *human*
-  review-process into the graph, which MODELING.md assigns to the MediaWiki edit
-  history; reprises the stored-stale-inference antipattern (a later per-row
-  re-review would not clear it); and manufactures a de-facto vouched/provisional
-  *trust tier* that source-first neutrality is designed to resist. Rejected.
-- **Coexisting single-source candidate statements** for value or predicate doubt —
-  corrupt the flagship disagreement report (§4). Rejected.
-- **A single item-valued `ratification_mode` fact on the extraction-*run* item** —
-  *deferred*, not adopted. Only if a pure-SPARQL bulk-accept filter later proves
-  operationally necessary; it carries no PII and rides existing run-item handling,
-  but it extends process-provenance-in-graph from *extraction* to *acceptance*,
-  reintroduces an ADR-0020-shaped staleness risk, and mis-models a review-*episode*
-  fact onto a *run* item — so it must be justified in its own ADR. See #65.
+- **A per-statement `confidence` float in the graph** — uncalibrated, non-re-derivable, confident-but-wrong-blind; the ADR-0020 stored-stale-inference antipattern; a rank-governance hazard. Rejected.
+- **A `contested_axis` / `assessment_confidence` _reference_ snak** — a quantity reference snak materialises `prv:` value-node triples that `backup.py`'s predicate-suffix strip does not remove cleanly (it would rely on the orphan sweep), an added export-correctness cost the core design avoids by adding nothing. Rejected.
+- **A per-statement `provisional_acceptance` marker** — puts _human_ review-process into the graph, which MODELING.md assigns to the MediaWiki edit history; reprises the stored-stale-inference antipattern (a later per-row re-review would not clear it); and manufactures a de-facto vouched/provisional _trust tier_ that source-first neutrality is designed to resist. Rejected.
+- **Coexisting single-source candidate statements** for value or predicate doubt — corrupt the flagship disagreement report (§4). Rejected.
+- **A single item-valued `ratification_mode` fact on the extraction-_run_ item** — _deferred_, not adopted. Only if a pure-SPARQL bulk-accept filter later proves operationally necessary; it carries no PII and rides existing run-item handling, but it extends process-provenance-in-graph from _extraction_ to _acceptance_, reintroduces an ADR-0020-shaped staleness risk, and mis-models a review-_episode_ fact onto a _run_ item — so it must be justified in its own ADR. See #65.
 
 ## Open questions
 
-- Whether a run-item `ratification_mode` is ever worth its own ADR (only if the
-  off-graph CSV + edit-history join proves operationally painful). See #65.
-- **Unmatched-entity subject-doubt** (ADR-0022 open Q2): a brand-new entity with
-  no blocking candidate generates no equivalences row, so a low-confidence
-  *invented* subject gets no identity-uncertainty surfacing through the reconcile
-  gate — this needs the lightweight unmatched-entity review view ADR-0022 already
-  flagged. See #112 and #137.
-- **Retention policy for `var/` reviewed CSVs** (ADR-0019): the bulk-accept
-  reappraisal dimension depends on these durable artifacts. See #100.
-- The under-witnessed query counts **multi-run corroboration by the same model**
-  as "witnessed"; whether to discount same-model corroboration when scoping by
-  run/model is a query-refinement question, not a schema one. See #137.
+- Whether a run-item `ratification_mode` is ever worth its own ADR (only if the off-graph CSV + edit-history join proves operationally painful). See #65.
+- **Unmatched-entity subject-doubt** (ADR-0022 open Q2): a brand-new entity with no blocking candidate generates no equivalences row, so a low-confidence _invented_ subject gets no identity-uncertainty surfacing through the reconcile gate — this needs the lightweight unmatched-entity review view ADR-0022 already flagged. See #112 and #137.
+- **Retention policy for `var/` reviewed CSVs** (ADR-0019): the bulk-accept reappraisal dimension depends on these durable artifacts. See #100.
+- The under-witnessed query counts **multi-run corroboration by the same model** as "witnessed"; whether to discount same-model corroboration when scoping by run/model is a query-refinement question, not a schema one. See #137.

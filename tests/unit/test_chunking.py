@@ -921,7 +921,7 @@ class TestEntityFirstExtractor:
         )
         ((method, prompt),) = llm.calls[1:]
         assert method == "fork"
-        assert 'final line:\n{"done": true}\n' in prompt
+        assert 'final line:\n\n```text\n{"done": true}\n```\n' in prompt
         assert "emitted" not in prompt
 
     def test_fork_flow_end_to_end(self, tmp_path):
