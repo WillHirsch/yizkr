@@ -484,6 +484,20 @@ class TestTheManifestParse:
         assert [entity.id for entity in parsed.entities] == ["e1"]
         assert parsed.dropped_kinds == {"e2": "death"}
 
+    def test_an_id_given_twice_is_a_problem_whatever_its_kinds(self):
+        # Rudolf and "Death of Rudolf" both given as e1: the manifest is
+        # refused, never emptied
+        answer = json.dumps(
+            {
+                "entities": [
+                    {"id": "e1", "label": "Rudolf Löbig", "kind": "human"},
+                    {"id": "e1", "label": "Death of Rudolf", "kind": "death"},
+                ]
+            }
+        )
+        _, problems = ChunkedClaimExtractor._parse_entity_manifest(answer, 4)
+        assert problems == ["duplicate entity id 'e1'"]
+
     def test_its_claims_are_rejects_of_their_own(self):
         principal = claim(
             "d1",

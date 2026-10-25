@@ -1586,7 +1586,14 @@ class ChunkedClaimExtractor:
             except Exception as exc:
                 return None, [str(exc)[:300]]
             problems: list[str] = []
+            # an id given twice is a problem whatever the kinds, so it is
+            # found before an entity of a kind only a curator makes is
+            # dropped (which would take both with it)
             seen: set[str] = set()
+            for record in records:
+                if record.id in seen:
+                    problems.append(f"duplicate entity id {record.id!r}")
+                seen.add(record.id)
             dropped = {
                 record.id: record.kind
                 for record in records
@@ -1596,9 +1603,6 @@ class ChunkedClaimExtractor:
                 record for record in records if record.id not in dropped
             ]
             for record in records:
-                if record.id in seen:
-                    problems.append(f"duplicate entity id {record.id!r}")
-                seen.add(record.id)
                 if record.kind not in item_keys:
                     problems.append(
                         f"entity {record.id}: unknown kind {record.kind!r}"
