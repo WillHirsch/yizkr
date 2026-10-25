@@ -156,6 +156,9 @@ def test_a_curator_dates_an_unknown_death():
     corrected = _parse_correction(late_felix(), "1931")
     assert isinstance(corrected.value, TimeValue)
     assert corrected.value.year == 1931 and corrected.curated is True
+    # still the source's claim: the correction keeps its reference
+    assert corrected.source == late_felix().source
+    assert corrected.subject == late_felix().subject
     with pytest.raises(ValueError, match="not an unambiguous date"):
         _parse_correction(late_felix(), "long ago")
 

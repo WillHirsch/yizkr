@@ -385,19 +385,23 @@ class TestAClassingClaim:
 
 
 class TestUnionEnds:
-    def test_a_witness_is_none_of_the_couple(self):
+    @pytest.mark.parametrize("role", ["spouse", "partner"])
+    def test_a_witness_is_none_of_the_couple(self, role):
         # a wedding's witness takes part in the union too, but only the
-        # spouses are its couple (ADR-0036)
-        witness = claim(
-            "marriage",
-            "participant",
-            item("felix"),
-            ("object_has_role", vocab("witness")),
-        )
+        # spouses or partners are its couple (ADR-0036)
+        def taking_part(person, as_role):
+            return claim(
+                "marriage",
+                "participant",
+                item(person),
+                ("object_has_role", vocab(as_role)),
+            )
+
+        couple = [taking_part(p, role) for p in ("eugen", "caecilie")]
+        witness = taking_part("felix", "witness")
         ended = claim("marriage", "ended_by_death_of", item("felix"))
-        assert codes(spouse("eugen"), spouse("caecilie"), witness, ended) == [
-            END_NOT_PARTNER
-        ]
+        assert codes(*couple, witness, ended) == [END_NOT_PARTNER]
+        assert codes(*couple, witness, ENDED) == []
 
     def test_a_partner_is_one_by_their_qid_or_their_local_id(self):
         # Eugen confirmed as Q7: the union end and the widowhood name him

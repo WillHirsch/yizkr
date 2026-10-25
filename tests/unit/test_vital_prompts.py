@@ -79,6 +79,21 @@ class TestUnionEnds:
         )
         assert "and no `date_of_death`" in CHUNK
 
+    def test_the_phrase_that_is_both_markers_gives_both_claims(self):
+        # the widowhood and the union end, and no death for the spouse
+        assert (
+            "your late brother Rudolf) gives the same: the survivor's "
+            "`civil_status` `widowed` and the union's `ended_by_death_of`, "
+            "and no `date_of_death`;" in CHUNK
+        )
+        assert (
+            "A widow's or widower's marker gives the survivor's "
+            "`civil_status` `widowed`; one that names the late spouse also "
+            "gives their marriage, `ended_by_death_of` that spouse, and no "
+            "death statement for the spouse, and so does one phrase that is "
+            "both markers" in SINGLE
+        )
+
     def test_the_single_call_prompt_says_so_too(self):
         assert "and no death statement for the spouse" in SINGLE
         assert "one phrase that is both markers" in SINGLE

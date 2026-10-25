@@ -2384,3 +2384,20 @@ class TestAnUnknownValue:
         )
         lines = adjudication._Document(doc.manifest).lines("e1")
         assert "date_of_death: unknown value" in lines
+
+    def test_a_kinsmans_death_without_its_date_shows_beside_him(self):
+        """The same register gives Felix as Leopold's father: Leopold's
+        lines show his father's death stated without its date, as they
+        show a dated one (ADR-0040 §2.2)."""
+        doc = register(
+            "a register",
+            [human("e1", "Felix Löbig"), human("e2", "Leopold Löbig")],
+            [
+                ("e1", "date_of_death", {"type": "unknown"}),
+                ("e2", "father", item("e1")),
+            ],
+            {"e1": "felix-loebig", "e2": "leopold-loebig"},
+        )
+        lines = adjudication._Document(doc.manifest).lines("e2")
+        (father,) = [line for line in lines if line.startswith("father:")]
+        assert "date_of_death: unknown value" in father

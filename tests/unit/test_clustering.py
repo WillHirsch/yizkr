@@ -3148,6 +3148,23 @@ class TestUnions:
         ) is one
         assert_no_false_merge(docs, identity)
 
+    @pytest.mark.parametrize(
+        ("by", "last"),
+        [
+            (("year", 1909), 1909),
+            (("decade", 1890), 1899),
+            (("century", 1801), 1900),
+        ],
+    )
+    def test_a_bound_runs_to_the_end_of_its_period(self, by, last):
+        # "died by the 1890s" allows any year to 1899, never only to 1890
+        from yizkr.died_by import When
+
+        precision, year = by
+        interval = clustering._bound_interval(When(year, precision=precision))
+        assert interval.end == last
+        assert interval.start == -math.inf or interval.start < 0
+
     def test_a_union_ended_by_a_death_gives_the_late_spouse_a_bound(self):
         """The burial register's "Witwer der Cäcilie": the marriage ended
         by her death, Eugen widowed at his own death on 16 March 1909. The

@@ -686,8 +686,97 @@ class TestEveryQualifierValue:
         (death,) = d.from_rows(rows).deaths
         assert death.dating.bound() == day(1909, 3, 16)
 
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_both_adapters_keep_the_first_earliest_and_widest_latest(
+        self, reverse
+    ):
+        # a death "after 1904, before 1909" and "after 15 December 1905,
+        # before 16 March 1909" in one statement (hypothetical): never
+        # narrower than either, its span runs from 1904 to the end of 1909
+        earliest = [("earliest_date", self.stamp(1905, 12, 15))]
+        latest = [("latest_date", self.stamp(1909, 3, 16))]
+        coarse = [
+            ("earliest_date", {"type": "time", "year": 1904}),
+            ("latest_date", {"type": "time", "year": 1909}),
+        ]
+        qualifiers = earliest + latest + coarse
+        if reverse:
+            qualifiers.reverse()
+        dated = ClaimBatch.model_validate(
+            {
+                "extraction_run": self.RUN,
+                "claims": [
+                    {
+                        "subject": {"kind": "local", "local_id": "eugen"},
+                        "property": "date_of_death",
+                        "value": {"type": "time", "year": 1906},
+                        "qualifiers": [
+                            {"property": k, "value": v} for k, v in qualifiers
+                        ],
+                        "source": {
+                            "artifact": {"kind": "artifact", "sha1": self.SHA1}
+                        },
+                    }
+                ],
+            }
+        )
+        (death,) = d.from_batch(dated).deaths
+        assert death.dating.span() == (19040000, 19099999)
+        assert death.dating.bound() == d.When(1909, precision="year")
+        rows = self.rows(
+            "death",
+            "time",
+            [
+                {
+                    "time": "1906-01-01T00:00:00Z",
+                    "timePrecision": "9",
+                    "earliest": early,
+                    "earliestPrecision": early_precision,
+                    "latest": late,
+                    "latestPrecision": late_precision,
+                }
+                for early, early_precision, late, late_precision in (
+                    (
+                        "1905-12-15T00:00:00Z",
+                        "11",
+                        "1909-03-16T00:00:00Z",
+                        "11",
+                    ),
+                    ("1904-01-01T00:00:00Z", "9", "1909-01-01T00:00:00Z", "9"),
+                )
+            ],
+            reverse,
+        )
+        (death,) = d.from_rows(rows).deaths
+        assert death.dating.span() == (19040000, 19099999)
+        assert death.dating.bound() == d.When(1909, precision="year")
+
 
 class TestEdges:
+    def test_a_deprecated_union_end_bounds_no_one(self):
+        # "Witwer der Cäcilie", a union end a curator deprecated
+        inputs = d.Inputs(
+            ends=(
+                d.UnionEnd(
+                    "m",
+                    "caecilie",
+                    frozenset({"eugen", "caecilie"}),
+                    frozenset({"register"}),
+                    deprecated=True,
+                ),
+            ),
+            widowhoods=(
+                d.Widowhood(
+                    "eugen",
+                    d.Dating(day(1909, 3, 16)),
+                    frozenset({"register"}),
+                ),
+            ),
+            inceptions={"register": (d.Dating(day(1909, 3, 20)),)},
+        )
+        assert d.died_by(inputs) == []
+        assert not d.death_evidence("caecilie", (), inputs.ends)
+
     def test_touching_spans_give_only_no_later_than(self):
         # Eugen's death in 1909 and Cäcilie's on 31 December 1909 (both
         # hypothetical): the spans meet on that day, so neither lies

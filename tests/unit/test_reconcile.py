@@ -2404,6 +2404,13 @@ class TestRosterDeaths:
                 latestPrecision="11",
             ),
             death("s2", time="1909-03-16T00:00:00Z", timePrecision="11"),
+            # one a source gives as circa (hypothetical)
+            death(
+                "s4",
+                time="1909-01-01T00:00:00Z",
+                timePrecision="9",
+                circa="true",
+            ),
             death(
                 "s3",
                 time="1909-01-01T00:00:00Z",
@@ -2427,11 +2434,12 @@ class TestRosterDeaths:
             "1909 (between 1908 and 1910)",
             "1909-03-16",
             "1909-03-16 (no later than 1909-03-16)",
+            "c. 1909",
         )
         # a dated statement wins over a curator's event's date
         assert reconcile.roster_death("1890", deaths["Q7"]) == (
             "1909 (between 1908 and 1910); 1909-03-16; "
-            "1909-03-16 (no later than 1909-03-16)"
+            "1909-03-16 (no later than 1909-03-16); c. 1909"
         )
 
     def test_a_vocabulary_without_its_keys_gives_nothing(self):
