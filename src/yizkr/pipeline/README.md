@@ -7,6 +7,11 @@ files, so a run pauses for review, can be inspected, and resumes.
 Whole-corpus scratch runs (`yizkr scratch run`, ADR-0025) have a runbook
 of their own, [docs/runbooks/scratch-run.md](../../../docs/runbooks/scratch-run.md),
 and a live monitor, [docs/MONITOR.md](../../../docs/MONITOR.md).
+For the surrounding services, storage and scratch-run workflow, see the
+[architecture diagrams](../../../docs/ARCHITECTURE.md).
+The [scratch-run stage breakdown](../../../docs/SCRATCH_WORKFLOW.md)
+maps intermediate data products to each stage's inputs, outputs and
+process type.
 
 ## The ingest loop: one command, two gates, repeat
 
@@ -18,23 +23,15 @@ reports `written`.
 
 ```mermaid
 flowchart TD
-    run(["yizkr ingest run &lt;folder&gt;"]) --> transcribe
-
-    subgraph auto ["per document, automatically"]
-        transcribe[transcribe] --> extract[extract] --> reconcile[reconcile]
-        extract -. advise .-> critique["critique + gaps<br/>(flag likely errors)"]
-    end
-
-    reconcile --> gate1{{"🚦 GATE 1 · identity<br/>fill equivalences.csv<br/>→ equivalences.reviewed.csv"}}
-    gate1 --> resolve[resolve] --> export[export-review]
-    export --> gate2{{"🚦 GATE 2 · claims<br/>fill review.csv<br/>→ review.reviewed.csv"}}
-    gate2 --> register
-
-    subgraph write ["write"]
-        register[register] --> claims[write claims]
-    end
-
-    claims --> outcome[("statements in the graph<br/>dual-referenced, normal rank")]
+    run(["yizkr ingest run &lt;folder&gt;"]) --> prepare["Prepare proposals<br/>(detail below)"]
+    prepare --> reconcile["Reconcile<br/>export equivalences.csv"]
+    reconcile --> gate1{{"GATE 1: identity review<br/>when proposals exist"}}
+    reconcile -->|no proposals| review["Apply equivalences<br/>resolve and export review.csv"]
+    gate1 -->|reviewed CSV| review
+    review --> gate2{{"GATE 2: claim review<br/>review.reviewed.csv"}}
+    gate2 -->|approved claims| register["Register source artifacts"]
+    register --> claims["Write through the identity map"]
+    claims --> outcome[("Wikibase statements<br/>source-attributed, normal rank")]
 
     classDef gate fill:#fde68a,stroke:#b45309,color:#1f2937;
     classDef store fill:#dbeafe,stroke:#1e40af,color:#1f2937;
@@ -43,10 +40,34 @@ flowchart TD
 ```
 
 The two amber hexagons are the human gates — the run pauses there until you
-save the reviewed CSV, then continues on the next `ingest run`. Nothing
+save the reviewed CSV, then continues on the next `ingest run`; Gate 1 is
+skipped when there are no identity proposals. Nothing
 before the write reads or writes the wiki: registration is the write's
 first step, just before the claims that cite the document (ADR-0025 §2;
 **register** below), and resolve matches nothing by label (#109).
+
+The preparation step expands into the following file-based workflow.
+GEDCOM supplies a deterministic batch directly; other documents pass
+through transcription and extraction. Critique adds advice to the claim
+review sheet, while extraction's coverage, rejects and gaps remain
+inspectable alongside the batch. The critic also reads the numbered
+transcription, with claim citations located in it and embedded images
+identified by their placements. Neither critique nor the extraction
+diagnostics supply human approval.
+
+```mermaid
+flowchart LR
+    kind{"Document kind"} -->|GEDCOM| gedcom["Deterministic GEDCOM adapter"]
+    kind -->|other supported files| transcribe["Transcribe<br/>transcription.json"]
+    transcribe --> extract["Extract and validate claims"]
+    gedcom --> batch["ClaimBatch<br/>batch.json"]
+    extract --> batch
+    extract -.-> evidence["Coverage, rejects and gaps"]
+    extract -->|batch| critique["Critique<br/>critique.json"]
+    transcribe -.->|text and image placements| critique
+    batch --> review["Reconcile and human review<br/>(overview above)"]
+    critique -.->|advisory notes| review
+```
 
 **The two gates**
 
@@ -633,15 +654,16 @@ per-document path; until then, two mechanisms remain:
       x["extract EVERY<br/>artifact"] --> s["sequence<br/>(hubs first)"]
       s --> a1["artifact 1<br/>· claim review · write"]
       a1 --> a2["artifact 2<br/>· claim review · write"]
-      a2 --> a3["artifact 3 …<br/>each sees the prior"]
+      a2 --> a3["artifact 3 …<br/>same identity map"]
   ```
 
   The trade is rhythm: because each artifact must be written before the
   next reconciles, a serial run advances **one artifact per pass** — clear
   its claim review, re-run, next artifact: about one re-run per artifact,
   where the default takes every document to its claim review in one pass
-  and writes them all in the next. In return each artifact resolves
-  against what the earlier ones wrote. **Advancing the process =
+  and writes them all in the next. Each write uses the run's identity map
+  and reuses the items already written for its clusters.
+  **Advancing the process =
   re-running `ingest run`** after you save a reviewed CSV; a future
   frontend (or a `--watch` mode) will drive those re-runs for you.
 
@@ -667,7 +689,35 @@ batch views and, for adjudication alone, the places of the images
 their transcription views place and the run's engine through the LLM
 cache: no wiki, no query service
 (`tests/unit/test_no_wiki_before_write.py` runs it under a wiki that
-refuses). The module docstrings are the full account; in short:
+refuses).
+
+```mermaid
+flowchart TD
+    batches["Completed document batches"] --> candidates["Fingerprint, block and prune<br/>deterministic"]
+    candidates --> classify["Classify clusters and merge<br/>safe confident components"]
+    classify -->|remaining eligible ambiguous pairs| adjudicate["LLM adjudication<br/>scratch clustering stage"]
+    placements["Transcription image placements"] --> adjudicate
+    classify --> settle["Recheck clusters<br/>apply verdicts in development mode"]
+    adjudicate --> settle
+    adjudicate --> record[("adjudication.json<br/>verdicts, reasons and calls")]
+    settle --> map[("identity-map.json<br/>mention to cluster")]
+    map --> writer["Writer<br/>one item per cluster"]
+```
+
+Confident clusters and the safe confident components of ambiguous
+clusters merge deterministically. Scratch clustering asks the model
+about the remaining eligible ambiguous pairs, then rechecks what their
+verdicts would join. Development runs apply accepted verdicts; keeper
+mode records them without merging by verdict. Conflicting clusters stay
+apart. The diagram abbreviates the repeated grouping and rechecks;
+**Adjudication** below gives their order and safeguards.
+`ingest run` uses the deterministic map construction without this
+scratch-stage adjudication.
+
+Dates that disagree can keep identity ambiguous; they never prune a
+candidate pair by themselves. This clusters entity mentions, without
+choosing between the assertions their sources make. The module docstrings
+are the full account:
 
 - **Mentions and fingerprints** (`fingerprints.py`). Every entity of every
   manifest, the GEDCOM export's included, is a mention. Its fingerprint
@@ -868,10 +918,11 @@ refuses). The module docstrings are the full account; in short:
   the source of the modules that make it, the Unicode version and the
   thresholds stand, and makes it again otherwise; the same decisions give the same cluster ids
   and hash. What reaches the run's events is counts within fixed labels.
-- **Not yet.** Overrides with never-re-ask come with #107, and the
-  cluster review sheet, which is to show keeper mode's verdicts, with
-  #108. The owner reviews ambiguous and conflicting clusters once,
-  before the keeper run.
+- **Writing and future review.** The writer resolves local entities
+  through the map, finding or creating one item per cluster (#109).
+  Overrides with never-re-ask come with #107, and the cluster review
+  sheet, which is to show keeper mode's verdicts, with #108. The owner
+  reviews ambiguous and conflicting clusters once, before the keeper run.
 
 ## The scratch run's write side (`scratchwrite.py`, ADR-0025 §1, §2)
 

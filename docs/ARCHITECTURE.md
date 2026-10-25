@@ -1,0 +1,302 @@
+# Architecture and workflow diagrams
+
+These diagrams describe the implemented system. Each has at most ten
+nodes; the overview abstracts subsystems that the later diagrams and
+the [pipeline guide](../src/yizkr/pipeline/README.md) expand.
+Arrows show data flow or processing order unless labelled otherwise.
+
+## System overview
+
+The `yizkr` Python CLI coordinates ingestion, model bootstrap and
+presentation. Wikibase is the system of record for assertions; document
+views, proposal batches and model responses are resumable runtime files.
+
+```mermaid
+flowchart LR
+    sources["Source files"] --> pipeline["Ingestion pipeline<br/>CLI and runtime files"]
+    pipeline <-->|model calls and responses| engine["Configured LLM engine"]
+    pipeline -->|review sheets| curator["Human reviewer"]
+    curator -->|reviewed decisions| pipeline
+    pipeline -->|referenced statements and media| wiki["Wikibase"]
+    wiki -->|asynchronous RDF updates| query["WDQS query index"]
+    query -->|SPARQL results| views["Query UI and private static site"]
+    views --> reader["Archive reader"]
+```
+
+The review branch applies to reviewed ingestion. Development scratch
+runs follow the separate [scratch workflow](#whole-corpus-scratch-runs)
+below. A configured external LLM engine is the explicit opt-in path for
+sending source content to a model. Face inference runs locally.
+
+The [model manifest](../src/yizkr/model/manifest.yaml) supplies vocabulary
+keys. [Bootstrap](../src/yizkr/model/README.md) creates their Wikibase
+properties and items and records the instance's ID mapping on a wiki
+page; writers and query templates use that mapping. Vocabulary reads
+check the mapped IDs against their manifest labels, falling back to a
+full label read when the mapping is missing or disagrees. Local P/Q IDs
+are not hard-coded into the repository.
+
+## Deployed storage and query services
+
+This expands the Wikibase and WDQS boxes above into the core service
+paths. WDQS and Elasticsearch are derived indexes; the database and
+uploaded media hold the underlying wiki content.
+
+```mermaid
+flowchart LR
+    client["Browser or yizkr CLI"] --> proxy["Traefik"]
+    proxy -->|wiki pages and API| wiki["Wikibase / MediaWiki"]
+    proxy -->|read-only SPARQL| query["WDQS / Blazegraph"]
+    wiki --> database[("MariaDB")]
+    wiki --> media[("Uploaded media volume")]
+    wiki --> search["Elasticsearch"]
+    jobs["MediaWiki jobrunner"] -->|background jobs| wiki
+    wiki -->|RDF and recent changes| updater["WDQS updater"]
+    updater -->|asynchronous index updates| query
+```
+
+Traefik also routes to the bundled WDQS frontend and QuickStatements,
+omitted here to keep the core paths readable. The query service can lag
+behind wiki writes. The base Compose stack serves HTTP; the HTTPS and
+containerised CLI configurations are separate overlays.
+
+Implementation: [Compose services](../deploy/docker-compose.yml),
+[proxy routes](../deploy/config/traefik-dynamic.yml) and the
+[deployment runbook](../deploy/README.md).
+
+## Source and process provenance
+
+This is the structure of a machine-written statement. Source and process
+provenance occupy separate reference blocks; a statement can accumulate
+several blocks of either kind. Qualifiers record the context or
+uncertainty asserted by the source.
+
+```mermaid
+flowchart LR
+    entity["Subject entity"] --> statement["Statement<br/>normal rank by default"]
+    statement --> value["Property value"]
+    statement --> qualifiers["Qualifiers<br/>dates, uncertainty, context"]
+    statement --> source["Source reference<br/>located passage, page or region"]
+    source --> artifact["Source artifact"]
+    statement --> process["Process reference<br/>optional judgement category and note"]
+    process --> run["Extraction or detection run"]
+```
+
+Different values or qualifiers remain separate statements. Repeated
+property/value/qualifier combinations can collect additional provenance.
+No preferred value is required: contradictory source-attributed values
+are a supported resting state. Curator-corrected claims retain source
+attribution without an extraction-run reference.
+
+A citation is a passage read where it stands in the source, with its
+locator and language. A machine judgement note belongs in the process
+reference. When a document explicitly says its text was prepared with
+machine assistance, the pipeline marks the applicable claims and cites
+that statement in an additional source block; it does not infer the
+marker from how the text reads.
+
+Before writing, the writer resolves each source's media SHA-1 to its
+registered artifact item; a page is cited through its parent artifact
+and page locator. Entity mentions resolve through the run's
+identity map, or an explicit reviewed equivalence, rather than by label
+alone. The [clustering diagram](../src/yizkr/pipeline/README.md#corpus-clustering-clusteringpy-the-scratch-runs-identity-map)
+shows how the map is made.
+
+Extraction and GEDCOM record births and deaths as statements on the person,
+including an unknown-valued death date when the source gives no date.
+Documents can also assert facts about themselves, placed media, and
+documents they record or mention. See
+[ADR-0040](adr/0040-deaths-and-births-are-statements-on-the-person.md) and
+[ADR-0039](adr/0039-claims-a-container-makes-about-what-it-places.md).
+
+Implementation: [claim contract](../src/yizkr/claims.py),
+[writer](../src/yizkr/pipeline/writer.py) and
+[modeling conventions](MODELING.md).
+
+## Reviewed ingestion
+
+The [ingestion overview and preparation detail](../src/yizkr/pipeline/README.md#the-ingest-loop-one-command-two-gates-repeat)
+show how `yizkr ingest run` advances documents through transcription,
+extraction, identity review where proposals exist, claim review and
+writing. Saving a reviewed CSV and rerunning the same command advances
+the workflow. Registration occurs at write time; stages before write do
+not access the wiki.
+
+The same guide expands [serial ingestion](../src/yizkr/pipeline/README.md#resolving-entities-across-artifacts)
+and corpus clustering. These views complement the unattended development
+path below.
+
+## Whole-corpus scratch runs
+
+A new scratch run starts with fresh document state, while reusing
+unchanged model calls from the shared cache. By default,
+`yizkr scratch run` resumes the latest incomplete run when one exists.
+This diagram shows a full development run and its subsequent assessment.
+
+For each stage's inputs, process type and intermediate files, see the
+[scratch-run stage and data-product breakdown](SCRATCH_WORKFLOW.md).
+
+```mermaid
+flowchart TD
+    corpus["Corpus after exclusions"] --> documents["Per-document stages<br/>transcribe, extract, critique or GEDCOM"]
+    documents --> barrier["Barrier<br/>all documents completed or failed"]
+    barrier -->|completed documents only| clusters["Clustering and LLM adjudication<br/>identity map"]
+    clusters --> reset["Reset or reuse scratch instance"]
+    reset --> register["Register artifacts and derived media"]
+    register --> write["Write scratch claims<br/>normal rank, dual provenance"]
+    write --> places["Reconcile place containment<br/>LLM + sourced link writes"]
+    places --> site["Wait for WDQS, then build private site"]
+    site -->|operator runs report and diff| evidence["Assess report and diff<br/>against the baseline run"]
+```
+
+Independently read images from PDFs or slide decks can join as documents
+of their own.
+Only documents whose required stages completed feed the corpus stages;
+failed documents remain visible in the run's evidence. Clustering first
+uses deterministic evidence, then asks the model about eligible ambiguous
+pairs using batch and transcription views, without accessing the wiki.
+Development runs apply usable verdicts under the clustering guards.
+The `places` stage reads the written graph and source records, asks the
+model to resolve place containers where needed, and writes sourced
+`part_of` links under a cycle guard. The reset, register, write and site
+stages access the instance and make no model calls themselves.
+
+Scratch writes have no human approval stop, mark their run items as
+unratified development output, and omit `depicts` claims. A kept instance
+refuses this write path. Resuming unchanged work can reuse the instance
+or continue a recorded write phase; it does not unconditionally reset
+on every invocation. The pipeline guide details the
+[write side](../src/yizkr/pipeline/README.md#the-scratch-runs-write-side-scratchwritepy-adr-0025-1-2).
+
+Reports and diffs are explicit commands and can also inspect partial
+runs. The default baseline is the latest completed run on main. Detailed reports
+and diffs stay local; aggregate summaries supply development evidence.
+The [monitor](MONITOR.md) reads run events and writes pause/resume/abort
+requests that the driver observes between stages.
+
+Implementation: [scratch driver](../src/yizkr/pipeline/scratch.py),
+[adjudication](../src/yizkr/pipeline/adjudication.py),
+[write stages](../src/yizkr/pipeline/scratchwrite.py),
+[runbook](runbooks/scratch-run.md), [reports](RUN_REPORT.md) and
+[diffs](RUN_DIFF.md).
+
+## Persisted views and model-response reuse
+
+Reuse has two levels: a document's derived views and the responses used
+to compute them. This diagram shows the normal path for a stage that
+needs a model call; deterministic adapters need no engine response.
+
+```mermaid
+flowchart TD
+    inputs["Stage inputs"] --> current{"Reusable persisted view?"}
+    current -->|yes| view["Use document view<br/>transcription, batch or critique"]
+    current -->|no| key["Build key from call contents"]
+    key --> cache{"Usable cached response?"}
+    cache -->|yes| response["Model response"]
+    cache -->|no| engine["Call configured engine<br/>and cache response"]
+    engine --> response
+    response --> compute["Parse, validate and merge"]
+    compute -->|persist| view
+```
+
+View reuse depends on its inputs' content hashes. A prompt, model or
+code change alone does not invalidate an existing view; reused
+transcriptions are also checked against the current transcription
+validator. A new scratch run rebuilds views, so changed parsing and
+validation run even when every model response comes from the cache.
+
+Call keys include prompt and file content hashes, engine/model/effort
+and configuration, call kind, conversation ancestry where applicable,
+attempt and role epoch. Input-file paths are replaced by content hashes
+in the key; sources are identified by media SHA-1 rather than artifact
+QID, and mtimes do not key calls. This allows reuse across fresh document
+directories and wiki resets while the engine configuration stays the same.
+
+`--refresh ROLE` rebuilds that role's views and bypasses cached answers
+once per key in the run. `--epoch ROLE=N` changes keys for calls that
+are made; combine it with refresh when existing views must be rebuilt.
+The [cache guide](LLM_CACHE.md) covers rejection, retries and resume
+semantics; implementation lives in
+[orchestration](../src/yizkr/pipeline/orchestrate.py) and
+[the LLM cache](../src/yizkr/pipeline/llmcache.py).
+
+## Human-confirmed face links
+
+Face proposals join the ordinary claim-review and writer path. Detection
+and matching are local, using the optional face engine and a gallery of
+identities enrolled by a curator.
+
+```mermaid
+flowchart TD
+    photo["Registered photograph"] --> detect["Local face detection"]
+    detect --> saved["Saved faces and embeddings"]
+    saved --> enroll["Curator enrolls an identity"]
+    enroll --> gallery["Enrolled identity gallery"]
+    saved --> match["Match or re-match embeddings"]
+    gallery --> match
+    match --> batch["Depicts proposal batch"]
+    batch --> review["Per-row human review"]
+    review --> writer["Writer verifies row approval"]
+    writer --> statement["Depicts statement<br/>region and provenance"]
+```
+
+Unmatched faces remain in the detections file without a claim. Matching
+can rerun against saved embeddings after enrollment. A `depicts` claim
+requires its own row approval, including when it came from text
+extraction; bulk acceptance cannot supply that approval. The writer
+checks it before accessing the instance. Scratch runs exclude face
+detection and never write `depicts`.
+
+Implementation: [face detection and matching](../src/yizkr/pipeline/faces.py),
+[review](../src/yizkr/pipeline/review.py) and
+[writer](../src/yizkr/pipeline/writer.py). The
+[pipeline guide](../src/yizkr/pipeline/README.md) gives the face commands;
+[ADR-0005](adr/0005-faces-strategy.md) distinguishes this implementation
+from later media-service integrations.
+
+## Queries and private exploration
+
+Query templates use manifest keys, resolved against each instance's
+vocabulary. Publishing query pages and building the static site are
+independent consumers of those templates.
+
+```mermaid
+flowchart LR
+    templates["SPARQL templates"] --> render["Resolve vocabulary keys<br/>and instance prefixes"]
+    mapping["Instance model mapping"] --> render
+    render --> pages["Publish wiki query links"]
+    pages --> ui["Query service UI"]
+    ui -->|SPARQL| endpoint["WDQS endpoint"]
+    render --> builder["Static site builder"]
+    endpoint -->|query results| builder
+    endpoint -->|statements and place containment| compare["Python disagreement comparison"]
+    endpoint -->|death, union and source-date evidence| bounds["Derive died-by bounds<br/>and union endings"]
+    bounds --> compare
+    bounds --> builder
+    compare --> builder
+    builder --> site["Private exploration site"]
+```
+
+The site presents people, artifacts, timelines, galleries, places and
+source disagreements. Artifact pages show both what an artifact asserts
+and what sources say about it. Shared Python derivation computes
+"died by" bounds and union endings at read time, labels them as derived
+in the site, and stores no new graph statements.
+
+Disagreement comparison accounts for date precision and ranges, derived
+bounds, source-stated parent sets, place containment and redirects; it
+does not choose a winning source. Containment follows sourced edges that
+have not been deprecated. The query library also provides provenance
+checks, the under-witnessed reappraisal queue and an unclassified-entity
+view for vocabulary development. The complementary `yizkr gaps rollup`
+command collects relation gaps from a run into a curator's CSV.
+
+The current site reads the live graph and includes possibly-living
+people, with runtime badges. Those badges do not filter the site; this
+build is for private/LAN use. Its media links point back to the wiki.
+
+Implementation: [query library](../src/yizkr/queries/README.md),
+[query publisher](../src/yizkr/queries/publish.py),
+[static site builder](../src/yizkr/staticsite.py) and
+[disagreement comparison](../src/yizkr/disagreement.py), with shared
+[death and union derivation](../src/yizkr/died_by.py).

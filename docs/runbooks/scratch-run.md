@@ -1,5 +1,10 @@
 # Runbook: a whole-corpus scratch run
 
+See the [scratch-run diagram](../ARCHITECTURE.md#whole-corpus-scratch-runs)
+for the document stages, corpus barrier and write-side sequence.
+The [stage and data-product guide](../SCRATCH_WORKFLOW.md) expands each
+stage's inputs, outputs and model/deterministic/instance processing.
+
 A scratch run takes every non-excluded source of the corpus through every
 stage, unattended, from fresh state directories (ADR-0025, ADR-0032).
 `yizkr scratch run` is the one command that runs it; this page is how to

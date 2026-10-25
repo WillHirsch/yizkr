@@ -20,6 +20,11 @@ Start here:
   the shared tools: the mutation harness, the query-engine sandbox and
   the live-stack lock
 - `docs/REQUIREMENTS.md` – the six requirements (acceptance criteria)
+- [Architecture and workflow diagrams](docs/ARCHITECTURE.md) – Mermaid
+  overviews of the implemented services, provenance, ingestion, scratch
+  runs, cache, face review and exploration, with subsystem details
+- [Scratch-run stages and data products](docs/SCRATCH_WORKFLOW.md) –
+  detailed input/output contracts and process types for every stage
 - `docs/adr/` – architecture decisions and their rationale; ADR-0025
   says how the pipeline is developed: whole-corpus scratch runs, reuse of
   unchanged work, and run reports and diffs in place of a synthetic eval;

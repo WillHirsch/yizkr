@@ -1,5 +1,8 @@
 # Wikibase modeling conventions
 
+The [provenance diagram](ARCHITECTURE.md#source-and-process-provenance)
+shows how a machine-written statement connects to its source and run.
+
 ## General approach
 
 - The schema is self-describing: properties and classes are minted as

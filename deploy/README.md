@@ -5,6 +5,9 @@ Docker Compose: MediaWiki + Wikibase, the WDQS SPARQL query service
 with its updater and frontend, Elasticsearch, QuickStatements, MariaDB,
 and a traefik reverse proxy.
 
+See the [service diagram](../docs/ARCHITECTURE.md#deployed-storage-and-query-services)
+for the storage, request and query-update paths.
+
 Adapted from [Wikibase Suite Deploy] 7.0.0. Differences: LAN/HTTP-first
 (no TLS by default — this archive is privacy-first and nothing is
 public by default), and the anonymous usage-metadata callback to
