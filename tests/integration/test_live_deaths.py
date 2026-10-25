@@ -398,6 +398,10 @@ def test_the_check_releases_by_an_unknown_value_and_an_age(
     report = exclusion_report(config)
     for key in ("caecilie", "felix", "eugen", "rudolf"):
         assert fixture_graph[key] in report.included, key
+    # Eugen's age at death is his only death evidence: the check reads it
+    # through the facts query's own arm (backup.PERSON_FACTS_QUERY,
+    # _DEATH_BINDINGS), Q1
+    assert report.reasons[fixture_graph["eugen"]] == "death recorded"
     # a deprecated unknown value, and a curator's "no value", release no
     # one; nor does a widowhood
     for key in ("deprecated", "no value", "nina"):

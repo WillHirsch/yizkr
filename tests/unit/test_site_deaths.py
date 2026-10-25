@@ -728,9 +728,12 @@ class TestThePrivacyRecord:
         sources=None,
         kind="certificate",
         also=None,
+        artifacts=None,
     ):
         typed = vocabulary[1].get(kind, kind)
-        artifacts = [{**each, "kind": uri(typed)} for each in ARTIFACTS]
+        artifacts = artifacts or [
+            {**each, "kind": uri(typed)} for each in ARTIFACTS
+        ]
         if also is not None:
             # a second type of each artifact, its row first or last
             second = vocabulary[1].get(also[0], also[0])
@@ -795,6 +798,33 @@ class TestThePrivacyRecord:
             "letter": 1,
         }
         assert record["derived_by_source"] == {"certificate": 2, "letter": 2}
+
+    def test_each_artifact_has_its_own_types_and_a_row_twice_counts_once(
+        self, tmp_path, vocabulary
+    ):
+        # the register (Q23), a certificate given twice, and a letter
+        # (Q24): Felix's unknown death rests on the letter, the derived
+        # dates on the register
+        certificate = uri(vocabulary[1]["certificate"])
+        letter = uri(vocabulary[1]["letter"])
+        artifacts = [
+            {**ARTIFACTS[0], "kind": certificate},
+            {**ARTIFACTS[0], "kind": certificate},
+            {
+                **ARTIFACTS[0],
+                "artifact": uri("Q24"),
+                "artifactLabel": literal("letter"),
+                "kind": letter,
+            },
+        ]
+        record = self.record(
+            tmp_path,
+            vocabulary,
+            sources=[stated_in("s2", "Q24")],
+            artifacts=artifacts,
+        )
+        assert record["unknown_date_of_death_by_source"] == {"letter": 1}
+        assert record["derived_by_source"] == {"certificate": 2}
 
     def test_every_source_of_a_statement_and_no_other_statements(
         self, tmp_path, vocabulary
