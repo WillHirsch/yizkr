@@ -199,6 +199,26 @@ class TestTheUnknownValue:
         assert codes(late) == [UNKNOWN_VALUE]
 
     @pytest.mark.parametrize(
+        "bound",
+        [
+            ("latest_date", {"type": "time", "year": 1909}),
+            ("earliest_date", {"type": "time", "year": 1908}),
+            ("sourcing_circumstances", vocab("circa")),
+        ],
+    )
+    def test_a_burials_date_keeps_its_range_or_circa(self, bound):
+        # Q3: "Beerdigt ca. 1909" (hypothetical) bounds the burial's date
+        buried = claim(
+            "eugen",
+            "burial_place",
+            UNKNOWN,
+            ("point_in_time", {"type": "time", "year": 1909}),
+            bound,
+            excerpt="Beerdigt ca. 1909",
+        )
+        assert codes(buried) == []
+
+    @pytest.mark.parametrize(
         "dated", ["point_in_time", "start_time", "end_time"]
     )
     def test_a_date_of_death_carries_no_date(self, dated):

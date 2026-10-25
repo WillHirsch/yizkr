@@ -398,6 +398,30 @@ class TestVocabulary:
             result.outcomes["BURI with no place: unknown place of burial"] == 1
         )
 
+    @pytest.mark.parametrize(
+        ("date", "kept"),
+        [
+            ("ABT 1909", {"point_in_time", "sourcing_circumstances"}),
+            ("BEF 1909", {"point_in_time", "latest_date"}),
+            (
+                "BET 1908 AND 1909",
+                {"point_in_time", "earliest_date", "latest_date"},
+            ),
+        ],
+    )
+    def test_an_unknown_place_keeps_its_burial_dates_uncertainty(
+        self, date, kept
+    ):
+        # Q3: the burial's own date, with its circa or its range, stays
+        # on the unknown place of burial, and the adapter does not fail
+        result = adapt_gedcom(
+            eugen("1 BURI", f"2 DATE {date}"), artifact=EXPORT
+        )
+        (burial,) = claims_for(result.batch, "i1", "burial_place")
+        assert isinstance(burial.value, UnknownValue)
+        assert {q.property for q in burial.qualifiers} >= kept
+        assert validate_against_manifest(result.batch) == []
+
     def test_a_buri_y_is_an_undated_unknown_place(self):
         result = adapt_gedcom(eugen("1 BURI Y"), artifact=EXPORT)
         (burial,) = claims_for(result.batch, "i1", "burial_place")

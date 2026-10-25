@@ -1543,13 +1543,14 @@ def artifact_kind_problems(
 
 # the properties `parentage` qualifies (ADR-0040 §4)
 PARENTAGE_PROPERTIES = frozenset({"father", "mother", "child"})
-# the qualifiers that bound or approximate a value, which an unknown value
-# never carries: its source states no limit (ADR-0040 §2.2)
+# the qualifiers that bound or approximate a date, which an unknown date of
+# death never carries: its source states no limit (ADR-0040 §2.2)
 UNKNOWN_BOUNDS = frozenset(
     {"earliest_date", "latest_date", "sourcing_circumstances"}
 )
 # the qualifiers that would date an unknown date of death, which states
-# none; an unknown place of burial keeps its burial's own date (Q3)
+# none. An unknown place of burial keeps its burial's own date, with the
+# range or circa its source gives that date (Q3)
 UNKNOWN_DEATH_DATES = frozenset({"point_in_time", "start_time", "end_time"})
 # the participant roles that make one of a union's couple (ADR-0036)
 COUPLE_ROLES = frozenset({"spouse", "partner"})
@@ -1567,9 +1568,9 @@ def vital_problems(
       (`Acceptance.unextracted_kinds`: `birth`, `death`), or a classing
       claim (CLASSING_PROPERTIES) whose value is such a kind, §3, §7, Q8;
     * an unknown value (UnknownValue) of a property the manifest does not
-      mark `unknown_value`, or as a qualifier's value, or with a bound
-      (UNKNOWN_BOUNDS), or, for a date of death, with a date
-      (UNKNOWN_DEATH_DATES), §2.2;
+      mark `unknown_value`, or as a qualifier's value, or, for a date of
+      death, with a bound (UNKNOWN_BOUNDS) or a date (UNKNOWN_DEATH_DATES),
+      §2.2; an unknown place of burial keeps its burial date's own, Q3;
     * an unknown value with no excerpt, the words that state the death
       or the burial (Q10);
     * a property the manifest gives `subjects` (the death and birth
@@ -1695,24 +1696,18 @@ def vital_problems(
                     f"(ADR-0040 §2.2) [{UNKNOWN_VALUE}]"
                 )
             else:
-                bounds = sorted(
-                    {
-                        qualifier.property
-                        for qualifier in claim.qualifiers
-                        if qualifier.property in UNKNOWN_BOUNDS
-                    }
-                )
-                if claim.property == "date_of_death":
-                    bounds = sorted(
+                bounds = (
+                    sorted(
                         {
-                            *bounds,
-                            *(
-                                qualifier.property
-                                for qualifier in claim.qualifiers
-                                if qualifier.property in UNKNOWN_DEATH_DATES
-                            ),
+                            qualifier.property
+                            for qualifier in claim.qualifiers
+                            if qualifier.property in UNKNOWN_BOUNDS
+                            or qualifier.property in UNKNOWN_DEATH_DATES
                         }
                     )
+                    if claim.property == "date_of_death"
+                    else []
+                )
                 if bounds:
                     problems.append(
                         f".value: an unknown value carries no "
