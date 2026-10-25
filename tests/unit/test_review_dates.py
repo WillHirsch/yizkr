@@ -106,3 +106,63 @@ def test_review_sheet_shows_the_portraits_decade_as_a_decade(tmp_path):
         (row,) = csv.DictReader(f)
     assert row["value"] == "the 1890s"
     assert row["qualifiers"] == "earliest_date=the 19th century"
+
+
+# -- an unknown value (ADR-0040 §2.2) -----------------------------------------
+
+LETTER = ArtifactRef.from_bytes(b"fictional scan: a letter of 1938")
+
+
+def late_felix(prop: str = "date_of_death") -> Claim:
+    """A hypothetical letter's "der selige Felix": a death its source
+    states without its date."""
+    from yizkr.claims import LocalRef, MonolingualText, UnknownValue
+
+    return Claim(
+        subject=LocalRef(local_id="e1", label="Felix Löbig"),
+        property=prop,
+        value=UnknownValue(),
+        source=SourceReference(
+            artifact=LETTER,
+            transcription_excerpt=MonolingualText(
+                text="der selige Felix", language="de"
+            ),
+        ),
+    )
+
+
+def test_an_unknown_value_shows_as_one():
+    from yizkr.claims import UnknownValue
+
+    assert describe_value(UnknownValue()) == "unknown value"
+    assert sheet_value(UnknownValue()) == "unknown value"
+
+
+def test_the_sheet_shows_an_unknown_value_as_one(tmp_path):
+    batch = ClaimBatch(
+        extraction_run=run_metadata("fake-model"), claims=[late_felix()]
+    )
+    sheet = tmp_path / "review.csv"
+    export_review_csv(batch, sheet)
+    with open(sheet, newline="") as f:
+        (row,) = csv.DictReader(f)
+    assert row["value"] == "unknown value"
+
+
+def test_a_curator_dates_an_unknown_death():
+    # the curator's correction states the date the source gives
+    from yizkr.pipeline.review import _parse_correction
+
+    corrected = _parse_correction(late_felix(), "1931")
+    assert isinstance(corrected.value, TimeValue)
+    assert corrected.value.year == 1931 and corrected.curated is True
+    with pytest.raises(ValueError, match="not an unambiguous date"):
+        _parse_correction(late_felix(), "long ago")
+
+
+def test_an_unknown_burial_place_takes_no_text():
+    # an item is fixed through the equivalence review, never as text
+    from yizkr.pipeline.review import _parse_correction
+
+    with pytest.raises(ValueError, match="cannot be corrected as text"):
+        _parse_correction(late_felix("burial_place"), "Friedhof Flörburg")
