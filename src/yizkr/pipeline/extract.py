@@ -568,6 +568,11 @@ def _parse_response(response: str) -> dict:
 # subject a curator's confirmation replaced). The JSON Schema the prompts
 # carry shows `curated` with the rest of a claim.
 REVIEW_STATE = ("curated", "row_approval", "confirmed_from")
+# The claim fields the pipeline sets from a document reading it has
+# checked, never the model: `circumstance_source`, where the document
+# states the circumstance of its making that a marked claim's qualifier
+# records (yizkr.pipeline.preparation, ADR-0008).
+PIPELINE_STATE = ("circumstance_source",)
 
 
 def cite_artifact(
@@ -583,7 +588,9 @@ def cite_artifact(
     Transcription.printed_pages), or absent (printed_page_number); the
     review-state fields (REVIEW_STATE) are dropped, so every claim is a
     machine claim, which the writer references to its extraction run
-    (ADR-0003); and claims that are then the same are kept once, in the
+    (ADR-0003); the fields the pipeline sets (PIPELINE_STATE) are
+    dropped, so no answer cites a passage of its own choosing as a
+    marker's evidence; and claims that are then the same are kept once, in the
     order first given.
 
     An extractor reads one document's transcription, so every claim it
@@ -600,7 +607,7 @@ def cite_artifact(
             claim = {
                 key: value
                 for key, value in claim.items()
-                if key not in REVIEW_STATE
+                if key not in REVIEW_STATE and key not in PIPELINE_STATE
             }
             if isinstance(claim.get("source"), dict):
                 source = {
@@ -915,7 +922,8 @@ def vocabulary_prompt_lines() -> tuple[str, str]:
     leave the model to guess both, and the manifest already holds the
     words. A property no claim may use, a retired or a reference
     property, is left out, as is one the manifest holds back from prompts
-    (`ManifestProperty.in_prompts`).
+    (`ManifestProperty.in_prompts`), and so is an item it holds back
+    (`ManifestItem.offered`).
     """
     manifest = load_manifest()
     property_lines = "\n".join(
@@ -923,7 +931,9 @@ def vocabulary_prompt_lines() -> tuple[str, str]:
         for key, spec in sorted(manifest.properties.items())
         if spec.in_prompts
     )
-    item_lines = "  " + ", ".join(sorted(manifest.items))
+    item_lines = "  " + ", ".join(
+        sorted(key for key, spec in manifest.items.items() if spec.offered)
+    )
     return property_lines, item_lines
 
 

@@ -569,6 +569,18 @@ class Claim(StrictModel):
     row_approval: SkipJsonSchema[str | None] = Field(
         default=None, pattern=r"^[0-9a-f]{12}$"
     )
+    # Where the claim's source says what its sourcing circumstances
+    # qualifier records of the source's own making (`machine_assisted`,
+    # ADR-0008): the source's statement about how its text was prepared,
+    # in the same artifact, with its own page and excerpt. The extraction
+    # sets it with the marker, never the model, and the writer writes it as
+    # a reference block of its own beside the claim's source block, so the
+    # marker's evidence is in the graph (CLAUDE.md rule 1). Documented in
+    # this comment and left out of the prompts' JSON Schema, as
+    # `row_approval` is. A claim without one serialises exactly as it
+    # would if the field did not exist.
+    circumstance_source: SkipJsonSchema[SourceReference | None] = None
+
     # The local subject a curator's confirmation replaced.
     # reconcile.apply_equivalences sets it when it turns the claim's local
     # subject into the QID of the existing item a curator approved the
@@ -581,6 +593,20 @@ class Claim(StrictModel):
     # it, and a claim without one serialises as if the field did not
     # exist.
     confirmed_from: SkipJsonSchema[LocalRef | None] = None
+
+    @model_validator(mode="after")
+    def _a_circumstance_cited_in_the_claim_s_own_source(self) -> Claim:
+        """The statement a sourcing circumstance stands on is the claim's
+        own source's: a source speaks only of its own making."""
+        if (
+            self.circumstance_source is not None
+            and self.circumstance_source.artifact != self.source.artifact
+        ):
+            raise ValueError(
+                "a circumstance source cites another artifact than the "
+                "claim's source"
+            )
+        return self
 
     @model_serializer(mode="wrap")
     def _omit_absent_row_approval(
@@ -596,6 +622,8 @@ class Claim(StrictModel):
                 data.pop("confirmed_from", None)
             if self.note is None:
                 data.pop("note", None)
+            if self.circumstance_source is None:
+                data.pop("circumstance_source", None)
         return data
 
 

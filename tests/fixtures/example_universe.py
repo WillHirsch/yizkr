@@ -1560,11 +1560,13 @@ SOURCES = (
     ),
 )
 
-# Values the assertions use that the manifest does not hold yet.
-# ADR-0008 (as amended by #289) adds `machine_assisted`, the sourcing
-# circumstance of a text that its source says was prepared with machine
-# assistance, with the extraction change that sets it (its follow-up B).
-PLANNED_VOCABULARY = ("machine_assisted",)
+# Values the assertions use that the manifest does not hold yet: none at
+# present. `machine_assisted`, the sourcing circumstance of a text that its
+# source says was prepared with machine assistance, joined the manifest
+# with the reading that sets it (ADR-0008's follow-up B, #666), and
+# `parentage_adoptive`, with the qualifier `parentage` and the property
+# `ended_by_death_of`, with ADR-0040's build (follow-up B, #687).
+PLANNED_VOCABULARY: tuple[str, ...] = ()
 # The properties the assertions use that the manifest does not hold yet,
 # by key, with their datatype: none at present.
 PLANNED_PROPERTIES: dict[str, str] = {}

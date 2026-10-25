@@ -636,6 +636,9 @@ class DocumentRun:
         # a curator's corrected transcription (plain text); when present
         # it is the document's transcription
         self.correction = self.dir / "transcription.corrected.txt"
+        # a curator's pointer to the document's statement about how its
+        # text was prepared, by its words (yizkr.pipeline.preparation)
+        self.pointer = self.dir / "preparation.pointer.txt"
         self.batch = self.dir / "batch.json"
         # the extractor's advisory side outputs: coverage, rejects, gaps
         self.extraction = self.dir / "extraction"
@@ -664,7 +667,9 @@ class DocumentRun:
                 # the GEDCOM adapter reads the source alone, whose bytes
                 # the directory is kept for (a changed source sets it
                 # aside)
-                self.batch: () if gedcom else (self.transcription,),
+                self.batch: ()
+                if gedcom
+                else (self.transcription, self.pointer),
                 # the critic reads each citation where it stands in the
                 # transcription (ADR-0003)
                 self.critique: (self.batch, self.transcription),
@@ -724,6 +729,13 @@ class DocumentRun:
     @property
     def kind(self) -> str:
         return document_kind(self.source)
+
+    def pointed(self) -> str | None:
+        """The words of the document's statement about its preparation
+        that a curator pointed to (`pointer`); None where none did."""
+        if not self.pointer.is_file():
+            return None
+        return self.pointer.read_text(encoding="utf-8")
 
     @property
     def unrecorded(self) -> bool:
@@ -2007,6 +2019,8 @@ class Orchestrator:
                 state_dir=doc.extraction,
                 concurrency=self.chunk_concurrency,
                 log=self.log,
+                read_preparation=True,
+                pointer=doc.pointed(),
             )
             extractors.append(extractor)
             batch = extractor.extract(

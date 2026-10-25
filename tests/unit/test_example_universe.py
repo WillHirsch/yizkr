@@ -211,8 +211,8 @@ class TestIntegrity:
             "sentences that call them "
             "planned: the comment above PLANNED_VOCABULARY in "
             "tests/fixtures/example_universe.py, and docs/EXAMPLES.md, "
-            '"Using it": "One value is planned rather than in the '
-            'manifest yet"'
+            '"Using it": "No value is planned rather than in the '
+            'manifest now"'
         )
 
     def test_the_manifest_marks_the_unknown_value_properties(self):

@@ -134,6 +134,11 @@ class ManifestItem(BaseModel):
     # types an entity as (`birth`, `death`, ADR-0040 §3, §7): validation
     # refuses an entity of it in a batch, and no prompt offers it.
     extracted: bool = True
+    # Whether the prompts rendered from the manifest offer the item. An
+    # item the pipeline sets from what a source says of itself, and no
+    # extractor sets claim by claim (`machine_assisted`, ADR-0008), is
+    # held back.
+    offered: bool = True
 
 
 class Manifest(BaseModel):

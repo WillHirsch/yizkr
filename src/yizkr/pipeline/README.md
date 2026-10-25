@@ -203,7 +203,11 @@ role afresh under new keys (with `--refresh`, for views that stand), and
 `--no-cache` runs without the cache: views are reused all the same, and a
 view made again calls the engine for everything. To correct a
 transcription, save the corrected text as `transcription.corrected.txt`
-there. `var/runs/<folder>/` is also the run directory, with an event for
+there. Where a document says its own text was prepared with machine
+assistance and the extraction missed it, save the statement's words, as
+the transcription holds them, as `preparation.pointer.txt` there: the
+entity manifest reads that passage, and the batch is made again
+(`preparation.py`, ADR-0008). `var/runs/<folder>/` is also the run directory, with an event for
 every stage started, done, reused or failed and every answer the cache
 gives or cannot give; `yizkr stages state var/runs/<folder>` sums them up.
 Every document directory the run makes has a `derivations.json` from its
