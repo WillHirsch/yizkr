@@ -260,8 +260,7 @@ property's (parent, child, sibling, relative) carry "(kinship class)" in
 their labels, so that no two items share a label (the bootstrap's key)
 and none reads as the property of the same name.
 
-Amended by ADR-0040 (2026-10-24), carried out by its build (until it
-lands, the text above holds):
+Amended by ADR-0040 (2026-10-24), carried out by its build (#687):
 - `birth` and `death` stay classes, for events a curator makes, but are
   kinds no extraction makes. Validation refuses an entity of either
   kind, and the GEDCOM adapter makes none. A birth and a death are
@@ -2339,7 +2338,8 @@ not a signal to grow the schema on.
     `place of burial`.
   - **Unions.** The person page and the timeline show each union with
     its stated end and its sources, or the derived end where none is
-    stated (ADR-0040 §2.6).
+    stated (ADR-0040 §2.6). The person page shows them now (#687); the
+    timeline's union rows come with the union readers (#520).
   - **The exception.** `UNDATED_DEATHS_QUERY` stays as it is (reading
     the `principal` only). After the build it meets only events a
     curator makes, so a curator-made undated death event still shows on
