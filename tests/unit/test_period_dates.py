@@ -299,9 +299,11 @@ class TestThePersonTimeline:
             "      GROUP BY ?event\n"
             "    }\n"
         ) in arm
-        # the subquery is the arm's only reading of a type, and no truthy
-        # triple, which a preferred type would leave the only one, is read
-        assert arm.count("{P:instance_of}") == 2
+        # the subquery is the arm's only reading of a type for its cell,
+        # beside the test that keeps a curator's birth or death event to
+        # its principal (ADR-0040 §6), and no truthy triple, which a
+        # preferred type would leave the only one, is read
+        assert arm.count("{P:instance_of}") == 4
         assert "wdt:" not in arm
         assert q.count("AS ?eventTypes)") == 1
 

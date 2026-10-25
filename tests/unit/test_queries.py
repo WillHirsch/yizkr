@@ -492,3 +492,26 @@ class TestDiedBy:
 
     def test_a_source_is_its_artifact(self, q):
         assert "BIND(COALESCE(?whole, ?source) AS ?artifact)" in q
+
+
+class TestDeathsOnThePersonInTheLibrary:
+    """ADR-0040 §6: the places map reaches the places people were born,
+    died and were buried in, and the timeline shows a curator's birth or
+    death event on its principal's alone, and an unknown value as one."""
+
+    def test_the_places_map_reads_births_deaths_and_burials(self, templates):
+        q = templates["places-map"]
+        for key in ("place_of_birth", "place_of_death", "burial_place"):
+            assert f"wdt:{{P:{key}}}" in q, key
+
+    def test_a_birth_or_death_event_is_its_principals_alone(self, templates):
+        q = " ".join(templates["person-timeline"].split())
+        assert "VALUES ?vital { wd:{Q:birth} wd:{Q:death} }" in q
+        assert "?participation pq:{P:object_has_role} wd:{Q:principal} ." in q
+
+    def test_an_unknown_value_is_never_shown_as_its_blank_node(
+        self, templates
+    ):
+        q = " ".join(templates["person-timeline"].split())
+        assert '"unknown value",' in q
+        assert "isBlank(?value)" in q

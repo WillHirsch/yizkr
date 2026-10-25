@@ -1,13 +1,16 @@
 # Places map: every place with coordinates, and what connects to it
-# (residences, event locations). Renders as a map in the query service UI.
+# (residences, event locations, and the people born, died or buried
+# there, whose births and deaths are statements on them, ADR-0040 §6).
+# Renders as a map in the query service UI.
 #defaultView:Map
 SELECT ?place ?placeLabel ?coords ?connection ?connectionLabel
 WHERE {
   ?place wdt:{P:coordinate_location} ?coords .
   OPTIONAL {
-    { ?connection wdt:{P:residence} ?place . }
-    UNION
-    { ?connection wdt:{P:location} ?place . }
+    VALUES ?connects { wdt:{P:residence} wdt:{P:location}
+                       wdt:{P:place_of_birth} wdt:{P:place_of_death}
+                       wdt:{P:burial_place} }
+    ?connection ?connects ?place .
   }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en" . }
 }

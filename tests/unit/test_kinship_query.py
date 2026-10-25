@@ -239,7 +239,13 @@ class TestInverseTerms:
             ("cousin-in-law", "relative", ""),
             ("great-father", "relative", ""),
             ("godmother", "relative", ""),
-            ("stepmother", "relative", ""),
+            # the step and half terms (ADR-0040 §4), each with its inverse
+            ("stepmother", "stepchild", ""),
+            ("Stiefvater", "stepchild", ""),
+            ("Stieftochter", "stepparent", ""),
+            ("Stiefbruder", "stepsibling", ""),
+            ("Halbbruder", "half-sibling", ""),
+            ("half-sister", "half-sibling", ""),
         ],
     )
     def test_a_term_is_read_as_the_inverse_arm_reads_it(
@@ -272,12 +278,13 @@ class TestInverseTerms:
         # the rows' set passes the arm's degree on, and the row's term is
         # that degree before the gendered base ("great-" + "nephew")
         assert re.match(
-            r"\s*SELECT \?subject \?relative \?base \?degree WHERE",
+            r"\s*SELECT \?subject \?relative \?base \?degree \?through "
+            r"WHERE",
             sets["kin"],
         )
         assert (
-            'BIND(CONCAT(COALESCE(?degree, ""), ?gendered) AS ?relationship)'
-            in main
+            'BIND(CONCAT(COALESCE(?degree, ""), ?kindPrefix, ?gendered, '
+            "?kindSuffix) AS ?relationship)" in " ".join(main.split())
         )
 
 
@@ -322,7 +329,7 @@ class TestSteps:
     may state it on."""
 
     def test_a_parent_is_read_from_either_side(self, sets):
-        parents = sets["parents"]
+        parents = sets["links"]
         # father or mother on the child, or child on the parent
         for key in ("father", "mother"):
             assert edges(parents, f"p:{{P:{key}}}") == [("?child", "?st")]
@@ -373,8 +380,11 @@ RELATIONS = {
     "spouse/sibling": "sibling-in-law",
 }
 
-# the sets that read statements: ?to is ?from's step
+# the sets that read statements: ?to is ?from's step; a parent's kind
+# (`links`, and the `parents` paths take) is a flag the paths carry, which
+# the evaluation below leaves unbound
 STEPS = {
+    "links": ("?child", "parent", "?parent"),
     "parents": ("?child", "parent", "?parent"),
     "spouses": ("?a", "spouse", "?b"),
     "siblings": ("?a", "sibling", "?b"),
@@ -446,16 +456,20 @@ class Paths:
         for expression, alias, plain in PROJECTED.findall(projection):
             if plain:
                 out[plain] = bound.get(plain)
-            elif expression.startswith("?"):
-                out[alias] = bound[expression]
+            elif re.fullmatch(r"\?\w+", expression):
+                out[alias] = bound.get(expression)
             elif constant := re.fullmatch(r'"([\w-]+)"', expression):
                 out[alias] = constant.group(1)
-            else:
-                var, value, then, other = re.fullmatch(
-                    r'IF\((\?\w+) = "(\w+)", "([\w-]+)", "([\w-]+)"\)',
-                    expression,
-                ).groups()
+            elif chosen := re.fullmatch(
+                r'IF\((\?\w+) = "(\w+)", "([\w-]+)", "([\w-]+)"\)',
+                expression,
+            ):
+                var, value, then, other = chosen.groups()
                 out[alias] = then if bound[var] == value else other
+            else:
+                # a parent's kind or an adoption flag, which the paths
+                # carry and this evaluation does not model
+                out[alias] = None
         return out
 
 
@@ -526,3 +540,42 @@ class TestJoins:
         ]
         assert joined
         assert [n for n, c in Counter(joined).items() if c > 1] == []
+
+
+class TestKindsOfParenthood:
+    """ADR-0040 §4: a parent's kind is its statement's `parentage`, set only
+    where a source states it; an adoptive step is labelled, and a path
+    through one says so; a foster step is labelled on its own and no
+    sibling or longer path takes it."""
+
+    def test_a_parent_statement_gives_its_kind(self, sets):
+        links = " ".join(sets["links"].split())
+        assert "OPTIONAL { ?st pq:{P:parentage} ?parentage . }" in links
+        assert '?parentage = wd:{Q:parentage_adoptive}, "adoptive"' in links
+        assert '?parentage = wd:{Q:parentage_foster}, "foster"' in links
+
+    def test_no_path_takes_a_foster_parent(self, sets):
+        parents = " ".join(sets["parents"].split())
+        assert includes(sets["parents"]) == ["links"]
+        assert 'FILTER(?kind != "foster")' in parents
+        # every path and sibling set reads `parents`, never `links`
+        for name, body in sets.items():
+            if name not in ("links", "parents", "kin"):
+                assert "links" not in includes(body), name
+
+    def test_a_one_step_parent_carries_its_kind(self, sets):
+        arms = kin_arms(sets)
+        one_step = [arm for arm in arms if "%links" in arm]
+        assert len(one_step) == 2
+        assert all("(?kind AS ?through)" in arm for arm in one_step)
+
+    def test_the_terms_say_the_kind(self, main):
+        flat = " ".join(main.split())
+        assert 'IF(?kindOf = "foster", "foster ",' in flat
+        assert 'IF(?base = "child", "adopted ", "adoptive ")' in flat
+        assert 'IF(?kindOf = "adoption", " through adoption", "")' in flat
+
+    def test_a_path_through_an_adoption_says_so(self, sets):
+        paths = [arm for arm in kin_arms(sets) if "%afterParent" in arm]
+        (arm,) = paths
+        assert 'IF(?first || ?second, "adoption", "")' in arm
