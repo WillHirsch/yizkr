@@ -43,6 +43,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
+from yizkr import died_by
 from yizkr.claims import (
     Claim,
     ClaimBatch,
@@ -71,6 +72,7 @@ from yizkr.pipeline.llm import CUT_OFF_AT_LIMIT, LlmClient, at_output_limit
 from yizkr.pipeline.names import NOT_PERSONS, appellations_of
 from yizkr.queries.publish import (
     load_templates,
+    placeholder_keys,
     prefix_block,
     render_for_instance,
 )
@@ -223,10 +225,17 @@ WHERE {{
                          wikibase:timePrecision ?deathPrecision .
               BIND(CONCAT(STR(?deathTime), "|", STR(?deathPrecision))
                    AS ?deathDate) }}
-  # dates asserted via event items (participant in a birth/death event)
-  OPTIONAL {{ ?birthEvent wdt:{participant} ?item ;
+  # dates asserted via the birth and death events a curator makes
+  # (ADR-0040 Q5), each its principal's alone, at any rank but deprecated:
+  # a witness of one gets no date from it
+  OPTIONAL {{ ?birthEvent p:{participant} ?birthPart ;
                           wdt:{instance_of} wd:{birth_item} ;
                           p:{point_in_time} ?birthEventStatement .
+              ?birthPart ps:{participant} ?item ;
+                         pq:{object_has_role} wd:{principal_item} .
+              FILTER NOT EXISTS {{
+                ?birthPart wikibase:rank wikibase:DeprecatedRank
+              }}
               ?birthEventStatement a wikibase:BestRank .
               wd:{point_in_time} wikibase:statementValue ?birthEventLink .
               ?birthEventStatement ?birthEventLink ?birthEventNode .
@@ -234,9 +243,14 @@ WHERE {{
                               wikibase:timePrecision ?birthEventPrecision .
               BIND(CONCAT(STR(?birthEventTime), "|",
                           STR(?birthEventPrecision)) AS ?birthEventDate) }}
-  OPTIONAL {{ ?deathEvent wdt:{participant} ?item ;
+  OPTIONAL {{ ?deathEvent p:{participant} ?deathPart ;
                           wdt:{instance_of} wd:{death_item} ;
                           p:{point_in_time} ?deathEventStatement .
+              ?deathPart ps:{participant} ?item ;
+                         pq:{object_has_role} wd:{principal_item} .
+              FILTER NOT EXISTS {{
+                ?deathPart wikibase:rank wikibase:DeprecatedRank
+              }}
               ?deathEventStatement a wikibase:BestRank .
               wd:{point_in_time} wikibase:statementValue ?deathEventLink .
               ?deathEventStatement ?deathEventLink ?deathEventNode .
@@ -299,12 +313,16 @@ def fetch_roster(client: WikiClient, config: Config) -> list[RosterEntity]:
         nickname=properties["nickname"],
         official_name=properties["official_name"],
         referred_to_as=properties["referred_to_as"],
+        object_has_role=properties["object_has_role"],
         birth_item=items["birth"],
         death_item=items["death"],
+        principal_item=items["principal"],
     )
     # sent in a POST body: the query is longer than a GET's request line
     # may be (ADR-0033)
-    bindings = sparql.runner(config, timeout=120)(query)
+    runner = sparql.runner(config, timeout=120)
+    bindings = runner(query)
+    deaths = roster_deaths(runner, properties, items, config.concept_uri)
 
     def field(binding: dict, name: str) -> str:
         return binding.get(name, {}).get("value", "")
@@ -334,9 +352,13 @@ def fetch_roster(client: WikiClient, config: Config) -> list[RosterEntity]:
                     "" if kind_qid in kind_key else field(binding, "kindLabel")
                 ),
                 # direct statements win; event-derived dates fill gaps;
-                # each at the precision its statement states
+                # each at the precision its statement states, and beside
+                # them what the shared derivation gives (roster_deaths)
                 birth=date(binding, "birth", "eventBirth"),
-                death=date(binding, "death", "eventDeath"),
+                death=roster_death(
+                    date(binding, "death", "eventDeath"),
+                    deaths.get(field(binding, "item").rsplit("/", 1)[-1]),
+                ),
                 spouses=split(binding, "spouses"),
                 fathers=split(binding, "fathers"),
                 mothers=split(binding, "mothers"),
@@ -353,6 +375,55 @@ def fetch_roster(client: WikiClient, config: Config) -> list[RosterEntity]:
             )
         )
     return roster
+
+
+# what the roster says of a death no source dates: one its source states
+# without its date (ADR-0040 §2.2)
+UNDATED = "date not stated"
+
+
+def roster_deaths(
+    run, properties, items, concept_uri: str
+) -> dict[str, list[str]]:
+    """What the shared derivation gives each item's death, by its QID
+    (ADR-0040 §2.4): each "died by" date, as "by 25 December 1958
+    (derived)" at its precision, and UNDATED for a date of death of unknown
+    value a curator has not deprecated, read with the library query
+    ``died-by.rq`` and `run`. An instance whose vocabulary lacks what that
+    query names gives nothing."""
+    template = load_templates()[died_by.QUERY]
+    keys = placeholder_keys(template)
+    if not (keys[0] <= properties.keys() and keys[1] <= items.keys()):
+        return {}
+    inputs = died_by.from_rows(
+        run(render_for_instance(template, properties, items, concept_uri))
+    )
+    found: dict[str, list[str]] = {}
+    for bound in died_by.died_by(inputs):
+        stamp = (
+            f"{bound.by.year:04d}-{bound.by.month or 0:02d}-"
+            f"{bound.by.day or 0:02d}T00:00:00Z"
+        )
+        text = time_text(
+            stamp,
+            died_by.WIKIBASE_PRECISION[bound.by.precision],
+            "a roster's derived date",
+        )
+        found.setdefault(bound.person.rsplit("/", 1)[-1], []).append(
+            f"by {text} (derived)"
+        )
+    for death in inputs.deaths:
+        if death.dating is None and not death.deprecated:
+            found.setdefault(death.person.rsplit("/", 1)[-1], []).append(
+                UNDATED
+            )
+    return {qid: sorted(set(shown)) for qid, shown in found.items()}
+
+
+def roster_death(dated: str, derived: list[str] | None) -> str:
+    """An item's death as the adjudicator reads it: its dated death, then
+    what the shared derivation gives it, "; "-separated."""
+    return "; ".join(part for part in (dated, *(derived or ())) if part)
 
 
 def _keys(names: Iterable[str]) -> set[str]:

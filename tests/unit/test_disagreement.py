@@ -19,7 +19,7 @@ import pytest
 import yaml
 
 from tests.fixtures import example_universe as u
-from yizkr import disagreement
+from yizkr import died_by, disagreement
 from yizkr.disagreement import (
     DEPRECATED,
     OWL_SAME_AS,
@@ -242,18 +242,25 @@ class TestTheUniverse:
 
     @staticmethod
     def statements() -> list[Statement]:
-        # set aside until ADR-0040's build (#687) gives them a form here:
-        # an unknown value, which the report never lists, and a parent of
-        # a stated kind, which it compares within that kind alone (§4, §8)
+        # an unknown value, which the report never lists, and a parent of a
+        # stated kind, which it compares within that kind alone; and the
+        # "died by" dates the shared derivation gives, compared as ranges
+        # open at their early end (ADR-0040 §2.4, §4, §8)
         compared = [
-            a
-            for a in u.ASSERTIONS
-            if a.property in disagreement.COMPARED
-            and a.value is not u.UNKNOWN
-            and "parentage" not in dict(a.qualifiers)
+            a for a in u.ASSERTIONS if a.property in disagreement.COMPARED
         ]
         found = []
         for a in compared:
+            if a.value is u.UNKNOWN:
+                found.append(
+                    said(
+                        a.subject,
+                        a.property,
+                        Term("bnode", f"unknown-{a.subject}"),
+                        a.source,
+                    )
+                )
+                continue
             qualifiers = {
                 {"start_time": "start", "end_time": "end"}.get(key, key): at(
                     date
@@ -264,9 +271,29 @@ class TestTheUniverse:
             value = a.value
             if a.property == "birth_name":
                 value = text(value, UNIVERSE[a.source].lang or "en")
-            found.append(
-                said(a.subject, a.property, value, a.source, **qualifiers)
+            statement = said(
+                a.subject, a.property, value, a.source, **qualifiers
             )
+            if "parentage" in dict(a.qualifiers):
+                statement = replace(statement, parentage=frozenset({"other"}))
+            found.append(statement)
+        found += [
+            replace(
+                said(
+                    bound.person,
+                    "date_of_death",
+                    u.Date(
+                        bound.by.year,
+                        bound.by.month,
+                        bound.by.day,
+                        qualifier="before",
+                    ),
+                    bound.source,
+                ),
+                derived=True,
+            )
+            for bound in u.DERIVED_DIED_BY
+        ]
         return found
 
     @staticmethod
@@ -1993,11 +2020,14 @@ class TestTheEntryPoint:
     """disagreements: the two library queries, rendered for the instance,
     run and compared."""
 
-    def test_it_runs_both_library_queries_and_compares_their_rows(self):
+    def test_it_runs_its_library_queries_and_compares_their_rows(self):
         sent = []
 
         def run(query: str) -> list[dict]:
             sent.append(query)
+            if 'BIND("death" AS ?kind)' in query:
+                # the shared derivation's inputs: none here
+                return []
             if "?item ?link ?target" in query:
                 return containment_rows(
                     edges=[
@@ -2013,7 +2043,105 @@ class TestTheEntryPoint:
 
         rows = disagreement.disagreements(run, PROPERTIES, ITEMS, CONCEPT)
         assert [row_of(row) for row in rows] == [GUSTAV_BORN]
-        assert len(sent) == 2
+        # the statements, the derivation's inputs and the containment
+        assert len(sent) == 3
         for query in sent:
             assert f"PREFIX wd: <{CONCEPT}/entity/>" in query
             assert "{P:" not in query and "{Q:" not in query
+
+
+class TestDeathsAndParentsOnThePerson:
+    """ADR-0040 §8: an unknown value is set aside and never listed;
+    parents are compared within one kind; and derived "died by" dates are
+    compared as ranges open at their early end, labelled as derived."""
+
+    def test_an_unknown_value_is_never_listed(self):
+        rows = listed(
+            said(
+                "rudolf-loebig",
+                "date_of_death",
+                Term("bnode", "b1"),
+                "letter-to-leopold-1958",
+            ),
+            said(
+                "rudolf-loebig",
+                "date_of_death",
+                u.Date(1941, 3, 6),
+                "death-certificate-1941",
+            ),
+        )
+        assert rows == []
+        skolem = Term("uri", f"{CONCEPT}/.well-known/genid/0f3c")
+        assert not disagreement.stated_value(
+            said("rudolf-loebig", "date_of_death", skolem, "family-tree-1984")
+        )
+
+    def test_a_birth_father_and_an_adoptive_father_never_disagree(self):
+        # a 1950 adoption order's "Adoptivvater" beside the register's
+        # birth father, of no stated kind
+        birth = said(
+            "gustav-loebig", "father", "sebastian-loebig", "birth-extract-1938"
+        )
+        adoptive = replace(
+            said(
+                "gustav-loebig", "father", "leopold-loebig", "family-tree-1984"
+            ),
+            parentage=frozenset({"other"}),
+        )
+        assert listed(birth, adoptive) == []
+        # of no stated kind, the two are compared as birth fathers
+        assert listed(birth, replace(adoptive, parentage=frozenset()))
+
+    def test_a_derived_date_is_compared_open_at_its_early_end(self):
+        died = said(
+            "rudolf-loebig",
+            "date_of_death",
+            u.Date(1941, 3, 6),
+            "death-certificate-1941",
+        )
+        by = replace(
+            said(
+                "rudolf-loebig",
+                "date_of_death",
+                u.Date(1958, 12, 25, qualifier="before"),
+                "letter-to-leopold-1958",
+            ),
+            derived=True,
+        )
+        # 1941 lies inside "died by 1958": a refinement, never listed
+        assert listed(died, by) == []
+        # a dated death after the bound disagrees with it, labelled
+        later = said(
+            "rudolf-loebig",
+            "date_of_death",
+            u.Date(1960),
+            "family-tree-1984",
+        )
+        (row,) = compare([later, by], NOTHING)
+        assert {row.a.value.derived, row.b.value.derived} == {True, False}
+
+    def test_the_derivation_gives_the_statements_it_compares(self):
+        person = iri("rudolf-loebig")
+        letter = iri("letter-to-leopold-1958")
+        inputs = died_by.Inputs(
+            ends=(
+                died_by.UnionEnd(
+                    "m",
+                    person,
+                    frozenset({person, iri("nina-sartina")}),
+                    frozenset({letter}),
+                ),
+            ),
+            widowhoods=(
+                died_by.Widowhood(
+                    iri("nina-sartina"),
+                    died_by.Dating(died_by.When(1958, 12, 25, "day")),
+                    frozenset({letter}),
+                ),
+            ),
+        )
+        (derived,) = disagreement.derived_statements(inputs, [])
+        assert derived.derived and derived.entity == person
+        assert derived.property == "date_of_death"
+        assert {t.value[:10] for t in derived.latest} == {"1958-12-25"}
+        assert {s.artifact for s in derived.sources} == {letter}

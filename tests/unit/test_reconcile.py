@@ -1529,6 +1529,7 @@ class TestRosterKinds:
                         "nickname",
                         "official_name",
                         "referred_to_as",
+                        "object_has_role",
                     ),
                     1,
                 )
@@ -1537,6 +1538,7 @@ class TestRosterKinds:
                 "human": "Q5",
                 "birth": "Q20",
                 "death": "Q21",
+                "principal": "Q22",
                 # the label "occupation" and "time period" never spell
                 # these keys
                 "occupation_class": "Q30",
@@ -2285,3 +2287,96 @@ class TestDocumentAppellations:
             block_candidates(appellated.entities, roster, batch=appellated)
             == {}
         )
+
+
+class TestRosterDeaths:
+    """ADR-0040 §8: the roster reads each death through the shared
+    derivation, and a curator's birth or death event dates its principal
+    alone."""
+
+    def test_an_event_dates_its_principal_alone(self, monkeypatch):
+        _, query = TestDatesAtTheirPrecision.fetch(monkeypatch, [])
+        flat = re.sub(r"\s+", " ", query)
+        for part in ("birthPart", "deathPart"):
+            # P16 is object_has_role and Q22 principal, as
+            # TestRosterKinds.Vocabulary numbers them
+            assert f"?{part} ps:P9 ?item ; pq:P16 wd:Q22 ." in flat
+            assert (
+                f"FILTER NOT EXISTS {{ ?{part} wikibase:rank "
+                "wikibase:DeprecatedRank }" in flat
+            )
+        assert "wdt:P9 ?item" not in flat
+
+    def test_the_derivation_gives_the_roster_its_deaths(self):
+        from yizkr.pipeline import reconcile
+
+        E = "http://wikibase.example/entity/"
+
+        def cell(value):
+            return {"type": "literal", "value": value}
+
+        def row(kind, subject, statement, **cells):
+            found = {
+                "kind": cell(kind),
+                "subject": {"type": "uri", "value": E + subject},
+                "statement": {"type": "uri", "value": E + statement},
+                "rank": {
+                    "type": "uri",
+                    "value": "http://wikiba.se/ontology#NormalRank",
+                },
+                "artifact": {"type": "uri", "value": E + "Q23"},
+            }
+            for name, value in cells.items():
+                found[name] = value if isinstance(value, dict) else cell(value)
+            return found
+
+        rows = [
+            # "der selige Felix" in a register of 1909 (hypothetical)
+            row("death", "Q11", "s1", value={"type": "bnode", "value": "b"}),
+            row(
+                "inception",
+                "Q23",
+                "s2",
+                time="1909-03-20T00:00:00Z",
+                timePrecision="11",
+            ),
+        ]
+        properties = {
+            key: f"P{n}" for n, key in enumerate(load_manifest_keys()[0], 1)
+        }
+        items = {
+            key: f"Q{n}" for n, key in enumerate(load_manifest_keys()[1], 1)
+        }
+        deaths = reconcile.roster_deaths(
+            lambda query: rows, properties, items, "http://wikibase.example"
+        )
+        assert deaths == {
+            "Q11": ["by 1909-03-20 (derived)", reconcile.UNDATED]
+        }
+        assert reconcile.roster_death("1941-03-06", deaths["Q11"]) == (
+            "1941-03-06; by 1909-03-20 (derived); date not stated"
+        )
+
+    def test_a_vocabulary_without_its_keys_gives_nothing(self):
+        from yizkr.pipeline import reconcile
+
+        properties, items = TestRosterKinds.Vocabulary().vocabulary()
+        assert (
+            reconcile.roster_deaths(
+                lambda query: pytest.fail("no query is run"),
+                properties,
+                items,
+                "http://wikibase.example",
+            )
+            == {}
+        )
+
+
+def load_manifest_keys() -> tuple[list[str], list[str]]:
+    """The manifest's property and item keys, in its order."""
+    import yaml
+
+    from yizkr.model.schema import read_manifest_data
+
+    raw = yaml.safe_load(read_manifest_data())
+    return list(raw["properties"]), list(raw["items"])

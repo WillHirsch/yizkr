@@ -21,7 +21,11 @@
 # statement with no stated-in source shows no source. Each time comes with
 # the calendar model its value node states, which the comparison checks: a
 # date before the common era or in a calendar other than the proleptic
-# Gregorian stops the report (ADR-0034).
+# Gregorian stops the report (ADR-0034). A parent statement carries the
+# kind its `parentage` states (?parentageKind: "birth", or "other" for an
+# adoptive or a foster parent), so parents are compared within one kind;
+# a value of unknown value is listed, and the comparison sets it aside
+# (ADR-0040 §4, §8).
 #
 # The comparison runs in Python, in yizkr.disagreement (ADR-0033): it
 # pairs the values that different artifacts attribute and sets aside
@@ -37,7 +41,7 @@ SELECT ?entity ?entityLabel ?property ?propertyLabel ?statement ?rank
        ?start ?startPrecision ?startCalendar
        ?end ?endPrecision ?endCalendar
        ?pointInTime ?pointInTimePrecision ?pointInTimeCalendar
-       ?source ?sourceLabel ?artifact
+       ?source ?sourceLabel ?artifact ?parentageKind
 WHERE {
   # the properties that hold at most one true value per subject, the
   # parents, and the two that accumulate values over a life but are dated
@@ -112,6 +116,10 @@ WHERE {
                               wikibase:timePrecision ?pointInTimePrecision .
              OPTIONAL { ?pointInTimeNode wikibase:timeCalendarModel
                           ?pointInTimeCalendar . } }
+  # a parent's kind, where its statement states one
+  OPTIONAL { ?statement pq:{P:parentage} ?parentage .
+             BIND(IF(?parentage = wd:{Q:parentage_birth}, "birth", "other")
+                  AS ?parentageKind) }
   # every stated-in source, with its label and the artifact it belongs to
   OPTIONAL { ?statement prov:wasDerivedFrom ?reference .
              ?reference pr:{P:stated_in} ?source .

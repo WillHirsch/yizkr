@@ -2309,6 +2309,10 @@ class SiteBuilder:
                     str(precision),
                     f"{row.entity_qid} {row.property}",
                 )
+                if value.derived:
+                    # a "died by" date the shared derivation gives, never a
+                    # value a source states (ADR-0040 §2.4)
+                    return esc(f"died by {shown} (derived)")
                 return esc(shown) + stated_range(row, side)
             if value.term.kind == "uri":
                 return esc(value.label or value.term.value.rsplit("/", 1)[-1])
