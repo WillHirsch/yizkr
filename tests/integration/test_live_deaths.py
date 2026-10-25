@@ -141,6 +141,19 @@ def batch(sources) -> ClaimBatch:
         claim(
             "deprecated", "date_of_death", UNKNOWN, burial, LATE_FELIX, "de"
         ),
+        # Nicholas, whom the curator's "no value" is about, is made by a
+        # claim of his own, which states nothing of a death
+        claim(
+            "no value",
+            "religion",
+            {
+                "type": "monolingual",
+                "value": {"text": "lutherisch", "language": "de"},
+            },
+            burial,
+            "lutherisch",
+            "de",
+        ),
         claim(
             "eugen",
             "age_at_death",
