@@ -56,6 +56,7 @@ from yizkr.core.config import Config
 from yizkr.core.dates import UnsupportedDate
 from yizkr.core.privacy import (
     BIRTHS_QUERY,
+    ended_by_death_query,
     family_type,
     participants_query,
     people_selection,
@@ -772,6 +773,8 @@ class TestTheBadgeReadsEveryBirth:
             + BIRTHS_QUERY.format(**properties),
             prefix_block(config().concept_uri)
             + participants_query(properties, items),
+            prefix_block(config().concept_uri)
+            + ended_by_death_query(properties),
         ]
 
 
@@ -890,7 +893,7 @@ class TestThePeopleAreTheExports:
 
         assert "participant" not in PEOPLE_QUERY
         assert "{death}" not in PEOPLE_QUERY
-        assert PEOPLE_QUERY.count("EXISTS {{ ?person wdt:") == 4
+        assert PEOPLE_QUERY.count("EXISTS {{ ?person wdt:") == 5
 
     def test_a_family_is_badged_whatever_the_check_says(
         self, tmp_path, vocabulary
@@ -2841,7 +2844,10 @@ class TestAnUndatedDeath:
         self, tmp_path, vocabulary
     ):
         site, summary = self.site(tmp_path, vocabulary)
-        assert f"<dt>death</dt><dd>{DIED}</dd>" in self.page(site, RUDOLF)
+        # a curator's death event (ADR-0040 Q5), under the date of death
+        assert f"<dt>date of death</dt><dd>{DIED}</dd>" in self.page(
+            site, RUDOLF
+        )
         assert summary["undated_deaths"] == 1
 
     def test_an_informant_is_never_shown_to_have_died(
@@ -3047,8 +3053,8 @@ class TestAnUndatedDeath:
     def test_it_stands_beside_a_dated_death_of_the_same_person(
         self, tmp_path, vocabulary
     ):
-        # Q7's date of death and an undated death event, both shown under
-        # their own headings
+        # Q7's date of death and a curator's undated death event, side by
+        # side under the date of death (ADR-0040 §6)
         rows = death_rows(
             "Q718",
             [
@@ -3066,10 +3072,11 @@ class TestAnUndatedDeath:
         text = self.page(site, "Q7")
         assert "<dt>date of death</dt>" in text
         assert (
-            "<dt>death</dt><dd>died (date not stated)"
+            "<dd>died (date not stated)"
             '<span class="source"><a href="../artifacts/Q23.html">'
             "burial register</a></span></dd>" in text
         )
+        assert "<dt>death</dt>" not in text
         # the timeline names them as the person page does, escaped
         timeline = (site / "timeline.html").read_text()
         assert (

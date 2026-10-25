@@ -177,8 +177,9 @@ TRAPS = (
         "that states no death: no DATE, no PLAC and no Y, as some programs "
         "write for everyone.",
         "No death evidence for him comes of it (ADR-0020): no date, place "
-        "or cause of death, no burial and no death event, and the adapter "
-        "counts the DEAT among the tags it does not map.",
+        "or cause of death, no burial and no unknown-value date of death "
+        "(ADR-0040), and the adapter counts the DEAT among the tags it does "
+        "not map.",
     ),
     Trap(
         "early-birth",

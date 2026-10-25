@@ -3,9 +3,13 @@
 # about a date, ALL attributed values appear as separate rows, labeled by
 # source — nothing is silently picked.
 # Covers: dated statements on the person (birth, death), the dates the
-# person's statements carry as qualifiers, and dated events the person
-# participated in, each dated by its point in time or by its own start
-# and end time. A qualifier's row names the statement's property, its
+# person's statements carry as qualifiers (a burial by its point in time),
+# and dated events the person participated in, each dated by its point in
+# time or by its own start and end time. A date of death of unknown value
+# has no date, so it gives no row here: the site shows it beside the
+# person's dated death, or under "No date stated" (ADR-0040 §6). A birth
+# or a death event, which only a curator makes, shows on its principal's
+# timeline alone; every other event on each participant's. A qualifier's row names the statement's property, its
 # value and the qualifier: a marriage is dated by the start time of its
 # spouse statement and ends at its end time, and a point in time on a
 # spouse or residence statement dates an observation, never the wedding
@@ -74,13 +78,18 @@ WHERE {
     FILTER(LANG(?propertyName) = "en")
     ?dated rdfs:label ?qualifierName .
     FILTER(LANG(?qualifierName) = "en")
-    # the value the statement states (the spouse, the place), by its label
+    # the value the statement states (the spouse, the place), by its label;
+    # an unknown value (a burial whose place its source does not state,
+    # ADR-0040 Q3) as "unknown value", never as its blank node
     OPTIONAL { ?st ?ps ?value .
                OPTIONAL { ?value rdfs:label ?valueName .
                           FILTER(LANG(?valueName) = "en") } }
-    BIND(COALESCE(?valueName,
-                  IF(isIRI(?value), REPLACE(STR(?value), "^.*/", ""),
-                     STR(?value)))
+    BIND(IF(isBlank(?value)
+            || CONTAINS(STR(?value), "/.well-known/genid/"),
+            "unknown value",
+            COALESCE(?valueName,
+                     IF(isIRI(?value), REPLACE(STR(?value), "^.*/", ""),
+                        STR(?value))))
          AS ?shown)
     BIND(COALESCE(CONCAT(?propertyName, ": ", ?shown,
                          " (", ?qualifierName, ")"),
@@ -102,6 +111,15 @@ WHERE {
     ?event p:{P:participant} ?participation .
     ?participation ps:{P:participant} ?person .
     FILTER NOT EXISTS { ?participation wikibase:rank wikibase:DeprecatedRank }
+    # a birth or a death, which only a curator makes, is its principal's
+    # alone, so it shows on no other participant's timeline (ADR-0040 §6)
+    FILTER(NOT EXISTS {
+             VALUES ?vital { wd:{Q:birth} wd:{Q:death} }
+             ?event p:{P:instance_of}/ps:{P:instance_of} ?vital .
+           }
+           || EXISTS {
+             ?participation pq:{P:object_has_role} wd:{Q:principal} .
+           })
     ?event ?eventClaim ?st .
     # the event's types at any rank but deprecated, each by its English
     # label (its id when it has none), URI-encoded and "|"-separated:

@@ -29,12 +29,22 @@
 # the relative's sex included, is at normal or preferred rank and never
 # deprecated, so no preferred value is needed and none hides another.
 #
+# A parent statement's kind is its `parentage` qualifier, set only where
+# a source states it (ADR-0040 §4). A parent of no stated kind is a birth
+# parent's step, as before. An adoptive parent is a step of its own,
+# labelled ("adoptive father", "adopted son"), and a path through one says
+# so ("grandparent through adoption", "sister through adoption"). A foster
+# parent is labelled on its own step ("foster mother", "foster daughter")
+# and no sibling or longer path uses it.
+#
 # Gendered terms (father vs mother, aunt vs uncle) come from the
 # ?relative's `sex_or_gender`; where sex is unknown the neutral term is
-# used, never guessed. Not derived here: step-relations (a parent's
-# spouse, a spouse's child), longer paths, and the degrees ("great-",
-# "once removed", half- vs full) of derived relations, which a frontend
-# derives over the same steps.
+# used, never guessed. A step or half term a source asserts ("Stiefvater",
+# "Halbbruder", the latter on a `sibling` statement's `kinship_type`) is
+# read through the inverse table like any other. Not
+# derived here: step-relations (a parent's spouse, a spouse's child),
+# longer paths, and the degrees ("great-", "once removed", half- vs full)
+# of derived relations, which a frontend derives over the same steps.
 #
 # The sets below are the query service's named subqueries (WITH { … } AS
 # %name, then INCLUDE %name), each computed once. The engine joins two
@@ -47,8 +57,9 @@
 # For one subject, add to the main WHERE:  VALUES ?subject { wd:Q26 }
 SELECT DISTINCT ?subject ?subjectLabel ?relative ?relativeLabel ?relationship
 WITH {
-  # ?parent is ?child's parent
-  SELECT DISTINCT ?child ?parent WHERE {
+  # ?parent is ?child's parent, of the ?kind its statement's `parentage`
+  # states: "adoptive", "foster", or "" where it states none
+  SELECT DISTINCT ?child ?parent ?kind WHERE {
     {
       ?child p:{P:father} ?st .
       ?st ps:{P:father} ?parent .
@@ -61,6 +72,21 @@ WITH {
     }
     ?st wikibase:rank ?rank .
     FILTER(?rank != wikibase:DeprecatedRank)
+    OPTIONAL { ?st pq:{P:parentage} ?parentage . }
+    # COALESCE, as a comparison with an unbound ?parentage is an error,
+    # which would leave ?kind unbound and the filters below drop the step
+    BIND(COALESCE(IF(?parentage = wd:{Q:parentage_adoptive}, "adoptive",
+                     IF(?parentage = wd:{Q:parentage_foster}, "foster", "")),
+                  "")
+         AS ?kind)
+  }
+} AS %links
+WITH {
+  # the parent steps a path takes: every one but a foster parent's, and
+  # whether it is an adoptive parent's (?adopted)
+  SELECT ?child ?parent (?kind = "adoptive" AS ?adopted) WHERE {
+    INCLUDE %links
+    FILTER(?kind != "foster")
   }
 } AS %parents
 WITH {
@@ -77,12 +103,20 @@ WITH {
     FILTER(?rank != wikibase:DeprecatedRank)
   }
 } AS %spouses
-# two children of one parent
-WITH { SELECT (?child AS ?a) ?parent WHERE { INCLUDE %parents } } AS %childA
-WITH { SELECT (?child AS ?b) ?parent WHERE { INCLUDE %parents } } AS %childB
+# two children of one parent, and whether each is the parent's by
+# adoption
 WITH {
-  # ?b is ?a's sibling: asserted either way, or through a shared parent
-  SELECT DISTINCT ?a ?b WHERE {
+  SELECT (?child AS ?a) ?parent (?adopted AS ?adoptedA)
+  WHERE { INCLUDE %parents }
+} AS %childA
+WITH {
+  SELECT (?child AS ?b) ?parent (?adopted AS ?adoptedB)
+  WHERE { INCLUDE %parents }
+} AS %childB
+WITH {
+  # ?b is ?a's sibling: asserted either way, or through a shared parent,
+  # by adoption (?sibAdopted) where either is that parent's adopted child
+  SELECT DISTINCT ?a ?b ?sibAdopted WHERE {
     {
       {
         ?a p:{P:sibling} ?st .
@@ -93,86 +127,122 @@ WITH {
       }
       ?st wikibase:rank ?rank .
       FILTER(?rank != wikibase:DeprecatedRank)
+      BIND(false AS ?sibAdopted)
     } UNION {
-      INCLUDE %childA
-      INCLUDE %childB
+      SELECT ?a ?b (?adoptedA || ?adoptedB AS ?sibAdopted) WHERE {
+        INCLUDE %childA
+        INCLUDE %childB
+      }
     }
     FILTER(?a != ?b)
   }
 } AS %siblings
-# the first step of a path: ?y is ?x's parent, child, sibling or spouse
-WITH { SELECT (?child AS ?x) (?parent AS ?y) WHERE { INCLUDE %parents } } AS %parentX
-WITH { SELECT (?parent AS ?x) (?child AS ?y) WHERE { INCLUDE %parents } } AS %childX
-WITH { SELECT (?a AS ?x) (?b AS ?y) WHERE { INCLUDE %siblings } } AS %siblingX
-WITH { SELECT (?a AS ?x) (?b AS ?y) WHERE { INCLUDE %spouses } } AS %spouseX
+# the first step of a path: ?y is ?x's parent, child, sibling or spouse,
+# and whether the step is an adoption (?first)
 WITH {
-  # ?z is ?y's child or spouse (?via)
-  SELECT ?y ?z ?via WHERE {
+  SELECT (?child AS ?x) (?parent AS ?y) (?adopted AS ?first)
+  WHERE { INCLUDE %parents }
+} AS %parentX
+WITH {
+  SELECT (?parent AS ?x) (?child AS ?y) (?adopted AS ?first)
+  WHERE { INCLUDE %parents }
+} AS %childX
+WITH {
+  SELECT (?a AS ?x) (?b AS ?y) (?sibAdopted AS ?first)
+  WHERE { INCLUDE %siblings }
+} AS %siblingX
+WITH {
+  SELECT (?a AS ?x) (?b AS ?y) (false AS ?first)
+  WHERE { INCLUDE %spouses }
+} AS %spouseX
+WITH {
+  # ?z is ?y's child or spouse (?via), and whether the step is an
+  # adoption (?second)
+  SELECT ?y ?z ?via ?second WHERE {
     {
       SELECT (?parent AS ?y) (?child AS ?z) ("child" AS ?via)
+             (?adopted AS ?second)
       WHERE { INCLUDE %parents }
     } UNION {
-      SELECT (?a AS ?y) (?b AS ?z) ("spouse" AS ?via)
+      SELECT (?a AS ?y) (?b AS ?z) ("spouse" AS ?via) (false AS ?second)
       WHERE { INCLUDE %spouses }
     }
   }
 } AS %afterSibling
 WITH {
-  # ?z is the child or spouse (?via) of ?x's sibling
-  SELECT ?x ?z ?via WHERE { INCLUDE %siblingX INCLUDE %afterSibling }
+  # ?z is the child or spouse (?via) of ?x's sibling, and whether the
+  # path takes an adoption (?thru)
+  SELECT ?x ?z ?via (?first || ?second AS ?thru)
+  WHERE { INCLUDE %siblingX INCLUDE %afterSibling }
 } AS %bySibling
 WITH {
   # ?z is ?x's ?base when ?y is ?x's parent
-  SELECT ?y ?z ?base WHERE {
+  SELECT ?y ?z ?base ?second WHERE {
     {
       SELECT (?child AS ?y) (?parent AS ?z) ("grandparent" AS ?base)
+             (?adopted AS ?second)
       WHERE { INCLUDE %parents }
     } UNION {
       SELECT (?a AS ?y) (?b AS ?z) ("pibling" AS ?base)
+             (?sibAdopted AS ?second)
       WHERE { INCLUDE %siblings }
     } UNION {
       # a parent's sibling's child is a cousin; a parent's sibling's
       # spouse is an aunt or uncle
       SELECT (?x AS ?y) ?z (IF(?via = "child", "cousin", "pibling") AS ?base)
+             (?thru AS ?second)
       WHERE { INCLUDE %bySibling }
     }
   }
 } AS %afterParent
 WITH {
   # ?z is ?x's ?base when ?y is ?x's child
-  SELECT ?y ?z ?base WHERE {
+  SELECT ?y ?z ?base ?second WHERE {
     {
       SELECT (?parent AS ?y) (?child AS ?z) ("grandchild" AS ?base)
+             (?adopted AS ?second)
       WHERE { INCLUDE %parents }
     } UNION {
       SELECT (?a AS ?y) (?b AS ?z) ("child-in-law" AS ?base)
+             (false AS ?second)
       WHERE { INCLUDE %spouses }
     }
   }
 } AS %afterChild
 WITH {
   # ?z is ?x's ?base when ?y is ?x's spouse
-  SELECT ?y ?z ?base WHERE {
+  SELECT ?y ?z ?base ?second WHERE {
     {
       SELECT (?child AS ?y) (?parent AS ?z) ("parent-in-law" AS ?base)
+             (?adopted AS ?second)
       WHERE { INCLUDE %parents }
     } UNION {
       SELECT (?a AS ?y) (?b AS ?z) ("sibling-in-law" AS ?base)
+             (?sibAdopted AS ?second)
       WHERE { INCLUDE %siblings }
     } UNION {
       # a spouse's sibling's child is a niece or nephew
-      SELECT (?x AS ?y) ?z ("nibling" AS ?base)
+      SELECT (?x AS ?y) ?z ("nibling" AS ?base) (?thru AS ?second)
       WHERE { INCLUDE %bySibling FILTER(?via = "child") }
     }
   }
 } AS %afterSpouse
 WITH {
-  # a term a source asserts: ?named is ?ego's ?term (ADR-0018)
+  # a term a source asserts: ?named is ?ego's ?term (ADR-0018), on a
+  # `relative` statement, or a half term on a `sibling` statement's
+  # `kinship_type` ("seine Halbschwester Cäcilie", ADR-0040 §4), which
+  # the sibling steps above read as a sibling besides
   SELECT DISTINCT ?named ?ego ?term WHERE {
-    ?named p:{P:relative} ?st .
-    ?st ps:{P:relative} ?ego ; wikibase:rank ?rank .
+    {
+      ?named p:{P:relative} ?st .
+      ?st ps:{P:relative} ?ego ; wikibase:rank ?rank .
+      OPTIONAL { ?st pq:{P:kinship_type} ?asserted }
+    } UNION {
+      ?named p:{P:sibling} ?st .
+      ?st ps:{P:sibling} ?ego ; wikibase:rank ?rank ;
+          pq:{P:kinship_type} ?asserted .
+    }
     FILTER(?rank != wikibase:DeprecatedRank)
-    OPTIONAL { ?st pq:{P:kinship_type} ?asserted }
     BIND(COALESCE(STR(?asserted), "relative") AS ?term)
   }
 } AS %asserted
@@ -184,34 +254,43 @@ WITH {
   }
 } AS %humans
 WITH {
-  SELECT ?subject ?relative ?base ?degree WHERE {
+  # ?through: a parent step's own kind ("adoptive", "foster"), "adoption"
+  # for a path that takes an adoptive step, or "" for none
+  SELECT ?subject ?relative ?base ?degree ?through WHERE {
     # --- one step ----------------------------------------------------
     {
       SELECT (?child AS ?subject) (?parent AS ?relative) ("parent" AS ?base)
-      WHERE { INCLUDE %parents }
+             (?kind AS ?through)
+      WHERE { INCLUDE %links }
     } UNION {
       SELECT (?parent AS ?subject) (?child AS ?relative) ("child" AS ?base)
-      WHERE { INCLUDE %parents }
+             (?kind AS ?through)
+      WHERE { INCLUDE %links }
     } UNION {
       SELECT (?a AS ?subject) (?b AS ?relative) ("spouse" AS ?base)
       WHERE { INCLUDE %spouses }
     } UNION {
       SELECT (?a AS ?subject) (?b AS ?relative) ("sibling" AS ?base)
+             (IF(?sibAdopted, "adoption", "") AS ?through)
       WHERE { INCLUDE %siblings }
     }
     # --- two and three steps -----------------------------------------
     UNION {
       SELECT (?x AS ?subject) (?z AS ?relative)
              (IF(?via = "child", "nibling", "sibling-in-law") AS ?base)
+             (IF(?thru, "adoption", "") AS ?through)
       WHERE { INCLUDE %bySibling }
     } UNION {
       SELECT (?x AS ?subject) (?z AS ?relative) ?base
+             (IF(?first || ?second, "adoption", "") AS ?through)
       WHERE { INCLUDE %parentX INCLUDE %afterParent }
     } UNION {
       SELECT (?x AS ?subject) (?z AS ?relative) ?base
+             (IF(?first || ?second, "adoption", "") AS ?through)
       WHERE { INCLUDE %childX INCLUDE %afterChild }
     } UNION {
       SELECT (?x AS ?subject) (?z AS ?relative) ?base
+             (IF(?first || ?second, "adoption", "") AS ?through)
       WHERE { INCLUDE %spouseX INCLUDE %afterSpouse }
     }
     # --- a term a source asserts, on the ego's row -------------------
@@ -273,6 +352,18 @@ WITH {
             ("sister-in-law" "sibling-in-law")
             ("sibling-in-law" "sibling-in-law")
             ("schwager" "sibling-in-law") ("schwägerin" "sibling-in-law")
+            ("stepfather" "stepchild") ("stepmother" "stepchild")
+            ("stepparent" "stepchild")
+            ("stiefvater" "stepchild") ("stiefmutter" "stepchild")
+            ("stepson" "stepparent") ("stepdaughter" "stepparent")
+            ("stepchild" "stepparent")
+            ("stiefsohn" "stepparent") ("stieftochter" "stepparent")
+            ("stepbrother" "stepsibling") ("stepsister" "stepsibling")
+            ("stepsibling" "stepsibling")
+            ("stiefbruder" "stepsibling") ("stiefschwester" "stepsibling")
+            ("half-brother" "half-sibling") ("half-sister" "half-sibling")
+            ("half-sibling" "half-sibling")
+            ("halbbruder" "half-sibling") ("halbschwester" "half-sibling")
           }
           FILTER(?key = ?core)
         }
@@ -327,8 +418,21 @@ WHERE {
     IF(?base = "parent-in-law", IF(?g = "m", "father-in-law", IF(?g = "f", "mother-in-law", "parent-in-law")),
     IF(?base = "child-in-law", IF(?g = "m", "son-in-law", IF(?g = "f", "daughter-in-law", "child-in-law")),
     IF(?base = "sibling-in-law", IF(?g = "m", "brother-in-law", IF(?g = "f", "sister-in-law", "sibling-in-law")),
-    ?base))))))))))) AS ?gendered)
-  BIND(CONCAT(COALESCE(?degree, ""), ?gendered) AS ?relationship)
+    IF(?base = "stepparent", IF(?g = "m", "stepfather", IF(?g = "f", "stepmother", "stepparent")),
+    IF(?base = "stepchild", IF(?g = "m", "stepson", IF(?g = "f", "stepdaughter", "stepchild")),
+    IF(?base = "stepsibling", IF(?g = "m", "stepbrother", IF(?g = "f", "stepsister", "stepsibling")),
+    IF(?base = "half-sibling", IF(?g = "m", "half-brother", IF(?g = "f", "half-sister", "half-sibling")),
+    ?base))))))))))))))) AS ?gendered)
+  # a parent step's kind before the term ("adoptive father", "adopted
+  # son", "foster mother"); a path through an adoption after it
+  BIND(COALESCE(?through, "") AS ?kindOf)
+  BIND(IF(?kindOf = "foster", "foster ",
+          IF(?kindOf = "adoptive",
+             IF(?base = "child", "adopted ", "adoptive "), ""))
+       AS ?kindPrefix)
+  BIND(IF(?kindOf = "adoption", " through adoption", "") AS ?kindSuffix)
+  BIND(CONCAT(COALESCE(?degree, ""), ?kindPrefix, ?gendered, ?kindSuffix)
+       AS ?relationship)
 
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en" . }
 }

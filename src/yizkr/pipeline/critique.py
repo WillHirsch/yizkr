@@ -147,6 +147,12 @@ CATEGORIES: dict[str, str] = {
         "artifact it concerns: name the claim. Such a claim that cites no "
         "excerpt is not judged"
     ),
+    "vital_not_on_person": (
+        "a birth or a death the transcription states with a date or a "
+        "place, where no claim gives that person the date or the place (a "
+        "`date_of_birth` or `place_of_birth`, a `date_of_death` or "
+        "`place_of_death`): name the person's entity (ADR-0040 §3)"
+    ),
 }
 
 
@@ -222,6 +228,13 @@ curator sees it. You FLAG concerns only; you never rewrite.
 
 Flag a genuine concern only, of one of these categories:
 {categories_block}
+
+A union's `ended_by_death_of` names the partner who died, never the
+survivor: one whose value the source presents as the widow or widower,
+or, on a death record, as anyone but the person whose death it states, is
+a `misapplied_property` finding that names the claim. A `date_of_death`
+listed as "unknown value" states a death without its date: judge its
+excerpt as any other, on whether it states that death.
 
 An appellation (a kinship term, alone or with a name, a pet name or a
 courtesy name) among a person's aliases, or recorded as a

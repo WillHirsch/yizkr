@@ -144,6 +144,15 @@ uv run yizkr publish-queries             # or: make publish-queries
   row per statement, time values with their stated precision. A
   queue, not a defect report; scope it with a `VALUES ?prop` filter.
 
+- **died-by** — what the shared "died by" derivation reads (ADR-0040
+  §2.4, `yizkr/died_by.py`): each date of death, dated or of unknown
+  value, each union ended by a partner's death with the union's
+  partners, each civil status of widowed with its point in time, and
+  each artifact's own date of making, every one at any rank with its
+  stated-in artifact. The derivation works out each "died by" date in
+  Python at view time and stores nothing; the site, the disagreement
+  report and reconcile's roster read it.
+
 ## Adding a query
 
 Add `<name>.rq` next to `publish.py` with a leading `# comment` block

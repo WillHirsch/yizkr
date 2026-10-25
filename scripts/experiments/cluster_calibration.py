@@ -94,6 +94,7 @@ from yizkr.claims import (
     LocalRef,
     TimeValue,
 )
+from yizkr.died_by import died_by, from_batch
 from yizkr.pipeline.reconcile import (
     ADJUDICATION_BATCH_PAIRS,
     ADJUDICATION_PROMPT,
@@ -115,8 +116,6 @@ HUMAN = "human"
 # kinds whose identity is anchored by who took part, not by a name
 EVENT_KINDS = frozenset(
     {
-        "birth",
-        "death",
         "marriage",
         "migration",
         "deportation",
@@ -331,15 +330,14 @@ def mentions_from_manifest(manifest: Manifest) -> list[Mention]:
             elif prop in ("point_in_time", "start_time"):
                 subject.when.append(interval)
     by_uid = {mention.uid: mention for mention in by_id.values()}
+    # a "died by" date the shared derivation gives (ADR-0040 §2.4), open
+    # at its early end: no event stands for a birth or a death
+    for bound in died_by(from_batch(batch)):
+        person = by_id.get(bound.person)
+        if person is not None and person.kind == HUMAN:
+            span = {"century": 99, "decade": 9}.get(bound.by.precision, 0)
+            person.deaths.append(Interval(-math.inf, bound.by.year + span))
     for mention in by_id.values():
-        # a birth/death EVENT's date is its participant's birth/death date
-        if mention.kind in ("birth", "death"):
-            for uid in mention.participants:
-                person = by_uid[uid]
-                dates = (
-                    person.births if mention.kind == "birth" else person.deaths
-                )
-                dates.extend(mention.when)
         if mention.kind == HUMAN:
             for _, uid in mention.kin:
                 mention.kin_surnames |= surnames(by_uid[uid])

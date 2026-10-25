@@ -75,6 +75,7 @@ from yizkr.core.config import Config
 from yizkr.core.dates import UNSUPPORTED_QUERY, UnsupportedDate
 from yizkr.core.privacy import (
     BIRTHS_QUERY,
+    DEATH_EVIDENCE_PROPERTIES,
     EVENT_DEATH_PROPERTIES,
     participants_query,
     people_selection,
@@ -196,6 +197,7 @@ class TestExclusionReport:
         births=BIRTHS,
         participants=(),
         event_births=(),
+        ended=(),
         **options,
     ):
         calls = []
@@ -207,6 +209,8 @@ class TestExclusionReport:
                 return facts
             if "?eventKind" in query:
                 return list(participants)
+            if "?union wdt:" in query:
+                return list(ended)
             if "/ps:" in query and 'BIND("value" AS ?bound)' in query:
                 return list(event_births)
             if 'BIND("value" AS ?bound)' in query:
@@ -298,7 +302,7 @@ class TestExclusionReport:
     def test_births_are_read_with_the_privacy_modules_query(self, vocabulary):
         properties, items = vocabulary
         _, calls = self.report(vocabulary)
-        assert len(calls) == 4
+        assert len(calls) == 5
         assert prefix_block(CONCEPT) + BIRTHS_QUERY.format(**properties) in (
             calls
         )
@@ -317,12 +321,13 @@ class TestExclusionReport:
         assert "participant" not in PERSON_FACTS_QUERY
         assert "{death}" not in PERSON_FACTS_QUERY
         assert "deathEvent" not in PERSON_FACTS_QUERY
-        assert backup._DEATH_BINDINGS == (
-            "death",
-            "deathPlace",
-            "deathCause",
-            "burial",
-        )
+        assert backup._DEATH_BINDINGS == {
+            "date_of_death": "death",
+            "place_of_death": "deathPlace",
+            "cause_of_death": "deathCause",
+            "burial_place": "burial",
+            "age_at_death": "deathAge",
+        }
 
     def test_people_are_selected_through_their_statements(self, vocabulary):
         # every item with person evidence, at every rank (#344), never the
@@ -333,6 +338,35 @@ class TestExclusionReport:
         assert people_selection(properties, items) in facts
         # nor any truthy type beside the selection
         assert f"?person wdt:{properties['instance_of']} " not in facts
+
+
+class TestAnAgeAtDeathInTheExport:
+    """ADR-0040 Q1: an age at death alone releases its person, through the
+    facts query's own arm for it."""
+
+    def test_each_death_property_is_read_by_its_own_id(self, vocabulary):
+        properties, _ = vocabulary
+        _, calls = TestExclusionReport().report(vocabulary)
+        (facts,) = [query for query in calls if "SAMPLE(?deathDate)" in query]
+        # each property's own id, never another's, in its arm
+        for key in backup._DEATH_BINDINGS:
+            assert f"?person wdt:{properties[key]} ?" in facts, key
+        assert f"?person wdt:{properties['age_at_death']} ?deathAge ." in (
+            facts
+        )
+
+    def test_an_age_alone_releases(self, vocabulary):
+        # Eugen's "73 Jahre", with no other death evidence (hypothetical
+        # QID Q399)
+        aged = {
+            "person": uri("Q399"),
+            "deathAge": {"type": "literal", "value": "73 Jahre"},
+        }
+        found, _ = TestExclusionReport().report(
+            vocabulary, facts=[*FACTS, aged]
+        )
+        assert "Q399" in found.included
+        assert found.reasons["Q399"] == "death recorded"
 
 
 class TestEventsInTheExclusionReport:
@@ -2787,27 +2821,32 @@ class TestReadDump:
 
     def test_the_events_that_start_and_end_a_union(self, tmp_path, vocabulary):
         # by started_by and ended_by (ADR-0036), at every rank, once the
-        # vocabulary holds them; a partner's own death is no bound of the
-        # union's, as it follows the person rule (#363)
+        # vocabulary holds them; a curator's death event that ends it is
+        # no bound of the union's, as it follows the person rule (#363);
+        # and a partner whose death ended it (ADR-0040 §5) is a person, and
+        # no bound either: ended_by_death_of is no UNION_BOUNDS property
         properties, items = vocabulary
         bounded = (
             {**properties, "started_by": "P996", "ended_by": "P997"},
             items,
         )
+        assert "ended_by_death_of" not in backup.UNION_BOUNDS
 
         def build(dump):
-            for qid in ("Q460", "Q461", "Q462", "Q463"):
+            for qid in ("Q460", "Q461", "Q462", "Q463", "Q466"):
                 dump.entity(qid, qid)
             dump.says("Q460", "instance_of", entity(items["marriage"]))
             dump.says("Q460", "started_by", entity("Q461"), rank="Deprecated")
             dump.says("Q460", "ended_by", entity("Q462"))
             dump.says("Q460", "ended_by", entity("Q463"))
+            dump.says("Q460", "ended_by_death_of", entity("Q466"))
             dump.says("Q461", "instance_of", entity(items["event"]))
             dump.says("Q462", "instance_of", entity(items["event"]))
             dump.says("Q463", "instance_of", entity(items["death"]))
 
         found = self.one(tmp_path, bounded, build)
         assert found.bounds == {"Q460": {"Q461", "Q462"}}
+        assert "Q466" in found.people
 
     def test_a_line_ends_at_a_newline_alone(self, tmp_path, vocabulary):
         # a raw carriage return inside a text (dumpRdf.php escapes every
@@ -3055,6 +3094,23 @@ class TestNonprivilegedExclusions:
             "Q495": backup.PARTICIPANT_LEFT_OUT.format("Q491"),
         }
 
+    def test_a_released_partner_stays_when_the_union_goes(self):
+        # "Witwer der Cäcilie": the union Q490 of Q402, possibly living,
+        # and Q401, released by the union's end alone (ADR-0040 Q9). The
+        # union goes with its living partner; Q401 stays, though the export
+        # then lacks the statement that released her (§5)
+        reading = DumpReading(
+            people={"Q401", "Q402"},
+            participants={"Q490": {"Q401", "Q402"}},
+        )
+        dropped = nonprivileged_exclusions(
+            reading, report_of({"Q401"}, {"Q402"})
+        )
+        assert dropped == {
+            "Q402": "possibly living (Q402)",
+            "Q490": backup.PARTICIPANT_LEFT_OUT.format("Q402"),
+        }
+
     def test_a_family_or_an_untyped_item_takes_its_event_with_it(self):
         # each the one participant left out of its event
         reading = DumpReading(
@@ -3275,7 +3331,7 @@ class ExportRun:
             return [
                 facts_row(qid, qid in self.released) for qid in self.selected
             ]
-        if "?eventKind" in query:
+        if "?eventKind" in query or "?union wdt:" in query:
             return []
         if 'BIND("value" AS ?bound)' in query:
             return birth_rows("Q404", [(("1990-01-01T00:00:00Z", 9), [], [])])
@@ -4646,11 +4702,12 @@ class TestExportNonprivileged:
             tmp_path, vocabulary, revisions=[behind, behind, dumped]
         )
         # two waits, then the check (unsupported dates, facts, births,
-        # event participants), then one more look
+        # event participants, union ends), then one more look
         assert [query == REVISIONS_QUERY for query in runner.queries] == [
             True,
             True,
             True,
+            False,
             False,
             False,
             False,
@@ -5413,3 +5470,26 @@ class TestTheFormerNames:
     def test_an_unknown_name_is_still_an_attribute_error(self):
         with pytest.raises(AttributeError, match="no_such_name"):
             backup.no_such_name  # noqa: B018
+
+
+class TestTheDeathEvidenceArms:
+    """Each of the privacy module's DEATH_EVIDENCE_PROPERTIES has its arm in
+    both hand-written queries that read it, the export's
+    PERSON_FACTS_QUERY and the site's PEOPLE_QUERY (and the run record's
+    RELEASES_QUERY), and the export reads it
+    by a binding of its own (ADR-0040 §5): a property missing from either
+    would release no one there."""
+
+    @pytest.mark.parametrize("key", DEATH_EVIDENCE_PROPERTIES)
+    def test_the_export_and_the_site_read_each(self, key):
+        from yizkr.staticsite import PEOPLE_QUERY, RELEASES_QUERY
+
+        binding = backup._DEATH_BINDINGS[key]
+        assert (
+            f"OPTIONAL {{{{ ?person wdt:{{{key}}} ?" in PERSON_FACTS_QUERY
+        ), key
+        assert f"AS ?{binding})" in PERSON_FACTS_QUERY, key
+        assert f"EXISTS {{{{ ?person wdt:{{{key}}} [] }}}}" in PEOPLE_QUERY
+        # and the run record's releases by cause count it
+        assert f'(p:{{{key}}} ps:{{{key}}} "{key}")' in RELEASES_QUERY
+        assert set(backup._DEATH_BINDINGS) == set(DEATH_EVIDENCE_PROPERTIES)

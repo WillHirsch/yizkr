@@ -252,6 +252,27 @@ be read, and one whose site record does not count them (made before the
 stage did, or holding a count that is no whole number) say they are not
 available, with why, never 0.
 
+**Releases by cause.** Once the run's site stage has run (#687; ADR-0040
+§7), in `aggregate.content.releases`: the people the site lists (its
+privacy selection, families left out), as the stage counted them on the
+written graph with the badge's own reading: `people`, `possibly_living`
+and `released`; `by_cause`, the released people under each cause the
+graph holds for them (a person counts under every cause they have, so
+the causes overlap): `date_of_death` (a dated one),
+`unknown_date_of_death`, `age_at_death`, `unknown_burial_place`,
+`other_death_property` (a place or cause of death, or a stated place of
+burial), `ended_by_death_of` (a union ended by their death),
+`death_event` (the principal of a curator-made death event) and
+`birth_cutoff` (released with no death evidence, by the birth-recency
+cutoff); `ended_by_death_of_alone`, the people a union's end alone
+releases; `unknown_date_of_death_by_source`, those released by an
+unknown date of death by the type of its source; and
+`derived_by_source`, the derived "died by" dates (ADR-0040 §2.4) by the
+type of the document each rests on. A type is its manifest key (`other`
+for a class the manifest does not hold, `no type stated` for none).
+Counts alone, never a QID, a label or a value; not available, with why,
+as the contradictions are.
+
 **Anomalies.** The alerts by check and by stage, each finding (a
 document or the run, a stage and a check) counted once: new when any of
 its alerts was new (on an output the engine answered in the run), carried
@@ -268,9 +289,14 @@ writer refused, count here too, under their check and the stage
 
 **Content**, from the views of the stages that completed:
 
-- entities by kind, and those not extracted;
+- entities by kind, and those not extracted, by kind too
+  (`entities.not_extracted_by_kind`: the people who only certify,
+  register, officiate, examine, report or witness are among them,
+  ADR-0040 §2.8; which of those roles each had is not recorded);
 - claims by property, and the `name` claims, name forms of no stated
-  type (ADR-0011), by source kind;
+  type (ADR-0011), by source kind; and the claims of unknown value
+  (ADR-0040 §2.2) by property and by source kind
+  (`claims.unknown_values_by_property`, `unknown_values_by_kind`);
 - rejects: the claims validation rejected and the objects the parser
   could not read, from each extraction's coverage, with their rate among
   the claims given; and how many extractions failed with every claim
@@ -298,7 +324,17 @@ writer refused, count here too, under their check and the stage
   the extraction fell back (ADR-0039 §10.1(b); #646), from each
   coverage's `manifest_artifact_kind`, with the extractions whose
   coverage counts none (`manifest_artifact_kind`,
-  `manifest_artifact_kind_absent`);
+  `manifest_artifact_kind_absent`); and the entity-manifest entities
+  dropped for a kind only a curator makes (`birth`, `death`; ADR-0040
+  §7, Q8), by kind, from each coverage's `manifest_vital_kind`, with the
+  extractions whose coverage counts none (`manifest_vital_kind_by_kind`,
+  `manifest_vital_kind_absent`). The reason codes count ADR-0040's
+  refusals too (`claims.VITAL_REASONS`: an extracted entity of such a
+  kind, an unknown value where the manifest allows none or with no
+  excerpt or with a bound, a vital property on another subject, a
+  `parentage` on another property, a union end naming no partner, the
+  §2.5 guard's union end whose value the batch calls widowed, and a claim
+  naming a person left out);
 - excerpts not in their source (#580): the claims each extraction kept
   whose `transcription_excerpt` its transcription does not hold,
   compared as core/verbatim.py compares a container's evidence (folded,
@@ -525,7 +561,10 @@ writer refused, count here too, under their check and the stage
   category from the critic's fixed list (`critique.CATEGORIES`; the
   three that apply ADR-0003's support test to a citation read where it
   stands are `unsupported_containment`, `evidence_does_not_state` and,
-  since #607, `excerpt_does_not_state`), and the findings that failed
+  since #607, `excerpt_does_not_state`; since #687,
+  `vital_not_on_person` flags a dated or placed birth or death the
+  transcription states that no claim gives its person, ADR-0040 §3), and
+  the findings that failed
   their checks, counted apart as invalid (a finding of a claim key that
   names no claim among them);
 - clusters, from the clustering stage's identity map: confident merges
@@ -611,6 +650,7 @@ never counted as none:
 - the place stage's questions and links: until it has run (above);
 - different-source contradictions: until the site stage has run, or when
   its record does not count them (a record made before it did, #575).
+- releases by cause: likewise (#687).
 - flags by tier and class: no stage makes flags yet. `_flags` in
   `yizkr.pipeline.report` is where the report reads them once the flags
   stage keeps them among its outputs (#112); until then it says they are

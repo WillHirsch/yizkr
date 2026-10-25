@@ -273,11 +273,22 @@ Rules — these mirror the archive's non-negotiable conventions:
   part of a name (ADR-0035 §3.1):
   * a widow's or widower's marker ("Wwe.", "вдова", "widdo"): the
     person's `civil_status` `widowed`; where it names the late spouse
-    ("Witwer der Cäcilie Löbig geb. Tarle"), also their marriage, ended
-    by that spouse's `death` event (below);
-  * "the late" ("verstorben", "покойный", "sillige"): that person's
-    `death` event, with them as its principal, dated only as the source
-    dates it;
+    ("Witwer der Cäcilie Löbig geb. Tarle"), also their marriage,
+    `ended_by_death_of` that spouse (below), and NO death statement for
+    the spouse: the union's end stands for the death. One phrase that is
+    both markers ("вдова Вашего покойного брата Рудольфа", the widow of
+    your late brother Rudolf) gives the same: the survivor's
+    `civil_status` `widowed` and the union's `ended_by_death_of`, and no
+    `date_of_death`;
+  * "the late" ("verstorben", "der selige", "покойный", "sillige"), and
+    any other statement of a death that gives no date: that person's
+    `date_of_death` of unknown value, written "value": {{"type":
+    "unknown"}}, with the words that state the death as its excerpt and
+    no earliest_date, latest_date or circa, beside any place, cause or
+    age the source gives; save the widow's marker above, which gives no
+    death statement. Where the same source dates the death itself, give
+    that date alone. A blank field, "d. ?" or "date unknown" gives no
+    claim;
   * a patronymic ("Феликсович", "Васильевна"): `father`, where the
     manifest holds the father it names;
   * a married-name marker: `married_name`, and `birth_name` for the name
@@ -308,9 +319,12 @@ Rules — these mirror the archive's non-negotiable conventions:
   "дядя по отцу" (uncle on the father's side) is kin_aunt_or_uncle of
   degree 0 on the paternal side; "двоюродная сестра" (first cousin) is
   kin_cousin of degree 1; "oerbeppe" (great-grandmother) is
-  kin_grandparent of degree 1; a bare "cousin" states no degree. A
-  spousal term ("my husband") gives a marriage (below), never a kinship
-  class.
+  kin_grandparent of degree 1; a bare "cousin" states no degree. A step
+  term ("mein Stiefvater") is `relative` with kinship_class
+  kin_step_parent (kin_step_child, kin_step_sibling) and the word in
+  kinship_type; a half term ("Halbbruder") is `sibling` with the word in
+  kinship_type. A spousal term ("my husband") gives a marriage (below),
+  never a kinship class.
 - Appellations (ADR-0018). Every form a source uses to name or address
   a person is an alias, with no distinction between them: a name form,
   a kinship term with a name ("Tante Rahel"), a kinship term alone
@@ -378,17 +392,30 @@ Rules — these mirror the archive's non-negotiable conventions:
   relation.
 - A count of children the source states is the parent's
   `number_of_children`, whether or not it names them.
+- A birth and a death are statements on the person, never events
+  (ADR-0040): the child's `date_of_birth` and `place_of_birth`, with
+  `father` and `mother`; the deceased's `date_of_death`,
+  `place_of_death`, `cause_of_death` (verbatim), `age_at_death` (verbatim,
+  "73 Jahre") and `burial_place`, whose `point_in_time` is the burial's
+  own date (a burial stated without its place gives `burial_place` of
+  unknown value). They go on the person, never on an event, a marriage or
+  a family. A parent's kind is `parentage` (parentage_birth,
+  parentage_adoptive, parentage_foster) on `father`, `mother` or `child`
+  only where the source's words state it ("Adoptivvater", "leiblicher
+  Vater", "foster mother"), with the word in `kinship_type`; a register's
+  parents carry none. An adoption's date is a `start_time` on each
+  adoptive parent statement.
+- A person the entity manifest leaves out (extract false: an official or
+  a witness the record gives no other role) is never a claim's value, a
+  document's `author` included.
 - Events and their participants (ADR-0035 §3.2): a `participant` claim
   has the EVENT as subject and the person as value, with an
-  `object_has_role` qualifier saying how they took part: `principal` (in
-  a birth or a death the one born or who died; in any other event the
+  `object_has_role` qualifier saying how they took part: `principal` (the
   person it happens to, such as the deportee, the prisoner or the
-  emigrant), `parent`, `informant` (who reported it), `witness` or
-  `officiant` (who performed it). One person may take part in several
-  roles, each a qualifier on one claim: a father who reports his son's
-  birth is `parent` and `informant`. A death's principal is never its
-  informant. An institution that carried out an event (a court, an
-  authority) is `carried_out_by` on the event, not a participant.
+  emigrant), `witness` or `officiant` (who performed it). One person may
+  take part in several roles, each a qualifier on one claim. An
+  institution that carried out an event (a court, an authority) is
+  `carried_out_by` on the event, not a participant.
 - Marriages and partnerships are entities bounded by events (ADR-0036);
   no property links two spouses directly:
   * the couple take part in the `marriage` entity (a `partnership` where
@@ -396,23 +423,34 @@ Rules — these mirror the archive's non-negotiable conventions:
     a `participant` of it with the role `spouse` (`partner` in a
     partnership);
   * its wedding is an event of its own: the union is `started_by` it,
-    and the wedding carries its own `point_in_time`, `location`, and
-    any witness or officiant as a participant with that role. The couple
+    and the wedding carries its own `point_in_time`, `location`, and a
+    witness or officiant who is kin of the couple as a participant with
+    that role (a registrar, and a witness who is no kin, are left out of
+    the manifest). The couple
     take part in the union, not in its wedding. Where the manifest lists
     a marriage's wedding, give the marriage its `started_by` and the
     wedding the date and place the source gives the marriage's start;
-  * its end is an event too: the union is `ended_by` a `divorce` or an
-    `annulment` (with its own date and place, and `carried_out_by` the
-    court or authority that pronounced it), or by a partner's own
-    `death` event, or by an `event` where the source does not say how
-    the union ended;
+  * a divorce or an annulment that ends it is an event too: the union is
+    `ended_by` a `divorce` or an `annulment` (with its own date and
+    place, and `carried_out_by` the court or authority that pronounced
+    it), or by an `event` where the source does not say how the union
+    ended;
+  * a partner's death ends it by `ended_by_death_of` that partner, and
+    ONLY where the source states the couple were married when that
+    partner died: a survivor's widow's or widower's word that names the
+    late spouse ("Witwer der Cäcilie Löbig", "вдова Вашего покойного
+    брата Рудольфа", "widdo sûnt ús sillige heit stoarn is"), or a death
+    record that calls the deceased the survivor's spouse ("Ehefrau des
+    Eugen"). A marriage and a partner's death stated apart give no end of
+    any kind ("dessen verstorbener Ehefrau", "Husband: Felix LÖBIG, died
+    1931"): a view works that out;
   * a source that merely names a spouse dates nothing, and the
     document's own date is no date of the marriage; a directory or a
     census that lists a couple as married gives the union a
     `point_in_time`, an observation, never a wedding date.
 {document_paragraphs}
 - Residence: an address stated on a form is asserted for the person that
-  field names (e.g. the informant/applicant on a certificate), NOT for
+  field names (e.g. the applicant on a certificate), NOT for
   everyone the document mentions. Do not copy one person's stated address
   onto others as their own `residence` — co-residence ("lived with") is
   derived later from separately-sourced residences over overlapping time,
@@ -423,8 +461,10 @@ Rules — these mirror the archive's non-negotiable conventions:
   by its `start_time` and `end_time` qualifiers, a move in and a move out
   as its start and end. `point_in_time` on such a claim only records a
   date at which the source presents it as holding (a census, a
-  directory entry). A marriage has no dates of its own: its wedding and
-  its end are events, each with its own `point_in_time`. A range bounds
+  directory entry). A marriage has no dates of its own: its wedding, and
+  a divorce or an annulment that ends it, are events, each with its own
+  `point_in_time`, and an end by a partner's death takes no date of its
+  own. A range bounds
   one end: a start takes `earliest_date` and `latest_start_date`, an end
   takes `earliest_end_date` and `latest_date`. Moved in "between X and
   Y" is start_time X with earliest_date X and latest_start_date Y; moved
@@ -568,8 +608,8 @@ Assigned entities:
 ENTITY_MANIFEST_PROMPT = """\
 You are preparing a genealogical claim extraction. First pass: read the
 whole transcription and produce a manifest of EVERY distinct entity it
-mentions — people, places, organizations, families, events (births,
-deaths, weddings, divorces, migrations, military service), marriages and
+mentions — people, places, organizations, families, events (weddings,
+divorces, migrations, military service, deportations), marriages and
 partnerships, and occupations or professions it names for people (kind
 occupation_class, label in the source's exact wording). Prefer
 completeness: an entity mentioned once still gets an entry, and every
@@ -641,11 +681,12 @@ Also:
   married, with no start) gets no wedding entry: in the 1984 tree,
   "= (1942) Florence Faxridge" gives a marriage and its 1942 wedding,
   and the undated "= Hildegard" gives the marriage alone;
-- a marker of a death ("the late", "verstorben", "покойный", "sillige")
-  gives that person's `death` event; a widow's or widower's marker that
-  names the late spouse ("Witwer der Cäcilie Löbig") gives the marriage
-  and the spouse's `death` event, and one that names no spouse
-  ("Löbig, Ursula, Wwe.") gives neither.
+- a birth or a death is never an entity: it is statements on the person
+  (ADR-0040), so the born and the deceased are `human` entities, and the
+  place they were born, died or were buried a `place`. A widow's or
+  widower's marker that names the late spouse ("Witwer der Cäcilie
+  Löbig") gives the marriage, which a death ends, and one that names no
+  spouse ("Löbig, Ursula, Wwe.") gives none.
 
 Unify aliases: one entity that appears as "Cäcilie Löbig", "Cäcilie", and
 "C. Löbig" is ONE manifest entry whose label is the fullest name the
@@ -698,8 +739,12 @@ alias (ADR-0018). Three cases:
   phrase, a description, is neither label nor alias.
 A person the document does not name is labelled with the document's own
 words for them: the postcard's writer signs "Dein Vater", so that is his
-label. Only where the document has no words for a person at all do you
-compose a label, such as "Klara's father".
+label. A person the record gives only by the role in which they report
+or certify a record, with no name ("Informant: husband", "the
+registrar"), is no entity at all, even where the role word is a kinship
+word: it makes no person and no union. Only where the document has no
+words for a person at all do you compose a label, such as "Klara's
+father".
 For example: a letter to Klara that writes "Tante Rahel" and elsewhere
 "Rahel Löbig" gives one entity labelled "Rahel Löbig" with the alias
 "Tante Rahel". A letter of Nicholas's that calls his grandmother
@@ -889,15 +934,21 @@ Rules:
   They are recorded for audit but no claims are extracted about them.
   Entities the document asserts historical/genealogical facts about get
   extract=true.
-- On official certificates and registers the administrative apparatus is
-  boilerplate: the registrar, officiant, or witness who only certifies
-  the record, and the register or certificate the document cites as its
-  own source, are extract=false. They attest the record — they are not
-  its genealogical subject. Whom the source shows acting is the
-  exception, extract=true: the officiant or a witness of the event the
-  document records (a wedding's registrar), the authority that issued
-  the document (a civil registry office such as a Standesamt), and a
-  witness or officiant who is ALSO a relative of the subject.
+- On official certificates, registers and forms the administrative
+  apparatus is boilerplate. A person who only certifies, registers,
+  officiates, examines, reports or witnesses the record (a registrar, a
+  pastor who enters a burial, a doctor who certifies a death, an
+  informant, a wedding's registrar and its witnesses), and the register
+  or certificate the document cites as its own source, are
+  extract=false, unless the same record gives them another role: kin of
+  someone it is about, or a party to it. A rank, a job, an address or a
+  signature is no other role. They attest the record — they are not its
+  genealogical subject. A kin witness or officiant is extract=true, with
+  that role, and so is a parent who reports a child's birth (Sebastian,
+  who "zeigte an" Gustav's birth, as his father). The authority that
+  issued the document (a civil registry office such as a Standesamt)
+  stays extract=true. A neighbour, a teacher or a doctor a letter names
+  is no apparatus.
 - summary is evidence for later identity matching: pack it with the
   document's key facts (born/died/married when-where, parents, the
   person married).
@@ -1333,6 +1384,9 @@ class ChunkedClaimExtractor:
         # the trailing commas read in the manifest answer the extraction
         # used (scan_json_answer)
         self._trailing_commas = 0
+        # the entities the manifest dropped for a kind no extraction makes
+        # (`birth`, `death`), by id, with that kind (ADR-0040 §7)
+        self._dropped_kinds: dict[str, str] = {}
         # each claim whose excerpt the transcription does not hold
         # (excerpt_audit)
         self._quotes: list[dict] = []
@@ -1460,7 +1514,10 @@ class ChunkedClaimExtractor:
         stands, so no chunk is asked and no fallback tier is taken. A
         record of a kind that is no manifest item, or of an artifact kind,
         which no extraction names (ADR-0039 §10.1(b)), is a problem that
-        makes the answer unusable.
+        makes the answer unusable. A record of a kind only a curator makes
+        (`birth`, `death`, ADR-0040 §7) is dropped alone, never failing the
+        turn, and kept by id with its kind, so its claims are rejected
+        under a reason of their own (salvage_valid_claims).
 
         An entity's mention record or judgement note that fails validation
         is set aside, never repaired and never the reason the manifest is
@@ -1481,7 +1538,8 @@ class ChunkedClaimExtractor:
         bracket or brace is read as JSON syntax, and the manifest counts
         each one (scan_json_answer)."""
         _, item_keys = load_vocabulary()
-        artifact_kinds = load_acceptance().artifact_kinds
+        acceptance = load_acceptance()
+        artifact_kinds = acceptance.artifact_kinds
         scan = scan_json_answer(response)
         for obj in scan.objects:
             if "entities" not in obj:
@@ -1528,11 +1586,23 @@ class ChunkedClaimExtractor:
             except Exception as exc:
                 return None, [str(exc)[:300]]
             problems: list[str] = []
+            # an id given twice is a problem whatever the kinds, so it is
+            # found before an entity of a kind only a curator makes is
+            # dropped (which would take both with it)
             seen: set[str] = set()
             for record in records:
                 if record.id in seen:
                     problems.append(f"duplicate entity id {record.id!r}")
                 seen.add(record.id)
+            dropped = {
+                record.id: record.kind
+                for record in records
+                if record.kind in acceptance.unextracted_kinds
+            }
+            records = [
+                record for record in records if record.id not in dropped
+            ]
+            for record in records:
                 if record.kind not in item_keys:
                     problems.append(
                         f"entity {record.id}: unknown kind {record.kind!r}"
@@ -1558,6 +1628,7 @@ class ChunkedClaimExtractor:
                     set_aside_records,
                     containers,
                     scan.trailing_commas,
+                    dropped,
                     obj.get(preparation.KEY, _ABSENT),
                 ),
                 problems,
@@ -1653,6 +1724,7 @@ class ChunkedClaimExtractor:
             self._set_aside_records = manifest.set_aside_records
             self._containers = manifest.containers
             self._trailing_commas = manifest.trailing_commas
+            self._dropped_kinds = manifest.dropped_kinds
             self._preparation_answer = manifest.preparation
             return manifest.entities, None, handle
         if not answered:
@@ -1953,6 +2025,7 @@ class ChunkedClaimExtractor:
         self._set_aside_records = 0
         self._containers = []
         self._trailing_commas = 0
+        self._dropped_kinds = {}
         self._quotes = []
         self._appellations = {"labels": 0, "label_names": 0, "parts": 0}
 
@@ -2335,7 +2408,11 @@ class ChunkedClaimExtractor:
         # from `source` (extract._normalize_claim_shape)
         moved = sum(language_on_source(claim) for claim in deduped)
         batch, rejects = salvage_valid_claims(
-            deduped, run, entities=entities_payload, placed=placed
+            deduped,
+            run,
+            entities=entities_payload,
+            placed=placed,
+            dropped=self._dropped_kinds,
         )
         rejects = transform_rejects + settled_rejects + rejects
         self._rejects = rejects
@@ -2384,6 +2461,11 @@ class ChunkedClaimExtractor:
             + sum(c.trailing_commas for c in outcomes if c is not None),
             "fallback": dict(self.fallback),
             "manifest_artifact_kind": self._manifest_artifact_kind,
+            # the manifest's entities dropped for a kind only a curator
+            # makes, by kind (ADR-0040 §7)
+            "manifest_vital_kind": dict(
+                sorted(Counter(self._dropped_kinds.values()).items())
+            ),
             "retried_chunks": self.retried_chunks,
             "excerpt_language_moved": moved,
         }
@@ -2741,8 +2823,9 @@ class _Manifest(NamedTuple):
     """An entity manifest as parsed: its entities; the mention records
     and judgement notes set aside, counted by the category of each
     reason; the number of entities whose mention record was set
-    aside; the audit of each place container checked; and the trailing
-    commas read as JSON syntax in its answer (scan_json_answer)."""
+    aside; the audit of each place container checked; the trailing
+    commas read as JSON syntax in its answer (scan_json_answer); and the
+    entities dropped for a kind only a curator makes."""
 
     entities: list[EntityRecord]
     set_aside: dict[str, int]
@@ -2752,6 +2835,9 @@ class _Manifest(NamedTuple):
     containers: list[dict]
     # the trailing commas read as JSON syntax (scan_json_answer)
     trailing_commas: int
+    # the entities dropped for a kind only a curator makes, by id, with
+    # that kind (ADR-0040 §7)
+    dropped_kinds: dict[str, str]
     # the answer's reading of the document's statement about its
     # preparation, as it gives it (preparation.parse); _ABSENT for none
     preparation: Any = _ABSENT

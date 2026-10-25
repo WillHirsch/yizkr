@@ -44,7 +44,17 @@ Each rule of MODELING.md "Contradictions" is one function here:
   it cites;
 * ``stated_together``: a child may have two fathers or two mothers, so two
   parents that one artifact states both of are compared only between
-  artifacts that each state one and not the other.
+  artifacts that each state one and not the other;
+* ``of_another_kind``: parents are compared within one kind, so a pair is
+  set aside when a statement gives either value a kind other than birth
+  (an adoptive or a foster parent, ADR-0040 §4);
+* ``stated_value``: a value its source states exists but does not give (a
+  death stated without its date) is set aside, and never listed;
+* ``derived_statements``: the "died by" dates the shared derivation gives
+  (yizkr.died_by, ADR-0040 §2.4) are compared with the dates of death, as
+  ranges open at their early end, each labelled as derived;
+  ``within_bound`` lists one only beside a date wholly after it, so two of
+  them never disagree with each other.
 
 Every time the fetch lists, a statement's value or a qualifier's, is read
 with the calendar model its value node states, and one before the common
@@ -65,6 +75,7 @@ from itertools import permutations, product
 
 import yaml
 
+from yizkr import died_by
 from yizkr.core.dates import check_time
 from yizkr.model.schema import read_manifest_data
 from yizkr.queries.publish import load_templates, render_for_instance
@@ -196,6 +207,12 @@ class Statement:
     end: frozenset[Time] = frozenset()
     point_in_time: frozenset[Time] = frozenset()
     sources: frozenset[Source] = frozenset()
+    # the kinds a parent statement's `parentage` states: "birth" or
+    # "other" (ADR-0040 §4)
+    parentage: frozenset[str] = frozenset()
+    # a "died by" date the shared derivation gives, never a statement of
+    # the graph (ADR-0040 §2.4)
+    derived: bool = False
 
 
 class Containment:
@@ -316,12 +333,15 @@ def read_statements(
                 "value_label": _cell(row, "valueLabel"),
                 "precision": int(precision) if precision else None,
                 "sources": set(),
+                "parentage": set(),
                 **{name: set() for name in TIME_COLUMNS},
             }
         for name, column in TIME_COLUMNS.items():
             time = _time(row, column, where)
             if time is not None:
                 entry[name].add(time)
+        if _cell(row, "parentageKind"):
+            entry["parentage"].add(_cell(row, "parentageKind"))
         if "source" in row:
             source = row["source"]["value"]
             entry["sources"].add(
@@ -373,6 +393,15 @@ def attributed(statement: Statement) -> bool:
     return bool(statement.sources)
 
 
+def stated_value(statement: Statement) -> bool:
+    """A value its source states exists but does not give (Wikibase's
+    "some value": a death stated without its date, ADR-0040 §2.2) has
+    nothing to compare, so it is set aside and never listed. The query
+    service gives it as a blank node or a skolem IRI."""
+    term = statement.value
+    return term.kind != "bnode" and "/.well-known/genid/" not in term.value
+
+
 @dataclass(frozen=True)
 class Aspect:
     """What two values must share to be compared: the entity and the
@@ -397,6 +426,9 @@ class Value:
     precision: int | None = None
     earliest: Time | None = None
     latest: Time | None = None
+    # a "died by" date the shared derivation gives (ADR-0040 §2.4), which
+    # a view labels as derived
+    derived: bool = False
 
 
 @dataclass(frozen=True)
@@ -487,6 +519,7 @@ def compared_values(
                 statement.precision,
                 earliest,
                 latest,
+                statement.derived,
             )
             yield Reading(statement, aspect, value)
     elif statement.property in DATED:
@@ -662,6 +695,19 @@ def stated_together(
     )
 
 
+def of_another_kind(
+    x: Reading, y: Reading, keys: Mapping[Reading, str], other: set[str]
+) -> bool:
+    """Parents are compared within one kind (ADR-0040 §4): a birth father
+    and an adoptive father never disagree. A pair is set aside when any
+    statement in contention gives either value a kind other than birth;
+    `other` holds the comparison keys of the values so given. A parent of
+    no stated kind is compared as a birth parent is."""
+    if x.aspect.property not in PARENTS:
+        return False
+    return keys[x] in other or keys[y] in other
+
+
 # -- pairing ------------------------------------------------------------------
 
 
@@ -719,6 +765,19 @@ def differ_in_resolution(
     if not (named(x.value) and named(y.value)):
         return False
     return spans_nest(a, b)
+
+
+def within_bound(x: Reading, y: Reading) -> bool:
+    """A derived "died by" date (ADR-0040 §2.4) bounds a death and states
+    no date of it: a date whose span meets the bound's agrees with it, so
+    the pair is set aside; only a date wholly after the bound disagrees.
+    Two readings neither of which is derived are not set aside here."""
+    if not (x.value.derived or y.value.derived):
+        return False
+    a, b = span(x), span(y)
+    if a is None or b is None:
+        return False
+    return a[0] <= b[1] and b[0] <= a[1]
 
 
 @dataclass(frozen=True)
@@ -795,7 +854,11 @@ def compare(
     Sources that state one value alike are listed together."""
     aspects: defaultdict[Aspect, list[Reading]] = defaultdict(list)
     for statement in statements:
-        if in_contention(statement) and attributed(statement):
+        if (
+            in_contention(statement)
+            and attributed(statement)
+            and stated_value(statement)
+        ):
             for reading in compared_values(statement, containment):
                 aspects[reading.aspect].append(reading)
 
@@ -811,6 +874,9 @@ def compare(
             for s in r.statement.sources:
                 by_artifact[s.artifact].add(keys[r])
         stated = {a: frozenset(found) for a, found in by_artifact.items()}
+        other = {
+            keys[r] for r in readings if r.statement.parentage - {"birth"}
+        }
         sides = {
             r: (keys[r], r.value.precision, r.value.earliest, r.value.latest)
             for r in readings
@@ -820,7 +886,9 @@ def compare(
                 paired(x, y)
                 and in_order(x, y, keys, orders)
                 and not differ_in_resolution(x, y, containment)
+                and not within_bound(x, y)
                 and not stated_together(x, y, keys, stated)
+                and not of_another_kind(x, y, keys, other)
             ):
                 row = rows.setdefault((aspect, sides[x], sides[y]), _Row())
                 row.a.append(x)
@@ -896,7 +964,67 @@ def disagreements(
         )
 
     statements = read_statements(fetch(FETCH), properties)
-    return compare(statements, read_containment(fetch(CONTAINMENT)))
+    derived = derived_statements(
+        died_by.from_rows(fetch(died_by.QUERY)), statements
+    )
+    return compare(
+        [*statements, *derived], read_containment(fetch(CONTAINMENT))
+    )
+
+
+def derived_statements(
+    inputs: died_by.Inputs, statements: Iterable[Statement]
+) -> list[Statement]:
+    """Each "died by" date the shared derivation gives (ADR-0040 §2.4) as a
+    date of death to compare: its date as the value and as its latest
+    date, so its span is open at its early end, stated in the document it
+    is derived from, and marked `derived`. Each is labelled with its
+    person's label, and with its document's, as the fetched statements
+    give them."""
+    statements = list(statements)
+    labels = {s.entity: s.entity_label for s in statements}
+    sources = {
+        source.artifact: source.label
+        for s in statements
+        for source in s.sources
+        if source.iri == source.artifact
+    }
+    found = []
+    for bound in died_by.died_by(inputs):
+        stamp, precision = bound_time(bound.by)
+        time = Time(stamp, precision)
+        found.append(
+            Statement(
+                iri=f"derived:{bound.person}:{bound.source}:{bound.via}",
+                entity=bound.person,
+                entity_label=labels.get(bound.person, ""),
+                property="date_of_death",
+                rank="http://wikiba.se/ontology#NormalRank",
+                value=Term("literal", stamp, XSD_DATETIME),
+                precision=precision,
+                latest=frozenset({time}),
+                sources=frozenset(
+                    {
+                        Source(
+                            bound.source,
+                            sources.get(bound.source, ""),
+                            bound.source,
+                        )
+                    }
+                ),
+                derived=True,
+            )
+        )
+    return found
+
+
+def bound_time(when: died_by.When) -> tuple[str, int]:
+    """A derived date as the fetch gives a time: its xsd:dateTime, as the
+    query service writes one, and its Wikibase precision."""
+    return (
+        f"{when.year:04d}-{when.month or 0:02d}-{when.day or 0:02d}T00:00:00Z",
+        died_by.WIKIBASE_PRECISION[when.precision],
+    )
 
 
 def counts_by_property(rows: Iterable[Disagreement]) -> dict[str, int]:

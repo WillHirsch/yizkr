@@ -3,7 +3,9 @@
 privacy").
 
 A fictional fixture writes people born in 1990, or in 1850, and the
-birth and death events they take part in, and reads the non-privileged
+birth and death events they take part in, as a curator makes them in the
+wiki (ADR-0040 Q5: no extraction or import makes one, and a curator-made
+one is still read as today; curator_event_writes), and reads the non-privileged
 export's exclusions back through the stack, with the cutoff pinned at
 1903:
 
@@ -42,7 +44,12 @@ from yizkr.pipeline import writer
 from yizkr.pipeline.writer import BatchWriter
 from yizkr.staticsite import PEOPLE_QUERY, SiteBuilder
 
-from .conftest import fixture_mark, register_fictional, wait_for_query_service
+from .conftest import (
+    curator_event_writes,
+    fixture_mark,
+    register_fictional,
+    wait_for_query_service,
+)
 
 pytestmark = pytest.mark.live
 
@@ -182,19 +189,20 @@ def fixture_graph(client, config):
         takes_part("early birth", "born by event", source, "principal"),
         claim("early birth", "point_in_time", year(1850), source),
     ]
-    written = write_mapped(
-        BatchWriter(client),
-        ClaimBatch.model_validate(
-            {
-                "extraction_run": {
-                    "model_identifier": "integration-test",
-                    "pipeline_version": "0.0.0",
-                    "started_at": datetime.now(UTC).isoformat(),
-                },
-                "claims": claims,
-            }
-        ),
-    )
+    with curator_event_writes():
+        written = write_mapped(
+            BatchWriter(client),
+            ClaimBatch.model_validate(
+                {
+                    "extraction_run": {
+                        "model_identifier": "integration-test",
+                        "pipeline_version": "0.0.0",
+                        "started_at": datetime.now(UTC).isoformat(),
+                    },
+                    "claims": claims,
+                }
+            ),
+        )
     qids = {
         key: written.created_items[ref["local_id"]]
         for key, ref in ENTITIES.items()

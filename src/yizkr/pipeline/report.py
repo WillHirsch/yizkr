@@ -193,6 +193,7 @@ from yizkr.pipeline.rundir import (
 from yizkr.pipeline.scratch import BARRIER, CORPUS_DIR, CORPUS_STAGES
 from yizkr.pipeline.stages import read_jsonl, staging_path
 from yizkr.pipeline.writer import REFUSAL_REASONS
+from yizkr.staticsite import RELEASE_CAUSES, UNSTATED_KIND
 
 # the version of report.json's layout
 FORMAT = 1
@@ -208,6 +209,8 @@ NOT_AVAILABLE = "not available"
 NOT_RUN = "not run"
 # what a name the aggregates do not know is counted as
 OTHER = "other"
+# the value type of a claim of unknown value (claims.UnknownValue)
+UNKNOWN_TYPE = "unknown"
 
 # how a completed stage came about
 COMPUTED = "computed"
@@ -1154,7 +1157,22 @@ def _read_views(document: Document, directory: Path, state: dict) -> None:
             "stage": stage,
             "entities": Counter(_text(e.get("kind")) or "?" for e in entities),
             "not_extracted": sum(e.get("extract") is False for e in entities),
+            # the mentions the manifest leaves out, by kind: officials who
+            # only certify, register, officiate, examine, report or witness
+            # among them (ADR-0040 §2.8)
+            "not_extracted_by_kind": Counter(
+                _text(e.get("kind")) or "?"
+                for e in entities
+                if e.get("extract") is False
+            ),
             "claims": Counter(_text(c.get("property")) or "?" for c in claims),
+            # the claims of unknown value (ADR-0040 §2.2), by property
+            "unknown_values": Counter(
+                _text(c.get("property")) or "?"
+                for c in claims
+                if isinstance(c.get("value"), dict)
+                and c["value"].get("type") == UNKNOWN_TYPE
+            ),
             "marriages": _marriages(entities, claims)
             if stage == "extraction"
             else None,
@@ -1178,6 +1196,12 @@ def _read_views(document: Document, directory: Path, state: dict) -> None:
                 "unread_objects": _count(coverage.get("unread_objects")),
                 "manifest_artifact_kind": _counted(
                     coverage.get("manifest_artifact_kind")
+                ),
+                # the manifest's entities dropped for a kind only a
+                # curator makes, by kind; None for a coverage that
+                # predates the count
+                "manifest_vital_kind": _tally(
+                    coverage.get("manifest_vital_kind")
                 ),
                 "trailing_commas": _counted(coverage.get("trailing_commas")),
                 "excerpt_language_moved": _counted(
@@ -2027,6 +2051,77 @@ def _aggregate_contradictions(
     }
 
 
+def _aggregate_releases(
+    sited: Mapping[str, Any] | _Unreadable | None, vocabulary: _Vocabulary
+) -> dict[str, Any]:
+    """The possibly-living count and the releases by cause the site stage
+    counted on the written graph (ADR-0040 §7): the people it lists, those
+    possibly living and those released, the released by each cause
+    (staticsite.RELEASE_CAUSES; one person may count under several), the
+    people a union's end alone releases, the unknown dates of death by
+    the type of their source, and the derived "died by" dates by the type
+    of the document each rests on. A type is a manifest key, or OTHER.
+    NOT_AVAILABLE, with why, when no site stage has run, its record cannot
+    be read, or it does not count them."""
+    if sited is None:
+        return {
+            "status": NOT_AVAILABLE,
+            "why": "no site stage of this run has run to its end, and the "
+            "site stage counts them on the written graph",
+        }
+    if isinstance(sited, _Unreadable):
+        return {
+            "status": NOT_AVAILABLE,
+            "why": "the site stage's record cannot be read",
+        }
+    counted = sited.get("privacy")
+    if not isinstance(counted, dict):
+        counted = {}
+    totals = [
+        _counted(counted.get(name))
+        for name in (
+            "people",
+            "possibly_living",
+            "released",
+            "ended_by_death_of_alone",
+        )
+    ]
+    names = (
+        "releases",
+        "unknown_date_of_death_by_source",
+        "derived_by_source",
+    )
+    tallies = [_tally(counted.get(name)) for name in names]
+    whole = [
+        tally is not None and len(tally) == len(counted[name])
+        for tally, name in zip(tallies, names, strict=True)
+    ]
+    if None in totals or not all(whole):
+        return {
+            "status": NOT_AVAILABLE,
+            "why": "the run's site stage did not record them",
+        }
+    people, living, released, alone = totals
+    causes, unknown, derived = tallies
+
+    def kind(value: Any) -> str:
+        if value == UNSTATED_KIND:
+            return value
+        return _known(value, vocabulary.items)
+
+    return {
+        "people": people,
+        "possibly_living": living,
+        "released": released,
+        "by_cause": {
+            cause: _count(causes.get(cause, 0)) for cause in RELEASE_CAUSES
+        },
+        "ended_by_death_of_alone": alone,
+        "unknown_date_of_death_by_source": _folded(unknown, kind),
+        "derived_by_source": _folded(derived, kind),
+    }
+
+
 def _place_cycles(
     placed: Mapping[str, Any] | None, documents: Mapping[str, Document]
 ) -> list[dict[str, str]]:
@@ -2751,6 +2846,13 @@ def _aggregate_content(
     # the entity-manifest answers refused for naming an artifact kind
     # (ADR-0039 §10.1(b)), and the extractions whose coverage counts none
     manifest_artifact_kind = artifact_kind_absent = 0
+    # the claims of unknown value, by property and by source kind, and the
+    # manifest entities dropped for a kind only a curator makes (ADR-0040
+    # §2.2, §7), with the extractions whose coverage counts none
+    unknown_values: Counter = Counter()
+    unknown_by_kind: Counter = Counter()
+    vital_kinds: Counter = Counter()
+    vital_kind_absent = 0
     record_extractions = records_given = recordless = notes_set_aside = 0
     records_set_aside = unsplit_forms = appellation_labels = 0
     appellation_parts = containers_checked = 0
@@ -2776,6 +2878,7 @@ def _aggregate_content(
     # those whose coverage gives no count
     languages_moved = moved_extractions = moved_absent = 0
     batches = not_extracted = zero_entities = 0
+    not_extracted_by_kind: Counter = Counter()
     # the extractions' marriages by their weddings (`_marriages`)
     marriages: Counter = Counter()
     marriage_extractions = 0
@@ -2792,8 +2895,14 @@ def _aggregate_content(
             batches += 1
             entities.update(batch["entities"])
             claims.update(batch["claims"])
+            unknown_values.update(batch["unknown_values"])
+            if batch["unknown_values"]:
+                unknown_by_kind[_kind(document.kind)] += batch[
+                    "unknown_values"
+                ].total()
             subject_forms.update(batch["subject_forms"])
             not_extracted += batch["not_extracted"]
+            not_extracted_by_kind.update(batch["not_extracted_by_kind"])
             if not batch["claims"].total():
                 zero_claims[_kind(document.kind)] += 1
             if batch["claims"].get("name"):
@@ -2825,6 +2934,10 @@ def _aggregate_content(
                 artifact_kind_absent += 1
             else:
                 manifest_artifact_kind += coverage["manifest_artifact_kind"]
+            if coverage.get("manifest_vital_kind") is None:
+                vital_kind_absent += 1
+            else:
+                vital_kinds.update(coverage["manifest_vital_kind"])
             fallbacks.update(
                 _known(tier, FALLBACK_TIERS) for tier in coverage["fallback"]
             )
@@ -2910,6 +3023,10 @@ def _aggregate_content(
         "entities": {
             "total": entities.total(),
             "not_extracted": not_extracted,
+            "not_extracted_by_kind": _folded(
+                not_extracted_by_kind,
+                lambda value: _known(value, vocabulary.items),
+            ),
             "per_batch": _mean(entities.total(), batches),
             "by_kind": _folded(
                 entities, lambda value: _known(value, vocabulary.items)
@@ -2922,6 +3039,11 @@ def _aggregate_content(
                 claims, lambda value: _known(value, vocabulary.properties)
             ),
             "untyped_names_by_kind": _by_count(untyped_names),
+            "unknown_values_by_property": _folded(
+                unknown_values,
+                lambda value: _known(value, vocabulary.properties),
+            ),
+            "unknown_values_by_kind": _by_count(unknown_by_kind),
         },
         "rejects": {
             "extractions": extractions,
@@ -2936,6 +3058,10 @@ def _aggregate_content(
             "by_reason_absent": reasons_absent,
             "manifest_artifact_kind": manifest_artifact_kind,
             "manifest_artifact_kind_absent": artifact_kind_absent,
+            "manifest_vital_kind_by_kind": _folded(
+                vital_kinds, lambda value: _known(value, vocabulary.items)
+            ),
+            "manifest_vital_kind_absent": vital_kind_absent,
         },
         "quotes": {
             "extractions": quote_extractions,
@@ -3046,6 +3172,7 @@ def _aggregate_content(
         "write": _aggregate_write(written),
         "place_hierarchy": _aggregate_places(placed),
         "contradictions": _aggregate_contradictions(sited, vocabulary),
+        "releases": _aggregate_releases(sited, vocabulary),
         "flags": {
             key: flags[key] for key in ("status", "why") if key in flags
         },
@@ -3806,7 +3933,8 @@ def _content_sections(content: Mapping[str, Any]) -> list[_Section]:
             [
                 f"{_n(entities['total'])} entities, "
                 f"{_n(entities['per_batch'])} a batch; "
-                f"{_n(entities['not_extracted'])} not extracted.",
+                f"{_n(entities['not_extracted'])} not extracted (by kind: "
+                f"{_listed(entities['not_extracted_by_kind'])}).",
                 _table(
                     ("Kind", "Entities"),
                     entities["by_kind"].items(),
@@ -3820,7 +3948,10 @@ def _content_sections(content: Mapping[str, Any]) -> list[_Section]:
             [
                 f"{_n(claims['total'])} claims, {_n(claims['per_batch'])} a "
                 "batch. Name forms of no stated type (`name`) by source "
-                f"kind: {_listed(claims['untyped_names_by_kind'])}.",
+                f"kind: {_listed(claims['untyped_names_by_kind'])}. Claims "
+                "of unknown value by property: "
+                f"{_listed(claims['unknown_values_by_property'])}; by source "
+                f"kind: {_listed(claims['unknown_values_by_kind'])}.",
                 _table(
                     ("Property", "Claims"),
                     claims["by_property"].items(),
@@ -3855,6 +3986,15 @@ def _content_sections(content: Mapping[str, Any]) -> list[_Section]:
                         f" (extractions that count none: "
                         f"{_n(rejects['manifest_artifact_kind_absent'])})"
                         if rejects["manifest_artifact_kind_absent"]
+                        else ""
+                    ),
+                    "Entity-manifest entities dropped for a kind only a "
+                    "curator makes: "
+                    f"{_listed(rejects['manifest_vital_kind_by_kind'])}"
+                    + (
+                        f" (extractions that count none: "
+                        f"{_n(rejects['manifest_vital_kind_absent'])})"
+                        if rejects["manifest_vital_kind_absent"]
                         else ""
                     ),
                     f"Fallback tiers taken: {_listed(content['fallbacks'])}",
@@ -3937,6 +4077,7 @@ def _content_sections(content: Mapping[str, Any]) -> list[_Section]:
         _Section("Clusters", _cluster_blocks(clusters), 3),
         *_write_sections(content),
         *_contradiction_sections(content),
+        *_release_sections(content),
         _Section(
             "Not available",
             [
@@ -3950,6 +4091,7 @@ def _content_sections(content: Mapping[str, Any]) -> list[_Section]:
                             "place_hierarchy",
                         ),
                         ("Different-source contradictions", "contradictions"),
+                        ("Releases by cause", "releases"),
                         ("Flags by tier and class", "flags"),
                     )
                     if content[key].get("status") == NOT_AVAILABLE
@@ -3965,6 +4107,7 @@ def _content_sections(content: Mapping[str, Any]) -> list[_Section]:
 # (yizkr.pipeline.writer.REFUSAL_REASONS)
 _REFUSAL_NAMES = {
     "retired_or_reference_property": "a retired or reference property",
+    "vital_rule": "the rules of deaths and births on the person",
     "subject_rule": "the subject rules",
     "text": "a text the instance cannot hold",
     "side_rule": "an entity the side rule blocks",
@@ -4102,6 +4245,34 @@ def _contradiction_sections(content: Mapping[str, Any]) -> list[_Section]:
                 "contradictions, as the site stage counted them on the "
                 "written graph; by property: "
                 f"{_listed(counted['by_property'])}."
+            ],
+            3,
+        )
+    ]
+
+
+def _release_sections(content: Mapping[str, Any]) -> list[_Section]:
+    """The possibly-living count and the releases by cause, when the site
+    stage counted them."""
+    counted = content["releases"]
+    if counted.get("status") == NOT_AVAILABLE:
+        return []
+    return [
+        _Section(
+            "Releases by cause",
+            [
+                f"{_n(counted['people'])} people listed, as the site stage "
+                "counted them on the written graph: "
+                f"{_n(counted['possibly_living'])} possibly living, "
+                f"{_n(counted['released'])} released. Released by cause "
+                "(a person counts under each cause they have): "
+                f"{_listed(counted['by_cause'])}; released by a union's "
+                "end alone: "
+                f"{_n(counted['ended_by_death_of_alone'])}.",
+                "Unknown dates of death by the type of their source: "
+                f"{_listed(counted['unknown_date_of_death_by_source'])}. "
+                'Derived "died by" dates by the type of the document '
+                f"each rests on: {_listed(counted['derived_by_source'])}.",
             ],
             3,
         )

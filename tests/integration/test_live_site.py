@@ -3,27 +3,28 @@ real queries against the running stack, and the flagship plural-display
 behavior holds on data this module seeds itself.
 
 The fixture writes a slice of the example universe
-(tests/fixtures/example_universe.py) through the normal write path,
-registering the sources and then writing one claim batch: Gustav
-Löbig's birth as two of its sources give it. The civil register's
-extract and the naturalisation certificate disagree on the day, the
-universe's deliberate contradiction (ADR-0002). They also give the place
-at two resolutions: the extract registers a birth "in seiner Wohnung",
-the home of a father "wohnhaft in Flörburg, Brunnenring 35", while the
-naturalisation names only Floerburg. The extract's address is recorded
-inside the town (Brunnenring 35, part of Brunnenring, part of Flörburg;
-ADR-0009), so the two places differ in resolution, not in substance. A
-photograph of the family gravestone gives the gallery an image, and
-Rahel Löbig's death, which the family tree gives as "after 1945", gives
-the timeline a date with a range its source states, open at one end
-(#309). Cäcilie Löbig's birth, which the tree gives as "c. 1833", gives it
-a circa date (#315), and Leopold Löbig's imprisonment, which the 1945
-registration card dates by its own start and end time, an event dated by
-start and end (#318). Rudolf Löbig's death, which Nina's 1958 letter
-states with no date ("the widow of your late brother Rudolf"), is a death
-event with no date, Rudolf its principal and Nina beside him as its
-informant: his page and the timeline show it as "died (date not stated)"
-with the letter, and hers never shows her to have died (#354).
+(tests/fixtures/example_universe.py) through the normal write path, registering
+the sources and then writing one claim batch: Gustav Löbig's birth as two of
+its sources give it. The civil register's extract and the naturalisation
+certificate disagree on the day, the universe's deliberate contradiction
+(ADR-0002). They also give the place at two resolutions: the extract registers
+a birth "in seiner Wohnung", the home of a father "wohnhaft in Flörburg,
+Brunnenring 35", while the naturalisation names only Floerburg. The extract's
+address is recorded inside the town (Brunnenring 35, part of Brunnenring, part
+of Flörburg; ADR-0009), so the two places differ in resolution, not in
+substance. A photograph of the family gravestone gives the gallery an image,
+and Rahel Löbig's death, which the family tree gives as "after 1945", gives the
+timeline a date with a range its source states, open at one end (#309). Cäcilie
+Löbig's birth, which the tree gives as "c. 1833", gives it a circa date (#315),
+and Leopold Löbig's imprisonment, which the 1945 registration card dates by its
+own start and end time, an event dated by start and end (#318). Nina's 1958
+letter, dated 25 December 1958, states Rudolf's death with no date in a phrase
+that is both markers ("the widow of your late brother Rudolf"): their marriage
+`ended_by_death_of` Rudolf and Nina widowed at the letter's date, and no death
+statement (ADR-0040 §2.5, Q5). His page and the timeline show the union's end
+with the letter, and his "died by 25 December 1958", labelled as derived; hers
+never shows her to have died (#354, #687). test_live_deaths.py shows a date of
+death of unknown value.
 
 Every label, title and image carries a marker, eight hex digits of a hash
 over the fixture, over the writer's and the site generator's source and
@@ -87,8 +88,9 @@ FIXTURE = (
     "give it, the family gravestone's photograph, Rahel's death after "
     "1945 and Cäcilie's birth circa 1833 as the 1984 family tree gives "
     "them, Leopold's imprisonment from its start to its end as the "
-    "1945 registration card dates it, and Rudolf's undated death, with "
-    "Nina its informant, as the 1958 letter states it"
+    "1945 registration card dates it, and Rudolf and Nina's marriage "
+    "ended by his death, with Nina widowed, as the dated 1958 letter "
+    "states it"
 )
 MARK = f"(site test {fixture_mark(FIXTURE, writer, staticsite)})"
 
@@ -130,9 +132,11 @@ HELD_BY = said(CARD, "participant", "imprisonment-1939")  # Leopold
 # the letter's own words for Rudolf's death, which give it no date: "the
 # widow of your late brother Rudolf"
 LATE = "вдова Вашего покойного брата Рудольфа"
+# the letter's own date
+LETTER_DATED = "25 декабря 1958 г."
 RUDOLF = marked("rudolf-loebig")
 NINA = marked("nina-sartina")
-RUDOLFS_DEATH = f"Death of {RUDOLF}"
+MARRIAGE = marked("marriage-rudolf-nina")
 # the extract's own words for the birth at home, and for the address
 HOME = (
     "wohnhaft in Flörburg, Brunnenring 35, zeigte an, daß von seiner "
@@ -261,9 +265,9 @@ def fixture_batch(sources: dict[str, ArtifactRef]) -> ClaimBatch:
     """The two sources' claims about the birth, the extract's placing of
     the address in the town, the tree's claims about Rahel's death and
     Cäcilie's birth, and the card's dating of Leopold's imprisonment by
-    its own start and end time, and the letter's undated death of Rudolf,
-    with Rudolf its principal and Nina its informant, each citing its
-    source by the SHA-1 of its media (#102)."""
+    its own start and end time, and the letter's own date, its union end
+    by Rudolf's death and Nina's widowhood, each citing its source by the
+    SHA-1 of its media (#102)."""
     person = local("person", PERSON, "human")
     address = local("address", ADDRESS, "place")
     street = local("street", STREET, "place")
@@ -274,15 +278,14 @@ def fixture_batch(sources: dict[str, ArtifactRef]) -> ClaimBatch:
     imprisonment = local("imprisonment", IMPRISONMENT, "imprisonment")
     rudolf = local("rudolf", RUDOLF, "human")
     nina = local("nina", NINA, "human")
-    death = local("death", RUDOLFS_DEATH, "death")
-
-    def role(key: str) -> list[dict]:
-        return [
-            {
-                "property": "object_has_role",
-                "value": item({"kind": "vocab", "key": key}),
-            }
-        ]
+    marriage = local("marriage", MARRIAGE, "marriage")
+    spouse = [
+        {
+            "property": "object_has_role",
+            "value": item({"kind": "vocab", "key": "spouse"}),
+        }
+    ]
+    letter_day = {"type": "time", "year": 1958, "month": 12, "day": 25}
 
     def claim(subject, prop, value, source, excerpt, qualifiers=()):
         return {
@@ -353,10 +356,22 @@ def fixture_batch(sources: dict[str, ArtifactRef]) -> ClaimBatch:
             for prop, held in HELD.items()
         ),
         claim(
-            death, "participant", item(rudolf), LETTER, LATE, role("principal")
+            sources[LETTER].model_dump(mode="json"),
+            "inception",
+            letter_day,
+            LETTER,
+            LETTER_DATED,
         ),
+        claim(marriage, "participant", item(rudolf), LETTER, LATE, spouse),
+        claim(marriage, "participant", item(nina), LETTER, LATE, spouse),
+        claim(marriage, "ended_by_death_of", item(rudolf), LETTER, LATE),
         claim(
-            death, "participant", item(nina), LETTER, LATE, role("informant")
+            nina,
+            "civil_status",
+            item({"kind": "vocab", "key": "widowed"}),
+            LETTER,
+            LATE,
+            [{"property": "point_in_time", "value": letter_day}],
         ),
     ]
     return ClaimBatch.model_validate({"extraction_run": RUN, "claims": claims})
@@ -370,8 +385,8 @@ class Site:
     rahel: str  # Rahel's QID, whose death has a stated range
     caecilie: str  # Cäcilie's QID, whose birth is circa
     leopold: str  # Leopold's QID, held from a start to an end
-    rudolf: str  # Rudolf's QID, the principal of a death with no date
-    nina: str  # Nina's QID, its informant
+    rudolf: str  # Rudolf's QID, whose marriage his death ended
+    nina: str  # Nina's QID, his widow
     places: dict[str, str]  # "address", "street", "town" -> QID
     sources: dict[str, str]  # universe source key -> artifact QID
     photo_file: str  # the gravestone photograph's file page
@@ -387,6 +402,7 @@ def site(client, config, tmp_path_factory):
     for held in (HELD_BY, *HELD.values()):
         assert held.excerpt in UNIVERSE[CARD].text
     assert LATE in UNIVERSE[LETTER].text
+    assert LETTER_DATED in UNIVERSE[LETTER].text
     media = tmp_path_factory.mktemp("media")
     registered, cited = {}, {}
     for key, kind in (
@@ -422,7 +438,7 @@ def site(client, config, tmp_path_factory):
             "imprisonment",
             "rudolf",
             "nina",
-            "death",
+            "marriage",
         )
     ]
     wait_for_query_service(config, client, [*seeded, *sources.values()])
@@ -645,36 +661,39 @@ def test_the_timeline_shows_an_event_by_its_start_and_end(site):
     }
 
 
-def test_an_undated_death_shows_for_its_principal_alone(site):
-    # the letter states Rudolf's death with no date: his page shows it
-    # under "death", as "died (date not stated)" with the letter, and the
-    # timeline lists it at its foot; Nina, its informant, is never shown
-    # to have died (#354)
+def test_a_union_ended_by_a_death_shows_with_its_derived_date(site):
+    # the letter ends Rudolf and Nina's marriage by his death: his page
+    # shows the end with the letter, and his "died by" the letter's date,
+    # labelled as derived (ADR-0040 §2.4, §2.6); no source states his
+    # death, so no death statement shows; Nina is never shown to have died
     page = site.read(f"people/{site.rudolf}.html")
-    (deaths,) = re.findall(r"<dt>death</dt>((?:<dd>.*?</dd>)+)", page)
+    (deaths,) = re.findall(r"<dt>date of death</dt>((?:<dd>.*?</dd>)+)", page)
     (entry,) = elements(deaths, "dd")
-    assert entry.startswith('died (date not stated)<span class="source">')
+    assert entry.startswith("died by 1958-12-25 (derived)")
     assert source_link(site, LETTER, root="../") in entry
-    assert "died (date not stated)" not in site.read(
-        f"people/{site.nina}.html"
-    )
+    assert "died (date not stated)" not in page
+    assert "<h2>Unions</h2>" in page
+    assert "ended by the death of" in page
+    nina = site.read(f"people/{site.nina}.html")
+    assert "died by" not in nina and "died (date not stated)" not in nina
+    assert "ended by the death of" in nina
 
-    (listed,) = [
+    # the timeline: the derived date among Rudolf's rows, and the union's
+    # end under "No date stated", as no source dates his death
+    (derived,) = [
         entry
         for entry in timeline_entries(site, site.rudolf)
-        if "died (date not stated)" in entry
+        if "(derived)" in entry
     ]
-    assert listed.startswith(
-        f'<a href="people/{site.rudolf}.html">{html.escape(RUDOLF)}</a>, '
-        'died (date not stated)<span class="source">'
-    )
-    assert source_link(site, LETTER, root="") in listed
+    assert derived.startswith("1958-12-25 — ")
+    assert source_link(site, LETTER, root="") in derived
+    timeline = site.read("timeline.html")
+    foot = timeline[timeline.index("<h2>No date stated</h2>") :]
+    assert html.escape(MARRIAGE) + ", ended by the death of" in foot
     assert not [
-        entry
-        for entry in timeline_entries(site, site.nina)
-        if "died (date not stated)" in entry
+        entry for entry in timeline_entries(site, site.nina) if "died" in entry
     ]
-    assert site.summary["undated_deaths"] >= 1
+    assert site.summary["derived_died_by"]["union end"] >= 1
 
 
 def test_sources_hyperlink_to_artifact_pages_with_downloads(site):

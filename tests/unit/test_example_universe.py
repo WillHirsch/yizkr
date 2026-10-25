@@ -211,8 +211,14 @@ class TestIntegrity:
             "sentences that call them "
             "planned: the comment above PLANNED_VOCABULARY in "
             "tests/fixtures/example_universe.py, and docs/EXAMPLES.md, "
-            '"Using it": "Two values are planned rather than in the '
-            'manifest yet"'
+            '"Using it": "No value is planned rather than in the '
+            'manifest now"'
+        )
+
+    def test_the_manifest_marks_the_unknown_value_properties(self):
+        # ADR-0040 §2.2: the manifest marks the properties that take one
+        assert load_acceptance().unknown_values == frozenset(
+            u.UNKNOWN_VALUE_PROPERTIES
         )
 
     def test_kinds_are_manifest_items(self):

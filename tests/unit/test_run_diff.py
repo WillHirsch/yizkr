@@ -18,6 +18,7 @@ import json
 import stat
 import subprocess
 import unicodedata
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -149,6 +150,52 @@ class TestTwoRuns:
         }
         text = rundiff.render_markdown(aggregate)
         block = text.split("## Contradictions", 1)[1].split("## ", 1)[0]
+        assert "Not available" not in block
+        assert leaks(text, second, tmp_path) == []
+
+    def test_a_run_s_releases_show_against_a_baseline_without(
+        self, tmp_path, engine, monkeypatch
+    ):
+        """#687: the run's site record counts the possibly-living people
+        and the releases by cause, and the baseline has no site stage: the
+        diff shows the run's counts and the baseline's absent."""
+        first, second = two_runs(tmp_path, engine, monkeypatch)
+        folder = second / scratch.CORPUS_DIR / "site"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "record.json").write_text(
+            json.dumps(
+                {
+                    "run_id": second.name,
+                    "out": str(folder / "site"),
+                    "built_at": "2026-10-05T09:00:00+00:00",
+                    "privacy": {
+                        "people": 3,
+                        "possibly_living": 1,
+                        "released": 2,
+                        "releases": {
+                            "date_of_death": 1,
+                            "ended_by_death_of": 1,
+                        },
+                        "ended_by_death_of_alone": 1,
+                        "unknown_date_of_death_by_source": {},
+                        "derived_by_source": {"certificate": 1},
+                    },
+                }
+            )
+        )
+        aggregate = rundiff.build(first, second, rebuild=True)["aggregate"]
+        section = aggregate["releases"]
+        assert section["status"] == "compared"
+        rows = {
+            r["figure"]: (r["baseline"], r["run"]) for r in section["figures"]
+        }
+        assert rows["releases.possibly_living"] == (ABSENT, 1)
+        assert rows["releases.by_cause.ended_by_death_of"] == (ABSENT, 1)
+        assert rows["releases.by_cause.birth_cutoff"] == (ABSENT, 0)
+        assert rows["releases.ended_by_death_of_alone"] == (ABSENT, 1)
+        assert rows["releases.derived_by_source.certificate"] == (ABSENT, 1)
+        text = rundiff.render_markdown(aggregate)
+        block = text.split("## Releases by cause", 1)[1].split("## ", 1)[0]
         assert "Not available" not in block
         assert leaks(text, second, tmp_path) == []
 
@@ -374,7 +421,11 @@ class TestReports:
         judgement notes were counted holds no `records` or `notes`: the
         diff reads it, and shows those figures absent, never 0."""
         first, second = two_runs(tmp_path, engine, monkeypatch)
-        older = report.build(first)
+        # made a second after the run ended: the report keeps whole
+        # seconds, so one made within the second the run ended in would
+        # read as made before it
+        ended = rundiff._time(rundiff._manifest(first)["ended_at"])
+        older = report.build(first, now=ended + timedelta(seconds=1))
         del older["aggregate"]["content"]["records"]
         del older["aggregate"]["content"]["notes"]
         stored = first / report.REPORT_DIR / report.JSON_FILE
@@ -1202,6 +1253,7 @@ def an_aggregate(**sections) -> dict:
         },
         "flags": {"status": NOT_AVAILABLE, "why": "none"},
         "contradictions": {"status": NOT_AVAILABLE, "why": "none"},
+        "releases": {"status": NOT_AVAILABLE, "why": "none"},
         "figures": [],
     } | sections
 

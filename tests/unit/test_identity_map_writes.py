@@ -33,7 +33,7 @@ from tests.unit.test_pipeline import (
     RUN,
     FakeWiki,
 )
-from yizkr.claims import ClaimBatch
+from yizkr.claims import Claim, ClaimBatch
 from yizkr.pipeline.clustering import (
     ClusteringInputError,
     IdentityMap,
@@ -591,6 +591,15 @@ class TestTheMapIsTheOnlyWay:
         # name: his cluster is of its own kind, and so is his item
         wiki = _wiki()
         tree = _tree(kind="place")
+        # a birth is a person's (ADR-0040 Q11), so the place's claim is
+        # one a place takes
+        tree.claims[0] = Claim.model_validate(
+            {
+                **tree.claims[0].model_dump(),
+                "property": "whg_place_id",
+                "value": {"type": "external-id", "value": "7001"},
+            }
+        )
         identity = mapped(_eugens(), tree)
         history = BatchWriter(wiki).write_batch(_eugens(), identity=identity)
 

@@ -138,6 +138,7 @@ from yizkr.claims import (
     QidRef,
     QuantityValue,
     TimeValue,
+    UnknownValue,
     VocabRef,
 )
 from yizkr.core import dates
@@ -169,6 +170,7 @@ from yizkr.pipeline.llm import (
     at_output_limit,
     reject_response,
 )
+from yizkr.pipeline.review import UNKNOWN_SHOWN
 from yizkr.pipeline.rundir import DEVELOPMENT_STAGE
 from yizkr.pipeline.stages import (
     atomic_write_text,
@@ -323,6 +325,10 @@ class _Document:
     def value(self, value: Any) -> str:
         if isinstance(value, TimeValue):
             return date_text(value)
+        if isinstance(value, UnknownValue):
+            # a death or a burial the source states without its date or
+            # place (ADR-0040 §2.2)
+            return UNKNOWN_SHOWN
         if isinstance(value, ItemValue):
             return self.named(value.value)
         if isinstance(value, MonolingualValue):
@@ -391,7 +397,8 @@ class _Document:
         """What the document says of an entity a claim of `of` names, one
         level deep, after a dash; empty when it says nothing more. An
         event or a union gives its claims but those that name `of`; any
-        other entity its own dates."""
+        other entity its own dates, a death stated without its date
+        among them."""
         if local_id is None or local_id == of:
             return ""
         kind = self.names.get(local_id, ("", ""))[1]
@@ -406,7 +413,9 @@ class _Document:
                     and self._local(claim.value.value) == of
                 )
             )
-            or (not timed and isinstance(claim.value, TimeValue))
+            or (
+                not timed and isinstance(claim.value, TimeValue | UnknownValue)
+            )
         ]
         if not claims:
             return ""
@@ -786,10 +795,11 @@ def stage_key(
 def code_digest() -> str:
     """The SHA-256 of what renders and reads the calls: this module's
     source, the date formatters it renders dates with (the claim date's
-    stamp, precision and span rule, and the site's formatter), and how it
-    names an artifact (critique.artifact_places and THIS_DOCUMENT)."""
+    stamp, precision and span rule, and the site's formatter), how it
+    shows an unknown value (review.UNKNOWN_SHOWN), and how it names an
+    artifact (critique.artifact_places and THIS_DOCUMENT)."""
     from yizkr import claims, staticsite
-    from yizkr.pipeline import critique
+    from yizkr.pipeline import critique, review
 
     return sha256_text(
         canonical_json(
@@ -810,6 +820,7 @@ def code_digest() -> str:
                     inspect.getsource(critique.artifact_places)
                     + repr(critique.THIS_DOCUMENT)
                 ),
+                "unknown": review.UNKNOWN_SHOWN,
             }
         )
     )

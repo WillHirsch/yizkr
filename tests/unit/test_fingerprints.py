@@ -13,10 +13,11 @@ import random
 import pytest
 
 from tests.fixtures import example_universe as u
-from yizkr.claims import ArtifactRef, ClaimBatch
+from yizkr.claims import ArtifactRef, ClaimBatch, UnknownValue
 from yizkr.pipeline.clustering import Manifest, cluster_corpus, load_config
 from yizkr.pipeline.fingerprints import (
     canonical_label,
+    canonical_value,
     claim_fingerprint,
     claim_prints,
     cluster_id,
@@ -660,9 +661,23 @@ def test_values_of_every_type_are_canonical():
         {"type": "item", "value": {"kind": "vocab", "key": "place"}},
         {"type": "item", "value": {"kind": "qid", "qid": "Q42"}},
         {"type": "item", "value": {"kind": "qid", "qid": "Q43"}},
+        # an unknown value is its tag alone (ADR-0040 §2.2): apart from
+        # every date and every other value
+        {"type": "unknown"},
+        {"type": "time", "year": 1909},
     ]
     prints = {print_of(birth_claim(value=value)) for value in distinct}
     assert len(prints) == len(distinct)
+
+
+def test_an_unknown_value_is_its_tag_alone():
+    # the run diff matches claims through claim_prints, so a value that
+    # carries nothing prints as its tag, and two of them print alike
+    assert canonical_value(UnknownValue(), {}) == ["unknown"]
+    late = {"type": "unknown"}
+    assert print_of(birth_claim(value=late)) == print_of(
+        birth_claim(value=dict(late))
+    )
 
 
 def test_a_local_ref_without_a_mention_is_refused():

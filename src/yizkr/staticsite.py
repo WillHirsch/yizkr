@@ -2,15 +2,21 @@
 
 `yizkr publish-site` renders the graph into a self-contained static
 site: person pages showing EVERY attributed value side by side with
-its source label (R6/ADR-0002 — never silently pick one), each death
-event of theirs that states no date, as "died (date not stated)" with
-its sources, and the artifacts that name the person; artifact pages
-showing what the artifact asserts and what sources say about it, a
-container's captions and the artifact's own statements about itself
-(ADR-0039 §7); a timeline that shows beside each date the range its
-source states, and at its foot the deaths no source dates; a photo
-gallery (ADR-0008 derived media included), the disagreement report, and
-a places index that becomes a map once places carry coordinates.
+its source label (R6/ADR-0002 — never silently pick one), a date of
+death of unknown value as "died (date not stated)", beside the dated
+ones, each "died by" date the shared derivation gives (yizkr.died_by,
+ADR-0040 §2.4), labelled as derived, each union the person takes part
+in with its stated end, or the end a view derives (§2.6), and the
+artifacts that name the person; artifact pages showing what the
+artifact asserts and what sources say about it, a container's captions
+and the artifact's own statements about itself (ADR-0039 §7); a
+timeline that shows beside each date the range its source states, a
+death of unknown value beside the person's dated death, and at its foot
+the deaths nothing dates; a photo gallery (ADR-0008 derived media
+included), the disagreement report, and a places index that becomes a
+map once places carry coordinates. A death event a curator makes that
+states no date shows as "died (date not stated)" with its sources on
+its principal's page and timeline (ADR-0040 Q5).
 
 Design constraints:
 
@@ -47,16 +53,17 @@ from __future__ import annotations
 import datetime
 import html
 import json
+import logging
 import re
 import shutil
 import urllib.parse
 from collections import defaultdict
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
 
-from yizkr import disagreement
+from yizkr import died_by, disagreement
 from yizkr.core import sparql
 from yizkr.core.config import Config
 from yizkr.core.dates import check_time, unsupported_in_graph
@@ -74,8 +81,10 @@ from yizkr.core.privacy import (
 )
 from yizkr.core.wiki import WikiClient
 from yizkr.disagreement import Disagreement, Side
-from yizkr.model.schema import Acceptance, load_acceptance
+from yizkr.model.schema import Acceptance, load_acceptance, load_manifest
 from yizkr.queries.publish import load_templates, prefix_block, render
+
+logger = logging.getLogger(__name__)
 
 # -- SPARQL ----------------------------------------------------------------
 
@@ -95,10 +104,13 @@ def qid_of(binding: dict, name: str) -> str:
 # deprecated or outranked, or who has no type but other evidence, is listed and
 # badged too, and an event is not listed on the death it states. ?deceased is
 # true when the graph holds any death-implying statement of the person's own
-# (date/place/cause of death, place of burial),
-# none of which needs a date. Death events, whose principal alone they mark
-# deceased, and births, for the birth-recency cutoff, are read apart, with the
-# reading the non-privileged export uses (core/privacy.py's read_evidence).
+# (date of death, dated or of unknown value, place, cause or age at death,
+# place of burial), none of which needs a date; each of the privacy module's
+# DEATH_EVIDENCE_PROPERTIES has its arm. A union's end by the person's
+# death, curator-made death events, whose principal alone they mark
+# deceased, and births, for the birth-recency cutoff, are read apart, with
+# the reading the non-privileged export uses (core/privacy.py's
+# read_evidence).
 # ?family is true for
 # a family (``{family_type}``, the privacy module's test), which never
 # enters the non-privileged export, released or not. No stored "living"
@@ -115,11 +127,57 @@ WHERE {{
      || EXISTS {{ ?person wdt:{place_of_death} [] }}
      || EXISTS {{ ?person wdt:{cause_of_death} [] }}
      || EXISTS {{ ?person wdt:{burial_place} [] }}
+     || EXISTS {{ ?person wdt:{age_at_death} [] }}
        ) AS ?deceased)
   SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en" . }}
 }}
 GROUP BY ?person ?personLabel ?personDescription ?deceased ?family
 ORDER BY ?personLabel
+"""
+
+# the death statements that release each listed person, for the run
+# record's releases by cause (ADR-0040 §7): every best-rank statement of
+# the DEATH_EVIDENCE_PROPERTIES, as ?deceased reads them, with whether its
+# value is an unknown value (?unknown: a blank node, or the skolem IRI the
+# query service gives one). It returns no value's own text, which the
+# count does not need; the source types are read apart
+# (RELEASE_SOURCES_QUERY), keyed by ?statement.
+RELEASES_QUERY = """\
+SELECT ?person ?releaseKey ?statement ?unknown
+WHERE {{
+{people}
+  VALUES (?claim ?statementValue ?releaseKey) {{
+    (p:{date_of_death} ps:{date_of_death} "date_of_death")
+    (p:{place_of_death} ps:{place_of_death} "place_of_death")
+    (p:{cause_of_death} ps:{cause_of_death} "cause_of_death")
+    (p:{burial_place} ps:{burial_place} "burial_place")
+    (p:{age_at_death} ps:{age_at_death} "age_at_death")
+  }}
+  ?person ?claim ?statement .
+  ?statement a wikibase:BestRank ;
+             ?statementValue ?value .
+  BIND(isBlank(?value) || CONTAINS(STR(?value), "/.well-known/genid/")
+       AS ?unknown)
+}}
+"""
+
+# the sources of each best-rank date of death of unknown value, for the
+# releases by the type of their source: each stated-in source, with the
+# artifact a page fragment belongs to (?whole); the site maps each to its
+# artifact's type from ARTIFACTS_QUERY, in Python
+RELEASE_SOURCES_QUERY = """\
+SELECT ?statement ?source ?whole
+WHERE {{
+  ?person p:{date_of_death} ?statement .
+  ?statement a wikibase:BestRank ;
+             ps:{date_of_death} ?value .
+  FILTER(isBlank(?value) || CONTAINS(STR(?value), "/.well-known/genid/"))
+  ?statement prov:wasDerivedFrom/pr:{stated_in} ?source .
+  OPTIONAL {{
+    ?source wdt:{instance_of} wd:{artifact_fragment} ;
+            wdt:{part_of} ?whole .
+  }}
+}}
 """
 
 # each qualifier of the statement ?st as one cell, for GROUP_CONCAT with
@@ -201,7 +259,7 @@ ORDER BY ?person ?propLabel
 )
 
 ARTIFACTS_QUERY = """\
-SELECT ?artifact ?artifactLabel ?artifactDescription ?kindLabel ?file
+SELECT ?artifact ?artifactLabel ?artifactDescription ?kind ?kindLabel ?file
 WHERE {{
   ?artifact wdt:{instance_of} ?kind .
   ?kind wdt:{subclass_of}* wd:{artifact} .
@@ -370,16 +428,17 @@ NAMED_AS = {
     "location_of_creation": "place of creation of",
 }
 
-# every death event that states no date, for the person page and the
-# timeline of the one who died: an item with a `death` type at any rank but
-# deprecated (through redirects) and no `point in time`, `start time` or
-# `end time` with a time value at any rank but deprecated. A row for each
-# role each of its participant statements states (one row with no role when
-# it states none), read through the statement node at every rank, as the
-# privacy module's participants query reads them, so that ``event_principal``
-# can say whose death it is; and beside it each source the participant
-# statement and the type statement are stated in, the label optional, so a
-# source with no English label is still shown, by its id.
+# every death event that states no date, for the person page and the timeline
+# of the one who died: only a curator makes one (ADR-0040 Q5), since a source's
+# death is statements on the person. An item with a `death` type at any rank
+# but deprecated (through redirects) and no `point in time`, `start time` or
+# `end time` with a time value at any rank but deprecated. A row for each role
+# each of its participant statements states (one row with no role when it
+# states none), read through the statement node at every rank, as the privacy
+# module's participants query reads them, so that ``event_principal`` can say
+# whose death it is; and beside it each source the participant statement and
+# the type statement are stated in, the label optional, so a source with no
+# English label is still shown, by its id.
 UNDATED_DEATHS_QUERY = """\
 SELECT ?event ?part ?partRank ?value ?role ?principal
        ?source ?sourceLabel ?kindSource ?kindSourceLabel
@@ -423,8 +482,164 @@ WHERE {{
 """
 
 # how the person page and the timeline show a death its source gives no
-# date for
+# date for, and a burial it gives no place for (ADR-0040 §2.2, Q3)
 UNDATED_DEATH = "died (date not stated)"
+UNPLACED_BURIAL = "buried (place not stated)"
+# any other value its source states exists but does not give
+UNSTATED_VALUE = "a value its source does not state"
+
+# the causes the run record counts a release under (``privacy_record``),
+# and the kind it gives a source with no type
+RELEASE_CAUSES = (
+    "date_of_death",
+    "unknown_date_of_death",
+    "age_at_death",
+    "unknown_burial_place",
+    "other_death_property",
+    "ended_by_death_of",
+    "death_event",
+    "birth_cutoff",
+)
+UNSTATED_KIND = "no type stated"
+OTHER_KIND = "other"
+
+# every union, a partnership or a marriage or a class the graph makes a
+# subclass of one, typed at any rank but deprecated: each partner its
+# participant statements name, at any rank but deprecated, and each
+# stated end, an `ended by` event or an `ended by death of` partner, at
+# any rank but deprecated, with each source it is stated in. The person
+# page shows each union a person takes part in with its stated end, or,
+# where none is stated, the end the shared derivation gives (ADR-0040
+# §2.6); the timeline shows an end event at its dates (UNION_END_DATES).
+UNIONS_QUERY = """\
+SELECT ?union ?unionLabel ?partner ?partnerLabel ?endProp ?end ?endLabel
+       ?endStatement ?source ?sourceLabel
+WHERE {{
+  ?union p:{instance_of} ?typing .
+  ?typing ps:{instance_of}/wdt:{subclass_of}* wd:{partnership} ;
+          wikibase:rank ?typingRank .
+  FILTER(?typingRank != wikibase:DeprecatedRank)
+  ?union p:{participant} ?participation .
+  ?participation ps:{participant} ?partner .
+  FILTER NOT EXISTS {{ ?participation wikibase:rank wikibase:DeprecatedRank }}
+  OPTIONAL {{
+    ?union rdfs:label ?unionLabel . FILTER(LANG(?unionLabel) = "en")
+  }}
+  OPTIONAL {{
+    ?partner rdfs:label ?partnerLabel . FILTER(LANG(?partnerLabel) = "en")
+  }}
+  OPTIONAL {{
+    VALUES ?endProp {{ wd:{ended_by} wd:{ended_by_death_of} }}
+    ?endProp wikibase:claim ?endClaim ;
+             wikibase:statementProperty ?endValue .
+    ?union ?endClaim ?endStatement .
+    ?endStatement ?endValue ?end .
+    FILTER NOT EXISTS {{
+      ?endStatement wikibase:rank wikibase:DeprecatedRank
+    }}
+    OPTIONAL {{ ?end rdfs:label ?endLabel . FILTER(LANG(?endLabel) = "en") }}
+    OPTIONAL {{
+      ?endStatement prov:wasDerivedFrom/pr:{stated_in} ?source .
+      OPTIONAL {{
+        ?source rdfs:label ?sourceLabel . FILTER(LANG(?sourceLabel) = "en")
+      }}
+    }}
+  }}
+}}
+"""
+
+# every date a union's end event states (a divorce's), one row for each
+# partner, each point-in-time statement of the event at any rank but
+# deprecated and each source that statement is stated in, in the
+# person-timeline query's form: the date at its stated precision, the
+# earliest and latest dates its source states for it (named by ?low and
+# ?high), its sourcing circumstances folded into ?circumstances, and the
+# date statement's own source. So every attributed date shows, each with
+# its own source, and none is picked (ADR-0002, rule 6). ?endedBy is the
+# union's end statement; its own sources are UNIONS_QUERY's.
+UNION_END_DATES_QUERY = """\
+SELECT ?union ?end ?dateStatement ?person ?personLabel ?date ?precision
+       ?low ?earliest ?earliestPrecision ?high ?latest ?latestPrecision
+       ?circumstances ?source ?sourceLabel
+WHERE {{
+  ?union p:{ended_by} ?endedBy .
+  ?endedBy ps:{ended_by} ?end .
+  FILTER NOT EXISTS {{ ?endedBy wikibase:rank wikibase:DeprecatedRank }}
+  ?union p:{participant} ?participation .
+  ?participation ps:{participant} ?person .
+  FILTER NOT EXISTS {{
+    ?participation wikibase:rank wikibase:DeprecatedRank
+  }}
+  ?end p:{point_in_time} ?dateStatement .
+  FILTER NOT EXISTS {{
+    ?dateStatement wikibase:rank wikibase:DeprecatedRank
+  }}
+  wd:{point_in_time} wikibase:statementValue ?dateLink .
+  ?dateStatement ?dateLink ?dateNode .
+  ?dateNode wikibase:timeValue ?date ;
+            wikibase:timePrecision ?precision .
+  BIND(wd:{earliest_date} AS ?low)
+  BIND(wd:{latest_date} AS ?high)
+  OPTIONAL {{
+    wd:{earliest_date} wikibase:qualifierValue ?lowLink .
+    ?dateStatement ?lowLink ?lowNode .
+    ?lowNode wikibase:timeValue ?earliest ;
+             wikibase:timePrecision ?earliestPrecision .
+  }}
+  OPTIONAL {{
+    wd:{latest_date} wikibase:qualifierValue ?highLink .
+    ?dateStatement ?highLink ?highNode .
+    ?highNode wikibase:timeValue ?latest ;
+              wikibase:timePrecision ?latestPrecision .
+  }}
+  OPTIONAL {{
+    SELECT ?dateStatement
+           (GROUP_CONCAT(DISTINCT ?circumstanceCell; separator="|")
+            AS ?circumstances)
+    WHERE {{
+      ?dateStatement pq:{sourcing_circumstances} ?circumstance .
+      OPTIONAL {{ ?circumstance rdfs:label ?circumstanceName .
+                 FILTER(LANG(?circumstanceName) = "en") }}
+      BIND(ENCODE_FOR_URI(COALESCE(?circumstanceName,
+                                   REPLACE(STR(?circumstance), "^.*/", "")))
+           AS ?circumstanceCell)
+    }}
+    GROUP BY ?dateStatement
+  }}
+  OPTIONAL {{
+    ?dateStatement prov:wasDerivedFrom/pr:{stated_in} ?source .
+    OPTIONAL {{
+      ?source rdfs:label ?sourceLabel . FILTER(LANG(?sourceLabel) = "en")
+    }}
+  }}
+  OPTIONAL {{
+    ?person rdfs:label ?personLabel . FILTER(LANG(?personLabel) = "en")
+  }}
+}}
+"""
+
+
+def _day(stamp: str) -> str:
+    """A time as the query service gives it, as "YYYY-MM-DD", for ordering
+    rows by date."""
+    return stamp.lstrip("+")[:10]
+
+
+def unknown_value(row: dict, name: str = "value") -> bool:
+    """Whether a query row's value is Wikibase's "some value", a value its
+    source states exists but does not give (ADR-0040 §2.2)."""
+    return died_by.unknown_term(row.get(name))
+
+
+def when_time(when: died_by.When) -> tuple[str, str]:
+    """A derived date as the query service gives a time: its xsd:dateTime
+    and its Wikibase precision, for ``format_time``."""
+    return (
+        f"+{when.year:04d}-{when.month or 0:02d}-{when.day or 0:02d}"
+        "T00:00:00Z",
+        str(died_by.WIKIBASE_PRECISION[when.precision]),
+    )
+
 
 # the scratch runs the instance holds, by their run items' marks
 SCRATCH_RUNS_QUERY = """\
@@ -686,6 +901,21 @@ def participation(row: dict, roles: set[tuple[str, bool]]) -> Participation:
 
 
 @dataclass(frozen=True)
+class UnionShown:
+    """A union as the person page shows it (UNIONS_QUERY): its QID and
+    label, each partner by QID with their label, and each stated end, as
+    (the end's property key, the end's QID, its label, its sources as
+    (QID, label) pairs); and the rows of each end event's dates
+    (UNION_END_DATES_QUERY), by the event's QID."""
+
+    qid: str
+    label: str
+    partners: dict[str, str]
+    ends: tuple[tuple[str, str, str, tuple[tuple[str, str], ...]], ...]
+    end_dates: dict[str, tuple[dict, ...]] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class Citation:
     """One reference block of a statement SOURCES_SAY_QUERY reads: the
     source it is stated in, by QID and English label, and the pages and
@@ -741,8 +971,13 @@ class SiteBuilder:
         # the roster's rows by QID, so a page can link a value to the
         # person's page and badge it as the person's own page does
         self.people: dict[str, dict] = {}
-        # the artifacts that have a page of their own
+        # the artifacts that have a page of their own, and their labels
         self.artifact_qids: set[str] = set()
+        self.artifact_labels: dict[str, str] = {}
+        # what the shared "died by" derivation reads from the graph, and
+        # the bounds it gives (ADR-0040 §2.4)
+        self._deaths = died_by.Inputs()
+        self._derived: list[died_by.DiedBy] = []
 
     # -- helpers ------------------------------------------------------------
 
@@ -772,6 +1007,125 @@ class SiteBuilder:
             cell(person, "deceased") == "true" or qid in self._evidence.died
         )
         return is_possibly_living(births, has_death, self._cutoff_year)[0]
+
+    def privacy_record(
+        self,
+        people: list[dict],
+        releases: list[dict],
+        sources: list[dict],
+        kinds: dict[str, set[str]],
+    ) -> dict:
+        """The run record's possibly-living count and its releases by
+        cause (ADR-0040 §7): each released person counts once under every
+        cause the graph holds for them, so the causes overlap. A dated
+        `date_of_death`; an unknown one, by the type of its source; an
+        `age_at_death`; an unknown `burial_place`; another death property;
+        a union `ended by death of` them, with the people it alone
+        releases; the principal of a death event; and the birth cutoff,
+        for a person released with no death evidence. Families are left
+        out, as the export leaves them. ``kinds`` gives each artifact's
+        types, every one it has, for the derived "died by" dates by the type
+        of the document each rests on, and the types of each source of an
+        unknown date of death (``sources``, RELEASE_SOURCES_QUERY's rows: a
+        fragment by its whole); a document of two types counts under each.
+        A source's type is its manifest key, UNSTATED_KIND for none, and
+        OTHER_KIND for a class the manifest does not hold."""
+        causes: dict[str, set[str]] = defaultdict(set)
+        unknown_by_kind: dict[str, set[str]] = defaultdict(set)
+        source_kinds: dict[str, set[str]] = defaultdict(set)
+        for row in sources:
+            artifact = qid_of(row, "whole") or qid_of(row, "source")
+            source_kinds[cell(row, "statement")].update(
+                kinds.get(artifact) or {UNSTATED_KIND}
+            )
+        for row in releases:
+            qid = qid_of(row, "person")
+            key = cell(row, "releaseKey")
+            unknown = cell(row, "unknown") == "true"
+            if key == "date_of_death" and unknown:
+                causes["unknown_date_of_death"].add(qid)
+                for kind in source_kinds.get(cell(row, "statement")) or {
+                    UNSTATED_KIND
+                }:
+                    unknown_by_kind[kind].add(qid)
+            elif key == "burial_place" and unknown:
+                causes["unknown_burial_place"].add(qid)
+            elif key in ("date_of_death", "age_at_death"):
+                causes[key].add(qid)
+            else:
+                causes["other_death_property"].add(qid)
+        for qid in self._evidence.ended:
+            causes["ended_by_death_of"].add(qid)
+        for qid in self._evidence.death_events:
+            causes["death_event"].add(qid)
+        persons = [
+            qid_of(row, "person")
+            for row in people
+            if cell(row, "family") != "true"
+        ]
+        living = {
+            qid_of(row, "person")
+            for row in people
+            if cell(row, "family") != "true" and self._possibly_living(row)
+        }
+        released = [qid for qid in persons if qid not in living]
+        found = {cause: 0 for cause in RELEASE_CAUSES}
+        alone = 0
+        for qid in released:
+            held = {cause for cause, who in causes.items() if qid in who}
+            for cause in held:
+                found[cause] += 1
+            if not held:
+                found["birth_cutoff"] += 1
+            if held == {"ended_by_death_of"}:
+                alone += 1
+        derived: dict[str, int] = defaultdict(int)
+        for bound in self._derived:
+            source = bound.source.rsplit("/", 1)[-1]
+            for kind in kinds.get(source) or {UNSTATED_KIND}:
+                derived[kind] += 1
+        return {
+            "people": len(persons),
+            "possibly_living": len(living),
+            "released": len(released),
+            "releases": found,
+            "ended_by_death_of_alone": alone,
+            "unknown_date_of_death_by_source": {
+                kind: len(who) for kind, who in sorted(unknown_by_kind.items())
+            },
+            "derived_by_source": dict(sorted(derived.items())),
+        }
+
+    def _releases(self, people: list[dict], artifacts: list[dict]):
+        """The run record's releases by cause (``privacy_record``), or None
+        when the query service cannot answer their queries: they are run
+        evidence, so a failure is logged and leaves them out of the
+        record (the run report says they are not available), and never
+        stops the site."""
+        try:
+            releases = self.run(self._instance_query(RELEASES_QUERY))
+            sources = self.run(self._instance_query(RELEASE_SOURCES_QUERY))
+        except (sparql.SparqlError, OSError, ValueError) as error:
+            # a refusal, a transport failure (a timeout, an unreachable
+            # service: OSError) or an answer that does not decode
+            # (ValueError, which JSONDecodeError is)
+            logger.warning(
+                "the releases by cause are not counted: the query service "
+                "did not answer their query (%s)",
+                str(error)[:300],
+            )
+            return None
+        kinds: dict[str, set[str]] = defaultdict(set)
+        for row in artifacts:
+            kinds[qid_of(row, "artifact")].add(self._kind_key(row, "kind"))
+        return self.privacy_record(people, releases, sources, kinds)
+
+    def _kind_key(self, row: dict, name: str) -> str:
+        """The manifest key of the class a row's ``name`` gives."""
+        if not cell(row, name):
+            return UNSTATED_KIND
+        keys = {qid: key for key, qid in self.items.items()}
+        return keys.get(qid_of(row, name), OTHER_KIND)
 
     def _instance_query(self, template: str) -> str:
         """`template` with this instance's ids, its ``{people}`` and
@@ -976,8 +1330,19 @@ class SiteBuilder:
         undated = self.undated_deaths(
             self.run(self._instance_query(UNDATED_DEATHS_QUERY))
         )
+        deaths = died_by.from_rows(self.run(self._library_query("died-by")))
+        unions = self.unions(
+            self.run(self._instance_query(UNIONS_QUERY)),
+            self.run(self._instance_query(UNION_END_DATES_QUERY)),
+        )
         self.people = {qid_of(row, "person"): row for row in people}
         self.artifact_qids = {qid_of(row, "artifact") for row in artifacts}
+        self.artifact_labels = {
+            qid_of(row, "artifact"): cell(row, "artifactLabel")
+            for row in artifacts
+        }
+        self._deaths = deaths
+        self._derived = died_by.died_by(deaths)
 
         by_person: dict[str, list[dict]] = defaultdict(list)
         for row in statements:
@@ -1008,6 +1373,7 @@ class SiteBuilder:
                     by_person.get(qid, []),
                     naming.get(qid, []),
                     undated.get(qid, []),
+                    [u for u in unions if qid in u.partners],
                 ),
             )
         for row in artifacts:
@@ -1019,7 +1385,12 @@ class SiteBuilder:
                 ),
             )
         self._write("index.html", self.index_page(people, artifacts))
-        self._write("timeline.html", self.timeline_page(timeline, undated))
+        self._write(
+            "timeline.html",
+            self.timeline_page(
+                timeline, undated, self.unknown_deaths(), unions
+            ),
+        )
         self._write("timeline.json", self.timeline_feed(timeline))
         self._write("gallery.html", self.gallery_page(gallery))
         self._write("places.html", self.places_page(places, place_tree))
@@ -1033,6 +1404,17 @@ class SiteBuilder:
             "artifacts": len(artifacts),
             "sources_say": len(sources_say),
             "undated_deaths": sum(len(each) for each in undated.values()),
+            # the dates of death of unknown value, and the "died by" dates
+            # the shared derivation gives, by how each was derived
+            "unknown_deaths": sum(
+                len(each) for each in self.unknown_deaths().values()
+            ),
+            "derived_died_by": {
+                via: sum(bound.via == via for bound in self._derived)
+                for via in died_by.VIA
+            },
+            "unions": len(unions),
+            "privacy": self._releases(people, artifacts),
             "timeline_rows": len(timeline),
             "gallery_items": len(gallery),
             "inconsistencies": len(inconsistencies),
@@ -1188,6 +1570,329 @@ class SiteBuilder:
                 )
             )
         return dict(deaths)
+
+    def unions(
+        self, rows: list[dict], date_rows: list[dict] | None = None
+    ) -> list[UnionShown]:
+        """UNIONS_QUERY's rows as unions, in the order of their QIDs: each
+        partner, and each stated end with its sources in the order of
+        their QIDs. An end whose property the manifest does not know is
+        left out. ``date_rows`` (UNION_END_DATES_QUERY's) give each end
+        event's dates, every row kept: each is a date statement's, for
+        one partner and one source."""
+        dates: dict[str, dict[str, list[dict]]] = {}
+        for row in date_rows or []:
+            dates.setdefault(qid_of(row, "union"), {}).setdefault(
+                qid_of(row, "end"), []
+            ).append(row)
+        found: dict[str, dict] = {}
+        for row in rows:
+            union = found.setdefault(
+                qid_of(row, "union"),
+                {"label": cell(row, "unionLabel"), "partners": {}, "ends": {}},
+            )
+            partner = qid_of(row, "partner")
+            if partner:
+                union["partners"][partner] = (
+                    cell(row, "partnerLabel") or partner
+                )
+            statement = cell(row, "endStatement")
+            key = self._keys_by_id.get(qid_of(row, "endProp"))
+            if not statement or key is None:
+                continue
+            end = union["ends"].setdefault(
+                statement,
+                {
+                    "key": key,
+                    "end": qid_of(row, "end"),
+                    "label": cell(row, "endLabel"),
+                    "sources": {},
+                },
+            )
+            if cell(row, "source"):
+                end["sources"][qid_of(row, "source")] = cell(
+                    row, "sourceLabel"
+                )
+        return [
+            UnionShown(
+                qid=qid,
+                label=found[qid]["label"] or qid,
+                partners=found[qid]["partners"],
+                ends=tuple(
+                    (
+                        end["key"],
+                        end["end"],
+                        end["label"] or end["end"],
+                        tuple(
+                            sorted(
+                                end["sources"].items(),
+                                key=lambda pair: natural_order(pair[0]),
+                            )
+                        ),
+                    )
+                    for end in found[qid]["ends"].values()
+                ),
+                end_dates={
+                    end: tuple(found_dates)
+                    for end, found_dates in (dates or {}).get(qid, {}).items()
+                },
+            )
+            for qid in sorted(found, key=natural_order)
+        ]
+
+    def _sources_of(self, documents: Iterable[str]) -> tuple:
+        """Documents by IRI as (QID, label) pairs, in the order of their
+        QIDs, each labelled as its artifact's page is."""
+        qids = sorted(
+            {document.rsplit("/", 1)[-1] for document in documents},
+            key=natural_order,
+        )
+        return tuple((qid, self.artifact_labels.get(qid, "")) for qid in qids)
+
+    def unknown_deaths(self) -> dict[str, list[tuple[tuple[str, str], ...]]]:
+        """Each date of death of unknown value a curator has not
+        deprecated, by the QID of the person, its sources as (QID, label)
+        pairs: a death its source states without its date (ADR-0040
+        §2.2)."""
+        found: dict[str, list] = defaultdict(list)
+        for death in self._deaths.deaths:
+            if death.dating is None and not death.deprecated:
+                found[death.person.rsplit("/", 1)[-1]].append(
+                    self._sources_of(death.sources)
+                )
+        return dict(found)
+
+    def derived_html(self, qid: str, root: str = "../") -> list[str]:
+        """Each "died by" date the shared derivation gives the person, as
+        "died by 25 December 1958 (derived)", with the document it is
+        derived from (ADR-0040 §2.4): labelled as derived, never a value a
+        source states."""
+        return [
+            self.died_by_html(bound, root)
+            for bound in self._derived
+            if bound.person.rsplit("/", 1)[-1] == qid
+        ]
+
+    def died_by_html(self, bound: died_by.DiedBy, root: str = "../") -> str:
+        """One derived "died by" date, labelled as derived, with how it is
+        derived and the document it is derived from."""
+        qid = bound.person.rsplit("/", 1)[-1]
+        stamp, precision = when_time(bound.by)
+        text = format_time(stamp, precision, f"{qid} died-by date")
+        links = self.artifact_links(self._sources_of([bound.source]), root)
+        return (
+            esc(f"died by {text} (derived)")
+            + qualifier_span(
+                "the document's own date"
+                if bound.via == died_by.UNDATED_DEATH
+                else "the date it presents the survivor as widowed, "
+                "or else its own"
+            )
+            + (f'<span class="source">{links}</span>' if links else "")
+        )
+
+    def _derived_end(self, union: UnionShown) -> died_by.DerivedEnd | None:
+        """The end the shared derivation gives a union from its partners'
+        deaths (ADR-0040 §2.6), its partners by QID; None for none."""
+        deaths, ends = self._deaths.deaths, self._deaths.ends
+        iri = {
+            each.rsplit("/", 1)[-1]: each
+            for each in (
+                *(death.person for death in deaths),
+                *(end.late for end in ends),
+                *(bound.person for bound in self._derived),
+            )
+        }
+        found = died_by.derived_end(
+            [iri.get(p, p) for p in union.partners],
+            deaths,
+            ends,
+            self._derived,
+        )
+        if found is None:
+            return None
+        return died_by.DerivedEnd(
+            by_death_of=found.by_death_of.rsplit("/", 1)[-1]
+            if found.by_death_of
+            else None,
+            no_later_than=tuple(
+                p.rsplit("/", 1)[-1] for p in found.no_later_than
+            ),
+        )
+
+    def union_ends(self, union: UnionShown) -> list[tuple[str, str]]:
+        """A union's end by a death, as the timeline shows it beside the
+        death of the partner it names (ADR-0040 §2.6): each stated
+        `ended_by_death_of`, with its sources, or, where no source states
+        how it ended, the end the shared derivation gives, labelled as
+        derived; as (that partner's QID, the entry's HTML)."""
+        named = esc(union.label)
+        stated = [
+            (end, label, sources)
+            for key, end, label, sources in union.ends
+            if key == "ended_by_death_of"
+        ]
+        found = []
+        for end, label, sources in stated:
+            links = self.artifact_links(sources, root="")
+            source = f'<span class="source">{links}</span>' if links else ""
+            found.append(
+                (
+                    end,
+                    f"{named}, ended by the death of "
+                    f"{self.person_link(end, label, root='')}{source}",
+                )
+            )
+        if union.ends:
+            return found
+        derived = self._derived_end(union)
+        if derived is None:
+            return []
+        if derived.by_death_of:
+            label = union.partners.get(derived.by_death_of, "")
+            return [
+                (
+                    derived.by_death_of,
+                    f"{named}, ended by "
+                    f"{self.person_link(derived.by_death_of, label, root='')}"
+                    "&#x27;s death (derived)",
+                )
+            ]
+        found = []
+        for partner in derived.no_later_than:
+            label = union.partners.get(partner, "")
+            found.append(
+                (
+                    partner,
+                    f"{named}, ended no later than "
+                    f"{self.person_link(partner, label, root='')}"
+                    "&#x27;s death (derived)",
+                )
+            )
+        return found
+
+    def other_ends(self, union: UnionShown) -> list[tuple[str, dict | None]]:
+        """A union's ends by an event (`ended by`: a divorce, an
+        annulment), as the timeline shows them, for each listed partner:
+        each row of the end event's dates (UNION_END_DATES_QUERY), each a
+        date statement's with its own range, circumstances and source, or
+        None where the event states no date; each row carries, under
+        ``_what``, the end with the sources of the union's end statement,
+        which are kept apart from the date's own; as (the partner's QID,
+        the row)."""
+        found = []
+        for key, end, label, sources in union.ends:
+            if key == "ended_by_death_of":
+                continue
+            links = self.artifact_links(sources, root="")
+            entry = f"{esc(union.label)}, ended by {esc(label)}" + (
+                f'<span class="source">{links}</span>' if links else ""
+            )
+            rows = union.end_dates.get(end, ())
+            for partner in sorted(union.partners, key=natural_order):
+                if partner not in self.people:
+                    continue
+                mine = [r for r in rows if qid_of(r, "person") == partner]
+                if not mine:
+                    found.append((partner, {"_what": entry}))
+                    continue
+                for row in mine:
+                    found.append(
+                        (
+                            partner,
+                            {**row, "_what": entry, "_dated": True},
+                        )
+                    )
+        return found
+
+    def end_dates_html(
+        self, union: UnionShown, key: str, end: str, qid: str
+    ) -> str:
+        """An end event's dates as the person page shows them beside the
+        end: every date statement of the event (UNION_END_DATES_QUERY's
+        rows for this partner), each at its stated precision with the
+        range and circumstances its source states and that statement's own
+        source, apart from the end statement's citation; "" for an end by
+        a death or an undated event."""
+        if key == "ended_by_death_of":
+            return ""
+        shown = []
+        for row in union.end_dates.get(end, ()):
+            if qid_of(row, "person") != qid:
+                continue
+            where = f"{qid} union end date"
+            source_qid = qid_of(row, "source")
+            source = (
+                f'<span class="source"><a href="../artifacts/'
+                f'{esc(source_qid)}.html">{esc(cell(row, "sourceLabel"))}'
+                "</a></span>"
+                if cell(row, "sourceLabel") and source_qid.startswith("Q")
+                else ""
+            )
+            shown.append(
+                esc(
+                    format_time(
+                        cell(row, "date"), cell(row, "precision"), where
+                    )
+                )
+                + qualifier_span(self.timeline_qualifiers(row))
+                + source
+            )
+        return "; its date " + "; ".join(shown) if shown else ""
+
+    def union_html(self, qid: str, unions: list[UnionShown]) -> str:
+        """A person page's "Unions": each union the person takes part in,
+        with its other partners, and each end a source states, with its
+        sources; where none is stated, "no source states how it ended",
+        and the end the shared derivation gives from the partners' deaths
+        (ADR-0040 §2.6), labelled as derived. "" for none."""
+        if not unions:
+            return ""
+        items = []
+        for union in unions:
+            others = [
+                self.person_link(other, label)
+                for other, label in sorted(union.partners.items())
+                if other != qid
+            ]
+            text = esc(union.label)
+            if others:
+                text += " with " + ", ".join(others)
+            stated = []
+            for key, end, label, sources in union.ends:
+                links = self.artifact_links(sources)
+                what = (
+                    f"ended by the death of {self.person_link(end, label)}"
+                    if key == "ended_by_death_of"
+                    else f"ended by {esc(label)}"
+                )
+                stated.append(
+                    what
+                    + (f'<span class="source">{links}</span>' if links else "")
+                    + self.end_dates_html(union, key, end, qid)
+                )
+            if stated:
+                text += ": " + "; ".join(sorted(stated, key=visible))
+            else:
+                text += ": no source states how it ended"
+                found = self._derived_end(union)
+                names = union.partners
+                if found is not None and found.by_death_of:
+                    text += esc(
+                        f"; ended by {names.get(found.by_death_of)}'s "
+                        "death (derived)"
+                    )
+                elif found is not None:
+                    text += esc(
+                        "; "
+                        + "; ".join(
+                            f"ended no later than {names.get(p)}'s death "
+                            "(derived)"
+                            for p in found.no_later_than
+                        )
+                    )
+            items.append(f"<li>{text}</li>")
+        return "<h2>Unions</h2><ul>" + "".join(items) + "</ul>"
 
     def undated_death_html(
         self, sources: Iterable[tuple[str, str]], root: str = "../"
@@ -1358,12 +2063,15 @@ class SiteBuilder:
         statements: list[dict],
         naming: list[Said] | None = None,
         undated: list[tuple[tuple[str, str], ...]] | None = None,
+        unions: list[UnionShown] | None = None,
     ) -> str:
         """A person's page: every statement about them, each value with
-        its sources, under its property, and each death event of theirs
-        that states no date (``undated``, its sources as
-        ``undated_deaths`` gives them) under "death", where a statement of
-        a property labelled "death" would stand too; then the artifacts
+        its sources, under its property, a date of death of unknown value
+        as "died (date not stated)"; under the date of death too, each
+        "died by" date the shared derivation gives (``derived_html``) and
+        each death event a curator makes of theirs that states no date
+        (``undated``, its sources as ``undated_deaths`` gives them); then
+        the unions they take part in (``union_html``) and the artifacts
         that name them."""
         qid = qid_of(person, "person")
         label = cell(person, "personLabel") or qid
@@ -1395,13 +2103,18 @@ class SiteBuilder:
             if qid_of(row, "prop") == self.properties.get("instance_of"):
                 continue
             grouped[prop].append(self.render_value(row))
+        died = disagreement.property_labels()["date_of_death"]
+        grouped[died] += self.derived_html(qid)
         for sources in undated or []:
-            grouped["death"].append(self.undated_death_html(sources))
+            grouped[died].append(self.undated_death_html(sources))
+        if not grouped[died]:
+            del grouped[died]
         body.append('<dl class="statements">')
         for prop in sorted(grouped):
             body.append(f"<dt>{esc(prop)}</dt>")
             body += [f"<dd>{entry}</dd>" for entry in grouped[prop]]
         body.append("</dl>")
+        body.append(self.union_html(qid, unions or []))
         body.append(self.named_in_html(naming or []))
         body.append(
             f'<p class="sub">'
@@ -1410,10 +2123,23 @@ class SiteBuilder:
         )
         return self._page(label, "".join(body), root="../")
 
+    def unknown_text(self, row: dict) -> str:
+        """How a value its source states exists but does not give shows,
+        by the statement's property: a death "died (date not stated)", a
+        burial "buried (place not stated)" (ADR-0040 §2.2, Q3)."""
+        prop = qid_of(row, "prop")
+        if prop and prop == self.properties.get("date_of_death"):
+            return UNDATED_DEATH
+        if prop and prop == self.properties.get("burial_place"):
+            return UNPLACED_BURIAL
+        return UNSTATED_VALUE
+
     def render_value(self, row: dict) -> str:
         value = row.get("value", {})
         raw = value.get("value", "")
-        if value.get("type") == "uri" and "/entity/Q" in raw:
+        if unknown_value(row):
+            rendered = esc(self.unknown_text(row))
+        elif value.get("type") == "uri" and "/entity/Q" in raw:
             target = raw.rsplit("/", 1)[-1]
             text = cell(row, "valueLabel") or target
             rendered = f'<a href="{esc(target)}.html">{esc(text)}</a>'
@@ -1566,7 +2292,20 @@ class SiteBuilder:
                 )
                 value = row.get("value", {})
                 raw = value.get("value", "")
-                if value.get("datatype", "").endswith("dateTime"):
+                if unknown_value(row):
+                    # never its blank node: what its source states
+                    shown = esc(
+                        self.unknown_text(
+                            {
+                                "prop": {
+                                    "value": self.prop_of_label(
+                                        cell(row, "propLabel")
+                                    )
+                                }
+                            }
+                        )
+                    )
+                elif value.get("datatype", "").endswith("dateTime"):
                     shown = esc(
                         format_time(raw, cell(row, "precision"), where)
                     )
@@ -1597,6 +2336,19 @@ class SiteBuilder:
             f"curate {qid} in the wiki</a></p>"
         )
         return self._page(label, "".join(body), root="../")
+
+    def prop_of_label(self, label: str) -> str:
+        """The instance's id of the manifest property labelled `label`,
+        or "" for none."""
+        labels = disagreement.property_labels()
+        return next(
+            (
+                self.properties[key]
+                for key, shown in labels.items()
+                if shown == label and key in self.properties
+            ),
+            "",
+        )
 
     def index_page(self, people: list[dict], artifacts: list[dict]) -> str:
         body = ["<h1>Family archive</h1>"]
@@ -1635,12 +2387,44 @@ class SiteBuilder:
         self,
         rows: list[dict],
         undated: dict[str, list[tuple[tuple[str, str], ...]]] | None = None,
+        unknown: dict[str, list[tuple[tuple[str, str], ...]]] | None = None,
+        unions: list[UnionShown] | None = None,
     ) -> str:
-        """The timeline: every dated row of the person-timeline query,
-        under its year, each with its source; then, under "No date
-        stated", each death a source gives no date for (``undated``, by
-        the QID of the one who died, its sources as ``undated_deaths``
-        gives them), by the name of the one who died."""
+        """The timeline: every dated row of the person-timeline query, under
+        its year, each with its source, and among a person's rows, at its date,
+        each "died by" date the shared derivation gives them, labelled as
+        derived (ADR-0040 §2.4). Each date of death of unknown value
+        (``unknown``, by the QID of the one who died, its sources as
+        ``unknown_deaths`` gives them) and each union's end by a partner's
+        death, stated or derived (``unions``, ``union_ends``; §2.6), shows
+        beside that person's first death entry: a dated date of death, or the
+        point in time of a curator's death event they are the principal of
+        (§6). Each union's end by an event (a divorce, ``other_ends``)
+        stands among each partner's rows at the event's date, with its
+        sources. Then, under "No date stated", each of those that has no
+        such entry to stand beside or date, and each death event a curator
+        makes that states no date (``undated``, as ``undated_deaths`` gives
+        them), by the name of the one it is about."""
+        beside: dict[str, list[str]] = defaultdict(list)
+        for qid, deaths in (unknown or {}).items():
+            for sources in deaths:
+                beside[qid].append(
+                    f'<a href="people/{esc(qid)}.html">'
+                    f"{esc(self._name(qid))}"
+                    "</a>, " + self.undated_death_html(sources, root="")
+                )
+        undated_ends: list[str] = []
+        for union in unions or []:
+            for qid, entry in self.union_ends(union):
+                beside[qid].append(entry)
+            for qid, row in self.other_ends(union):
+                if "_dated" not in row:
+                    undated_ends.append(
+                        f'<a href="people/{esc(qid)}.html">'
+                        f"{esc(self._name(qid))}</a>: {row['_what']}"
+                    )
+        died = disagreement.property_labels()["date_of_death"]
+        death_type = load_manifest().items["death"].label
         body = [
             "<h1>Timeline</h1>",
             '<p class="sub">every dated assertion, labeled by its source — '
@@ -1652,11 +2436,28 @@ class SiteBuilder:
             "its latest start date and an end from its earliest end date to "
             "its latest date. An event's own start or end time, like any "
             "other date, runs from its earliest date to its latest date. A "
-            "date its source gives as circa says so there too.</p>",
+            "date its source gives as circa says so there too. A date "
+            "marked derived is no source's: a view works it out from the "
+            "statements it names.</p>",
             '<div class="timeline">',
         ]
         current_year = None
-        for row in rows:
+
+        def is_death(row: dict) -> bool:
+            # a derived date is no source's, so nothing stands beside it;
+            # nor anything beside a union's end
+            if "_html" in row or "_what" in row:
+                return False
+            if cell(row, "what") == died:
+                return True
+            types = {
+                urllib.parse.unquote(each)
+                for each in cell(row, "eventTypes").split("|")
+                if each
+            }
+            return death_type in types and not cell(row, "what")
+
+        for row in self._with_derived(rows, unions or []):
             date = cell(row, "date")
             person = qid_of(row, "person")
             where = f"{person} timeline date"
@@ -1670,45 +2471,145 @@ class SiteBuilder:
             if year != current_year:
                 current_year = year
                 body.append(f'<div class="year">{esc(year)}</div>')
-            source_qid = qid_of(row, "source")
-            source_label = cell(row, "sourceLabel")
-            source = (
-                f'<span class="source">'
-                f'<a href="artifacts/{esc(source_qid)}.html">'
-                f"{esc(source_label)}</a></span>"
-                if source_label and source_qid.startswith("Q")
-                else ""
-            )
-            body.append(
-                '<div class="entry">'
-                f"{esc(format_time(date, cell(row, 'precision'), where))}"
-                f"{qualifier_span(self.timeline_qualifiers(row))} — "
+            shown_date = esc(format_time(date, cell(row, "precision"), where))
+            link = (
                 f'<a href="people/{esc(person)}.html">'
                 f"{esc(cell(row, 'personLabel'))}</a>, "
-                f"{esc(self.timeline_what(row))}" + source + "</div>"
             )
+            if "_html" in row:
+                body.append(
+                    f'<div class="entry">{shown_date} — {link}'
+                    f"{row['_html']}</div>"
+                )
+            else:
+                source_qid = qid_of(row, "source")
+                source_label = cell(row, "sourceLabel")
+                source = (
+                    f'<span class="source">'
+                    f'<a href="artifacts/{esc(source_qid)}.html">'
+                    f"{esc(source_label)}</a></span>"
+                    if source_label and source_qid.startswith("Q")
+                    else ""
+                )
+                what = esc(self.timeline_what(row))
+                if "_what" in row:
+                    # a union's end, with its own sources, then its date's
+                    what = row["_what"] + ("; its date" if source else "")
+                body.append(
+                    f'<div class="entry">{shown_date}'
+                    f"{qualifier_span(self.timeline_qualifiers(row))} — "
+                    f"{link}{what}" + source + "</div>"
+                )
+            if is_death(row):
+                # a death its source states without its date, and a union
+                # ended by the death, beside a dated death of the same
+                # person (ADR-0040 §6)
+                body += [
+                    f'<div class="entry">{entry}</div>'
+                    for entry in beside.pop(person, [])
+                ]
         body.append("</div>")
         entries = reading_order(
-            (
-                f'<a href="people/{esc(qid)}.html">'
-                f"{esc(cell(self.people.get(qid, {}), 'personLabel') or qid)}"
-                "</a>, ",
-                self.undated_death_html(sources, root=""),
-            )
-            for qid, deaths in (undated or {}).items()
-            for sources in deaths
+            [
+                *(
+                    (
+                        f'<a href="people/{esc(qid)}.html">'
+                        f"{esc(self._name(qid))}"
+                        "</a>, ",
+                        self.undated_death_html(sources, root=""),
+                    )
+                    for qid, deaths in (undated or {}).items()
+                    for sources in deaths
+                ),
+                *(
+                    (entry, "")
+                    for qid in sorted(beside, key=natural_order)
+                    for entry in beside[qid]
+                ),
+                *((entry, "") for entry in undated_ends),
+            ]
         )
         if entries:
             body.append(
                 '<h2>No date stated</h2><p class="sub">each death a source '
-                "states with no date, so that it has no place above, with "
-                'its source</p><div class="timeline">'
+                "states with no date, and each union's end by an event that "
+                "states none, so that it has no place above, with its "
+                'source</p><div class="timeline">'
                 + "".join(
                     f'<div class="entry">{entry}</div>' for entry in entries
                 )
                 + "</div>"
             )
         return self._page("Timeline", "".join(body))
+
+    def _name(self, qid: str) -> str:
+        """A listed person's label, or their QID."""
+        return cell(self.people.get(qid, {}), "personLabel") or qid
+
+    def _with_derived(
+        self, rows: list[dict], unions: list[UnionShown] = ()
+    ) -> list[dict]:
+        """The person-timeline rows, ordered by person and then by date,
+        with a row (its HTML under ``_html``) among its person's rows at
+        its date, after any row of the same date, for each derived "died
+        by" date and each dated end of a union by an event (``other_ends``);
+        a person the rows do not name has theirs at the end."""
+        pending: dict[str, list[dict]] = defaultdict(list)
+
+        def add(qid: str, stamp: str, precision: str, shown: str) -> None:
+            pending[qid].append(
+                {
+                    "person": {
+                        "type": "uri",
+                        "value": f"{self.config.concept_uri}/entity/{qid}",
+                    },
+                    "personLabel": {
+                        "type": "literal",
+                        "value": self._name(qid),
+                    },
+                    "date": {"type": "literal", "value": stamp},
+                    "precision": {"type": "literal", "value": precision},
+                    "_html": shown,
+                }
+            )
+
+        for bound in self._derived:
+            qid = bound.person.rsplit("/", 1)[-1]
+            if qid in self.people:
+                add(
+                    qid,
+                    *when_time(bound.by),
+                    self.died_by_html(bound, root=""),
+                )
+        for union in unions:
+            for qid, row in self.other_ends(union):
+                if "_dated" in row:
+                    pending[qid].append(row)
+        for found in pending.values():
+            found.sort(key=lambda row: _day(cell(row, "date")))
+
+        merged: list[dict] = []
+        previous = None
+
+        def flush(qid, before=None):
+            waiting = pending.get(qid, [])
+            while waiting and (
+                before is None or _day(cell(waiting[0], "date")) < before
+            ):
+                merged.append(waiting.pop(0))
+
+        for row in rows:
+            person = qid_of(row, "person")
+            if previous is not None and person != previous:
+                flush(previous)
+            flush(person, _day(cell(row, "date")))
+            merged.append(row)
+            previous = person
+        if previous is not None:
+            flush(previous)
+        for qid in sorted(pending, key=natural_order):
+            flush(qid)
+        return merged
 
     def timeline_feed(self, rows: list[dict]) -> str:
         """TimelineJS-compatible JSON, if the user later wants that UI.
@@ -1952,6 +2853,10 @@ class SiteBuilder:
                     str(precision),
                     f"{row.entity_qid} {row.property}",
                 )
+                if value.derived:
+                    # a "died by" date the shared derivation gives, never a
+                    # value a source states (ADR-0040 §2.4)
+                    return esc(f"died by {shown} (derived)")
                 return esc(shown) + stated_range(row, side)
             if value.term.kind == "uri":
                 return esc(value.label or value.term.value.rsplit("/", 1)[-1])

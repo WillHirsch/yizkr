@@ -22,6 +22,7 @@ from yizkr.core.privacy import (
     CENTURY,
     DEATH_EVIDENCE_PROPERTIES,
     DECADE,
+    ENDED_BY_DEATH_QUERY,
     EVENT_DEATH_PROPERTIES,
     FAMILY_CLASS,
     MILLENNIUM,
@@ -37,6 +38,7 @@ from yizkr.core.privacy import (
     YEAR,
     Participation,
     birth_event_dates_query,
+    ended_by_death_query,
     event_kinds,
     event_principal,
     family_type,
@@ -608,6 +610,8 @@ DOCUMENTED_SUBJECT_EVIDENCE = (
     "place_of_death",
     "burial_place",
     "cause_of_death",
+    # a statement on the person, death evidence (ADR-0040 Q1)
+    "age_at_death",
     "father",
     "mother",
     "spouse",
@@ -635,6 +639,8 @@ DOCUMENTED_VALUE_EVIDENCE = (
     "sibling",
     "relative",
     "gave_refuge_to",
+    # the partner whose death ended a union (ADR-0040 §5)
+    "ended_by_death_of",
 )
 DOCUMENTED_PERSON_EVENTS = (
     "birth",
@@ -1039,16 +1045,22 @@ class TestPrincipalsByEvent:
 
 
 def evidence_runner(
-    calls=None, *, participants=EVENT_PARTICIPANTS, births=EVENT_PEOPLE_BIRTHS
+    calls=None,
+    *,
+    participants=EVENT_PARTICIPANTS,
+    births=EVENT_PEOPLE_BIRTHS,
+    ended=(),
 ):
     """A query runner that answers the evidence queries with the event
-    cases."""
+    cases, and `ended` for the people unions are ended by the death of."""
 
     def run(query: str) -> list[dict]:
         if calls is not None:
             calls.append(query)
         if "?eventKind" in query:
             return participants
+        if "?union wdt:" in query:
+            return list(ended)
         if "/ps:" in query:
             return EVENT_BIRTHS
         if 'BIND("value" AS ?bound)' in query:
@@ -1074,7 +1086,8 @@ class TestReadEvidence:
         )
 
     def test_a_death_event_marks_its_principal_alone(self):
-        assert self.read().died == {"Q321"}
+        found = self.read()
+        assert found.died == found.death_events == {"Q321"}
 
     def test_a_birth_event_is_a_further_birth_of_its_principal(self):
         found = self.read()
@@ -1123,6 +1136,7 @@ class TestReadEvidence:
             "PREFIXES\n" + BIRTHS_QUERY.format(**properties),
             "PREFIXES\n" + participants_query(properties, items),
             "PREFIXES\n" + birth_event_dates_query(properties, items),
+            "PREFIXES\n" + ended_by_death_query(properties),
         ]
 
     def test_no_birth_event_reads_no_event_dates(self):
@@ -1130,7 +1144,39 @@ class TestReadEvidence:
         read_evidence(
             evidence_runner(calls, participants=[]), "", *self.vocabulary()
         )
-        assert len(calls) == 2
+        assert len(calls) == 3
+
+    def test_a_union_ended_by_a_death_releases_that_partner(self):
+        # Q9 (ADR-0040): "Witwer der Cäcilie" ends the union by her death,
+        # which is evidence that she died, for her alone
+        found = self.read(
+            participants=[],
+            ended=[
+                {"person": {"type": "uri", "value": f"{CONCEPT}/entity/Q350"}}
+            ],
+        )
+        assert "Q350" in found.died
+        assert not is_possibly_living([], "Q350" in found.died, CUTOFF)[0]
+        # kept apart from the death events, for the run record's causes
+        assert found.ended == {"Q350"}
+        assert found.death_events == set()
+
+    def test_the_union_end_query_reads_item_values_at_their_truthy_rank(
+        self,
+    ):
+        # an unknown value names no one, a deprecated end releases no one,
+        # and the value is read through its redirect
+        query = " ".join(ENDED_BY_DEATH_QUERY.split())
+        assert "?union wdt:{ended_by_death_of} ?named ." in query
+        assert "FILTER(isIRI(?named))" in query
+        assert "?named {same_as}* ?person ." in query
+
+    def test_an_instance_without_the_property_reads_no_end(self):
+        calls = []
+        properties, items = self.vocabulary()
+        del properties["ended_by_death_of"]
+        read_evidence(evidence_runner(calls), "", properties, items)
+        assert not any("?union wdt:" in call for call in calls)
 
 
 class TestTheEventQueries:

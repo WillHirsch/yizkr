@@ -625,7 +625,7 @@ ENTITIES = [
     {"id": "eugen", "label": "Eugen Löbig", "kind": "human"},
     {"id": "gustav", "label": "Gustav Löbig", "kind": "human"},
     {"id": "floerburg", "label": "Flörburg", "kind": "place"},
-    {"id": "birth", "label": "Gustav's birth", "kind": "birth"},
+    {"id": "wedding", "label": "the 1905 wedding", "kind": "wedding"},
 ]
 
 
@@ -837,7 +837,9 @@ class TestAKindKeyIsNoValue:
         [
             # the manifest's kind key for periods, not a period
             (
-                about("birth", "time_period", vocab_item("time_period_class")),
+                about(
+                    "wedding", "time_period", vocab_item("time_period_class")
+                ),
                 "time_period_class",
             ),
             # the class of places, not a country
@@ -874,11 +876,11 @@ class TestAKindKeyIsNoValue:
             # an existing class, named by its QID
             about("gustav", "instance_of", qid_item("Q5")),
             # an existing period item, named by its QID
-            about("birth", "time_period", qid_item("Q88")),
+            about("wedding", "time_period", qid_item("Q88")),
             # a vocabulary value the property names
             about("gustav", "sex_or_gender", vocab_item("male")),
             about(
-                "birth",
+                "wedding",
                 "point_in_time",
                 {"type": "time", "year": 1919},
                 {
@@ -944,7 +946,7 @@ class TestAKindKeyIsNoValue:
         ],
     )
     def test_anything_else_is_refused(self, value, reason):
-        found = problems_of(about("birth", "time_period", value))
+        found = problems_of(about("wedding", "time_period", value))
         assert any(reason in problem for problem in found), found
 
     def test_it_is_a_counted_reject_that_sinks_no_other_claim(self):
@@ -953,7 +955,9 @@ class TestAKindKeyIsNoValue:
         valid, rejects = salvage_valid_claims(
             [
                 about("gustav", "residence", local_item("floerburg")),
-                about("birth", "time_period", vocab_item("time_period_class")),
+                about(
+                    "wedding", "time_period", vocab_item("time_period_class")
+                ),
             ],
             RUN,
             entities=ENTITIES,

@@ -1,16 +1,17 @@
 """Live write path for a document-subject claim whose mention a curator
 confirms as an existing item (#670, ADR-0039 §10.1(c)).
 
-The 1958 letter to Leopold encloses Rudolf's death certificate, held as
-the scan death-certificate-1941. The letter's batch names the
-certificate as an unclassified entity, and its `main_subject` → Rudolf's
-death stands on that mention. A curator confirms the mention is the held
-scan's item (reconcile.apply_equivalences), and the writer then writes
-the claim on that item, with both references (ADR-0003), and a re-run
-adds nothing. A person a curator confirmed as an item is no such
-subject: its claim is refused before the first write. The tests write
-fictional fixture data only, under test labels. Every title and label
-carries the session's marker (conftest.fixture_mark).
+The 1958 letter to Leopold encloses Rudolf's death certificate, held as the
+scan death-certificate-1941. The letter's batch names the certificate as an
+unclassified entity, and its `main_subject` → Rudolf stands on that mention (a
+death is statements on the person, ADR-0040 §1, so the certificate is about
+Rudolf). A curator confirms the mention is the held scan's item
+(reconcile.apply_equivalences), and the writer then writes the claim on that
+item, with both references (ADR-0003), and a re-run adds nothing. A person a
+curator confirmed as an item is no such subject: its claim is refused before
+the first write. The tests write fictional fixture data only, under test
+labels. Every title and label carries the session's marker
+(conftest.fixture_mark).
 """
 
 from __future__ import annotations
@@ -33,12 +34,13 @@ pytestmark = pytest.mark.live
 # what the fixture is; a change to it gives the fixture new items
 FIXTURE = (
     "#670: the 1958 letter's main_subject of the death certificate it "
-    "encloses, on the held scan a curator confirms its mention as"
+    "encloses, on the held scan a curator confirms its mention as; "
+    "#687: its subject Rudolf"
 )
 MARK = fixture_mark(FIXTURE, claims, reconcile, registrar, writer)
 LETTER_TITLE = f"Yizkr Confirmed-Mention Test Letter 1958 {MARK}"
 SCAN_TITLE = f"Yizkr Confirmed-Mention Test Death Certificate 1941 {MARK}"
-DEATH = f"Yizkr Confirmed-Mention Test Death of Rudolf Löbig {MARK}"
+RUDOLF = f"Yizkr Confirmed-Mention Test Rudolf Löbig {MARK}"
 # the refusal test's pair: a source and the item a person is confirmed as
 REFUSAL_LETTER_TITLE = f"Yizkr Confirmed-Person Test Letter 1958 {MARK}"
 REFUSAL_SCAN_TITLE = (
@@ -69,7 +71,7 @@ def _batch(sha1: str, kind: str = "unclassified_entity") -> ClaimBatch:
                         "value": {
                             "kind": "local",
                             "local_id": "d1",
-                            "label": DEATH,
+                            "label": RUDOLF,
                         },
                     },
                     "source": {
@@ -83,7 +85,7 @@ def _batch(sha1: str, kind: str = "unclassified_entity") -> ClaimBatch:
             ],
             "entities": [
                 {"id": "u1", "label": "death certificate", "kind": kind},
-                {"id": "d1", "label": DEATH, "kind": "death"},
+                {"id": "d1", "label": RUDOLF, "kind": "human"},
             ],
         }
     )
@@ -119,9 +121,9 @@ def test_a_confirmed_mention_s_claim_is_written_on_the_held_scan(client):
     result = write_mapped(BatchWriter(client), batch)
     assert (result.written, result.skipped, result.refused) == (1, 0, [])
     assert "u1" not in result.created_items
-    death = result.created_items["d1"]
+    rudolf = result.created_items["d1"]
     (statement,) = _main_subjects(client, scan.qid)
-    assert statement["mainsnak"]["datavalue"]["value"]["id"] == death
+    assert statement["mainsnak"]["datavalue"]["value"]["id"] == rudolf
     assert statement["rank"] == "normal"
     assert _cited(client, statement, "stated_in") == {letter.qid}
     runs = _cited(client, statement, "inferred_from_extraction_run")
@@ -151,7 +153,7 @@ def test_a_confirmed_person_is_no_document_subject(client):
     (claim,) = batch.claims
     assert result.refused == [claim_id(claim)]
     assert (result.written, result.skipped) == (0, 0)
-    # refused before any of its refs resolves: the death is never minted
+    # refused before any of its refs resolves: Rudolf is never minted
     assert "d1" not in result.created_items
     assert _main_subjects(client, scan.qid) == []
     assert _main_subjects(client, letter.qid) == []

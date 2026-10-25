@@ -2,10 +2,11 @@
 
 Each claim the writer refuses whole counts under the one reason that
 refused it, of REFUSAL_REASONS, in the order the writer looks for them:
-a retired or reference property, the subject rules (ADR-0035 §3.4,
-ADR-0039 §2), a text the instance cannot hold, an entity the side rule
-blocks (ADR-0010; tests/unit/test_registration_flags.py), and an item
-value that is its subject's item. The counts keep every reason, in that
+a retired or reference property, the rules of deaths and births on the
+person (ADR-0040), the subject rules (ADR-0035 §3.4, ADR-0039 §2), a
+text the instance cannot hold, an entity the side rule blocks
+(ADR-0010; tests/unit/test_registration_flags.py), and an item value
+that is its subject's item. The counts keep every reason, in that
 order, and sum to the claims refused. Every example comes from the
 fictional universe (docs/EXAMPLES.md): the 1957 divorce judgment.
 """
@@ -60,6 +61,13 @@ CLAIMS = {
         "value": {"type": "item", "value": NAMED},
         "source": source(),
     },
+    # an unknown birth date, which no source states so (ADR-0040 §2.2)
+    "vital_rule": {
+        "subject": LEOPOLD,
+        "property": "date_of_birth",
+        "value": {"type": "unknown"},
+        "source": source(),
+    },
     # the judgment as the subject of a property that takes no artifact
     "subject_rule": named_as(JUDGMENT, "Landgericht Rekau"),
     "text": named_as(LEOPOLD, OVER_LIMIT),
@@ -100,11 +108,12 @@ class TestEachReason:
         assert list(by_reason) == list(REFUSAL_REASONS)
         assert by_reason == counts(
             retired_or_reference_property=1,
+            vital_rule=1,
             subject_rule=1,
             text=2,
             self_reference=1,
         )
-        assert sum(by_reason.values()) == len(result.refused) == 5
+        assert sum(by_reason.values()) == len(result.refused) == 6
         # each claim's reason, in batch order beside its claim id
         assert list(
             zip(result.refused, result.refusal_reasons, strict=True)
@@ -126,6 +135,7 @@ class TestEachReason:
         assert planned.refused_by_reason() == written.refused_by_reason()
         assert written.refused_by_reason() == counts(
             retired_or_reference_property=1,
+            vital_rule=1,
             subject_rule=1,
             text=1,
             self_reference=1,

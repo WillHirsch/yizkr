@@ -1995,6 +1995,159 @@ class TestContradictions:
         )
 
 
+class TestUnknownValues:
+    """#687 (ADR-0040 §2.2, §7): the claims of unknown value, by property
+    and source kind, and the manifest entities dropped for a kind only a
+    curator makes."""
+
+    @pytest.fixture
+    def counted(self, tmp_path) -> dict:
+        path = record(tmp_path / RUN_ID)
+        directory = path / slugify(Path(FILES[CERT][0]).stem)
+        view = json.loads((directory / "batch.json").read_text())
+        view["claims"].append(
+            {
+                **claim("e1", "date_of_death", "der selige Felix", CERT),
+                "value": {"type": "unknown"},
+            }
+        )
+        # the register's pastor, who only certifies the entry (§2.8)
+        view["entities"].append(
+            {
+                "id": "pastor",
+                "label": "Pfarrer Gerlach",
+                "kind": "human",
+                "extract": False,
+            }
+        )
+        (directory / "batch.json").write_text(json.dumps(view))
+        covered = directory / "extraction" / "coverage.json"
+        counts = json.loads(covered.read_text())
+        counts["manifest_vital_kind"] = {"death": 2, HOSTILE: 1}
+        covered.write_text(json.dumps(counts))
+        return build(path, now=NOW)
+
+    def test_they_are_counted(self, counted):
+        content = counted["aggregate"]["content"]
+        assert content["claims"]["unknown_values_by_property"] == {
+            "date_of_death": 1
+        }
+        assert sum(content["claims"]["unknown_values_by_kind"].values()) == 1
+        assert content["entities"]["not_extracted_by_kind"]["human"] >= 1
+        rejects = content["rejects"]
+        assert rejects["manifest_vital_kind_by_kind"] == {
+            "death": 2,
+            OTHER: 1,
+        }
+        assert rejects["manifest_vital_kind_absent"] == (
+            rejects["extractions"] - 1
+        )
+
+    def test_report_md_gives_them(self, counted):
+        text = render_markdown(counted["aggregate"])
+        assert "Claims of unknown value by property: date_of_death 1;" in text
+        assert "not extracted (by kind: human" in text
+        assert "Gerlach" not in text
+        assert (
+            "Entity-manifest entities dropped for a kind only a curator "
+            f"makes: death 2, {OTHER} 1"
+        ) in text
+        assert "der selige" not in text
+        assert leaks(text) == []
+
+
+PRIVACY = {
+    "people": 4,
+    "possibly_living": 1,
+    "released": 3,
+    "releases": {
+        "date_of_death": 1,
+        "unknown_date_of_death": 1,
+        "ended_by_death_of": 1,
+        "birth_cutoff": 1,
+    },
+    "ended_by_death_of_alone": 1,
+    "unknown_date_of_death_by_source": {
+        "certificate": 1,
+        "Gustav Löbig": 1,
+    },
+    "derived_by_source": {"certificate": 2, "no type stated": 1},
+}
+
+
+class TestReleases:
+    """#687 (ADR-0040 §7): the site stage's record keeps the
+    possibly-living count and the releases by cause it counted on the
+    written graph; the report reads them from it."""
+
+    def test_a_site_record_with_counts(self, run):
+        site_record(run, privacy=PRIVACY)
+        aggregate = build(run, now=NOW)["aggregate"]
+        assert aggregate["content"]["releases"] == {
+            "people": 4,
+            "possibly_living": 1,
+            "released": 3,
+            "by_cause": {
+                "date_of_death": 1,
+                "unknown_date_of_death": 1,
+                "age_at_death": 0,
+                "unknown_burial_place": 0,
+                "other_death_property": 0,
+                "ended_by_death_of": 1,
+                "death_event": 0,
+                "birth_cutoff": 1,
+            },
+            "ended_by_death_of_alone": 1,
+            # a type the manifest does not hold folds into OTHER
+            "unknown_date_of_death_by_source": {"certificate": 1, OTHER: 1},
+            "derived_by_source": {"certificate": 2, "no type stated": 1},
+        }
+        text = render_markdown(aggregate)
+        assert (
+            "4 people listed, as the site stage counted them on the written "
+            "graph: 1 possibly living, 3 released."
+        ) in text
+        assert "released by a union's end alone: 1." in text
+        assert (
+            'Derived "died by" dates by the type of the document each rests '
+            "on: certificate 2, no type stated 1."
+        ) in text
+        assert "Releases by cause: not available" not in text
+        assert "Löbig" not in text
+        assert leaks(text) == []
+
+    def test_an_older_site_record_counts_none(self, run):
+        site_record(run)
+        aggregate = build(run, now=NOW)["aggregate"]
+        assert aggregate["content"]["releases"] == {
+            "status": NOT_AVAILABLE,
+            "why": "the run's site stage did not record them",
+        }
+        assert (
+            "Releases by cause: not available: the run's site stage did not "
+            "record them"
+        ) in render_markdown(aggregate)
+
+    @pytest.mark.parametrize(
+        "changed",
+        [
+            {"people": "4"},
+            {"released": True},
+            {"releases": {"date_of_death": -1}},
+            {"derived_by_source": []},
+        ],
+    )
+    def test_a_record_of_another_shape_counts_none(self, run, changed):
+        site_record(run, privacy={**PRIVACY, **changed})
+        releases = build(run, now=NOW)["aggregate"]["content"]["releases"]
+        assert releases["status"] == NOT_AVAILABLE
+
+    def test_a_run_with_no_site_stage(self, made):
+        assert made["aggregate"]["content"]["releases"]["status"] == (
+            NOT_AVAILABLE
+        )
+
+
 # -- the anomalies ------------------------------------------------------------
 
 

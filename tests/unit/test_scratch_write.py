@@ -815,6 +815,28 @@ class TestTheSite:
         record, rather than record 0."""
         run.past_the_barrier()
         assert "disagreements" not in run.record("site")
+        assert "privacy" not in run.record("site")
+
+    def test_the_site_records_its_releases_by_cause(self, run, monkeypatch):
+        """#687: the site's record keeps the possibly-living count and the
+        releases by cause its build counted, as counts alone."""
+        privacy = {
+            "people": 2,
+            "possibly_living": 1,
+            "released": 1,
+            "releases": {"ended_by_death_of": 1},
+            "ended_by_death_of_alone": 1,
+            "unknown_date_of_death_by_source": {},
+            "derived_by_source": {},
+        }
+
+        def site(config, out):
+            run.sites.append(out)
+            return {"people": 2, "artifacts": 3, "privacy": privacy}
+
+        monkeypatch.setattr(scratchwrite, "build_site", site)
+        run.past_the_barrier()
+        assert run.record("site")["privacy"] == privacy
 
     def test_a_query_service_that_never_shows_the_run_fails_it(
         self, run, monkeypatch
@@ -1693,6 +1715,7 @@ def test_the_record_counts_the_claims_naming_their_own_subjects_item(
     # and by reason, every reason in its order (#552)
     assert documents[letter.sha1]["refused_by_reason"] == {
         "retired_or_reference_property": 0,
+        "vital_rule": 0,
         "subject_rule": 1,
         "text": 0,
         "side_rule": 0,
@@ -1716,6 +1739,7 @@ def test_the_record_counts_the_claims_naming_their_own_subjects_item(
     assert content["write"]["claims_self_referencing"] == 1
     assert content["write"]["claims_refused_by_reason"] == {
         "retired_or_reference_property": 0,
+        "vital_rule": 0,
         "subject_rule": 1,
         "text": 0,
         "side_rule": 0,
@@ -1723,7 +1747,8 @@ def test_the_record_counts_the_claims_naming_their_own_subjects_item(
     }
     (section,) = report._write_sections(content)
     assert (
-        "2 refused: 0 for a retired or reference property, 1 for the "
+        "2 refused: 0 for a retired or reference property, 0 for the "
+        "rules of deaths and births on the person, 1 for the "
         "subject rules, 0 for a text the instance cannot hold, 0 for an "
         "entity the side rule blocks, 1 for an item value that is the "
         "subject's item; " in section.blocks[0][0]

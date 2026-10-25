@@ -1187,6 +1187,9 @@ def run_site(context: Any) -> list[str]:
             "total": total,
             "by_property": by_property,
         }
+    # the possibly-living count and the releases by cause (ADR-0040 §7)
+    if isinstance(summary.get("privacy"), dict):
+        record["privacy"] = summary["privacy"]
     save_record(context.directory, record)
     context.log(
         f"{SITE}: built in {out} for scratch run {expected} "

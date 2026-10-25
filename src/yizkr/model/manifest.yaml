@@ -159,12 +159,18 @@ properties:
     description: date on which the subject was born, as asserted by a source
     datatype: time
     wikidata: P569
+    subjects: [human, unclassified_entity]
 
   date_of_death:
     label: date of death
-    description: date on which the subject died, as asserted by a source
+    description: >-
+      date on which the subject died, as asserted by a source; a source
+      that states the death but not its date gives the unknown value,
+      with the words that state it as its excerpt (ADR-0040 §2.2)
     datatype: time
     wikidata: P570
+    unknown_value: true
+    subjects: [human, unclassified_entity]
 
   place_of_birth:
     label: place of birth
@@ -172,6 +178,7 @@ properties:
     datatype: wikibase-item
     accepts: [place, unclassified_entity]
     wikidata: P19
+    subjects: [human, unclassified_entity]
 
   place_of_death:
     label: place of death
@@ -179,14 +186,17 @@ properties:
     datatype: wikibase-item
     accepts: [place, unclassified_entity]
     wikidata: P20
+    subjects: [human, unclassified_entity]
 
   age_at_death:
     label: age at death
     description: >-
-      age at death exactly as asserted by a source (qualifier on date of
-      death). Redundant with birth/death dates but still a source
-      assertion; kept verbatim, never derived. No Wikidata equivalent.
+      a person's age at death exactly as a source states it ("73 Jahre"),
+      verbatim and never derived: a statement on the person, which needs
+      no date of death beside it (ADR-0040 Q1). Nearest Wikidata form:
+      the qualifier age at event (P3629)
     datatype: string
+    subjects: [human, unclassified_entity]
 
   said_to_be_the_same_as:
     label: said to be the same as
@@ -201,14 +211,20 @@ properties:
 
   father:
     label: father
-    description: male parent of the subject
+    description: >-
+      male parent of the subject; qualify with parentage only where the
+      source states the kind (adoptive, foster, birth), and keep its word
+      in kinship_type (ADR-0040 §4)
     datatype: wikibase-item
     accepts: [human, unclassified_entity]
     wikidata: P22
 
   mother:
     label: mother
-    description: female parent of the subject
+    description: >-
+      female parent of the subject; qualify with parentage only where the
+      source states the kind (adoptive, foster, birth), and keep its word
+      in kinship_type (ADR-0040 §4)
     datatype: wikibase-item
     accepts: [human, unclassified_entity]
     wikidata: P25
@@ -248,9 +264,10 @@ properties:
   kinship_type:
     label: kinship type
     description: >-
-      qualifier on `relative`: the relationship exactly as a source
-      words it ("maternal aunt", "cousin", "brother-in-law") — the
-      frontend maps it to the derived-kinship term set (ADR-0014)
+      qualifier on relative, father, mother, child or sibling: the
+      relationship exactly as a source words it ("maternal aunt",
+      "Adoptivvater", "Halbbruder"); the frontend maps it to the
+      derived-kinship term set (ADR-0014, ADR-0040 §4)
     datatype: string
 
   perspective:
@@ -311,10 +328,15 @@ properties:
 
   burial_place:
     label: place of burial
-    description: place where the subject is buried, as asserted by a source
+    description: >-
+      place where the subject is buried, as asserted by a source, with
+      the burial's own date as its point in time; a burial stated
+      without its place gives the unknown value (ADR-0040 Q3)
     datatype: wikibase-item
     accepts: [place, unclassified_entity]
     wikidata: P119
+    unknown_value: true
+    subjects: [human, unclassified_entity]
 
   cause_of_death:
     label: cause of death
@@ -325,6 +347,7 @@ properties:
       or translated
     datatype: monolingualtext
     wikidata: P509
+    subjects: [human, unclassified_entity]
 
   number_of_children:
     label: number of children
@@ -569,11 +592,10 @@ properties:
     label: object has role
     description: >-
       qualifier on participant: how the person took part, as one of the
-      participant role items (principal, parent, partner, spouse,
-      informant, witness, officiant); one participant may hold several
-      roles
+      participant role items (principal, partner, spouse, witness,
+      officiant); one participant may hold several roles
     datatype: wikibase-item
-    accepts: [principal, parent, partner, spouse, informant, witness, officiant]
+    accepts: [principal, partner, spouse, witness, officiant]
     wikidata: P3831
 
   kinship_class:
@@ -597,6 +619,9 @@ properties:
       - kin_child_in_law
       - kin_sibling_in_law
       - kin_relative
+      - kin_step_parent
+      - kin_step_child
+      - kin_step_sibling
 
   side:
     label: kinship side
@@ -696,10 +721,20 @@ properties:
     label: ended by
     description: >-
       partnership or marriage -> the event that ended it: a divorce, an
-      annulment, a partner's own death event, or an event of unstated
-      kind
+      annulment, or an event of unstated kind; a partner's death ends it
+      by ended_by_death_of instead (ADR-0040 §2.5)
     datatype: wikibase-item
-    accepts: [divorce, annulment, death, event, unclassified_entity]
+    accepts: [divorce, annulment, event, unclassified_entity]
+
+  ended_by_death_of:
+    label: ended by death of
+    description: >-
+      partnership or marriage -> the partner whose death ended it, only
+      where a source states the couple were married when that partner
+      died ("Witwer der", "widow of the late", "Ehefrau des"); never
+      from a marriage and a death stated apart (ADR-0040 §2.5)
+    datatype: wikibase-item
+    accepts: [human, unclassified_entity]
 
   # --- scratch runs (ADR-0025 §1): statements of a run item, never of
   # an extracted entity, so no prompt offers them ---
@@ -736,9 +771,10 @@ properties:
   author:
     label: author
     description: >-
-      document -> who wrote, drew or made it, as the document states of
-      itself (a signature, a studio's stamp on a mount) or a source's
-      passage conveys of a document it places or mentions
+      document -> who wrote, drew or made it, as it states of itself (a
+      letter's signature, a studio's stamp) or a source's passage conveys
+      of a document it places or mentions; a signature that only
+      certifies or registers is no authorship
     datatype: wikibase-item
     accepts: [human, organization, family, unclassified_entity]
     wikidata: P50
@@ -820,6 +856,15 @@ properties:
     accepts: [combined_from_sources]
     wikidata: P459
     offered: false
+
+  parentage:
+    label: parentage
+    description: >-
+      qualifier on father, mother or child: the kind of parenthood, birth,
+      adoptive or foster, set only where the source's words or tags state
+      it, never inferred (ADR-0040 §4)
+    datatype: wikibase-item
+    accepts: [parentage_birth, parentage_adoptive, parentage_foster]
 
 # `entity_kind: true` marks an item the extractor may type a
 # document-mentioned entity as (ADR-0007 manifest pass). The extraction
@@ -949,7 +994,8 @@ items:
     description: >-
       a marriage, as an entity and not an event: the couple are its
       participants, with the role spouse; started_by points to its
-      wedding, ended_by to a divorce, an annulment or a death (ADR-0036)
+      wedding, ended_by to a divorce or an annulment, ended_by_death_of
+      to a partner whose death ended it (ADR-0036, ADR-0040)
     subclass_of: partnership
     wikidata: Q8445
     entity_kind: true
@@ -958,16 +1004,21 @@ items:
 
   birth:
     label: birth
-    description: event of a person being born
+    description: >-
+      event of a person being born, made only by a curator: a source's
+      birth is statements on the person (ADR-0040 §3)
     subclass_of: event
     entity_kind: true
+    extracted: false
 
   death:
     label: death
-    description: event of a person dying
+    description: >-
+      event of a person dying, made only by a curator: a source's death is
+      statements on the person (ADR-0040 §2)
     subclass_of: event
     entity_kind: true
-
+    extracted: false
 
   migration:
     label: migration
@@ -1129,11 +1180,13 @@ items:
     label: principal
     description: >-
       participant role: the one an event happens to, such as the person
-      born in a birth or who died in a death; a birth's or a death's date
-      is its principal's alone
+      deported in a deportation, or born or died in an event a curator
+      makes; a curator's birth's or death's date is its principal's alone
   parent:
     label: parent
-    description: participant role; a parent of the principal, such as a parent named in a birth record
+    description: >-
+      retired participant role (ADR-0040 §3): a parent is the child's
+      father or mother; kept for the instance, offered by no property
   partner:
     label: partner
     description: participant role; one of the couple of a partnership (ADR-0036)
@@ -1142,7 +1195,9 @@ items:
     description: participant role; one of the couple of a marriage (ADR-0036)
   informant:
     label: informant
-    description: participant role; the person who reported the event to the record's keeper, such as the one who reported a birth or a death
+    description: >-
+      participant role, offered by no property (ADR-0040 §2.8): the person
+      who reported an event to the record's keeper
   witness:
     label: witness
     description: participant role; a witness of the event that the source names
@@ -1188,6 +1243,15 @@ items:
   kin_relative:
     label: relative (kinship class)
     description: kinship class; a relative whose kind the term does not make clear
+  kin_step_parent:
+    label: step-parent
+    description: kinship class; a step-father or a step-mother (ADR-0040 §4)
+  kin_step_child:
+    label: step-child
+    description: kinship class; a step-son or a step-daughter (ADR-0040 §4)
+  kin_step_sibling:
+    label: step-sibling
+    description: kinship class; a step-brother or a step-sister (ADR-0040 §4)
 
   # --- kinship sides (side values) ---
 
@@ -1236,6 +1300,18 @@ items:
   combined_from_sources:
     label: combined from sources
     description: determination method; a curator combined the values of the statement's references, none of which states the value alone
+
+  # --- kinds of parenthood (parentage values, ADR-0040 §4) ---
+
+  parentage_birth:
+    label: birth (parentage)
+    description: kind of parenthood; a birth parent, where the source states it
+  parentage_adoptive:
+    label: adoptive (parentage)
+    description: kind of parenthood; an adoptive parent, where the source states it
+  parentage_foster:
+    label: foster (parentage)
+    description: kind of parenthood; a foster parent, where the source states it
 
   # --- schema source (see schema_source_item above) ---
 

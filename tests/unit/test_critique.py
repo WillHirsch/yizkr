@@ -224,6 +224,9 @@ class TestCritique:
             "evidence_does_not_state",
             # any other claim whose excerpt fails the support test (#607)
             "excerpt_does_not_state",
+            # a stated birth or death that reaches no claim of its person
+            # (ADR-0040 §3)
+            "vital_not_on_person",
         ]
         assert "ADR-0031" in CATEGORIES["relation_kind_mismatch"]
 
@@ -1043,3 +1046,58 @@ def test_only_a_true_done_ends_the_answer():
     assert [reason for _, reason in llm.rejected] == [
         "critique: no terminal sentinel"
     ]
+
+
+class TestDeathsOnThePerson:
+    """ADR-0040 §3, §2.5: the critic flags a stated birth or death that
+    reaches no claim of its person, and lists an unknown value as one."""
+
+    @staticmethod
+    def late_felix() -> ClaimBatch:
+        # a hypothetical "der selige Felix", a death without its date
+        return ClaimBatch.model_validate(
+            {
+                "extraction_run": RUN,
+                "claims": [
+                    {
+                        "subject": {"kind": "local", "local_id": "e01"},
+                        "property": "date_of_death",
+                        "value": {"type": "unknown"},
+                        "source": {
+                            "artifact": SCAN.model_dump(),
+                            "transcription_excerpt": {
+                                "text": "der selige Felix",
+                                "language": "de",
+                            },
+                        },
+                    }
+                ],
+                "entities": [
+                    {"id": "e01", "label": "Felix Löbig", "kind": "human"}
+                ],
+            }
+        )
+
+    def test_an_unknown_value_is_listed_as_one(self):
+        llm = ScriptedLlm(response([]))
+        run_critique(llm, self.late_felix())
+        assert "e01 | date_of_death | unknown value" in llm.prompts[0]
+
+    def test_a_birth_that_reaches_no_claim_is_a_finding(self):
+        lost = {
+            "entity": "e01",
+            "axis": "existence",
+            "category": "vital_not_on_person",
+            "issue": "the page dates his birth, and no claim gives it",
+        }
+        (finding,) = run_critique(
+            ScriptedLlm(response([lost])), self.late_felix()
+        )
+        assert finding.category == "vital_not_on_person"
+
+    def test_the_prompt_checks_a_union_ends_value(self):
+        prompt = " ".join(CRITIQUE_PROMPT.split())
+        assert (
+            "A union's `ended_by_death_of` names the partner who died, never "
+            "the survivor" in prompt
+        )

@@ -164,7 +164,7 @@ comment above it.
 | A surname with a masculine and a feminine form | *Сартин* and *Сартина*: Pavel Sartin and his sister Nina (the 1958 letter) |
 | A name particle | *van 't Nijks*, kept whole in every name that carries it: *S. van 't Nijks* and *S. Faxridge-van 't Nijks* (the 1952 letter's envelope) |
 | Widow and "the late" markers (ADR-0040 §2.5) | *вдова Вашего покойного брата Рудольфа*, "the widow of your late brother Rudolf" (the 1958 letter); *Se is widdo sûnt ús sillige heit stoarn is*, "she is a widow since our late father died" (the 1952 letter). Each is one phrase that is both markers: it states that the couple were married when he died, so it gives the widow's `civil_status` `widowed` at the letter's date and their marriage `ended_by_death_of` him (ADR-0040's Q2). That end is the evidence of his death (Q9), and no death statement is written for him: the union end alone stands for the death (Q5). His "died by" date is derived when a view is built, never stored (below). The burial register's *Witwer der Cäcilie Löbig geb. Tarle* likewise gives Eugen's `civil_status` `widowed` at his death and their marriage `ended_by_death_of` Cäcilie. The directory's *Löbig, Ursula, Wwe.* names no spouse, so it would give the civil status alone (Amended by ADR-0040, 2026-10-24: until #686, the universe gave each letter's widow marker as a `spouse` claim and its "the late" as a death *before* the letter's date) |
-| A death stated without its date (ADR-0040 §2.2) | the 1905 certificate's *dessen verstorbener Ehefrau Cäcilie*, "his late wife Cäcilie": "his late wife" with no widowhood marked, so it gives Cäcilie a `date_of_death` of unknown value (`UNKNOWN`), cited to those words, and their marriage, with no union end (Q12); views derive the end. "The late" gives the unknown value in a dated document too. The GEDCOM export dates every `DEAT`, so its `1 DEAT Y` form waits for the adapter that gives it the unknown value (#687) |
+| A death stated without its date (ADR-0040 §2.2) | the 1905 certificate's *dessen verstorbener Ehefrau Cäcilie*, "his late wife Cäcilie": "his late wife" with no widowhood marked, so it gives Cäcilie a `date_of_death` of unknown value (`UNKNOWN`), cited to those words, and their marriage, with no union end (Q12); views derive the end. "The late" gives the unknown value in a dated document too. The GEDCOM export dates every `DEAT`; the adapter gives a `1 DEAT Y` the unknown value too (ADR-0040 Q4), and the live GEDCOM test writes one |
 | A union ended by a death (ADR-0040 §2.5) | Eugen and Cäcilie's marriage is `ended_by_death_of` Cäcilie twice: by the burial register's widower's word, and by her death register's *Ehefrau des Hutmachermeisters Eugen Löbig*, a death record that calls the deceased the survivor's wife, beside the death it dates. Rudolf and Nina's, and Sipkje's parents', by the letters' widow phrases. Each union is a `marriage` entity whose couple take part as spouses (ADR-0036); no source calls the partner whose death ended it widowed (the guard) |
 | "Died by" dates, derived (ADR-0040 §2.4) | `DERIVED_DIED_BY`, never stored: Cäcilie by 15 December 1905 (the certificate's own date, for its undated death), by 14 December 1902 (her death register's date, which states no widowhood) and by 16 March 1909 (Eugen's widowhood in the burial register); Rudolf by 25 December 1958 (Nina's widowhood on the letter's date), beside the certificate's 6 March 1941; Sipkje's father by 24 January 1952 |
 | A parent's kind (ADR-0040 §4) | the 1950 order of the Amtsgericht Flörburg (its `issued_by`) gives Alfred `father` → Leopold and `mother` → Agnes, each with `parentage` → `parentage_adoptive`, its word (*Adoptivvater*, *Adoptivmutter*) in `kinship_type` and the order's date, 25 May 1950, as `start_time`. His birth register names his birth parents, Ernst and Erna Luthorn, with no kind, since a register words none; a birth father and an adoptive father never disagree. The GEDCOM export gives the adoption as `2 PEDI adopted` beneath his `FAMC`, which the adapter counts and does not map |
@@ -221,13 +221,14 @@ People, places, entities (organisations, occupations, a vessel,
 events) and sources are ground truth, so tests can check identity and
 containment decisions against it. Everything said *about* them is a
 source-attributed `Assertion` in the archive's own vocabulary: manifest
-property ids, entity kinds and artifact classes. One value is planned
-rather than in the manifest yet, which `PLANNED_VOCABULARY` names:
-`parentage_adoptive`, which ADR-0040's build (#687) adds with the
-properties `parentage` and `ended_by_death_of` that `PLANNED_PROPERTIES`
-names; `machine_assisted`, which ADR-0008's follow-up B adds, joined the
-manifest with #666. An unknown value is `UNKNOWN`, on the properties
-`UNKNOWN_VALUE_PROPERTIES` names. `DERIVED_DIED_BY` gives the "died by"
+property ids, entity kinds and artifact classes. No value is planned
+rather than in the manifest now: `PLANNED_VOCABULARY` and
+`PLANNED_PROPERTIES` name any. `machine_assisted`, which ADR-0008's
+follow-up B adds, joined the manifest with #666, and
+`parentage_adoptive`, with the properties `parentage` and
+`ended_by_death_of`, with ADR-0040's build (#687). An unknown value is
+`UNKNOWN`, on the properties `UNKNOWN_VALUE_PROPERTIES` names, which the
+manifest marks `unknown_value`. `DERIVED_DIED_BY` gives the "died by"
 dates a view derives, and `NO_CLAIM` the passages that give no claim. `CONTRADICTIONS` and
 `REFINEMENTS` name the deliberate cases, and `NAMING_PATTERNS` names the
 passages that show each naming pattern mention records must handle

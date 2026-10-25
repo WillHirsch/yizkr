@@ -15,6 +15,7 @@ from yizkr.claims import (
     ClaimBatch,
     LocalRef,
     MonolingualText,
+    UnknownValue,
     VocabRef,
     structure_problems,
     validate_against_manifest,
@@ -379,16 +380,76 @@ class TestVocabulary:
         assert caecilie_sex.value.value.key == "female"
         assert not claims_for(batch, "i13", "sex_or_gender")
 
-    def test_burial_without_place_warns_and_skips(self):
+    def test_a_dated_burial_without_its_place_is_an_unknown_place(self):
+        # Q3: a burial stated with no place gives the place as unknown,
+        # with its point in time where dated
         result = adapt_gedcom(
-            "0 @I1@ INDI\n1 NAME A /B/\n1 BURI\n2 DATE 1900\n0 TRLR\n",
-            artifact=EXPORT,
+            eugen("1 BURI", "2 DATE 20 MAR 1909"), artifact=EXPORT
         )
-        assert any(
-            "BURI without a PLAC that names a place" in w
-            for w in result.warnings
+        (burial,) = claims_for(result.batch, "i1", "burial_place")
+        assert isinstance(burial.value, UnknownValue)
+        ((prop, when),) = [(q.property, q.value) for q in burial.qualifiers]
+        assert prop == "point_in_time"
+        assert (when.year, when.month, when.day) == (1909, 3, 20)
+        assert burial.source.transcription_excerpt.text == (
+            "1 BURI | 2 DATE 20 MAR 1909"
         )
-        assert not claims_for(result.batch, "i1", "burial_place")
+        assert (
+            result.outcomes["BURI with no place: unknown place of burial"] == 1
+        )
+
+    @pytest.mark.parametrize(
+        ("date", "kept"),
+        [
+            ("ABT 1909", {"point_in_time", "sourcing_circumstances"}),
+            ("BEF 1909", {"point_in_time", "latest_date"}),
+            (
+                "BET 1908 AND 1909",
+                {"point_in_time", "earliest_date", "latest_date"},
+            ),
+        ],
+    )
+    def test_an_unknown_place_keeps_its_burial_dates_uncertainty(
+        self, date, kept
+    ):
+        # Q3: the burial's own date, with its circa or its range, stays
+        # on the unknown place of burial, and the adapter does not fail
+        result = adapt_gedcom(
+            eugen("1 BURI", f"2 DATE {date}"), artifact=EXPORT
+        )
+        (burial,) = claims_for(result.batch, "i1", "burial_place")
+        assert isinstance(burial.value, UnknownValue)
+        assert {q.property for q in burial.qualifiers} >= kept
+        assert validate_against_manifest(result.batch) == []
+
+    def test_a_buri_y_is_an_undated_unknown_place(self):
+        result = adapt_gedcom(eugen("1 BURI Y"), artifact=EXPORT)
+        (burial,) = claims_for(result.batch, "i1", "burial_place")
+        assert isinstance(burial.value, UnknownValue)
+        assert burial.qualifiers == []
+        # a burial gives no date of death (§2.2)
+        assert claims_for(result.batch, "i1", "date_of_death") == []
+
+    @pytest.mark.parametrize(
+        "lines",
+        [["1 BURI"], ["1 BURI", "2 NOTE Friedhof"], ["1 BURI N"]],
+        ids=["bare", "NOTE", "N"],
+    )
+    def test_a_buri_that_states_no_burial_gives_no_claim(self, lines):
+        # a BURI follows a DEAT's rules (Q3, Q4), its census included
+        result = adapt_gedcom(eugen(*lines), artifact=EXPORT)
+        assert claims_for(result.batch, "i1", "burial_place") == []
+        assert result.unsupported_tags == {"BURI": 1}
+
+    @pytest.mark.parametrize(
+        "lines",
+        [["1 BURI", "2 DATE SOMEDAY MAYBE"], ["1 BURI", "2 PLAC unbekannt"]],
+        ids=["unparsed-date", "placeholder-PLAC"],
+    )
+    def test_a_burial_stated_only_by_what_gives_no_claim(self, lines):
+        result = adapt_gedcom(eugen(*lines), artifact=EXPORT)
+        assert claims_for(result.batch, "i1", "burial_place") == []
+        assert result.outcomes["BURI stating its burial by no claim"] == 1
 
     def test_dated_and_placed_occupation_carries_qualifiers(self):
         batch = adapt_gedcom(
@@ -695,6 +756,54 @@ class TestUnsupportedCensus:
         assert adapt_gedcom(text, artifact=EXPORT).unsupported_tags == {
             "FAM.NCHI": 1
         }
+
+
+class TestDeferredParentage:
+    """ADR-0040 §4: PEDI, _FREL, _MREL and ADOP are counted and never
+    mapped until a source carries them: no `parentage` is written."""
+
+    def test_each_is_counted_and_none_is_read(self):
+        # Alfred's adoption by Leopold and Agnes, as an export may give it
+        text = "\n".join(
+            [
+                "0 @I1@ INDI",
+                "1 NAME Leopold /Löbig/",
+                "1 FAMS @F1@",
+                "0 @I2@ INDI",
+                "1 NAME Agnes /Nertler/",
+                "1 FAMS @F1@",
+                "0 @I3@ INDI",
+                "1 NAME Alfred /Luthorn/",
+                "1 FAMC @F1@",
+                "2 PEDI adopted",
+                "2 _FREL Adopted",
+                "2 _MREL Adopted",
+                "1 ADOP",
+                "2 FAMC @F1@",
+                "0 @F1@ FAM",
+                "1 HUSB @I1@",
+                "1 WIFE @I2@",
+                "1 CHIL @I3@",
+                "0 TRLR",
+                "",
+            ]
+        )
+        result = adapt_gedcom(text, artifact=EXPORT)
+        tags = result.unsupported_tags
+        for tag in ("PEDI", "_FREL", "_MREL", "ADOP"):
+            assert (
+                sum(
+                    count
+                    for name, count in tags.items()
+                    if name.split(".")[-1] == tag
+                )
+                == 1
+            ), tag
+        assert not [
+            claim
+            for claim in result.batch.claims
+            if any(q.property == "parentage" for q in claim.qualifiers)
+        ]
 
 
 class TestSourceCitations:
@@ -1927,7 +2036,10 @@ def test_a_period_on_another_event_is_one_dates_range(
 def described(value, labels: dict[str, str]):
     """A claim's or a qualifier's value: a time as (year, month, day,
     precision), an entity by its label, a vocabulary item by its key, a
-    text as itself and a quantity as its amount."""
+    text as itself, a quantity as its amount and an unknown value as
+    "unknown"."""
+    if value.type == "unknown":
+        return "unknown"
     if value.type == "time":
         return value.year, value.month, value.day, value.precision
     if value.type == "item":
@@ -2063,8 +2175,15 @@ class TestRepeatedEvents:
     @pytest.mark.parametrize(
         ("tag", "date", "prop", "expected"),
         [
-            ("BIRT", "1836", "date_of_birth", year(1836)),
-            ("DEAT", "16 MAR 1909", "date_of_death", day(1909, 3, 16)),
+            ("BIRT", "1836", "date_of_birth", [year(1836)]),
+            # a DEAT Y is a source of its own, which gives the unknown
+            # value beside the dated one (ADR-0040 §2.2)
+            (
+                "DEAT",
+                "16 MAR 1909",
+                "date_of_death",
+                ["unknown", day(1909, 3, 16)],
+            ),
         ],
     )
     def test_an_undated_event_hides_no_dated_one(
@@ -2073,7 +2192,7 @@ class TestRepeatedEvents:
         # (here) the export says first that Eugen was born, or died, and
         # then when
         text = eugen(f"1 {tag} Y", f"1 {tag}", f"2 DATE {date}")
-        assert stated(text, "i1", prop) == [(expected, [])]
+        assert stated(text, "i1", prop) == [(e, []) for e in expected]
 
     def test_a_restated_event_gives_its_claims_once(self):
         # (here) the export repeats Eugen's birth line for line: the batch
@@ -2667,40 +2786,44 @@ POSTCARD = "Postcard from Sebastian Löbig to his daughter Klara"
 
 
 def death_events(batch) -> list[tuple[str, str]]:
-    """The batch's death events, as (id, label)."""
+    """The batch's death events, as (id, label): none, since a death is
+    statements on the person (ADR-0040)."""
     return [(e.id, e.label) for e in batch.entities if e.kind == "death"]
 
 
 def participations(batch) -> list[tuple[str, str, str]]:
     """Every participant claim of a death event, as (event, participant,
-    excerpt); each names its person as the death's principal."""
+    excerpt)."""
     deaths = {event for event, _ in death_events(batch)}
-    found = [
-        claim
-        for claim in batch.claims
-        if claim.property == "participant" and claim.subject.local_id in deaths
-    ]
-    assert all(roles(claim) == ["principal"] for claim in found)
     return [
         (
             claim.subject.local_id,
             claim.value.value.local_id,
             claim.source.transcription_excerpt.text,
         )
-        for claim in found
+        for claim in batch.claims
+        if claim.property == "participant" and claim.subject.local_id in deaths
+    ]
+
+
+def unknown_deaths(batch, subject: str = "i1") -> list[str]:
+    """The excerpts of `subject`'s dates of death of unknown value."""
+    return [
+        claim.source.transcription_excerpt.text
+        for claim in claims_for(batch, subject, "date_of_death")
+        if isinstance(claim.value, UnknownValue)
     ]
 
 
 class TestUndatedDeath:
     """A DEAT states the death only as GEDCOM 5.5.1 has an event asserted:
     by a DATE or a PLAC with a value, or else by a Y on its own line. One
-    that states it with no date, place or cause, by its Y alone or by a
-    DATE the grammar cannot parse, says that the person died and nothing
-    else: a `death` event with the person as its participant (ADR-0020 §2,
-    docs/MODELING.md "Living persons and privacy"; #323). That is the
-    shape the possibly-living check reads as death evidence: an item that
-    is an instance of `death`, with the person as its `participant`. A
-    DEAT that states no death gives no claim, and the census counts it."""
+    that states it and dates it nowhere gives a `date_of_death` of unknown
+    value, citing the DEAT, beside any place and cause it gives (ADR-0040
+    §2.2, Q4; #323). No event stands for the death. A DEAT that states it
+    only by a DATE the grammar cannot read, or by a PLAC of placeholder
+    words, and no Y, gives no claim, counted (Q4). A DEAT that states no
+    death gives no claim, and the census counts it."""
 
     @pytest.mark.parametrize(
         ("lines", "excerpt", "counted"),
@@ -2710,7 +2833,8 @@ class TestUndatedDeath:
             (["1 DEAT Y"], "1 DEAT Y", {"SOUR": 1}),
             (["1 DEAT y"], "1 DEAT y", {"SOUR": 1}),
             # Eugen died aged 73 per the burial register: (here) the export
-            # gives that age beside the Y, and the census counts it
+            # gives that age beside the Y, and the census counts it, since
+            # DEAT.AGE stays unmapped (Q1)
             (
                 ["1 DEAT Y", "2 AGE 73"],
                 "1 DEAT Y | 2 AGE 73",
@@ -2722,23 +2846,24 @@ class TestUndatedDeath:
                 f"1 DEAT Y | 2 SOUR @S1@ | cited: {BURIAL_REGISTER}",
                 {},
             ),
+            # a Y states the death whatever its DATE holds (Q4)
+            (["1 DEAT Y", "2 DATE ?"], "1 DEAT Y | 2 DATE ?", {"SOUR": 1}),
         ],
-        ids=["Y", "lowercase-y", "Y-and-AGE", "Y-and-SOUR"],
+        ids=["Y", "lowercase-y", "Y-and-AGE", "Y-and-SOUR", "Y-and-DATE-?"],
     )
-    def test_an_undated_death_is_a_death_event(self, lines, excerpt, counted):
+    def test_an_undated_death_is_an_unknown_date(
+        self, lines, excerpt, counted
+    ):
         # (here) the export says that Eugen died, but not when, where or
         # of what
         text = cited(BURIAL_REGISTER) + eugen(*lines)
         result = adapt_gedcom(text, artifact=EXPORT)
-        assert result.warnings == []
         assert result.unsupported_tags == counted
-        assert death_events(result.batch) == [
-            ("i1-death", "Death of Eugen Löbig")
-        ]
-        # the event is the claim's subject, and Eugen its participant
-        assert participations(result.batch) == [("i1-death", "i1", excerpt)]
-        for prop in ("date_of_death", "place_of_death", "cause_of_death"):
+        assert death_events(result.batch) == []
+        assert unknown_deaths(result.batch) == [excerpt]
+        for prop in ("place_of_death", "cause_of_death"):
             assert not claims_for(result.batch, "i1", prop)
+        assert result.outcomes["DEAT with no date: unknown date of death"] == 1
 
     def test_an_undated_death_cites_its_own_citation(self):
         # (here) the export cites the burial register, at its page, for
@@ -2747,10 +2872,12 @@ class TestUndatedDeath:
             "1 DEAT Y", "2 SOUR @S1@", "3 PAGE Beerdigungsbuch 1909"
         )
         batch = adapt_gedcom(text, artifact=EXPORT).batch
-        (participant,) = claims_for(batch, "i1-death", "participant")
-        assert participant.source.artifact == EXPORT
-        assert participant.source.page_number == "Beerdigungsbuch 1909"
-        assert participant.source.transcription_excerpt.text == (
+        (death,) = claims_for(batch, "i1", "date_of_death")
+        assert isinstance(death.value, UnknownValue)
+        assert death.qualifiers == []
+        assert death.source.artifact == EXPORT
+        assert death.source.page_number == "Beerdigungsbuch 1909"
+        assert death.source.transcription_excerpt.text == (
             "1 DEAT Y | 2 SOUR @S1@ | 3 PAGE Beerdigungsbuch 1909"
             f" | cited: {BURIAL_REGISTER}"
         )
@@ -2763,45 +2890,38 @@ class TestUndatedDeath:
         ],
         ids=["undated-first", "dated-first"],
     )
-    def test_an_undated_death_beside_a_dated_one_adds_its_event(self, lines):
+    def test_an_undated_death_beside_a_dated_one_gives_both(self, lines):
         # (here) one DEAT says that Eugen died, and another when: each is
-        # claimed, and neither hides the other
+        # its own source, claimed, and neither hides the other (§2.2)
         text = eugen(*lines)
         batch = adapt_gedcom(text, artifact=EXPORT).batch
-        assert stated(text, "i1", "date_of_death") == [(day(1909, 3, 16), [])]
-        assert participations(batch) == [("i1-death", "i1", "1 DEAT Y")]
+        dated = [
+            claim.value
+            for claim in claims_for(batch, "i1", "date_of_death")
+            if not isinstance(claim.value, UnknownValue)
+        ]
+        assert [(v.year, v.month, v.day) for v in dated] == [(1909, 3, 16)]
+        assert unknown_deaths(batch) == ["1 DEAT Y"]
 
-    def test_each_undated_death_is_a_participant_claim_on_the_one_event(
-        self,
-    ):
+    def test_each_undated_death_is_a_claim_of_its_own(self):
         # Eugen's death per the gravestone and per the tree: (here) the
         # export states it twice, citing each, with no date, and restates
-        # the second line for line
+        # the second line for line, which the batch holds once
         stated_by_tree = ["1 DEAT Y", "2 SOUR @S2@"]
         text = cited(GRAVESTONE, TREE) + eugen(
             "1 DEAT Y", "2 SOUR @S1@", *stated_by_tree, *stated_by_tree
         )
         batch = adapt_gedcom(text, artifact=EXPORT).batch
-        assert death_events(batch) == [("i1-death", "Death of Eugen Löbig")]
-        assert participations(batch) == [
-            (
-                "i1-death",
-                "i1",
-                f"1 DEAT Y | 2 SOUR @S1@ | cited: {GRAVESTONE}",
-            ),
-            ("i1-death", "i1", f"1 DEAT Y | 2 SOUR @S2@ | cited: {TREE}"),
+        assert unknown_deaths(batch) == [
+            f"1 DEAT Y | 2 SOUR @S1@ | cited: {GRAVESTONE}",
+            f"1 DEAT Y | 2 SOUR @S2@ | cited: {TREE}",
         ]
 
-    def test_each_person_has_a_death_event_of_their_own(self):
-        # (here) the export says only that Eugen and Cäcilie died, and
-        # gives Eugen a second NAME, his nickname Muckel: each event takes
-        # its person's label, from the first NAME
+    def test_each_person_has_their_own(self):
         text = "\n".join(
             [
                 "0 @I1@ INDI",
                 "1 NAME Eugen /Löbig/",
-                "1 NAME Muckel",
-                "2 TYPE aka",
                 "1 DEAT Y",
                 "0 @I2@ INDI",
                 "1 NAME Cäcilie /Tarle/",
@@ -2811,14 +2931,9 @@ class TestUndatedDeath:
             ]
         )
         batch = adapt_gedcom(text, artifact=EXPORT).batch
-        assert death_events(batch) == [
-            ("i1-death", "Death of Eugen Löbig"),
-            ("i2-death", "Death of Cäcilie Tarle"),
-        ]
-        assert participations(batch) == [
-            ("i1-death", "i1", "1 DEAT Y"),
-            ("i2-death", "i2", "1 DEAT Y"),
-        ]
+        assert unknown_deaths(batch, "i1") == ["1 DEAT Y"]
+        assert unknown_deaths(batch, "i2") == ["1 DEAT Y"]
+        assert death_events(batch) == []
 
     @pytest.mark.parametrize(
         ("lines", "prop", "expected"),
@@ -2863,31 +2978,68 @@ class TestUndatedDeath:
     def test_a_death_that_gives_a_claim_gives_no_event(
         self, lines, prop, expected
     ):
-        # a date, a place or a cause of death is death evidence of its own
         text = eugen(*lines)
         batch = adapt_gedcom(text, artifact=EXPORT).batch
-        assert stated(text, "i1", prop) == expected
+        assert stated(text, "i1", prop)[: len(expected)] == expected
         assert death_events(batch) == []
-        assert participations(batch) == []
+
+    @pytest.mark.parametrize(
+        ("lines", "unknown"),
+        [
+            (["1 DEAT", "2 DATE 16 MAR 1909"], False),
+            (["1 DEAT", f"2 PLAC {FLOERBURG}"], True),
+            (["1 DEAT Y", "2 CAUS Wassersucht"], True),
+        ],
+        ids=["dated", "placed", "caused"],
+    )
+    def test_a_death_dated_nowhere_gives_the_unknown_value_beside(
+        self, lines, unknown
+    ):
+        # "verstorben in Flörburg" gives the place and the unknown value
+        batch = adapt_gedcom(eugen(*lines), artifact=EXPORT).batch
+        assert bool(unknown_deaths(batch)) is unknown
 
     def test_the_fixtures_dated_deaths_give_no_event(self):
         batch = fixture_result().batch
         assert death_events(batch) == []
         assert participations(batch) == []
 
-    def test_a_death_with_only_an_unparsed_date_is_a_death_event(self):
-        # (here) the export dates Eugen's death by a phrase the grammar
-        # cannot read: the date is warned of and omitted, and the death,
-        # which its DATE states, is still claimed
-        text = eugen("1 DEAT", "2 DATE SOMEDAY MAYBE")
-        result = adapt_gedcom(text, artifact=EXPORT)
-        assert result.warnings == [
-            "line 4: unparsed date 'SOMEDAY MAYBE' — no date_of_death claim "
-            "emitted"
-        ]
-        assert participations(result.batch) == [
-            ("i1-death", "i1", "1 DEAT | 2 DATE SOMEDAY MAYBE")
-        ]
+    @pytest.mark.parametrize(
+        ("lines", "counted"),
+        [
+            # "Spring 1900": its limit may exist (Q4)
+            (
+                ["1 DEAT", "2 DATE SOMEDAY MAYBE"],
+                "DEAT stating its death by no claim",
+            ),
+            # a PLAC of placeholder words alone places it nowhere (Q4)
+            (
+                ["1 DEAT", "2 PLAC unbekannt"],
+                "DEAT stating its death by no claim",
+            ),
+            # a PLAC with no word, as a blank place field
+            (["1 DEAT", "2 PLAC ?, -"], "DEAT stating its death by no claim"),
+        ],
+        ids=["unparsed-date", "placeholder-PLAC", "wordless-PLAC"],
+    )
+    def test_a_death_stated_only_by_what_gives_no_claim(self, lines, counted):
+        result = adapt_gedcom(eugen(*lines), artifact=EXPORT)
+        assert claims_for(result.batch, "i1", "date_of_death") == []
+        assert claims_for(result.batch, "i1", "place_of_death") == []
+        assert result.outcomes[counted] == 1
+
+    def test_an_unread_date_beside_a_place_gives_no_date(self):
+        # the place is claimed; the date, which the grammar cannot read,
+        # gives no claim, and no unknown value, since its limit may exist
+        result = adapt_gedcom(
+            eugen("1 DEAT", "2 DATE SOMEDAY MAYBE", f"2 PLAC {FLOERBURG}"),
+            artifact=EXPORT,
+        )
+        assert claims_for(result.batch, "i1", "date_of_death") == []
+        assert claims_for(result.batch, "i1", "place_of_death")
+        assert (
+            result.outcomes["DEAT with an unread DATE: no date of death"] == 1
+        )
 
     @pytest.mark.parametrize(
         "lines",

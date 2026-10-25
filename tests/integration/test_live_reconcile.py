@@ -12,7 +12,12 @@ The elder's birth and death are stated at century and decade precision,
 and the younger's birth and death by events dated to a decade and a
 year, so the
 roster's dates round-trip at the precision each statement states, as
-"the 19th century" or "the 1850s", never as a first year (#337).
+"the 19th century" or "the 1850s", never as a first year (#337). The
+events are curator-made (ADR-0040 Q5; conftest.curator_event_writes),
+the younger their principal, as the roster reads an event's principal
+alone. A brother's death, stated without its date, is a `date of death`
+of unknown value, which the roster gives as "date not stated" (ADR-0040
+§2.2, #687).
 
 Two grandmothers each carry the alias "Oma" and a `referred_to_as`
 statement giving it (ADR-0018), so the roster reads each one's
@@ -27,7 +32,11 @@ from datetime import UTC, datetime
 import pytest
 
 from tests.fixtures.identity import write_mapped
-from tests.integration.conftest import fixture_mark, wait_for_query_service
+from tests.integration.conftest import (
+    curator_event_writes,
+    fixture_mark,
+    wait_for_query_service,
+)
 from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.pipeline import reconcile, writer
 from yizkr.pipeline.reconcile import (
@@ -48,7 +57,9 @@ FIXTURE = (
     "of a country, in one letter; #337: the elder born in the 19th century "
     "and dead in the 1890s, the younger's birth an event of the 1850s and his "
     "death an event of 1938; #523: two grandmothers each aliased 'Oma' "
-    "with a referred_to_as statement giving it, and a name form each"
+    "with a referred_to_as statement giving it, and a name form each; "
+    "#687: the events curator-made, the younger their principal, and a "
+    "brother's death of unknown date"
 )
 MARK = fixture_mark(FIXTURE, reconcile, writer)
 ELDER = f"Yizkr Reconcile-Test Elder {MARK}"
@@ -57,6 +68,7 @@ COUNTRY = f"Yizkr Reconcile-Test Country {MARK}"
 TOWN = f"Yizkr Reconcile-Test Town {MARK}"
 BIRTH = f"Yizkr Reconcile-Test Birth {MARK}"
 DEATH = f"Yizkr Reconcile-Test Death {MARK}"
+BROTHER = f"Yizkr Reconcile-Test Brother {MARK}"
 GRANDMOTHER_A = f"Yizkr Reconcile-Test Grandmother A {MARK}"
 GRANDMOTHER_B = f"Yizkr Reconcile-Test Grandmother B {MARK}"
 APPELLATION = "Oma"
@@ -82,6 +94,18 @@ def _source(artifact: ArtifactRef, excerpt: str) -> dict:
     }
 
 
+# the younger's part in each event: its principal
+PRINCIPAL = [
+    {
+        "property": "object_has_role",
+        "value": {
+            "type": "item",
+            "value": {"kind": "vocab", "key": "principal"},
+        },
+    }
+]
+
+
 def _relations_batch(artifact: ArtifactRef) -> ClaimBatch:
     return ClaimBatch.model_validate(
         {
@@ -97,6 +121,7 @@ def _relations_batch(artifact: ArtifactRef) -> ClaimBatch:
                 {"id": "e_country", "label": COUNTRY, "kind": "place"},
                 {"id": "e_birth", "label": BIRTH, "kind": "birth"},
                 {"id": "e_death", "label": DEATH, "kind": "death"},
+                {"id": "e_brother", "label": BROTHER, "kind": "human"},
                 {
                     "id": "e_grandmother_a",
                     "label": GRANDMOTHER_A,
@@ -156,6 +181,7 @@ def _relations_batch(artifact: ArtifactRef) -> ClaimBatch:
                         "type": "item",
                         "value": _local("e_younger", YOUNGER, "human"),
                     },
+                    "qualifiers": PRINCIPAL,
                     "source": _source(artifact, "born in the fifties"),
                 },
                 {
@@ -175,6 +201,7 @@ def _relations_batch(artifact: ArtifactRef) -> ClaimBatch:
                         "type": "item",
                         "value": _local("e_younger", YOUNGER, "human"),
                     },
+                    "qualifiers": PRINCIPAL,
                     "source": _source(artifact, "the son, died in 1938"),
                 },
                 {
@@ -182,6 +209,12 @@ def _relations_batch(artifact: ArtifactRef) -> ClaimBatch:
                     "property": "point_in_time",
                     "value": {"type": "time", "year": 1938},
                     "source": _source(artifact, "the son, died in 1938"),
+                },
+                {
+                    "subject": _local("e_brother", BROTHER, "human"),
+                    "property": "date_of_death",
+                    "value": {"type": "unknown"},
+                    "source": _source(artifact, "his late brother"),
                 },
                 *(
                     {
@@ -220,9 +253,10 @@ def written(client, config, tmp_path_factory):
     )
     # the claims cite the source by the SHA-1 of its media (#102)
     batch = _relations_batch(ArtifactRef.from_path(media))
-    result = write_mapped(BatchWriter(client), batch)
-    # written again, the batch finds every item and statement
-    again = write_mapped(BatchWriter(client), batch)
+    with curator_event_writes():
+        result = write_mapped(BatchWriter(client), batch)
+        # written again, the batch finds every item and statement
+        again = write_mapped(BatchWriter(client), batch)
     assert (again.written, again.referenced) == (0, 0)
     assert again.created_items == result.created_items
     wait_for_query_service(
@@ -264,6 +298,8 @@ def test_roster_dates_round_trip_at_their_precision(client, config, written):
     # as the adjudicator reads them
     assert "born: the 19th century; died: the 1890s" in elder.facts()
     assert "born: the 1850s; died: 1938" in younger.facts()
+    # a death its source states without its date
+    assert _by_label(roster, BROTHER).death == "date not stated"
 
 
 def test_kinship_edge_makes_the_pair_impossible(client, config, written):

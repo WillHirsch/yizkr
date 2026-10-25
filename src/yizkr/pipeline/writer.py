@@ -333,8 +333,10 @@ without the claims it refuses, until it refuses no other.
 
 Each refused claim is counted under the one reason that refused it, of
 REFUSAL_REASONS, in the order the writer looks for them: a retired or
-reference property, the subject rules, the claim's text, an entity the
-side rule blocks, and an item value that is its subject's item. The
+reference property, the rules of deaths and births on the person
+(claims.vital_problems, ADR-0040), the subject rules, the claim's text,
+an entity the side rule blocks, and an item value that is its subject's
+item. The
 result's `refusal_reasons` gives each claim of `refused` its reason, and
 refused_by_reason counts them, every reason in that order, summing to
 the claims refused.
@@ -441,6 +443,7 @@ for depicts, whose per-row approval it checks, as above.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import re
@@ -469,10 +472,13 @@ from yizkr.claims import (
     SourceReference,
     StringValue,
     TimeValue,
+    UnknownValue,
     VocabRef,
     confirmed_kind,
     document_subject_form,
     has_excerpt,
+    load_vocabulary,
+    vital_problems,
 )
 from yizkr.core.dates import UnsupportedDate
 from yizkr.core.wiki import ItemLabels, WikiClient
@@ -505,6 +511,7 @@ TEXT_LIMIT = 400
 # item value of it is its subject's item (ADR-0035 §3.5)
 REFUSAL_REASONS = (
     "retired_or_reference_property",
+    "vital_rule",
     "subject_rule",
     "text",
     "side_rule",
@@ -680,11 +687,25 @@ class UnapprovedDepictsError(ValueError):
         )
 
 
+def _snak_type(snak) -> str:
+    """A snak's type as Wikibase names it: "value", "somevalue" (an
+    unknown value) or "novalue"."""
+    kind = getattr(snak, "snaktype", None)
+    return getattr(kind, "value", kind) or "value"
+
+
+@functools.lru_cache(maxsize=1)
+def _datatypes() -> dict[str, str]:
+    """Each manifest property's datatype, by key."""
+    return load_vocabulary()[0]
+
+
 def unsupported_dates(batch: ClaimBatch) -> list[str]:
     """Each date of `batch` the project does not support (ADR-0034), a
     claim's value or a qualifier's: the claim's id and property, which
     part holds it (its value, or the qualifier by its property) and the
-    reason (``TimeValue.problem``)."""
+    reason (``TimeValue.problem``). An unknown value has no date, so it
+    has none."""
     found = []
     for claim in batch.claims:
         parts = [("its value", claim.value)]
@@ -1520,6 +1541,14 @@ def pre_plan_refusals(
       statement's references (ADR-0035 §4), as the claim's property or a
       qualifier's: validation refuses both, and `yizkr write` takes a
       batch without validating it (`retired_or_reference_property`);
+    * a claim the rules of deaths and births on the person refuse
+      (claims.vital_problems, ADR-0040): a reference to a `birth` or
+      `death` entity, which only a curator makes; an unknown value where
+      it is not taken, with a bound, or with no excerpt; a death or birth
+      property on a subject that is no person; `parentage` on a property
+      that is no parent's or child's; a union `ended_by_death_of` someone
+      the batch calls widowed or who is neither of its couple; a value
+      naming a person the entity manifest leaves out (`vital_rule`);
     * a subject the subject rules refuse (subject_refusal, with `placed`,
       the artifacts given as each source's placed media, and
       `resolved`, the artifact SHA-1s an item carries): an artifact
@@ -1550,6 +1579,7 @@ def pre_plan_refusals(
     acceptance = load_acceptance()
     kinds = {entity.id: entity.kind for entity in batch.entities}
     records = {entity.id: entity for entity in batch.entities}
+    vital = vital_problems(batch, acceptance)
     refusals = {}
     for index, claim in enumerate(batch.claims):
         uses = [
@@ -1573,6 +1603,14 @@ def pre_plan_refusals(
                 f"claim {claim_id(claim)} ({claim.property}) is "
                 f"refused, and nothing of it is written: "
                 f"{'; '.join(misused)}",
+            )
+            continue
+        if index in vital:
+            refusals[index] = (
+                "vital_rule",
+                f"claim {claim_id(claim)} ({claim.property}) is refused, "
+                f"and nothing of it is written: "
+                f"{'; '.join(p.split(': ', 1)[-1] for p in vital[index])}",
             )
             continue
         subject = claim.subject
@@ -2712,13 +2750,21 @@ class BatchWriter:
         one the caller must leave as it is): APPEND_OR_REPLACE would
         instead replace that statement's references and rank with the
         new claim's.
+
+        An unknown value is always added as a statement of its own:
+        WikibaseIntegrator finds two statements equal by their values and
+        qualifiers alone, so to it an unknown value (ADR-0040 §2.2) equals
+        a curator's "no value" of the same property, neither having a
+        value, and APPEND_OR_REPLACE would replace that statement. The
+        writer has already compared snak types (_find_matching_statement)
+        before it adds one.
         """
         from wikibaseintegrator.wbi_enums import ActionIfExists
 
         entity.claims.add(
             claim,
             action_if_exists=ActionIfExists.FORCE_APPEND
-            if beside_equal
+            if beside_equal or _snak_type(claim.mainsnak) != "value"
             else ActionIfExists.APPEND_OR_REPLACE,
         )
 
@@ -2783,6 +2829,22 @@ class BatchWriter:
             )
         if isinstance(value, QuantityValue):
             return Quantity(prop_nr=pid, amount=value.to_wikibase()["amount"])
+        if isinstance(value, UnknownValue):
+            # Wikibase's "some value": the source states one, not which
+            # (ADR-0040 §2.2); validation lets only an item or a time
+            # property (burial_place, date_of_death) take it
+            from wikibaseintegrator.wbi_enums import WikibaseSnakType
+
+            unknown = {"time": Time, "wikibase-item": Item}.get(
+                _datatypes().get(prop_key)
+            )
+            if unknown is None:
+                raise TypeError(
+                    f"property {prop_key!r} takes no unknown value"
+                )
+            return unknown(
+                prop_nr=pid, snaktype=WikibaseSnakType.UNKNOWN_VALUE
+            )
         raise TypeError(f"unhandled value {value!r}")
 
     def _references(
@@ -2978,8 +3040,11 @@ class BatchWriter:
     def _find_matching_statement(self, subject_qid: str, wbi_claim):
         """The existing statement equal to this claim, or None.
 
-        Equal means same property, same mainsnak value, AND the same
-        qualifiers: a same-value claim with different qualifiers (a
+        Equal means same property, same snak type and mainsnak value, AND
+        the same qualifiers. An unknown value ("some value") and a "no
+        value" carry no datavalue, so only the snak type tells them apart:
+        one never matches the other, or a dated statement. Equal needs the
+        same qualifiers: a same-value claim with different qualifiers (a
         marriage date on a spouse statement, a residence date) is a
         DIFFERENT assertion and must coexist as its own statement
         (ADR-0002), never be swallowed by a bare-value match.
@@ -2993,9 +3058,12 @@ class BatchWriter:
             return None
         entity = self._entity(subject_qid)
         prop = wbi_claim.mainsnak.property_number
-        new_value = wbi_claim.mainsnak.datavalue.get("value")
+        new_type = _snak_type(wbi_claim.mainsnak)
+        new_value = (wbi_claim.mainsnak.datavalue or {}).get("value")
         new_qualifiers = self._qualifier_snapshot(wbi_claim)
         for existing in entity.claims.get(prop) or []:
+            if _snak_type(existing.mainsnak) != new_type:
+                continue
             existing_value = (existing.mainsnak.datavalue or {}).get("value")
             if self._values_equal(existing_value, new_value) and (
                 self._qualifier_snapshot(existing) == new_qualifiers
