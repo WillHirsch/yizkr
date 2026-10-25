@@ -1752,6 +1752,41 @@ class SiteBuilder:
                     )
         return found
 
+    def end_dates_html(
+        self, union: UnionShown, key: str, end: str, qid: str
+    ) -> str:
+        """An end event's dates as the person page shows them beside the
+        end: every date statement of the event (UNION_END_DATES_QUERY's
+        rows for this partner), each at its stated precision with the
+        range and circumstances its source states and that statement's own
+        source, apart from the end statement's citation; "" for an end by
+        a death or an undated event."""
+        if key == "ended_by_death_of":
+            return ""
+        shown = []
+        for row in union.end_dates.get(end, ()):
+            if qid_of(row, "person") != qid:
+                continue
+            where = f"{qid} union end date"
+            source_qid = qid_of(row, "source")
+            source = (
+                f'<span class="source"><a href="../artifacts/'
+                f'{esc(source_qid)}.html">{esc(cell(row, "sourceLabel"))}'
+                "</a></span>"
+                if cell(row, "sourceLabel") and source_qid.startswith("Q")
+                else ""
+            )
+            shown.append(
+                esc(
+                    format_time(
+                        cell(row, "date"), cell(row, "precision"), where
+                    )
+                )
+                + qualifier_span(self.timeline_qualifiers(row))
+                + source
+            )
+        return "; its date " + "; ".join(shown) if shown else ""
+
     def union_html(self, qid: str, unions: list[UnionShown]) -> str:
         """A person page's "Unions": each union the person takes part in,
         with its other partners, and each end a source states, with its
@@ -1781,6 +1816,7 @@ class SiteBuilder:
                 stated.append(
                     what
                     + (f'<span class="source">{links}</span>' if links else "")
+                    + self.end_dates_html(union, key, end, qid)
                 )
             if stated:
                 text += ": " + "; ".join(sorted(stated, key=visible))

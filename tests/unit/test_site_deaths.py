@@ -384,7 +384,7 @@ class TestTheTimelinesDerivedDates:
             or "Q11.html" not in text[text.index("<h2>No date stated</h2>") :]
         )
 
-    def divorce(self, tmp_path, vocabulary, dates=None):
+    def divorce(self, tmp_path, vocabulary, dates=None, site_of=False):
         # the Landgericht Rekau's 1957 judgment: Leopold and Agnes's
         # marriage ended by their divorce, each of whose date statements
         # (`dates`, by default one of 2 January 1957 in the court's
@@ -432,18 +432,19 @@ class TestTheTimelinesDerivedDates:
                 "person": uri(partner),
                 "personLabel": literal(label),
                 "date": time_literal(stamp),
-                "precision": literal("11"),
+                "precision": literal(cells.pop("precision", "11")),
                 "low": uri(property_id("earliest_date")),
                 "high": uri(property_id("latest_date")),
                 "source": uri(source),
                 "sourceLabel": literal(f"court register {source}"),
                 **{name: literal(value) for name, value in cells.items()},
             }
-            for statement, stamp, cells, source in dates
+            for statement, stamp, given, source in dates
             for partner, label in (
                 ("Q12", "Leopold Löbig"),
                 ("Q13", "Agnes Löbig"),
             )
+            for cells in [dict(given)]
         ]
         site, _ = build(
             tmp_path,
@@ -454,7 +455,7 @@ class TestTheTimelinesDerivedDates:
                 "GROUP_CONCAT(DISTINCT ?alias": people,
             },
         )
-        return timeline(site)
+        return site if site_of else timeline(site)
 
     def test_a_divorce_stands_at_its_date(self, tmp_path, vocabulary):
         found = entries(self.divorce(tmp_path, vocabulary))
@@ -510,6 +511,71 @@ class TestTheTimelinesDerivedDates:
         assert sum("court register Q25" in e for e in leopold) == 2
         assert any("sourcing circumstances: circa" in e for e in leopold)
         assert any("1956" in e and "1958" in e for e in leopold)
+
+    THREE = [
+        ("t1", "+1957-01-02T00:00:00Z", {}, "Q24"),
+        ("t2", "+1957-01-02T00:00:00Z", {"circumstances": "circa"}, "Q25"),
+        (
+            "t3",
+            "+1957-01-02T00:00:00Z",
+            {
+                "earliest": "1956-01-01T00:00:00Z",
+                "earliestPrecision": "9",
+                "latest": "1958-01-01T00:00:00Z",
+                "latestPrecision": "9",
+            },
+            "Q25",
+        ),
+    ]
+
+    def test_each_bound_is_named_by_its_qualifier(self, tmp_path, vocabulary):
+        found = entries(self.divorce(tmp_path, vocabulary, self.THREE))
+        (ranged,) = [
+            e for e in found if "people/Q12.html" in e and "1956" in e
+        ]
+        assert "earliest date: 1956" in ranged
+        assert "latest date: 1958" in ranged
+
+    def test_a_date_shows_at_its_stated_precision(self, tmp_path, vocabulary):
+        # a source that dates the divorce to 1957 alone
+        dates = [("t4", "+1957-01-01T00:00:00Z", {"precision": "9"}, "Q24")]
+        found = entries(self.divorce(tmp_path, vocabulary, dates))
+        dated = [e for e in found if "ended by divorce" in e]
+        assert dated and all(e.startswith("1957 — ") for e in dated)
+        assert not any("1957-01-01" in e for e in dated)
+
+    def test_identical_assertions_stay_apart(self, tmp_path, vocabulary):
+        # two statements of one source giving the same date
+        dates = [
+            ("t1", "+1957-01-02T00:00:00Z", {}, "Q24"),
+            ("t5", "+1957-01-02T00:00:00Z", {}, "Q24"),
+        ]
+        found = entries(self.divorce(tmp_path, vocabulary, dates))
+        leopold = [
+            e
+            for e in found
+            if "people/Q12.html" in e and "ended by divorce" in e
+        ]
+        assert len(leopold) == 2
+
+    def test_the_person_page_shows_every_end_date(self, tmp_path, vocabulary):
+        # Leopold's and Agnes's pages give each date of the divorce, with
+        # its circa, its range and its own source, apart from the end's
+        site = self.divorce(tmp_path, vocabulary, self.THREE, site_of=True)
+        for qid in ("Q12", "Q13"):
+            text = page(site, qid)
+            (unions,) = re.findall(r"<h2>Unions</h2><ul>(.*?)</ul>", text)
+            assert (
+                "ended by divorce of Leopold and Agnes Löbig"
+                '<span class="source"><a href="../artifacts/Q23.html">'
+                in unions
+            )
+            assert unions.count("1957-01-02") == 3
+            assert "sourcing circumstances: circa" in unions
+            assert "earliest date: 1956" in unions
+            assert "latest date: 1958" in unions
+            assert unions.count('href="../artifacts/Q25.html"') == 2
+            assert unions.count('href="../artifacts/Q24.html"') == 1
 
     def test_the_dates_are_every_date_statement_of_the_end(self):
         from yizkr.staticsite import UNION_END_DATES_QUERY
