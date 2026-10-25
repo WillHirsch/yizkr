@@ -1086,7 +1086,8 @@ class TestReadEvidence:
         )
 
     def test_a_death_event_marks_its_principal_alone(self):
-        assert self.read().died == {"Q321"}
+        found = self.read()
+        assert found.died == found.death_events == {"Q321"}
 
     def test_a_birth_event_is_a_further_birth_of_its_principal(self):
         found = self.read()
@@ -1156,6 +1157,9 @@ class TestReadEvidence:
         )
         assert "Q350" in found.died
         assert not is_possibly_living([], "Q350" in found.died, CUTOFF)[0]
+        # kept apart from the death events, for the run record's causes
+        assert found.ended == {"Q350"}
+        assert found.death_events == set()
 
     def test_the_union_end_query_reads_item_values_at_their_truthy_rank(
         self,

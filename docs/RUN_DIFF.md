@@ -200,7 +200,7 @@ the schema, and cycles and conflicts refused. A run whose report has no
 such counts (its place stage has not run) is `absent` on its side, and a
 diff where neither has them says the section is not available.
 
-**Flags and contradictions.** Compared figure by figure when either
+**Flags, contradictions and releases.** Compared figure by figure when either
 report counts them (#575): a figure of a report that does not count
 them is `absent` on its side, never 0, and has no delta, as in the
 place-hierarchy section. Where neither report counts them, the section
@@ -209,7 +209,12 @@ different-source contradictions are those the site stage counted on the
 written graph: `different_source`, their total, and `by_property`, by
 manifest key (a property one report counted none of is 0 on its side).
 So a diff of a run with a site stage against one with no write side
-shows the run's counts, the baseline's absent.
+shows the run's counts, the baseline's absent. The releases by cause
+(#687; ADR-0040 §7) are compared the same way, in a section of their
+own: the possibly-living count, the released, the releases by cause,
+the people a union's end alone releases, the unknown dates of death by
+source type and the derived "died by" dates by source type
+(docs/RUN_REPORT.md, "Releases by cause").
 
 **Claims**, per document and per property, matched by their claim
 fingerprints as multisets (ADR-0025 §4, as amended by #197): a claim only

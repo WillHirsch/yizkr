@@ -132,6 +132,33 @@ GROUP BY ?person ?personLabel ?personDescription ?deceased ?family
 ORDER BY ?personLabel
 """
 
+# the death statements that release each listed person, for the run
+# record's releases by cause (ADR-0040 §7): every best-rank statement of
+# the DEATH_EVIDENCE_PROPERTIES, as ?deceased reads them, with its value
+# (an unknown value comes as a blank node) and the type of each artifact
+# it is stated in (a fragment's whole), as ?sourceType
+RELEASES_QUERY = """\
+SELECT ?person ?releaseKey ?value ?sourceType
+WHERE {{
+{people}
+  VALUES (?claim ?statementValue ?releaseKey) {{
+    (p:{date_of_death} ps:{date_of_death} "date_of_death")
+    (p:{place_of_death} ps:{place_of_death} "place_of_death")
+    (p:{cause_of_death} ps:{cause_of_death} "cause_of_death")
+    (p:{burial_place} ps:{burial_place} "burial_place")
+    (p:{age_at_death} ps:{age_at_death} "age_at_death")
+  }}
+  ?person ?claim ?statement .
+  ?statement a wikibase:BestRank ;
+             ?statementValue ?value .
+  OPTIONAL {{ ?statement prov:wasDerivedFrom/pr:{stated_in} ?source .
+             OPTIONAL {{ ?source wdt:{instance_of} wd:{artifact_fragment} ;
+                                 wdt:{part_of} ?whole . }}
+             BIND(COALESCE(?whole, ?source) AS ?artifact)
+             ?artifact wdt:{instance_of} ?sourceType . }}
+}}
+"""
+
 # each qualifier of the statement ?st as one cell, for GROUP_CONCAT with
 # separator "|": its property's id, its property's English label, its value
 # and, for a time, its precision, separated by spaces. The label and the
@@ -211,7 +238,7 @@ ORDER BY ?person ?propLabel
 )
 
 ARTIFACTS_QUERY = """\
-SELECT ?artifact ?artifactLabel ?artifactDescription ?kindLabel ?file
+SELECT ?artifact ?artifactLabel ?artifactDescription ?kind ?kindLabel ?file
 WHERE {{
   ?artifact wdt:{instance_of} ?kind .
   ?kind wdt:{subclass_of}* wd:{artifact} .
@@ -439,6 +466,21 @@ UNDATED_DEATH = "died (date not stated)"
 UNPLACED_BURIAL = "buried (place not stated)"
 # any other value its source states exists but does not give
 UNSTATED_VALUE = "a value its source does not state"
+
+# the causes the run record counts a release under (``privacy_record``),
+# and the kind it gives a source with no type
+RELEASE_CAUSES = (
+    "date_of_death",
+    "unknown_date_of_death",
+    "age_at_death",
+    "unknown_burial_place",
+    "other_death_property",
+    "ended_by_death_of",
+    "death_event",
+    "birth_cutoff",
+)
+UNSTATED_KIND = "no type stated"
+OTHER_KIND = "other"
 
 # every union, a partnership or a marriage or a class the graph makes a
 # subclass of one, typed at any rank but deprecated: each partner its
@@ -867,6 +909,85 @@ class SiteBuilder:
         )
         return is_possibly_living(births, has_death, self._cutoff_year)[0]
 
+    def privacy_record(
+        self, people: list[dict], releases: list[dict], kinds: dict[str, str]
+    ) -> dict:
+        """The run record's possibly-living count and its releases by
+        cause (ADR-0040 §7): each released person counts once under every
+        cause the graph holds for them, so the causes overlap. A dated
+        `date_of_death`; an unknown one, by the type of its source; an
+        `age_at_death`; an unknown `burial_place`; another death property;
+        a union `ended by death of` them, with the people it alone
+        releases; the principal of a death event; and the birth cutoff,
+        for a person released with no death evidence. Families are left
+        out, as the export leaves them. ``kinds`` gives each artifact's
+        type, for the derived "died by" dates by the type of the document
+        each rests on. A source's type is its manifest key, UNSTATED_KIND
+        for none, and OTHER_KIND for a class the manifest does not hold."""
+        causes: dict[str, set[str]] = defaultdict(set)
+        unknown_by_kind: dict[str, set[str]] = defaultdict(set)
+        for row in releases:
+            qid = qid_of(row, "person")
+            key = cell(row, "releaseKey")
+            unknown = unknown_value(row)
+            if key == "date_of_death" and unknown:
+                causes["unknown_date_of_death"].add(qid)
+                kind = self._kind_key(row, "sourceType")
+                unknown_by_kind[kind].add(qid)
+            elif key == "burial_place" and unknown:
+                causes["unknown_burial_place"].add(qid)
+            elif key in ("date_of_death", "age_at_death"):
+                causes[key].add(qid)
+            else:
+                causes["other_death_property"].add(qid)
+        for qid in self._evidence.ended:
+            causes["ended_by_death_of"].add(qid)
+        for qid in self._evidence.death_events:
+            causes["death_event"].add(qid)
+        persons = [
+            qid_of(row, "person")
+            for row in people
+            if cell(row, "family") != "true"
+        ]
+        living = {
+            qid_of(row, "person")
+            for row in people
+            if cell(row, "family") != "true" and self._possibly_living(row)
+        }
+        released = [qid for qid in persons if qid not in living]
+        found = {cause: 0 for cause in RELEASE_CAUSES}
+        alone = 0
+        for qid in released:
+            held = {cause for cause, who in causes.items() if qid in who}
+            for cause in held:
+                found[cause] += 1
+            if not held:
+                found["birth_cutoff"] += 1
+            if held == {"ended_by_death_of"}:
+                alone += 1
+        derived: dict[str, int] = defaultdict(int)
+        for bound in self._derived:
+            source = bound.source.rsplit("/", 1)[-1]
+            derived[kinds.get(source) or UNSTATED_KIND] += 1
+        return {
+            "people": len(persons),
+            "possibly_living": len(living),
+            "released": len(released),
+            "releases": found,
+            "ended_by_death_of_alone": alone,
+            "unknown_date_of_death_by_source": {
+                kind: len(who) for kind, who in sorted(unknown_by_kind.items())
+            },
+            "derived_by_source": dict(sorted(derived.items())),
+        }
+
+    def _kind_key(self, row: dict, name: str) -> str:
+        """The manifest key of the class a row's ``name`` gives."""
+        if not cell(row, name):
+            return UNSTATED_KIND
+        keys = {qid: key for key, qid in self.items.items()}
+        return keys.get(qid_of(row, name), OTHER_KIND)
+
     def _instance_query(self, template: str) -> str:
         """`template` with this instance's ids, its ``{people}`` and
         ``{family_type}`` (where it has them) the privacy module's
@@ -1072,6 +1193,7 @@ class SiteBuilder:
         )
         deaths = died_by.from_rows(self.run(self._library_query("died-by")))
         unions = self.unions(self.run(self._instance_query(UNIONS_QUERY)))
+        releases = self.run(self._instance_query(RELEASES_QUERY))
         self.people = {qid_of(row, "person"): row for row in people}
         self.artifact_qids = {qid_of(row, "artifact") for row in artifacts}
         self.artifact_labels = {
@@ -1149,6 +1271,14 @@ class SiteBuilder:
                 for via in died_by.VIA
             },
             "unions": len(unions),
+            "privacy": self.privacy_record(
+                people,
+                releases,
+                {
+                    qid_of(row, "artifact"): self._kind_key(row, "kind")
+                    for row in artifacts
+                },
+            ),
             "timeline_rows": len(timeline),
             "gallery_items": len(gallery),
             "inconsistencies": len(inconsistencies),

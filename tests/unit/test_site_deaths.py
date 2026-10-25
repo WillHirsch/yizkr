@@ -328,3 +328,129 @@ class TestAParentsKind:
         text = page(site, "Q11")
         assert shown in text
         assert "kinship type: Adoptivvater" in text
+
+
+def release(person: str, key: str, value: dict, kind: str) -> dict:
+    """A row of the releases query: a death statement and the type of its
+    source (an item id)."""
+    return {
+        "person": uri(person),
+        "releaseKey": literal(key),
+        "value": value,
+        "sourceType": uri(kind),
+    }
+
+
+def releases(vocabulary) -> list[dict]:
+    """Eugen's dated death and Felix's unknown one, both stated in a
+    certificate (hypothetically, the register's extract)."""
+    certificate = vocabulary[1]["certificate"]
+    return [
+        release(
+            "Q7",
+            "date_of_death",
+            time_literal("+1909-03-16T00:00:00Z"),
+            certificate,
+        ),
+        release("Q11", "date_of_death", GENID, certificate),
+    ]
+
+
+class TestThePrivacyRecord:
+    """The run record's releases by cause (ADR-0040 §7), counted on the
+    written graph as the site's badge decides them."""
+
+    def record(self, tmp_path, vocabulary, people=PEOPLE, rows=None):
+        _, summary = build(
+            tmp_path,
+            vocabulary,
+            {
+                "?releaseKey": releases(vocabulary) if rows is None else rows,
+                # "Witwer der Cäcilie": the marriage ended by her death
+                "?named .": [{"person": uri("Q9")}],
+                **responses(),
+                "GROUP_CONCAT(DISTINCT ?alias": people,
+                # every artifact typed a certificate
+                "?kind wdt:": [
+                    {**each, "kind": uri(vocabulary[1]["certificate"])}
+                    for each in ARTIFACTS
+                ],
+            },
+        )
+        return summary["privacy"]
+
+    def test_each_release_counts_under_its_cause(self, tmp_path, vocabulary):
+        record = self.record(tmp_path, vocabulary)
+        assert record["people"] == 3
+        assert record["possibly_living"] == 0
+        assert record["released"] == 3
+        assert record["releases"] == {
+            "date_of_death": 1,
+            "unknown_date_of_death": 1,
+            "age_at_death": 0,
+            "unknown_burial_place": 0,
+            "other_death_property": 0,
+            "ended_by_death_of": 1,
+            "death_event": 0,
+            "birth_cutoff": 0,
+        }
+        # Cäcilie has no death statement: the union end alone releases her
+        assert record["ended_by_death_of_alone"] == 1
+        assert record["unknown_date_of_death_by_source"] == {"certificate": 1}
+        # her bound and Felix's, both resting on the register (Q23)
+        assert record["derived_by_source"] == {"certificate": 2}
+
+    def test_a_source_of_no_stated_type(self, tmp_path, vocabulary):
+        row = {**releases(vocabulary)[1]}
+        del row["sourceType"]
+        record = self.record(tmp_path, vocabulary, rows=[row])
+        assert record["unknown_date_of_death_by_source"] == {
+            "no type stated": 1
+        }
+
+    def test_a_release_with_no_death_evidence_is_the_birth_cutoff(
+        self, tmp_path, vocabulary
+    ):
+        # Eugen, born 1836, with no death statement on the graph
+        people = [
+            {**PEOPLE[0], "deceased": literal("false")},
+            *PEOPLE[1:],
+        ]
+        record = self.record(
+            tmp_path, vocabulary, people, releases(vocabulary)[1:]
+        )
+        assert record["releases"]["birth_cutoff"] == 1
+        assert record["releases"]["date_of_death"] == 0
+        assert record["released"] == 3
+
+    def test_an_unknown_burial_place_and_other_properties(
+        self, tmp_path, vocabulary
+    ):
+        certificate = vocabulary[1]["certificate"]
+        rows = [
+            release("Q7", "burial_place", GENID, certificate),
+            release("Q7", "place_of_death", uri("Q50"), certificate),
+            release("Q11", "age_at_death", literal("72"), certificate),
+        ]
+        record = self.record(tmp_path, vocabulary, rows=rows)
+        assert record["releases"]["unknown_burial_place"] == 1
+        assert record["releases"]["other_death_property"] == 1
+        assert record["releases"]["age_at_death"] == 1
+
+    def test_a_possibly_living_person_is_no_release(
+        self, tmp_path, vocabulary
+    ):
+        _, summary = build(tmp_path, vocabulary, responses())
+        record = summary["privacy"]
+        # Cäcilie, with no union end read and no death statement
+        assert record["possibly_living"] == 1
+        assert record["released"] == 2
+        # and the fixture's artifacts give no type
+        assert record["derived_by_source"] == {"no type stated": 2}
+
+    def test_a_class_the_manifest_does_not_hold_is_other(
+        self, tmp_path, vocabulary
+    ):
+        row = {**releases(vocabulary)[1], "sourceType": uri("Q99999")}
+        record = self.record(tmp_path, vocabulary, rows=[row])
+        assert record["unknown_date_of_death_by_source"] == {"other": 1}

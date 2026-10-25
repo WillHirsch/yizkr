@@ -42,8 +42,10 @@ model, the configuration, the attempt, the epoch.
 - *Anomalies*: each finding (a document or the run, a stage and a
   check) new in the run, resolved since the baseline, or in both.
 - *Failures*: the documents that fail in one run and not the other.
-- *Flags* and *contradictions* (the different-source contradictions the
-  site stage counted, in total and by property): compared when either
+- *Flags*, *contradictions* (the different-source contradictions the
+  site stage counted, in total and by property) and *releases by cause*
+  (the possibly-living count and the releases by cause the site stage
+  counted, ADR-0040 §7): compared when either
   report counts them, a side whose report does not count them *absent*,
   never 0, as in the figures; not available, with why, when neither does.
 - *Place hierarchy*: the place stage's counts (questions, calls,
@@ -1127,13 +1129,14 @@ def compare_findings(
     return aggregate, detail
 
 
-# -- flags and contradictions -------------------------------------------------
+# -- flags, contradictions and releases ---------------------------------------
 
 
 def _counted_section(
     baseline: Mapping[str, Any], run: Mapping[str, Any], name: str
 ) -> dict:
-    """A content section only some reports count (flags, contradictions):
+    """A content section only some reports count (flags, contradictions,
+    releases):
     its figures side by side when either report counts it, each figure
     ABSENT on a side whose report does not; else not available, with
     why."""
@@ -1422,6 +1425,7 @@ def build(
         "failures": failures,
         "flags": _counted_section(*aggregates, "flags"),
         "contradictions": _counted_section(*aggregates, "contradictions"),
+        "releases": _counted_section(*aggregates, "releases"),
         "figures": figures(*aggregates),
     }
     detail = {
@@ -1895,6 +1899,7 @@ def render_markdown(aggregate: Mapping[str, Any]) -> str:
     for title, key in (
         ("Flags", "flags"),
         ("Contradictions", "contradictions"),
+        ("Releases by cause", "releases"),
     ):
         section = aggregate[key]
         lines += [f"## {title}", ""]

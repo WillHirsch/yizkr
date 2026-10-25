@@ -5446,13 +5446,14 @@ class TestTheFormerNames:
 class TestTheDeathEvidenceArms:
     """Each of the privacy module's DEATH_EVIDENCE_PROPERTIES has its arm in
     both hand-written queries that read it, the export's
-    PERSON_FACTS_QUERY and the site's PEOPLE_QUERY, and the export reads it
+    PERSON_FACTS_QUERY and the site's PEOPLE_QUERY (and the run record's
+    RELEASES_QUERY), and the export reads it
     by a binding of its own (ADR-0040 §5): a property missing from either
     would release no one there."""
 
     @pytest.mark.parametrize("key", DEATH_EVIDENCE_PROPERTIES)
     def test_the_export_and_the_site_read_each(self, key):
-        from yizkr.staticsite import PEOPLE_QUERY
+        from yizkr.staticsite import PEOPLE_QUERY, RELEASES_QUERY
 
         binding = backup._DEATH_BINDINGS[key]
         assert (
@@ -5460,4 +5461,6 @@ class TestTheDeathEvidenceArms:
         ), key
         assert f"AS ?{binding})" in PERSON_FACTS_QUERY, key
         assert f"EXISTS {{{{ ?person wdt:{{{key}}} [] }}}}" in PEOPLE_QUERY
+        # and the run record's releases by cause count it
+        assert f'(p:{{{key}}} ps:{{{key}}} "{key}")' in RELEASES_QUERY
         assert set(backup._DEATH_BINDINGS) == set(DEATH_EVIDENCE_PROPERTIES)

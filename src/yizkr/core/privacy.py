@@ -819,10 +819,13 @@ class LifeEvidence:
     (``latest_births``), those of birth events included
     (``read_evidence``); and `died`, everyone a union is `ended by death
     of`, and everyone who is the principal of a death event
-    (``event_principal``)."""
+    (``event_principal``). `ended` and `death_events` keep those two
+    apart, for the run record's releases by cause."""
 
     births: dict[str, list[int | None]] = field(default_factory=dict)
     died: set[str] = field(default_factory=set)
+    ended: set[str] = field(default_factory=set)
+    death_events: set[str] = field(default_factory=set)
 
 
 def read_evidence(
@@ -858,10 +861,16 @@ def read_evidence(
             for person in events["shared birth"].get(event, ()):
                 if person in births:
                     births[person].extend(years)
-    died = set().union(*events["death"].values())
+    death_events = set().union(*events["death"].values())
+    ended: set[str] = set()
     if "ended_by_death_of" in properties:
-        died |= {
+        ended = {
             _cell(row, "person").rsplit("/", 1)[-1]
             for row in run(prefixes + ended_by_death_query(properties))
         }
-    return LifeEvidence(births=births, died=died)
+    return LifeEvidence(
+        births=births,
+        died=death_events | ended,
+        ended=ended,
+        death_events=death_events,
+    )
