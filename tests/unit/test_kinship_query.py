@@ -188,6 +188,17 @@ class TestAssertedKinship:
         assert qualified == statement
         assert f'BIND(COALESCE(STR({term}), "relative") AS ?term)' in q
 
+    def test_a_half_term_on_a_sibling_statement_is_asserted(self, sets):
+        # "seine Halbschwester Cäcilie": Cäcilie —sibling→ Christian,
+        # kinship_type "Halbschwester" (ADR-0040 §4): the term's row, and
+        # its inverse, "half-brother"; the sibling steps read it besides
+        asserted = " ".join(sets["asserted"].split())
+        assert (
+            "?named p:{P:sibling} ?st . ?st ps:{P:sibling} ?ego ; "
+            "wikibase:rank ?rank ; pq:{P:kinship_type} ?asserted ."
+        ) in asserted
+        assert "?a p:{P:sibling} ?st ." in " ".join(sets["siblings"].split())
+
     def test_a_term_is_gendered_by_the_person_it_names(self, q):
         ((person, statement),) = edges(q, "p:{P:sex_or_gender}")
         assert person == "?relative"
@@ -319,9 +330,9 @@ class TestRanks:
                 assert f"FILTER({rank} != wikibase:DeprecatedRank)" in body, (
                     f"{name} reads a deprecated {key} statement"
                 )
-        # parents (3), spouses (2), siblings (2), asserted terms, humans
-        # and the relative's sex
-        assert read == 10
+        # parents (3), spouses (2), siblings (2), asserted terms (a
+        # relative's and a half sibling's), humans and the relative's sex
+        assert read == 11
 
 
 class TestSteps:
@@ -553,6 +564,15 @@ class TestKindsOfParenthood:
         assert "OPTIONAL { ?st pq:{P:parentage} ?parentage . }" in links
         assert '?parentage = wd:{Q:parentage_adoptive}, "adoptive"' in links
         assert '?parentage = wd:{Q:parentage_foster}, "foster"' in links
+
+    def test_a_parent_of_no_stated_kind_has_the_empty_kind(self, sets):
+        # an unbound ?parentage makes the comparisons an error, which
+        # would leave ?kind unbound, and the foster filter would then drop
+        # every ordinary parent: COALESCE gives it ""
+        links = " ".join(sets["links"].split())
+        assert re.search(
+            r'BIND\(COALESCE\(IF\(\?parentage = .*, ""\) AS \?kind\)', links
+        )
 
     def test_no_path_takes_a_foster_parent(self, sets):
         parents = " ".join(sets["parents"].split())

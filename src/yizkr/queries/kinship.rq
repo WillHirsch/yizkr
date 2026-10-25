@@ -40,7 +40,8 @@
 # Gendered terms (father vs mother, aunt vs uncle) come from the
 # ?relative's `sex_or_gender`; where sex is unknown the neutral term is
 # used, never guessed. A step or half term a source asserts ("Stiefvater",
-# "Halbbruder") is read through the inverse table like any other. Not
+# "Halbbruder", the latter on a `sibling` statement's `kinship_type`) is
+# read through the inverse table like any other. Not
 # derived here: step-relations (a parent's spouse, a spouse's child),
 # longer paths, and the degrees ("great-", "once removed", half- vs full)
 # of derived relations, which a frontend derives over the same steps.
@@ -72,8 +73,11 @@ WITH {
     ?st wikibase:rank ?rank .
     FILTER(?rank != wikibase:DeprecatedRank)
     OPTIONAL { ?st pq:{P:parentage} ?parentage . }
-    BIND(IF(?parentage = wd:{Q:parentage_adoptive}, "adoptive",
-            IF(?parentage = wd:{Q:parentage_foster}, "foster", ""))
+    # COALESCE, as a comparison with an unbound ?parentage is an error,
+    # which would leave ?kind unbound and the filters below drop the step
+    BIND(COALESCE(IF(?parentage = wd:{Q:parentage_adoptive}, "adoptive",
+                     IF(?parentage = wd:{Q:parentage_foster}, "foster", "")),
+                  "")
          AS ?kind)
   }
 } AS %links
@@ -224,12 +228,21 @@ WITH {
   }
 } AS %afterSpouse
 WITH {
-  # a term a source asserts: ?named is ?ego's ?term (ADR-0018)
+  # a term a source asserts: ?named is ?ego's ?term (ADR-0018), on a
+  # `relative` statement, or a half term on a `sibling` statement's
+  # `kinship_type` ("seine Halbschwester Cäcilie", ADR-0040 §4), which
+  # the sibling steps above read as a sibling besides
   SELECT DISTINCT ?named ?ego ?term WHERE {
-    ?named p:{P:relative} ?st .
-    ?st ps:{P:relative} ?ego ; wikibase:rank ?rank .
+    {
+      ?named p:{P:relative} ?st .
+      ?st ps:{P:relative} ?ego ; wikibase:rank ?rank .
+      OPTIONAL { ?st pq:{P:kinship_type} ?asserted }
+    } UNION {
+      ?named p:{P:sibling} ?st .
+      ?st ps:{P:sibling} ?ego ; wikibase:rank ?rank ;
+          pq:{P:kinship_type} ?asserted .
+    }
     FILTER(?rank != wikibase:DeprecatedRank)
-    OPTIONAL { ?st pq:{P:kinship_type} ?asserted }
     BIND(COALESCE(STR(?asserted), "relative") AS ?term)
   }
 } AS %asserted

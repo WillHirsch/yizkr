@@ -19,12 +19,15 @@ curator's rank:
   grandmother"`` (in the universe she is his father Gustav's
   grandmother; the fixture states none of her other relations), so her
   inverse row drops the side and keeps the degree;
+* the 1902 register's "seine Halbschwester Cäcilie": ``Cäcilie —sibling→
+  Christian ; kinship_type = "Halbschwester"`` (ADR-0040 §4), a sibling
+  step both ways and an asserted half term with its inverse;
 * two statements a curator deprecated, so neither gives a row: Felix
   misread as Klara's father, and the courtesy title "Nana Maisie" misread
   as kinship (it is a `referred_to_as`, never a `relative`).
 
 The query reads each row as "?relative is ?subject's ?relationship", so
-the fixture gives the 44 rows of RELATIVES: the stated steps from both
+the fixture gives the 48 rows of RELATIVES: the stated steps from both
 sides, the siblings through a shared parent, the second-order relations
 through them (Leopold's uncle Sebastian and his aunt by marriage
 Hildegard, whose nephew he is), the in-laws, the asserted aunt and
@@ -70,7 +73,7 @@ pytestmark = pytest.mark.live
 # what the fixture is; a change to it gives the fixture new items
 FIXTURE = (
     "ADR-0014, ADR-0018: a slice of the Löbig family, each relation stated "
-    "on one side only, some with a curator's rank"
+    "on one side only, some with a curator's rank; #687: a half sibling"
 )
 MARK = fixture_mark(FIXTURE, writer)
 
@@ -85,6 +88,7 @@ LEOPOLD = "leopold-loebig"
 NICHOLAS = "nicholas-lobig"
 MAISIE = "maisie-cutmore"
 CAECILIE = "caecilie-loebig"
+CHRISTIAN = "christian-tarle"
 PEOPLE = (
     EUGEN,
     SEBASTIAN,
@@ -97,6 +101,7 @@ PEOPLE = (
     NICHOLAS,
     MAISIE,
     CAECILIE,
+    CHRISTIAN,
 )
 
 # (subject, property, value, kinship term)
@@ -112,6 +117,7 @@ STATEMENTS = [
     (CAECILIE, "relative", NICHOLAS, "paternal great grandmother"),
     (MAISIE, "relative", NICHOLAS, "Nana"),
     (KLARA, "father", FELIX, None),
+    (CAECILIE, "sibling", CHRISTIAN, "Halbschwester"),
 ]
 # the curator's ranks: (subject, property, value) -> rank
 RANKS = {
@@ -119,7 +125,11 @@ RANKS = {
     (MAISIE, "relative", NICHOLAS): WikibaseRank.DEPRECATED,
     (KLARA, "father", FELIX): WikibaseRank.DEPRECATED,
 }
-EXCERPTS = {"aunt": "Aunt Pünktchen", "Nana": "Nana Maisie"}
+EXCERPTS = {
+    "aunt": "Aunt Pünktchen",
+    "Nana": "Nana Maisie",
+    "Halbschwester": "seine Halbschwester Cäcilie",
+}
 
 # (subject, relative, relationship): the relative is the subject's
 RELATIVES = {
@@ -173,6 +183,12 @@ RELATIVES = {
     # its inverse drops the side, which names Nicholas's parent, and
     # keeps the degree
     (CAECILIE, NICHOLAS, "great-grandson"),
+    # a half sibling: a sibling either way, and the half term the
+    # register asserts, shown as it gives it, with its inverse
+    (CHRISTIAN, CAECILIE, "sister"),
+    (CAECILIE, CHRISTIAN, "brother"),
+    (CHRISTIAN, CAECILIE, "Halbschwester"),
+    (CAECILIE, CHRISTIAN, "half-brother"),
 }
 
 
