@@ -1071,6 +1071,47 @@ class TestArtifactPage:
                 "Flörburg</q></td>"
             )
 
+    def test_a_direct_call_links_a_subject_only_by_the_roster_it_is_given(
+        self, tmp_path, vocabulary
+    ):
+        # #701: the locators live test calls artifact_page without a build.
+        # The table and its heading need no build-time state; the subject's
+        # link needs the roster, which build() reads first, so a direct
+        # call shows the subject unlinked until it is given the roster
+        builder = SiteBuilder(
+            config(),
+            tmp_path / "site",
+            run=lambda _: [],
+            vocabulary=vocabulary,
+        )
+        row = asserted(
+            {
+                "st": uri("s20"),
+                "reference": uri("r20"),
+                "subject": uri("Q12"),
+                "subjectLabel": literal("Gustav Löbig"),
+                "propLabel": literal("date of birth"),
+                "value": time_literal("+1862-02-15T00:00:00Z"),
+                "precision": literal("11"),
+                "page": literal("1"),
+            }
+        )
+        artifact = {"artifact": uri("Q23")}
+        page = builder.artifact_page(artifact, [row])
+        assert "What this artifact asserts (1)" in page
+        (shown,) = self.rows_of(page)
+        assert shown.startswith("Gustav Löbig</td>")
+        assert "people/Q12.html" not in page
+
+        builder.people = {"Q12": {"person": uri("Q12")}}
+        page = builder.artifact_page(artifact, [row])
+        assert "What this artifact asserts (1)" in page
+        (shown,) = self.rows_of(page)
+        assert shown.startswith(
+            '<a href="../people/Q12.html">Gustav Löbig</a></td>'
+            "<td>date of birth</td>"
+        )
+
     def test_same_value_statements_that_differ_by_a_qualifier_stay_two(
         self, tmp_path, vocabulary
     ):

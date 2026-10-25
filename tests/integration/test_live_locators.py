@@ -42,7 +42,14 @@ from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.pipeline import writer
 from yizkr.pipeline.writer import BatchWriter
 from yizkr.queries.publish import load_templates, render_for_instance
-from yizkr.staticsite import ASSERTIONS_QUERY, SiteBuilder, cell
+from yizkr.staticsite import (
+    ARTIFACTS_QUERY,
+    ASSERTIONS_QUERY,
+    PEOPLE_QUERY,
+    SiteBuilder,
+    cell,
+    qid_of,
+)
 
 from .conftest import (
     fixture_mark,
@@ -270,7 +277,20 @@ def test_the_site_and_the_query_show_each_place(
     )
     assert {row["excerpt"].get("xml:lang") for row in births} == {"de"}
 
-    # the page: the statement once, both places in its row
+    # the page: the statement once, both places in its row. The evidence
+    # table links a subject to its page only where the site gives it one,
+    # by the roster and the artifacts build() reads before it writes a
+    # page (#701), so the call reads them as build() does
+    builder.people = {
+        qid_of(row, "person"): row
+        for row in builder.run(builder._instance_query(PEOPLE_QUERY))
+    }
+    builder.artifact_qids = {
+        qid_of(row, "artifact")
+        for row in builder.run(builder._instance_query(ARTIFACTS_QUERY))
+    }
+    assert person in builder.people
+    assert registered.qid in builder.artifact_qids
     page = builder.artifact_page(
         {"artifact": {"type": "uri", "value": entity + registered.qid}},
         [row for row in rows if ours(row)],
