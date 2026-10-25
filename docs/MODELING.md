@@ -2340,8 +2340,10 @@ not a signal to grow the schema on.
     its stated end and its sources, or the derived end where none is
     stated (ADR-0040 §2.6). On the timeline, a union's end by a death,
     stated or derived, stands beside that partner's dated death, or
-    under "No date stated" where none is dated; the derived "died by"
-    dates stand among the person's dated entries, labelled as derived.
+    under "No date stated" where none is dated; a union's end by an
+    event (a divorce) stands at the event's date, with its sources; the
+    derived "died by" dates stand among the person's dated entries,
+    labelled as derived.
   - **The exception.** `UNDATED_DEATHS_QUERY` stays as it is (reading
     the `principal` only). After the build it meets only events a
     curator makes, so a curator-made undated death event still shows on

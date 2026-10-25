@@ -58,7 +58,7 @@ import shutil
 import urllib.parse
 from collections import defaultdict
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
 
@@ -486,13 +486,14 @@ OTHER_KIND = "other"
 # subclass of one, typed at any rank but deprecated: each partner its
 # participant statements name, at any rank but deprecated, and each
 # stated end, an `ended by` event or an `ended by death of` partner, at
-# any rank but deprecated, with each source it is stated in. The person
+# any rank but deprecated, with each source it is stated in, and an end
+# event's best-ranked points in time (?endTime, ?endPrecision). The person
 # page shows each union a person takes part in with its stated end, or,
 # where none is stated, the end the shared derivation gives (ADR-0040
-# §2.6).
+# §2.6); the timeline shows an end event at its dates.
 UNIONS_QUERY = """\
 SELECT ?union ?unionLabel ?partner ?partnerLabel ?endProp ?end ?endLabel
-       ?endStatement ?source ?sourceLabel
+       ?endStatement ?source ?sourceLabel ?endTime ?endPrecision
 WHERE {{
   ?union p:{instance_of} ?typing .
   ?typing ps:{instance_of}/wdt:{subclass_of}* wd:{partnership} ;
@@ -517,6 +518,14 @@ WHERE {{
       ?endStatement wikibase:rank wikibase:DeprecatedRank
     }}
     OPTIONAL {{ ?end rdfs:label ?endLabel . FILTER(LANG(?endLabel) = "en") }}
+    OPTIONAL {{
+      ?end p:{point_in_time} ?endDated .
+      ?endDated a wikibase:BestRank .
+      wd:{point_in_time} wikibase:statementValue ?endTimeLink .
+      ?endDated ?endTimeLink ?endNode .
+      ?endNode wikibase:timeValue ?endTime ;
+               wikibase:timePrecision ?endPrecision .
+    }}
     OPTIONAL {{
       ?endStatement prov:wasDerivedFrom/pr:{stated_in} ?source .
       OPTIONAL {{
@@ -814,12 +823,16 @@ class UnionShown:
     """A union as the person page shows it (UNIONS_QUERY): its QID and
     label, each partner by QID with their label, and each stated end, as
     (the end's property key, the end's QID, its label, its sources as
-    (QID, label) pairs)."""
+    (QID, label) pairs); and each end event's points in time, by its QID,
+    as (time, precision) pairs."""
 
     qid: str
     label: str
     partners: dict[str, str]
     ends: tuple[tuple[str, str, str, tuple[tuple[str, str], ...]], ...]
+    end_dates: dict[str, tuple[tuple[str, str], ...]] = field(
+        default_factory=dict
+    )
 
 
 @dataclass(frozen=True)
@@ -1476,6 +1489,10 @@ class SiteBuilder:
                 end["sources"][qid_of(row, "source")] = cell(
                     row, "sourceLabel"
                 )
+            if cell(row, "endTime"):
+                union.setdefault("dates", {}).setdefault(end["end"], {})[
+                    (cell(row, "endTime"), cell(row, "endPrecision"))
+                ] = None
         return [
             UnionShown(
                 qid=qid,
@@ -1495,6 +1512,10 @@ class SiteBuilder:
                     )
                     for end in found[qid]["ends"].values()
                 ),
+                end_dates={
+                    end: tuple(sorted(dates))
+                    for end, dates in found[qid].get("dates", {}).items()
+                },
             )
             for qid in sorted(found, key=natural_order)
         ]
@@ -1628,6 +1649,29 @@ class SiteBuilder:
                     "&#x27;s death (derived)",
                 )
             )
+        return found
+
+    def other_ends(
+        self, union: UnionShown
+    ) -> list[tuple[str, tuple[str, str] | None, str]]:
+        """A union's ends by an event (`ended by`: a divorce, an
+        annulment), as the timeline shows them: for each listed partner
+        and each of the end event's points in time (None for an undated
+        one), the entry's HTML, the end with its sources; as (the
+        partner's QID, the date, the HTML)."""
+        found = []
+        for key, end, label, sources in union.ends:
+            if key == "ended_by_death_of":
+                continue
+            links = self.artifact_links(sources, root="")
+            entry = f"{esc(union.label)}, ended by {esc(label)}" + (
+                f'<span class="source">{links}</span>' if links else ""
+            )
+            for partner in sorted(union.partners, key=natural_order):
+                if partner not in self.people:
+                    continue
+                for date in union.end_dates.get(end) or (None,):
+                    found.append((partner, date, entry))
         return found
 
     def union_html(self, qid: str, unions: list[UnionShown]) -> str:
@@ -2188,10 +2232,12 @@ class SiteBuilder:
         death, stated or derived (``unions``, ``union_ends``; §2.6), shows
         beside that person's first death entry: a dated date of death, or the
         point in time of a curator's death event they are the principal of
-        (§6). Then, under "No date stated", each of those that has no such
-        entry to stand beside, and each death event a curator makes that states
-        no date (``undated``, as ``undated_deaths`` gives them), by
-        the name of the one who died."""
+        (§6). Each union's end by an event (a divorce, ``other_ends``)
+        stands among each partner's rows at the event's date, with its
+        sources. Then, under "No date stated", each of those that has no
+        such entry to stand beside or date, and each death event a curator
+        makes that states no date (``undated``, as ``undated_deaths`` gives
+        them), by the name of the one it is about."""
         beside: dict[str, list[str]] = defaultdict(list)
         for qid, deaths in (unknown or {}).items():
             for sources in deaths:
@@ -2200,9 +2246,16 @@ class SiteBuilder:
                     f"{esc(self._name(qid))}"
                     "</a>, " + self.undated_death_html(sources, root="")
                 )
+        undated_ends: list[str] = []
         for union in unions or []:
             for qid, entry in self.union_ends(union):
                 beside[qid].append(entry)
+            for qid, date, entry in self.other_ends(union):
+                if date is None:
+                    undated_ends.append(
+                        f'<a href="people/{esc(qid)}.html">'
+                        f"{esc(self._name(qid))}</a>: {entry}"
+                    )
         died = disagreement.property_labels()["date_of_death"]
         death_type = load_manifest().items["death"].label
         body = [
@@ -2225,7 +2278,7 @@ class SiteBuilder:
 
         def is_death(row: dict) -> bool:
             # a derived date is no source's, so nothing stands beside it
-            if "_derived" in row:
+            if "_html" in row:
                 return False
             if cell(row, "what") == died:
                 return True
@@ -2236,7 +2289,7 @@ class SiteBuilder:
             }
             return death_type in types and not cell(row, "what")
 
-        for row in self._with_derived(rows):
+        for row in self._with_derived(rows, unions or []):
             date = cell(row, "date")
             person = qid_of(row, "person")
             where = f"{person} timeline date"
@@ -2255,10 +2308,10 @@ class SiteBuilder:
                 f'<a href="people/{esc(person)}.html">'
                 f"{esc(cell(row, 'personLabel'))}</a>, "
             )
-            if "_derived" in row:
+            if "_html" in row:
                 body.append(
                     f'<div class="entry">{shown_date} — {link}'
-                    f"{row['_derived']}</div>"
+                    f"{row['_html']}</div>"
                 )
             else:
                 source_qid = qid_of(row, "source")
@@ -2301,13 +2354,15 @@ class SiteBuilder:
                     for qid in sorted(beside, key=natural_order)
                     for entry in beside[qid]
                 ),
+                *((entry, "") for entry in undated_ends),
             ]
         )
         if entries:
             body.append(
                 '<h2>No date stated</h2><p class="sub">each death a source '
-                "states with no date, so that it has no place above, with "
-                'its source</p><div class="timeline">'
+                "states with no date, and each union's end by an event that "
+                "states none, so that it has no place above, with its "
+                'source</p><div class="timeline">'
                 + "".join(
                     f'<div class="entry">{entry}</div>' for entry in entries
                 )
@@ -2319,30 +2374,45 @@ class SiteBuilder:
         """A listed person's label, or their QID."""
         return cell(self.people.get(qid, {}), "personLabel") or qid
 
-    def _with_derived(self, rows: list[dict]) -> list[dict]:
+    def _with_derived(
+        self, rows: list[dict], unions: list[UnionShown] = ()
+    ) -> list[dict]:
         """The person-timeline rows, ordered by person and then by date,
-        with a row for each derived "died by" date (its HTML under
-        ``_derived``) among its person's rows at its date, after any row
-        of the same date; a person the rows do not name has theirs at the
-        end."""
+        with a row (its HTML under ``_html``) among its person's rows at
+        its date, after any row of the same date, for each derived "died
+        by" date and each dated end of a union by an event (``other_ends``);
+        a person the rows do not name has theirs at the end."""
         pending: dict[str, list[dict]] = defaultdict(list)
-        for bound in self._derived:
-            qid = bound.person.rsplit("/", 1)[-1]
-            if qid not in self.people:
-                continue
-            stamp, precision = when_time(bound.by)
+
+        def add(qid: str, stamp: str, precision: str, shown: str) -> None:
             pending[qid].append(
                 {
-                    "person": {"type": "uri", "value": bound.person},
+                    "person": {
+                        "type": "uri",
+                        "value": f"{self.config.concept_uri}/entity/{qid}",
+                    },
                     "personLabel": {
                         "type": "literal",
-                        "value": cell(self.people[qid], "personLabel") or qid,
+                        "value": self._name(qid),
                     },
                     "date": {"type": "literal", "value": stamp},
                     "precision": {"type": "literal", "value": precision},
-                    "_derived": self.died_by_html(bound, root=""),
+                    "_html": shown,
                 }
             )
+
+        for bound in self._derived:
+            qid = bound.person.rsplit("/", 1)[-1]
+            if qid in self.people:
+                add(
+                    qid,
+                    *when_time(bound.by),
+                    self.died_by_html(bound, root=""),
+                )
+        for union in unions:
+            for qid, date, entry in self.other_ends(union):
+                if date is not None:
+                    add(qid, *date, entry)
         for found in pending.values():
             found.sort(key=lambda row: _day(cell(row, "date")))
 

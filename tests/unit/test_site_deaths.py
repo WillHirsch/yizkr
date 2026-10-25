@@ -384,6 +384,79 @@ class TestTheTimelinesDerivedDates:
             or "Q11.html" not in text[text.index("<h2>No date stated</h2>") :]
         )
 
+    def divorce(self, tmp_path, vocabulary, dated=True):
+        # the Landgericht Rekau's 1957 judgment: Leopold and Agnes's
+        # marriage ended by their divorce of 2 January 1957
+        people = [
+            *PEOPLE,
+            *(
+                {
+                    "person": uri(qid),
+                    "personLabel": literal(label),
+                    "deceased": literal("false"),
+                    "aliases": literal(""),
+                }
+                for qid, label in (
+                    ("Q12", "Leopold Löbig"),
+                    ("Q13", "Agnes Löbig"),
+                )
+            ),
+        ]
+        unions = [
+            {
+                "union": uri("Q41"),
+                "unionLabel": literal("marriage of Leopold and Agnes Löbig"),
+                "partner": uri(partner),
+                "partnerLabel": literal(label),
+                "endProp": uri(property_id("ended_by")),
+                "end": uri("Q42"),
+                "endLabel": literal("divorce of Leopold and Agnes Löbig"),
+                "endStatement": uri("d9"),
+                "source": uri("Q23"),
+                "sourceLabel": literal("divorce judgment"),
+                **(
+                    {
+                        "endTime": time_literal("+1957-01-02T00:00:00Z"),
+                        "endPrecision": literal("11"),
+                    }
+                    if dated
+                    else {}
+                ),
+            }
+            for partner, label in (
+                ("Q12", "Leopold Löbig"),
+                ("Q13", "Agnes Löbig"),
+            )
+        ]
+        site, _ = build(
+            tmp_path,
+            vocabulary,
+            {
+                **responses(unions=unions),
+                "GROUP_CONCAT(DISTINCT ?alias": people,
+            },
+        )
+        return timeline(site)
+
+    def test_a_divorce_stands_at_its_date(self, tmp_path, vocabulary):
+        found = entries(self.divorce(tmp_path, vocabulary))
+        dated = [e for e in found if e.startswith("1957-01-02 — ")]
+        assert {"Q12" if "people/Q12.html" in e else "Q13" for e in dated} == {
+            "Q12",
+            "Q13",
+        }
+        for entry in dated:
+            assert (
+                "marriage of Leopold and Agnes Löbig, ended by divorce of "
+                'Leopold and Agnes Löbig<span class="source">' in entry
+            )
+            assert '<a href="artifacts/Q23.html">' in entry
+
+    def test_an_undated_divorce_has_no_date_stated(self, tmp_path, vocabulary):
+        text = self.divorce(tmp_path, vocabulary, dated=False)
+        foot = text[text.index("<h2>No date stated</h2>") :]
+        assert foot.count("ended by divorce of Leopold and Agnes Löbig") == 2
+
     def test_hostile_labels_are_escaped(self, tmp_path, vocabulary):
         hostile = [
             {
