@@ -44,7 +44,8 @@ through its scenarios once before drawing them by weight):
   precision; earliest/latest ranges, open-ended ones, circa; agreement,
   differences of resolution, contradictions between artifacts and
   between the fragments of one artifact, a curator's correction beside
-  the machine reading; the same mix for events' own dates;
+  the machine reading; the same mix for events' own dates; and a date
+  of death of unknown value (ADR-0040 §2.2), alone or beside a dated one;
 - places of birth and death, contained in each other or not, and through
   redirects; parents, contradicting or redirected; spouses stated on
   both partners with start, end or point-in-time qualifiers, sometimes
@@ -251,6 +252,15 @@ class Plain:
 
 
 @dataclass(frozen=True)
+class Unknown:
+    """Wikibase's "some value": a value its source states exists but does
+    not give (ADR-0040 §2.2), which the query service gives as a skolem
+    IRI of its own."""
+
+    token: str
+
+
+@dataclass(frozen=True)
 class Coordinate:
     latitude: float
     longitude: float
@@ -294,6 +304,8 @@ def term(value) -> str:
         return f"{literal(value.text)}@{value.lang}"
     if isinstance(value, Plain):
         return literal(value.text)
+    if isinstance(value, Unknown):
+        return f"<{CONCEPT_URI}/.well-known/genid/{value.token}>"
     if isinstance(value, Coordinate):
         point = f"Point({value.longitude:.4f} {value.latitude:.4f})"
         return f"{literal(point)}^^geo:wktLiteral"
@@ -581,6 +593,7 @@ class Builder:
         self.addresses: list[str] = []
         self.name_number = 0
         self.excerpt_number = 0
+        self.unknown_deaths = 0
 
     # -- draws ----------------------------------------------------------------
 
@@ -987,6 +1000,12 @@ class Builder:
             died = person.born + self.rng.randint(40, 90)
             if self.chance(0.85):
                 self.dates(qid, "date_of_death", died)
+            # a death its source states without its date, beside any dated
+            # one; the first person who dies has one
+            if not self.unknown_deaths or self.chance(0.1):
+                self.unknown_deaths += 1
+                token = digest(f"unknown|{qid}|{self.unknown_deaths}")
+                self.claim(qid, "date_of_death", Unknown(token))
         if self.wants("place", 0.75):
             self.places(qid, "place_of_birth")
         if self.chance(0.5):

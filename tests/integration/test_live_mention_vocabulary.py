@@ -1,5 +1,5 @@
-"""Live: the bootstrap creates ADR-0035's and ADR-0036's vocabulary, and a
-second bootstrap changes nothing (#406).
+"""Live: the bootstrap creates ADR-0035's, ADR-0036's and ADR-0040's
+vocabulary, and a second bootstrap changes nothing (#406, #687).
 
 On a fresh instance the first bootstrap creates it all. On one bootstrapped
 before, it creates what is new and appends each new subclass statement,
@@ -30,6 +30,8 @@ NEW_PROPERTIES = {
     "judgement_note": "string",
     "started_by": "wikibase-item",
     "ended_by": "wikibase-item",
+    "ended_by_death_of": "wikibase-item",
+    "parentage": "wikibase-item",
 }
 NEW_ITEMS = (
     "partnership",
@@ -59,6 +61,12 @@ NEW_ITEMS = (
     "judgement_date_reading",
     "judgement_identity",
     "judgement_other",
+    "parentage_birth",
+    "parentage_adoptive",
+    "parentage_foster",
+    "kin_step_parent",
+    "kin_step_child",
+    "kin_step_sibling",
 )
 SUBCLASSES = {
     "marriage": "partnership",

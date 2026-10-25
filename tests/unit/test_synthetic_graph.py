@@ -203,9 +203,29 @@ DATES = ("date_of_birth", "date_of_death")
 
 
 def dated_statements(g: Graph):
+    """Each date statement, a date of death of unknown value (#687) left
+    out."""
     for key in DATES:
         for subject, statement in g.statements(key):
-            yield key, subject, statement
+            if not is_unknown(g.value(statement, key)):
+                yield key, subject, statement
+
+
+def is_unknown(term: str) -> bool:
+    """Whether a term is Wikibase's "some value", a skolem IRI."""
+    return "/.well-known/genid/" in term
+
+
+def unknown_deaths(g: Graph) -> list[str]:
+    """The dates of death of unknown value, each a statement of its own
+    with no value node."""
+    pid = g.pid("date_of_death")
+    found = []
+    for _, statement in g.statements("date_of_death"):
+        if is_unknown(g.value(statement, "date_of_death")):
+            assert not g.objects(statement, f"psv:{pid}")
+            found.append(statement)
+    return found
 
 
 def date_precisions(g: Graph) -> list[int]:
@@ -243,8 +263,9 @@ def contradictions(g: Graph, within_one_artifact: bool) -> list[tuple]:
     found = []
     for key in DATES:
         by_subject = defaultdict(list)
-        for subject, statement in g.statements(key):
-            by_subject[subject].append(statement)
+        for found_key, subject, statement in dated_statements(g):
+            if found_key == key:
+                by_subject[subject].append(statement)
         for subject, statements in by_subject.items():
             for a, b in combinations(statements, 2):
                 (first_a, last_a), (first_b, last_b) = (
@@ -415,6 +436,7 @@ SHAPES = {
     "unreferenced statements": lambda g: unsourced(g, with_run=False),
     "redirected values": redirected_values,
     "machine beside curator": machine_and_curator,
+    "a date of death of unknown value": unknown_deaths,
 }
 
 PERSONS, SEED = 60, 11

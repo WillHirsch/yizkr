@@ -1,7 +1,7 @@
 """Live write path for the GEDCOM adapter's SOUR/OBJE handling (ADR-0021),
 a residence's date period (#308), a repeated event's alternatives (#322),
 an undated death (#323), a marriage's citation (#324), and a family's
-union with its events, the death's principal and the undetermined
+union with its events, the undetermined
 language of an export that states none (#408), and a couple of two WIFEs
 with their child (#353).
 
@@ -24,9 +24,9 @@ item with no wedding. A family of two WIFEs and no MARR must become a
 partnership item whose two partners are its participants with the role
 partner, and its child must hold a mother statement for each of them.
 A DEAT that gives
-no date, place or cause must become a death event: an item that is an
-instance of `death`, with the person as its principal participant, which
-is what the possibly-living check reads as death evidence (ADR-0020 §2).
+no date, place or cause must become a `date of death` of unknown value
+on the person, which the possibly-living check reads as death evidence
+(ADR-0020 §2, ADR-0040 Q4).
 The export states no language, so its excerpts are undetermined (`und`),
 which the instance must take (ADR-0035 §6), as it must every code the
 adapter maps a GEDCOM language name to. All flow through the generic
@@ -64,7 +64,7 @@ FIXTURE = (
 MARK = fixture_mark(FIXTURE, writer, gedcom)
 
 # The export's text, with {marker} in each label it gives an item: the
-# people's (and so the death event's), the media object's and the place's
+# people's, the media object's and the place's
 # (_marker).
 TEMPLATE = """\
 0 HEAD
@@ -610,38 +610,25 @@ def test_every_code_the_adapter_maps_to_is_one_the_instance_takes(client):
     assert sorted(wanted - accepted) == []
 
 
-def test_gedcom_undated_death_is_a_death_event(client, gedcom_artifact):
+def test_gedcom_undated_death_is_an_unknown_date_of_death(
+    client, gedcom_artifact
+):
     """`1 DEAT Y`, with a citation and nothing else beneath it, lands as a
-    death event: an item that is an instance of `death`, with the spouse
-    as its principal participant at normal rank, cited to the export at
-    the citation's page. The spouse has no date of death (#323, #408)."""
+    `date of death` of unknown value on the spouse (a somevalue snak), at
+    normal rank, cited to the export at the citation's page; no death
+    event is made (ADR-0040 Q4, #687). A second write writes no copy."""
     export_qid, export = gedcom_artifact
-    write = write_mapped(
-        BatchWriter(client), adapt_gedcom(GEDCOM, artifact=export).batch
-    )
+    batch = adapt_gedcom(GEDCOM, artifact=export).batch
+    write = write_mapped(BatchWriter(client), batch)
     spouse_qid = write.created_items["i2"]
-    event_qid = write.created_items["i2-death"]
-    properties, items = client.vocabulary()
-    kinds = {v["id"] for v in _claim_values(client, event_qid, "instance_of")}
-    assert kinds == {items["death"]}
-    found = client.api_get(
-        {
-            "action": "wbgetclaims",
-            "entity": event_qid,
-            "property": properties["participant"],
-        }
-    )
-    (participant,) = [
-        statement
-        for statements in found["claims"].values()
-        for statement in statements
-    ]
-    assert participant["mainsnak"]["datavalue"]["value"]["id"] == spouse_qid
-    assert _qualifier_values(client, participant, "object_has_role") == [
-        items["principal"]
-    ]
-    assert participant["rank"] == "normal"
-    references = participant.get("references", [])
+    assert "i2-death" not in write.created_items
+    properties, _ = client.vocabulary()
+    (death,) = _statements(client, spouse_qid, "date_of_death")
+    assert death["mainsnak"]["snaktype"] == "somevalue"
+    assert "datavalue" not in death["mainsnak"]
+    assert death["rank"] == "normal"
+    assert not death.get("qualifiers")
+    references = death.get("references", [])
     stated_in = {
         snak["datavalue"]["value"]["id"]
         for ref in references
@@ -654,7 +641,9 @@ def test_gedcom_undated_death_is_a_death_event(client, gedcom_artifact):
         for snak in ref["snaks"].get(properties["page_number"], [])
     ]
     assert pages == ["Volume 3, Page 9"]
-    assert _claim_values(client, spouse_qid, "date_of_death") == []
+    # written again, it finds the statement: the snak types compare
+    write_mapped(BatchWriter(client), batch)
+    assert len(_statements(client, spouse_qid, "date_of_death")) == 1
 
 
 def test_gedcom_write_is_idempotent(client, gedcom_artifact):

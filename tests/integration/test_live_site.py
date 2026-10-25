@@ -20,10 +20,10 @@ the timeline a date with a range its source states, open at one end
 a circa date (#315), and Leopold Löbig's imprisonment, which the 1945
 registration card dates by its own start and end time, an event dated by
 start and end (#318). Rudolf Löbig's death, which Nina's 1958 letter
-states with no date ("the widow of your late brother Rudolf"), is a death
-event with no date, Rudolf its principal and Nina beside him as its
-informant: his page and the timeline show it as "died (date not stated)"
-with the letter, and hers never shows her to have died (#354).
+states with no date ("the widow of your late brother Rudolf"), is a
+`date of death` of unknown value on Rudolf (ADR-0040 §2.2), and Nina
+widowed: his page and the timeline show it as "died (date not stated)"
+with the letter, and hers never shows her to have died (#354, #687).
 
 Every label, title and image carries a marker, eight hex digits of a hash
 over the fixture, over the writer's and the site generator's source and
@@ -87,8 +87,8 @@ FIXTURE = (
     "give it, the family gravestone's photograph, Rahel's death after "
     "1945 and Cäcilie's birth circa 1833 as the 1984 family tree gives "
     "them, Leopold's imprisonment from its start to its end as the "
-    "1945 registration card dates it, and Rudolf's undated death, with "
-    "Nina its informant, as the 1958 letter states it"
+    "1945 registration card dates it, and Rudolf's death of unknown date, "
+    "with Nina widowed, as the 1958 letter states it"
 )
 MARK = f"(site test {fixture_mark(FIXTURE, writer, staticsite)})"
 
@@ -132,7 +132,6 @@ HELD_BY = said(CARD, "participant", "imprisonment-1939")  # Leopold
 LATE = "вдова Вашего покойного брата Рудольфа"
 RUDOLF = marked("rudolf-loebig")
 NINA = marked("nina-sartina")
-RUDOLFS_DEATH = f"Death of {RUDOLF}"
 # the extract's own words for the birth at home, and for the address
 HOME = (
     "wohnhaft in Flörburg, Brunnenring 35, zeigte an, daß von seiner "
@@ -261,9 +260,9 @@ def fixture_batch(sources: dict[str, ArtifactRef]) -> ClaimBatch:
     """The two sources' claims about the birth, the extract's placing of
     the address in the town, the tree's claims about Rahel's death and
     Cäcilie's birth, and the card's dating of Leopold's imprisonment by
-    its own start and end time, and the letter's undated death of Rudolf,
-    with Rudolf its principal and Nina its informant, each citing its
-    source by the SHA-1 of its media (#102)."""
+    its own start and end time, and the letter's death of Rudolf of
+    unknown date, with Nina widowed, each citing its source by the SHA-1
+    of its media (#102)."""
     person = local("person", PERSON, "human")
     address = local("address", ADDRESS, "place")
     street = local("street", STREET, "place")
@@ -274,15 +273,6 @@ def fixture_batch(sources: dict[str, ArtifactRef]) -> ClaimBatch:
     imprisonment = local("imprisonment", IMPRISONMENT, "imprisonment")
     rudolf = local("rudolf", RUDOLF, "human")
     nina = local("nina", NINA, "human")
-    death = local("death", RUDOLFS_DEATH, "death")
-
-    def role(key: str) -> list[dict]:
-        return [
-            {
-                "property": "object_has_role",
-                "value": item({"kind": "vocab", "key": key}),
-            }
-        ]
 
     def claim(subject, prop, value, source, excerpt, qualifiers=()):
         return {
@@ -352,11 +342,13 @@ def fixture_batch(sources: dict[str, ArtifactRef]) -> ClaimBatch:
             )
             for prop, held in HELD.items()
         ),
+        claim(rudolf, "date_of_death", {"type": "unknown"}, LETTER, LATE),
         claim(
-            death, "participant", item(rudolf), LETTER, LATE, role("principal")
-        ),
-        claim(
-            death, "participant", item(nina), LETTER, LATE, role("informant")
+            nina,
+            "civil_status",
+            item({"kind": "vocab", "key": "widowed"}),
+            LETTER,
+            LATE,
         ),
     ]
     return ClaimBatch.model_validate({"extraction_run": RUN, "claims": claims})
@@ -370,8 +362,8 @@ class Site:
     rahel: str  # Rahel's QID, whose death has a stated range
     caecilie: str  # Cäcilie's QID, whose birth is circa
     leopold: str  # Leopold's QID, held from a start to an end
-    rudolf: str  # Rudolf's QID, the principal of a death with no date
-    nina: str  # Nina's QID, its informant
+    rudolf: str  # Rudolf's QID, whose date of death is of unknown value
+    nina: str  # Nina's QID, his widow
     places: dict[str, str]  # "address", "street", "town" -> QID
     sources: dict[str, str]  # universe source key -> artifact QID
     photo_file: str  # the gravestone photograph's file page
@@ -422,7 +414,6 @@ def site(client, config, tmp_path_factory):
             "imprisonment",
             "rudolf",
             "nina",
-            "death",
         )
     ]
     wait_for_query_service(config, client, [*seeded, *sources.values()])
@@ -647,11 +638,11 @@ def test_the_timeline_shows_an_event_by_its_start_and_end(site):
 
 def test_an_undated_death_shows_for_its_principal_alone(site):
     # the letter states Rudolf's death with no date: his page shows it
-    # under "death", as "died (date not stated)" with the letter, and the
-    # timeline lists it at its foot; Nina, its informant, is never shown
-    # to have died (#354)
+    # under "date of death", as "died (date not stated)" with the letter,
+    # and the timeline lists it under "No date stated", as nothing dates
+    # it; Nina, his widow, is never shown to have died (#354, ADR-0040 §6)
     page = site.read(f"people/{site.rudolf}.html")
-    (deaths,) = re.findall(r"<dt>death</dt>((?:<dd>.*?</dd>)+)", page)
+    (deaths,) = re.findall(r"<dt>date of death</dt>((?:<dd>.*?</dd>)+)", page)
     (entry,) = elements(deaths, "dd")
     assert entry.startswith('died (date not stated)<span class="source">')
     assert source_link(site, LETTER, root="../") in entry
@@ -674,7 +665,7 @@ def test_an_undated_death_shows_for_its_principal_alone(site):
         for entry in timeline_entries(site, site.nina)
         if "died (date not stated)" in entry
     ]
-    assert site.summary["undated_deaths"] >= 1
+    assert site.summary["unknown_deaths"] >= 1
 
 
 def test_sources_hyperlink_to_artifact_pages_with_downloads(site):

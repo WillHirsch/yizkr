@@ -45,7 +45,7 @@ from types import ModuleType
 import pytest
 import requests
 
-from yizkr.claims import ArtifactRef
+from yizkr.claims import VITAL_KIND, VITAL_SUBJECT, ArtifactRef
 from yizkr.core import sparql
 from yizkr.core.config import USER_AGENT, Config
 from yizkr.core.instance import clear_contents
@@ -77,6 +77,31 @@ def legacy_spouse_writes() -> Iterator[None]:
     lifted = replace(load_acceptance(), retired=frozenset())
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(writer, "load_acceptance", lambda: lifted)
+        yield
+
+
+@contextmanager
+def curator_event_writes() -> Iterator[None]:
+    """Within it, the writer writes a `birth` or `death` event and the
+    death and birth properties on it, as a curator makes them in the wiki
+    (ADR-0040 Q5): no extraction or import makes one, and the writer
+    refuses one in a batch (claims.vital_problems). A fixture writes so
+    the curator-made events the readers still read (the privacy check,
+    the export, the site's undated deaths, reconcile). Only those two
+    rules are lifted: every other rule of deaths and births still holds."""
+    lifted = (f"[{VITAL_KIND}]", f"[{VITAL_SUBJECT}]")
+    vital = writer.vital_problems
+
+    def problems(batch, acceptance=None):
+        found = {}
+        for index, held in vital(batch, acceptance).items():
+            kept = [p for p in held if not p.endswith(lifted)]
+            if kept:
+                found[index] = kept
+        return found
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(writer, "vital_problems", problems)
         yield
 
 

@@ -24,7 +24,8 @@ mutant's run included, never meets the session's fixture:
 * a family with a religion, which is no person evidence: the export
   leaves every family out, as any of its people may be living;
 * a person typed human and born in 1990, "Named In Text", whom texts on
-  other items name: a birth event they take part in, labelled "Birth of"
+  other items name: a birth event they take part in (curator-made, as
+  ADR-0040 Q5 leaves birth events to a curator), labelled "Birth of"
   and their label, and dated 1990; the family's description; the
   released person's description; and a letter's title, its page's label
   and description, and its file's name, which is made from the title.
@@ -143,7 +144,12 @@ from yizkr.backup import (
 from yizkr.pipeline import writer
 from yizkr.staticsite import PEOPLE_QUERY, SiteBuilder
 
-from .conftest import fixture_mark, register_fictional, wait_for_query_service
+from .conftest import (
+    curator_event_writes,
+    fixture_mark,
+    register_fictional,
+    wait_for_query_service,
+)
 from .test_live_privacy import write_fixture
 
 pytestmark = pytest.mark.live
@@ -486,94 +492,100 @@ def fixture_graph(client, config):
         client, f"Export fixture source {MARK}", "certificate"
     )
     letter = register_fictional(client, LETTER, "letter", pages=1)
-    written = write_fixture(
-        client,
-        {source.ref.sha1: "A", letter.ref.sha1: "B"},
-        [
-            religion("deprecated type", source.ref),
-            religion("outranked type", source.ref),
-            born("no type", source.ref),
-            born("organization born", source.ref),
-            claim(
-                "released",
-                "date_of_death",
-                {"type": "time", "year": 1995},
-                source.ref,
-                excerpt=f"the father of {NAMED} died in 1995",
-            ),
-            participant("vessel", source.ref),
-            participant("vessel typed human", source.ref),
-            born("merge target", source.ref),
-            religion("family", source.ref),
-            born("named in text", letter.ref),
-            claim(
-                "birth of named in text",
-                "participant",
-                {"type": "item", "value": ENTITIES["named in text"]},
-                source.ref,
-            ),
-            claim(
-                "birth of named in text",
-                "point_in_time",
-                {"type": "time", "year": 1990},
-                source.ref,
-            ),
-            claim(
-                "unrecorded birth",
-                "point_in_time",
-                {"type": "time", "year": 1990},
-                source.ref,
-            ),
-            claim(
-                "released",
-                "spouse",
-                {"type": "item", "value": ENTITIES["named in text"]},
-                source.ref,
-                excerpt=WEDDING,
-                qualifiers=[("start_time", {"type": "time", "year": 1938})],
-            ),
-            claim(
-                "released",
-                "referred_to_as",
-                {
-                    "type": "monolingual",
-                    "value": {"text": APPELLATION, "language": "en"},
-                },
-                source.ref,
-                excerpt=CALLED,
-                qualifiers=[
-                    (
-                        "perspective",
-                        {"type": "item", "value": ENTITIES["named in text"]},
-                    )
-                ],
-            ),
-            claim(
-                "talk",
-                "point_in_time",
-                {"type": "time", "year": 1938},
-                source.ref,
-            ),
-            claim(
-                "talk",
-                "participant",
-                {"type": "item", "value": ENTITIES["released"]},
-                source.ref,
-            ),
-            claim(
-                "hearing",
-                "carried_out_by",
-                {"type": "item", "value": ENTITIES["organization born"]},
-                source.ref,
-            ),
-            claim(
-                "hearing",
-                "point_in_time",
-                {"type": "time", "year": 1957},
-                source.ref,
-            ),
-        ],
-    )
+    with curator_event_writes():
+        written = write_fixture(
+            client,
+            {source.ref.sha1: "A", letter.ref.sha1: "B"},
+            [
+                religion("deprecated type", source.ref),
+                religion("outranked type", source.ref),
+                born("no type", source.ref),
+                born("organization born", source.ref),
+                claim(
+                    "released",
+                    "date_of_death",
+                    {"type": "time", "year": 1995},
+                    source.ref,
+                    excerpt=f"the father of {NAMED} died in 1995",
+                ),
+                participant("vessel", source.ref),
+                participant("vessel typed human", source.ref),
+                born("merge target", source.ref),
+                religion("family", source.ref),
+                born("named in text", letter.ref),
+                claim(
+                    "birth of named in text",
+                    "participant",
+                    {"type": "item", "value": ENTITIES["named in text"]},
+                    source.ref,
+                ),
+                claim(
+                    "birth of named in text",
+                    "point_in_time",
+                    {"type": "time", "year": 1990},
+                    source.ref,
+                ),
+                claim(
+                    "unrecorded birth",
+                    "point_in_time",
+                    {"type": "time", "year": 1990},
+                    source.ref,
+                ),
+                claim(
+                    "released",
+                    "spouse",
+                    {"type": "item", "value": ENTITIES["named in text"]},
+                    source.ref,
+                    excerpt=WEDDING,
+                    qualifiers=[
+                        ("start_time", {"type": "time", "year": 1938})
+                    ],
+                ),
+                claim(
+                    "released",
+                    "referred_to_as",
+                    {
+                        "type": "monolingual",
+                        "value": {"text": APPELLATION, "language": "en"},
+                    },
+                    source.ref,
+                    excerpt=CALLED,
+                    qualifiers=[
+                        (
+                            "perspective",
+                            {
+                                "type": "item",
+                                "value": ENTITIES["named in text"],
+                            },
+                        )
+                    ],
+                ),
+                claim(
+                    "talk",
+                    "point_in_time",
+                    {"type": "time", "year": 1938},
+                    source.ref,
+                ),
+                claim(
+                    "talk",
+                    "participant",
+                    {"type": "item", "value": ENTITIES["released"]},
+                    source.ref,
+                ),
+                claim(
+                    "hearing",
+                    "carried_out_by",
+                    {"type": "item", "value": ENTITIES["organization born"]},
+                    source.ref,
+                ),
+                claim(
+                    "hearing",
+                    "point_in_time",
+                    {"type": "time", "year": 1957},
+                    source.ref,
+                ),
+            ],
+        )
     qids = {
         role: written.created_items[ref["local_id"]]
         for role, ref in ENTITIES.items()

@@ -2,12 +2,14 @@
 (#577; ADR-0020, as amended by #577; docs/MODELING.md, "Living persons
 and privacy").
 
-A fictional fixture writes Eugen Löbig's death as an event, typed
-`death`, with Eugen as its principal: the event states his cause of death
-("Wassersucht") and his age ("73 Jahre"), and its point in time, 1909.
-Beside it, a death event that states a cause of death and a `date of
-birth` too, and one whose only cause of death a curator deprecated. Read
-back through the stack:
+A fictional fixture writes Eugen Löbig's death as an event, typed `death`, with
+Eugen as its principal, as a curator makes one in the wiki (ADR-0040 Q5: no
+extraction or import makes a death event, and a curator-made one still releases
+its principal; curator_event_writes): the event states his cause of death
+("Wassersucht") and his age ("73 Jahre"), and its point in time, 1909. Beside
+it, a death event that states a cause of death and a `date of birth` too, and
+one whose only cause of death a curator deprecated. Read back through the
+stack:
 
 * the site's people roster holds no row for Eugen's death, so it gets no
   person page, and the check does not assess it; Eugen is in the roster,
@@ -42,7 +44,12 @@ from yizkr.pipeline import writer
 from yizkr.pipeline.writer import BatchWriter
 from yizkr.staticsite import PEOPLE_QUERY, SiteBuilder
 
-from .conftest import fixture_mark, register_fictional, wait_for_query_service
+from .conftest import (
+    curator_event_writes,
+    fixture_mark,
+    register_fictional,
+    wait_for_query_service,
+)
 
 pytestmark = pytest.mark.live
 
@@ -153,19 +160,20 @@ def fixture_graph(client, config):
             "deprecated death", "cause_of_death", cause("Wassersucht"), source
         ),
     ]
-    written = write_mapped(
-        BatchWriter(client),
-        ClaimBatch.model_validate(
-            {
-                "extraction_run": {
-                    "model_identifier": "integration-test",
-                    "pipeline_version": "0.0.0",
-                    "started_at": datetime.now(UTC).isoformat(),
-                },
-                "claims": claims,
-            }
-        ),
-    )
+    with curator_event_writes():
+        written = write_mapped(
+            BatchWriter(client),
+            ClaimBatch.model_validate(
+                {
+                    "extraction_run": {
+                        "model_identifier": "integration-test",
+                        "pipeline_version": "0.0.0",
+                        "started_at": datetime.now(UTC).isoformat(),
+                    },
+                    "claims": claims,
+                }
+            ),
+        )
     qids = {
         key: written.created_items[ref["local_id"]]
         for key, ref in ENTITIES.items()
