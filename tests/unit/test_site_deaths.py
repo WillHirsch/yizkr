@@ -10,12 +10,15 @@ hypothetical "der selige Felix".
 
 from __future__ import annotations
 
+import re
+
 import pytest
 import yaml
 
 from tests.unit.test_staticsite import (
     ARTIFACTS,
     RESPONSES,
+    TIMELINE,
     build,
     literal,
     property_id,
@@ -262,6 +265,141 @@ class TestTheTimeline:
         assert "<h2>No date stated</h2>" in timeline
         foot = timeline[timeline.index("<h2>No date stated</h2>") :]
         assert "Q7.html" not in foot
+
+
+def timeline(site) -> str:
+    return (site / "timeline.html").read_text()
+
+
+def entries(text: str) -> list[str]:
+    return re.findall(r'<div class="entry">(.*?)</div>', text)
+
+
+class TestTheTimelinesDerivedDates:
+    """ADR-0040 §2.4, §2.6, §6: the timeline shows the derived "died by"
+    dates, labelled as derived, with their sources, and each union's end
+    by a death, stated or derived."""
+
+    def test_a_derived_date_stands_among_its_persons_rows(
+        self, tmp_path, vocabulary
+    ):
+        site, _ = build(tmp_path, vocabulary, responses())
+        (caecilie,) = [
+            e
+            for e in entries(timeline(site))
+            if e.startswith("1909-03-16 — ") and "people/Q9.html" in e
+        ]
+        assert "died by 1909-03-16 (derived)" in caecilie
+        assert '<a href="artifacts/Q23.html">burial register</a>' in caecilie
+        felix = [
+            e for e in entries(timeline(site)) if "died by 1909-03-20" in e
+        ]
+        assert felix and felix[0].startswith("1909-03-20 — ")
+
+    def test_a_stated_union_end_stands_beside_the_death(
+        self, tmp_path, vocabulary
+    ):
+        # Cäcilie's death dated 13 December 1902 by her register
+        dated = {
+            **TIMELINE[0],
+            "person": uri("Q9"),
+            "personLabel": literal("Cäcilie Löbig"),
+            "date": time_literal("+1902-12-13T00:00:00Z"),
+        }
+        site, _ = build(
+            tmp_path,
+            vocabulary,
+            {**responses(), 'date of birth"@en': [dated, *TIMELINE]},
+        )
+        found = entries(timeline(site))
+        death = next(
+            i for i, e in enumerate(found) if e.startswith("1902-12-13 — ")
+        )
+        assert found[death + 1].startswith(
+            "marriage of Eugen and Cäcilie Löbig, ended by the death of "
+            '<a href="people/Q9.html">Cäcilie Löbig</a>'
+        )
+        assert "burial register" in found[death + 1]
+
+    def test_a_stated_end_with_no_dated_death_has_no_date_stated(
+        self, tmp_path, vocabulary
+    ):
+        site, _ = build(tmp_path, vocabulary, responses())
+        text = timeline(site)
+        foot = text[text.index("<h2>No date stated</h2>") :]
+        assert "ended by the death of" in foot
+        assert "ended by the death of" not in text[: text.index("<h2>No")]
+
+    def test_a_derived_end_stands_beside_the_partners_death(
+        self, tmp_path, vocabulary
+    ):
+        unstated = [
+            {
+                k: v
+                for k, v in each.items()
+                if not k.startswith(("end", "source"))
+            }
+            for each in UNIONS
+        ]
+        rows = [r for r in DIED_BY if r["kind"]["value"] != "end"]
+        site, _ = build(tmp_path, vocabulary, responses(rows, unstated))
+        found = entries(timeline(site))
+        death = next(
+            i
+            for i, e in enumerate(found)
+            if e.startswith("1909-03-16 — ") and "people/Q7.html" in e
+        )
+        assert found[death + 1] == (
+            "marriage of Eugen and Cäcilie Löbig, ended no later than "
+            '<a href="people/Q7.html">Eugen Löbig</a>&#x27;s death (derived)'
+        )
+
+    def test_a_curators_dated_death_event_is_a_death_entry(
+        self, tmp_path, vocabulary
+    ):
+        # Felix's death a curator makes, dated by its point in time: his
+        # date of death of unknown value stands beside it
+        event = {
+            "person": uri("Q11"),
+            "personLabel": literal("Felix Löbig"),
+            "eventTypes": literal("death"),
+            "date": time_literal("+1931-06-01T00:00:00Z"),
+            "source": uri("Q23"),
+            "sourceLabel": literal("burial register"),
+        }
+        site, _ = build(
+            tmp_path,
+            vocabulary,
+            {**responses(), 'date of birth"@en': [*TIMELINE, event]},
+        )
+        text = timeline(site)
+        found = entries(text)
+        dated = next(
+            i for i, e in enumerate(found) if e.startswith("1931-06-01 — ")
+        )
+        assert "died (date not stated)" in found[dated + 1]
+        assert "people/Q11.html" in found[dated + 1]
+        assert (
+            "No date stated" not in text
+            or "Q11.html" not in text[text.index("<h2>No date stated</h2>") :]
+        )
+
+    def test_hostile_labels_are_escaped(self, tmp_path, vocabulary):
+        hostile = [
+            {
+                **each,
+                "unionLabel": literal("<b>marriage</b> & co"),
+                "partnerLabel": literal("<i>partner</i>"),
+                "endLabel": literal("<i>end</i>"),
+                "sourceLabel": literal("<u>source</u>"),
+            }
+            for each in UNIONS
+        ]
+        site, _ = build(tmp_path, vocabulary, responses(unions=hostile))
+        for text in (timeline(site), page(site, "Q7")):
+            assert "<b>" not in text and "<i>" not in text
+            assert "<u>" not in text
+        assert "&lt;b&gt;marriage&lt;/b&gt; &amp; co" in timeline(site)
 
 
 class TestAnArtifactPage:
