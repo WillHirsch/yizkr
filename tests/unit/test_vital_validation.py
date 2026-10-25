@@ -436,3 +436,26 @@ class TestTheWriter:
             len(wiki.wbi.item.get(again.created_items["e1"]).claims.get("P60"))
             == 1
         )
+
+    def test_an_unknown_value_never_matches_a_no_value(self):
+        """The writer compares snak types: a curator's "no value", which
+        has no value as an unknown value has none, is never the unknown
+        value's statement, so the unknown value is written beside it."""
+        from wikibaseintegrator.wbi_enums import WikibaseSnakType
+
+        from tests.fixtures.identity import write_mapped
+
+        wiki = UnknownWiki({"1" * 40: "Q900"}, detached=True)
+        first = write_mapped(BatchWriter(wiki), batch_of(self.late_felix()))
+        felix = first.created_items["e1"]
+        # a curator makes the statement a "no value"
+        entity = wiki.wbi.item.get(felix)
+        (statement,) = entity.claims.get("P60")
+        statement.mainsnak.snaktype = WikibaseSnakType.NO_VALUE
+        entity.write()
+        again = write_mapped(BatchWriter(wiki), batch_of(self.late_felix()))
+        assert again.written == 1
+        assert sorted(
+            each.mainsnak.snaktype.value
+            for each in wiki.wbi.item.get(felix).claims.get("P60")
+        ) == ["novalue", "somevalue"]

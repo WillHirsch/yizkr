@@ -2750,13 +2750,21 @@ class BatchWriter:
         one the caller must leave as it is): APPEND_OR_REPLACE would
         instead replace that statement's references and rank with the
         new claim's.
+
+        An unknown value is always added as a statement of its own:
+        WikibaseIntegrator finds two statements equal by their values and
+        qualifiers alone, so to it an unknown value (ADR-0040 §2.2) equals
+        a curator's "no value" of the same property, neither having a
+        value, and APPEND_OR_REPLACE would replace that statement. The
+        writer has already compared snak types (_find_matching_statement)
+        before it adds one.
         """
         from wikibaseintegrator.wbi_enums import ActionIfExists
 
         entity.claims.add(
             claim,
             action_if_exists=ActionIfExists.FORCE_APPEND
-            if beside_equal
+            if beside_equal or _snak_type(claim.mainsnak) != "value"
             else ActionIfExists.APPEND_OR_REPLACE,
         )
 
