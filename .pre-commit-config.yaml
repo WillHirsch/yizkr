@@ -1,9 +1,10 @@
-# Enforce the repo's ruff standard (line-length 79) before every commit.
+# Enforce Python formatting and unwrapped Markdown before every commit.
 #
-# These are `local` hooks so they reuse the project's own uv-managed ruff
+# The Ruff hooks reuse the project's own uv-managed ruff
 # (astral-sh/ruff, pinned in pyproject.toml's dev group + uv.lock). That
 # keeps the version identical to CI and the Makefile — one source of truth,
-# no second pin to drift.
+# no second pin to drift. Prettier's Node environment is managed by
+# pre-commit; its version is shared by the formatter and manual check.
 #
 # Enable once per clone:  make hooks   (or: uv run pre-commit install)
 repos:
@@ -21,3 +22,16 @@ repos:
         language: system
         types_or: [python, pyi]
         require_serial: true
+      - &prettier
+        id: prettier
+        name: prettier (Markdown, proseWrap never)
+        entry: prettier
+        args: [--write]
+        language: node
+        additional_dependencies: [prettier@3.6.2]
+        types: [markdown]
+      - <<: *prettier
+        id: prettier-check
+        name: prettier check (Markdown, proseWrap never)
+        args: [--check]
+        stages: [manual]

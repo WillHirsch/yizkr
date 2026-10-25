@@ -1967,7 +1967,7 @@ class TestViews:
         ]
         text = Transcription.model_validate_json(doc.transcription.read_text())
         assert (
-            f"each line numbered:\n{number_lines(text.prompt_text())}\n"
+            f"each line numbered:\n\n{number_lines(text.prompt_text())}\n"
             in (prompt)
         )
 

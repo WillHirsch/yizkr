@@ -24,8 +24,7 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --dev --all-extras
-      - run: uv run ruff check .
-      - run: uv run ruff format --check .
+      - run: make lint
       # pytest-xdist: one worker per CPU; loadfile keeps each test file in
       # one worker, so its module fixtures and test order hold as in a
       # serial run. Local runs stay serial unless -n is given.

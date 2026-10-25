@@ -245,7 +245,9 @@ class TestCritique:
         gated nothing (#7)."""
         llm = ScriptedLlm(response([]))
         run_critique(llm, batch())
-        assert llm.prompts[0].endswith('final line:\n{"done": true}\n')
+        assert llm.prompts[0].endswith(
+            'final line:\n\n```text\n{"done": true}\n```\n'
+        )
         assert "emitted" not in llm.prompts[0]
 
     def test_prompt_carries_appellation_routing_guidance(self):

@@ -180,12 +180,12 @@ def prompt_of(batch: ClaimBatch, given: Transcription | None) -> str:
 def rows(prompt: str) -> list[str]:
     """The claims block's rows."""
     block = prompt.split("\nClaims (subject | property | value | times | ")[1]
-    return block.split(":\n", 1)[1].split("\n\n")[0].splitlines()
+    return block.split(":\n\n", 1)[1].split("\n\n")[0].splitlines()
 
 
 def within_rows(prompt: str) -> list[str]:
     block = prompt.split(
-        "where it occurs, nearest the place's mentions\nfirst:\n"
+        "where it occurs, nearest the place's mentions first:\n\n"
     )
     return block[1].split("\n\n")[0].splitlines()
 
@@ -196,7 +196,7 @@ class TestThePrompt:
             eugen_batch(place_of_death("Flörburg")), transcription(REGISTER)
         )
         assert (
-            "The source's transcription, each line numbered:\n"
+            "The source's transcription, each line numbered:\n\n"
             "1: Friedhof Flörburg, Beerdigungsbuch 1909.\n"
             "2: Nr. 14. Eugen Löbig, Hutmacher, 73 Jahre.\n"
             "3: Gestorben: 16. März 1909 in Flörburg.\n"
@@ -205,7 +205,7 @@ class TestThePrompt:
 
     def test_with_no_transcription_it_carries_none(self):
         prompt = prompt_of(eugen_batch(place_of_death("Flörburg")), None)
-        assert "each line numbered:\n(none)\n" in prompt
+        assert "each line numbered:\n\n(none)\n" in prompt
         assert rows(prompt) == [
             "e01 | place_of_death | e02 | times: - | not in the "
             'transcription: "Flörburg"'
@@ -280,7 +280,7 @@ class TestThePrompt:
         given.pages[0].printed_page = "17"
         prompt = prompt_of(eugen_batch(place_of_death("Flörburg")), given)
         assert (
-            'each line numbered:\n1: [Page 1] (printed page number "17")\n'
+            'each line numbered:\n\n1: [Page 1] (printed page number "17")\n'
             "2: Friedhof Flörburg, Beerdigungsbuch 1909.\n"
         ) in prompt
 

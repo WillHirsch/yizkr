@@ -1,28 +1,15 @@
 # Roadmap: moved to the GitHub Project
 
-This file is retired. The plan lives in GitHub (ADR-0024): issues, epics
-with native sub-issues, milestones, blocked-by links, labels, and the
-Status, Size, Owner touchpoint and Iteration fields of the
-[yizkr Project](https://github.com/users/WillHirsch/projects/2).
-`docs/AGENT_PROTOCOL.md` §1 says how to cite work: issues by `#number`,
-decisions by ADR number, requirements by R-number.
+This file is retired. The plan lives in GitHub (ADR-0024): issues, epics with native sub-issues, milestones, blocked-by links, labels, and the Status, Size, Owner touchpoint and Iteration fields of the [yizkr Project](https://github.com/users/WillHirsch/projects/2). `docs/AGENT_PROTOCOL.md` §1 says how to cite work: issues by `#number`, decisions by ADR number, requirements by R-number.
 
-Deferred work waits in the deferred-on-trigger register, #171. Each
-deferred item there names its source, and its trigger or the issue whose
-body states it.
+Deferred work waits in the deferred-on-trigger register, #171. Each deferred item there names its source, and its trigger or the issue whose body states it.
 
 ## Old item numbers
 
-This file once numbered its items, and commits, code and docs cited the
-numbers ("item 13", "W1 task 7"). The numbers are retired. The tables map
-each item to the ADR that records it and to the issues that carry what is
-left of it. Items 1 to 7, the first tasks of phase W1 (ADR-0004), were
-also cited as "W1 task 1" to "W1 task 7"; items 8 to 20 were the
-hardening items that followed the first trial ingestion. "Done" means the
-item was finished before the plan moved to GitHub.
+This file once numbered its items, and commits, code and docs cited the numbers ("item 13", "W1 task 7"). The numbers are retired. The tables map each item to the ADR that records it and to the issues that carry what is left of it. Items 1 to 7, the first tasks of phase W1 (ADR-0004), were also cited as "W1 task 1" to "W1 task 7"; items 8 to 20 were the hardening items that followed the first trial ingestion. "Done" means the item was finished before the plan moved to GitHub.
 
 | Item | Topic | Status and issues |
-|---|---|---|
+| --- | --- | --- |
 | 1 | Wikibase Suite stack, runbook and smoke test | Done (`deploy/`, ADR-0001) |
 | 2 | Model manifest and bootstrap | Done |
 | 3 | Claim schema | Done (ADR-0003) |
@@ -47,7 +34,7 @@ item was finished before the plan moved to GitHub.
 The sections without item numbers map the same way:
 
 | Section | Status and issues |
-|---|---|
+| --- | --- |
 | Phase W2, the IIIF tier (ADR-0004) | #166 |
 | Phase W3, the immich tier (ADR-0004) | #167 |
 | Model extensions: georeferenced map artifacts, temporal and subject coverage | #171, with #164 and #166 |

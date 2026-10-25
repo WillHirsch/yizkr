@@ -70,6 +70,7 @@ from yizkr.model.schema import load_acceptance
 from yizkr.pipeline.extract import scan_json_objects
 from yizkr.pipeline.llm import CUT_OFF_AT_LIMIT, LlmClient, at_output_limit
 from yizkr.pipeline.names import NOT_PERSONS, appellations_of
+from yizkr.pipeline.prompts import load_prompt
 from yizkr.queries.publish import (
     load_templates,
     placeholder_keys,
@@ -868,34 +869,7 @@ def entity_facts(batch: ClaimBatch, entity_id: str) -> str:
     return "; ".join(lines[:12])
 
 
-ADJUDICATION_PROMPT = """\
-You adjudicate entity identity for a family archive. For each entity
-extracted from a new document, decide whether it is the same real-world
-entity as each candidate already in the graph. Weigh RELATIONAL
-evidence over spelling: the same spouse, the same parents, compatible
-birth/death dates, or an alias relationship between names is strong;
-a shared surname alone is weak. People recur across family documents
-under fuller or shorter names. Typed names are strong evidence when they
-line up: one entity's married name equalling another's birth/maiden name
-(a name change on marriage), or a shared nickname, points to identity —
-a differing birth name to distinctness.
-
-Verdicts: "same" (confident identity), "uncertain" (plausible, needs
-the reviewer's judgement), "distinct" (different entities).
-
-For every (entity, candidate) pair below, output one NDJSON line:
-{{"entity_id": "<id>", "qid": "<Q..>", "verdict": "same|uncertain|distinct",
-"confidence": <0-1>, "evidence": "<one sentence naming the deciding facts>"}}
-No wrapper object, no code fences, no prose. After the last line, end
-with exactly one final line:
-{{"done": true}}
-
-Entities from the new document:
-{entities_block}
-
-Candidates already in the graph:
-{candidates_block}
-"""
+ADJUDICATION_PROMPT = load_prompt("reconciliation.md")
 
 
 class Proposal(BaseModel):
@@ -1298,26 +1272,7 @@ def apply_equivalences(
 # -- graph-side pass (existing duplicates) -----------------------------------
 
 
-GRAPH_ADJUDICATION_PROMPT = """\
-You adjudicate whether pairs of items ALREADY in a family archive graph
-are the same real-world entity (duplicates from separate documents).
-Weigh RELATIONAL evidence over spelling: same spouse, same parents,
-compatible dates. Fuller and shorter forms of one name are common.
-
-Verdicts: "same", "uncertain", "distinct".
-
-For every pair below, output one NDJSON line:
-{{"entity_id": "<QID A>", "qid": "<QID B>",
-"verdict": "same|uncertain|distinct",
-"confidence": <0-1>, "evidence": "<one sentence naming the deciding facts>"}}
-No wrapper object, no code fences, no prose.
-
-After the last line, end with exactly one final line:
-{{"done": true}}
-
-Pairs:
-{pairs_block}
-"""
+GRAPH_ADJUDICATION_PROMPT = load_prompt("graph-reconciliation.md")
 
 
 def propose_graph_pairs(

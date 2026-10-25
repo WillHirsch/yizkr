@@ -86,7 +86,7 @@ class TestTheChunkRule:
             "The couple take part in the union, not in its wedding. Where "
             "the manifest lists a marriage's wedding, give the marriage its "
             "`started_by` and the wedding the date and place the source "
-            "gives the marriage's start; * a divorce or an annulment that "
+            "gives the marriage's start; - a divorce or an annulment that "
             "ends it is an event too"
         ) in CHUNK
 

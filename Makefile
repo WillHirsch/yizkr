@@ -18,7 +18,7 @@ install:            ## create/update the uv-managed venv (with dev tools)
 # a delete.
 PRE_PUSH_HOOK = scripts/git-hooks/pre-push
 
-hooks:              ## install git hooks: pre-commit (ruff), pre-push (no pushes to main)
+hooks:              ## install git hooks: pre-commit (Ruff + Prettier), pre-push (no pushes to main)
 	$(UV) run pre-commit install
 	@dest="$$(git rev-parse --git-path hooks)/pre-push"; \
 	if [ -e "$$dest" ] && ! grep -q '^# yizkr-pre-push:' "$$dest"; then \
@@ -38,10 +38,13 @@ test-live:          ## integration tests against the running stack (make up firs
 lint:
 	$(UV) run ruff check .
 	$(UV) run ruff format --check .
+	$(UV) run pre-commit run prettier-check --all-files --hook-stage manual
 
 fmt:
 	$(UV) run ruff format .
 	$(UV) run ruff check --fix .
+	$(UV) run pre-commit run prettier --all-files || \
+		$(UV) run pre-commit run prettier-check --all-files --hook-stage manual
 
 up:                 ## start the Wikibase Suite stack
 	cd deploy && docker compose up -d --wait

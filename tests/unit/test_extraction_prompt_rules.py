@@ -568,7 +568,7 @@ REGISTER = "\n".join(
 def claim_rows(prompt: str) -> list[str]:
     """The claims block's rows."""
     block = prompt.split("\nClaims (subject | property | value | times | ")[1]
-    rows = block.split(":\n", 1)[1].split("\n\n")[0]
+    rows = block.split(":\n", 1)[1].lstrip("\n").split("\n\n")[0]
     return rows.splitlines()
 
 
@@ -929,11 +929,11 @@ class TestStringListsAreShownAsStrings:
         after it says what a title is and that an office or an
         occupation is a claim, not a name part."""
         assert (
-            '"titles": ["..."]}. * Titles are honorifics and ranks (Mrs, '
+            '"titles": ["..."]}. - Titles are honorifics and ranks (Mrs, '
             "Dr., Frau, Fräulein, Mefrou, Rabbi), never a kinship word. An "
             'office or an occupation beside a name ("Standesbeamter", '
             '"Hutmachermeister") is no name part: it is a claim at '
-            "extraction. * status says what the label is"
+            "extraction. - status says what the label is"
         ) in _PERSON
 
     def test_the_patronymic_bullet_keeps_its_markers(self):

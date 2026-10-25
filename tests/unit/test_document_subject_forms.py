@@ -1110,7 +1110,7 @@ class TestThePrompts:
                 LETTER_REF,
             )
         )
-        assert "* `shows`: whom or what an image shows" in block
+        assert "- `shows`: whom or what an image shows" in block
         assert "no claim whose subject is an image" not in block
         forbidding = block.split("places no image read on its own")[1]
         assert "other than this document's" in forbidding
