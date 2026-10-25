@@ -1084,32 +1084,22 @@ class TestArtifactPage:
             run=lambda _: [],
             vocabulary=vocabulary,
         )
-        row = asserted(
-            {
-                "st": uri("s20"),
-                "reference": uri("r20"),
-                "subject": uri("Q12"),
-                "subjectLabel": literal("Gustav Löbig"),
-                "propLabel": literal("date of birth"),
-                "value": time_literal("+1862-02-15T00:00:00Z"),
-                "precision": literal("11"),
-                "page": literal("1"),
-            }
-        )
+        # Eugen's death as the burial register gives it
+        (row,) = ASSERTIONS
         artifact = {"artifact": uri("Q23")}
         page = builder.artifact_page(artifact, [row])
         assert "What this artifact asserts (1)" in page
         (shown,) = self.rows_of(page)
-        assert shown.startswith("Gustav Löbig</td>")
-        assert "people/Q12.html" not in page
+        assert shown.startswith("Eugen Löbig</td>")
+        assert "people/Q7.html" not in page
 
-        builder.people = {"Q12": {"person": uri("Q12")}}
+        builder.people = {"Q7": {"person": uri("Q7")}}
         page = builder.artifact_page(artifact, [row])
         assert "What this artifact asserts (1)" in page
         (shown,) = self.rows_of(page)
         assert shown.startswith(
-            '<a href="../people/Q12.html">Gustav Löbig</a></td>'
-            "<td>date of birth</td>"
+            '<a href="../people/Q7.html">Eugen Löbig</a></td>'
+            "<td>date of death</td>"
         )
 
     def test_same_value_statements_that_differ_by_a_qualifier_stay_two(
