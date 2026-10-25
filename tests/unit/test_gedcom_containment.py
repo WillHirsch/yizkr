@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.pipeline.gedcom import adapt_gedcom
 from yizkr.pipeline.places import PlaceRecord, build_worklist, stated_links
@@ -288,6 +290,17 @@ class TestPlaceholderComponents:
             + "1 RESI\n2 PLAC Fläckfeld, ?, Hesse, Germany\n"
         )
         assert result.outcomes[COUNTED] == 2
+
+    @pytest.mark.parametrize("tag", ["DEAT", "BURI"])
+    def test_a_death_or_burials_place_is_counted_once(self, tag):
+        # (here) Eugen's death or burial in "Flörburg, ?, Hesse": the
+        # adapter reads the PLAC to see whether it states the event, and
+        # again for its claim, and counts its component once
+        result = adapted(
+            "0 @I1@ INDI\n1 NAME Eugen /Löbig/\n"
+            f"1 {tag}\n2 PLAC Flörburg, ?, Hesse\n"
+        )
+        assert result.outcomes[COUNTED] == 1
 
     def test_named_components_count_nothing(self):
         assert COUNTED not in adapted().outcomes

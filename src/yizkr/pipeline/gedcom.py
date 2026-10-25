@@ -2276,12 +2276,18 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
             made.add(key)
             claims.append(new)
 
+    # each event's places, read once, so that a reader asking again (a
+    # DEAT's or a BURI's stated_alone, then its claims) counts nothing twice
+    placed: dict[int, list[Record]] = {}
+
     def places(event: Record) -> list[Record]:
         """The PLACs of an event that name a place (_place_parts), the
         first of each value, in their order: a further PLAC is an
         alternative, placed by a claim of its own. Each component without
         a word, and each placeholder, that a PLAC with a value holds is
-        counted."""
+        counted, once an event."""
+        if id(event) in placed:
+            return placed[id(event)]
         first: dict[str, Record] = {}
         for place in event.all("PLAC"):
             read = _place_parts(place.value)
@@ -2291,7 +2297,8 @@ def adapt_gedcom(text: str, artifact: ArtifactRef) -> AdapterResult:
                 outcome("PLAC placeholder component")
             if read.parts:
                 first.setdefault(place.value, place)
-        return list(first.values())
+        placed[id(event)] = list(first.values())
+        return placed[id(event)]
 
     def each_date(
         event: Record, qualifiers: Callable[..., list[dict]], *args: str
