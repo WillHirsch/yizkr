@@ -304,6 +304,22 @@ class TestAQidSubject:
         ]
         assert pre_plan_refusals(confirmed, {})[0][0] == "vital_rule"
 
+    def test_its_confirmed_kind_stands_without_its_record(self):
+        # a batch whose entity record is gone keeps the kind the claim
+        # records it was confirmed from
+        dated = {
+            **claim(
+                "wedding", "date_of_death", {"type": "time", "year": 1909}
+            ),
+            "subject": {"kind": "qid", "qid": "Q503"},
+            "confirmed_from": {
+                "kind": "local",
+                "local_id": "wedding",
+                "instance_of": "wedding",
+            },
+        }
+        assert codes(dated, entities=[]) == [VITAL_SUBJECT]
+
     def test_a_confirmed_person_takes_one(self):
         from yizkr.pipeline.reconcile import apply_equivalences
 
