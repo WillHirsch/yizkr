@@ -487,7 +487,8 @@ Build B (the PR's follow-up) carries these changes. In brief:
      - Alternative: the unknown value, since GEDCOM 5.5.1 has a PLAC with a value assert the event.
    - **`states_event` is unchanged** for MARR, DIV and ANUL.
    - People who are released today only by such DEATs become possibly living. The scratch diff counts them.
-5. **Death dates, and birth and death events a curator makes.** _Decided (owner, 2026-10-24)._
+5. **Death dates, and birth and death events a curator makes.**  
+   _Decided (owner, 2026-10-24)._
    - **Bounds: B+C, chosen** ("store only what a source says"). The four options:
      - (A), as drafted: a dated document's "the late" stores its bound as value and `latest_date`, and a widow marker writes the late spouse's bounded `date_of_death`.
      - (B): unknown values everywhere, with every bound derived.
@@ -520,7 +521,8 @@ Build B (the PR's follow-up) carries these changes. In brief:
      - follow-up C (a record's own informant) stays parked;
      - `witness` and `officiant` stay accepted roles, for a kin witness or officiant and for events a curator makes.
    - **What it does not add:** no cross-document matching and no count of name matches.
-7. **What bounds the death that a widow's or widower's marker states.** _Decided (owner, 2026-10-24): the lean._ It now decides what bounds the derived "died by" date (Q5, §2.4).
+7. **What bounds the death that a widow's or widower's marker states.**  
+   _Decided (owner, 2026-10-24): the lean._ It now decides what bounds the derived "died by" date (Q5, §2.4).
    - **The rule.** The date at which the source presents the widowhood as holding, which is also the `civil_status` statement's `point_in_time`.
      - The burial register presents Eugen as a widower at his death, so Cäcilie's bound is 16 March 1909.
      - A letter presents its writer's widowhood at its own date: the 1958 letter gives 25 December 1958.

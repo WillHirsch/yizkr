@@ -39,7 +39,7 @@ make test-live           # integration tests against the running stack
 
 `make fmt` formats Python with Ruff and tracked Markdown with Prettier; `make lint` checks both without changing files. The pre-commit hooks use the same versions and configuration as CI. Pre-commit manages Prettier's Node environment and installs the pinned formatter on its first run.
 
-Keep Markdown prose unwrapped: each paragraph and each list-item paragraph stays on one source line, with visual wrapping left to the editor or viewer. `.prettierrc.json` enforces `proseWrap: "never"`. Preserve meaningful line breaks in code blocks. Substantial Markdown belongs in `.md` files rather than Python strings; interpolated prompts are Markdown format templates in `src/yizkr/pipeline/prompts/`.
+Keep Markdown prose unwrapped: each paragraph and each list-item paragraph stays on one source line, with visual wrapping left to the editor or viewer. `.prettierrc.json` enforces `proseWrap: "never"`. Where a line break within a paragraph is meaningful, end the line with two spaces to mark an explicit Markdown hard break; Prettier preserves them. Preserve meaningful line breaks in code blocks. Substantial Markdown belongs in `.md` files rather than Python strings; interpolated prompts are Markdown format templates in `src/yizkr/pipeline/prompts/`.
 
 To format or check Markdown alone:
 

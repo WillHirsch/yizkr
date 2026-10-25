@@ -2,9 +2,13 @@
 
 Status: accepted
 
-Amended by #7 (2026-09-29): the terminal sentinel carries no gap count, nor any other (§B). Amended by #386 (2026-09-29): each critic finding is a validated record with an axis and a category, not a `target` string (§C, ADR-0023 §3). Amended by #460 (2026-10-05): the entity-manifest prompt says the escape hatch is right only where no kind in the list fits, and names the cases that have one (an agency, office or department is an organization; a cemetery or building a place; a named ship a vessel). A named aircraft keeps it (type hint "aircraft"), since a vessel is a ship or boat, and so does a letter or certificate a source mentions, since artifact kinds are no entity kinds; the critic's `escape_hatch_misused` says the same.
+Amended by #7 (2026-09-29): the terminal sentinel carries no gap count, nor any other (§B).  
+Amended by #386 (2026-09-29): each critic finding is a validated record with an axis and a category, not a `target` string (§C, ADR-0023 §3).  
+Amended by #460 (2026-10-05): the entity-manifest prompt says the escape hatch is right only where no kind in the list fits, and names the cases that have one (an agency, office or department is an organization; a cemetery or building a place; a named ship a vessel). A named aircraft keeps it (type hint "aircraft"), since a vessel is a ship or boat, and so does a letter or certificate a source mentions, since artifact kinds are no entity kinds; the critic's `escape_hatch_misused` says the same.
 
-Amended by [ADR-0035](0035-mention-records.md) (owner decision 2026-09-29, #385): §A's type hint is given in English, so the unclassified-entities query (#91) groups like with like. Amended by #91 (2026-10-23): §A's standing view is `queries/unclassified-entities.rq`, and §B's gap log has a cross-document rollup over a run, `yizkr gaps rollup` (both below). Amended by #607 (2026-10-24, the owner's decision of 2026-10-23): §C's critic reviews the entity manifest, the claims and the document's transcription, whole and each line numbered, and reads each citation where it stands (ADR-0003's test, ADR-0023); the critique view is made from the batch and the transcription, so a changed transcription makes it again.
+Amended by [ADR-0035](0035-mention-records.md) (owner decision 2026-09-29, #385): §A's type hint is given in English, so the unclassified-entities query (#91) groups like with like.  
+Amended by #91 (2026-10-23): §A's standing view is `queries/unclassified-entities.rq`, and §B's gap log has a cross-document rollup over a run, `yizkr gaps rollup` (both below).  
+Amended by #607 (2026-10-24, the owner's decision of 2026-10-23): §C's critic reviews the entity manifest, the claims and the document's transcription, whole and each line numbered, and reads each citation where it stands (ADR-0003's test, ADR-0023); the critique view is made from the batch and the transcription, so a changed transcription makes it again.
 
 ## Context
 

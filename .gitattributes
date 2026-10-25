@@ -1,0 +1,3 @@
+# Markdown uses two trailing spaces for intentional hard breaks.
+# Prettier enforces Markdown whitespace; keep Git's other whitespace checks.
+*.md whitespace=-blank-at-eol

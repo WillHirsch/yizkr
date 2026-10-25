@@ -1,6 +1,7 @@
 # ADR-0016: Phase-tiered inference (effort and model per pipeline phase)
 
-Status: accepted — implemented. Reasoning effort and model are chosen **per pipeline phase**, not per run. Mechanical bulk extraction defaults to low effort on a discipline-first model (`claude-sonnet-5`); the judgment steps keep the run's main model at high effort. Amended by #128 (2026-09-28): `ingest run` no longer adjudicates, since its reconcile step reads no roster (ADR-0007, as amended), so there the judgment steps are now the critique alone, and `--review-effort` governs only it.
+Status: accepted — implemented. Reasoning effort and model are chosen **per pipeline phase**, not per run. Mechanical bulk extraction defaults to low effort on a discipline-first model (`claude-sonnet-5`); the judgment steps keep the run's main model at high effort.  
+Amended by #128 (2026-09-28): `ingest run` no longer adjudicates, since its reconcile step reads no roster (ADR-0007, as amended), so there the judgment steps are now the critique alone, and `--review-effort` governs only it.
 
 ## Context
 

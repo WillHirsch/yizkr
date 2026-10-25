@@ -22,7 +22,8 @@ Amended by #409 (2026-09-29): §3's union that names only one of its couple is a
 
 Amended by #409 (2026-09-29), decided by the orchestrator (the owner may override): a union that names only one of its couple stays ambiguous, as the line above says; that can only keep two unions apart.
 
-Amended by #410 (2026-10-16): the writer refuses a claim of the retired `spouse` itself, before the first write, naming it in its `refused` list with a warning, as validation does, since `yizkr write` takes a batch without validating it; the rest of the batch is written. A union and its events, from extraction as from the GEDCOM adapter, are written through the writer's general path: their items, minted through the identity map with their kinds, the couple's `participant` statements with their roles, `started_by`, `ended_by` (a partner's own `death` event included), and each event's own date, place and `carried_out_by`, each with both references (ADR-0003). Superseded by ADR-0040 (2026-10-24, the owner's decisions and answers of 2026-10-24): "`ended_by` (a partner's own `death` event included)" no longer holds.
+Amended by #410 (2026-10-16): the writer refuses a claim of the retired `spouse` itself, before the first write, naming it in its `refused` list with a warning, as validation does, since `yizkr write` takes a batch without validating it; the rest of the batch is written. A union and its events, from extraction as from the GEDCOM adapter, are written through the writer's general path: their items, minted through the identity map with their kinds, the couple's `participant` statements with their roles, `started_by`, `ended_by` (a partner's own `death` event included), and each event's own date, place and `carried_out_by`, each with both references (ADR-0003).  
+Superseded by ADR-0040 (2026-10-24, the owner's decisions and answers of 2026-10-24): "`ended_by` (a partner's own `death` event included)" no longer holds.
 
 - A union ended by a death points to the partner who died, through `ended_by_death_of`: a person value with no date of its own.
 - It is written only where a source specifically states that the couple were married when that partner died. Where the end is only implicit, views derive it and nothing is written (ADR-0040's Q2).
@@ -54,7 +55,8 @@ A marriage is its own entity, bounded by events; the spouse link is derived from
 | `ended_by_death_of` | (amended by ADR-0040, 2026-10-24) union → the partner whose death ended it, a person, with no date of its own. It is written only where a source specifically states that the couple were married when that partner died (ADR-0040's Q2). `ended_by` no longer accepts `death`, and reads "a divorce, an annulment, or an `event` of unstated kind" | none (nearest: end cause, P1534) |
 
 - **`marriage` keeps its key, label and Wikidata id**, and becomes a subclass of `partnership` instead of `event`; each scratch run's reset bootstraps an empty graph (ADR-0025), so no stale statement survives.
-- **The union points to its events**, so its item holds its couple and its bounds, as a P26 statement holds its dates, and no event needs a link back. A death that ends a union is the partner's own `death` event (ADR-0020 §2, ADR-0035 §3.2): `ended_by` points to it, never to a copy. Superseded by ADR-0040, 2026-10-24: there is no death event.
+- **The union points to its events**, so its item holds its couple and its bounds, as a P26 statement holds its dates, and no event needs a link back. A death that ends a union is the partner's own `death` event (ADR-0020 §2, ADR-0035 §3.2): `ended_by` points to it, never to a copy.  
+  Superseded by ADR-0040, 2026-10-24: there is no death event.
   - A death that ends a union is named by `ended_by_death_of` → the partner who died, written only where a source states that the couple were married when that partner died (ADR-0040's Q2).
   - Otherwise the end is derived in views from the partners' death statements (ADR-0040 §2.6), and nothing is written.
   - Where the batch names the couple, validation checks that the value is one of them.
@@ -109,7 +111,8 @@ A marriage is its own entity, bounded by events; the spouse link is derived from
 
 ### 6. Privacy and display
 
-- **Privacy.** A union and the events that start and end it are withheld whenever any of its couple may be living, as a family is (#374): the export keeps them only when the union names both and the possibly-living check releases each; the site badges them otherwise. A partner's death, a witness and an officiant follow the person rule, and taking part in a union or its events is person evidence (ADR-0020). Amended by ADR-0040, 2026-10-24:
+- **Privacy.** A union and the events that start and end it are withheld whenever any of its couple may be living, as a family is (#374): the export keeps them only when the union names both and the possibly-living check releases each; the site badges them otherwise. A partner's death, a witness and an officiant follow the person rule, and taking part in a union or its events is person evidence (ADR-0020).  
+  Amended by ADR-0040, 2026-10-24:
   - The partner's death is that partner's own statements.
   - The partner named by `ended_by_death_of` follows the person rule through `PERSON_VALUE_PROPERTIES`, never as a bound: it stays out of `backup.UNION_BOUNDS`.
   - `ended_by_death_of` is death evidence for the partner it names (ADR-0040's Q9). A partner it alone releases is kept when the union is left out, without the statement that released them.

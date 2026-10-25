@@ -1,6 +1,8 @@
 # ADR-0005: Face-region strategy
 
-Status: accepted Amended by #226 (2026-09-27): the write step enforces the confirmation rule instead of trusting its input (see Amendments). Amended by #258 (2026-09-28): the writer and the approval record read the entity manifest through one lookup (see Amendments).
+Status: accepted  
+Amended by #226 (2026-09-27): the write step enforces the confirmation rule instead of trusting its input (see Amendments).  
+Amended by #258 (2026-09-28): the writer and the approval record read the entity manifest through one lookup (see Amendments).
 
 ## Context
 

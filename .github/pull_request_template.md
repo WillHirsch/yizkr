@@ -9,7 +9,8 @@ Examples come only from the fictional universe (docs/EXAMPLES.md). Cite
 people by QID, and give metrics as aggregates only.
 -->
 
-**Exec label:** <!-- exec:local-agent | exec:cloud-agent-ok | exec:owner --> **Requirement:** <!-- R1 to R6, R7-privacy, or "none: infrastructure/governance" -->
+**Exec label:** <!-- exec:local-agent | exec:cloud-agent-ok | exec:owner -->  
+**Requirement:** <!-- R1 to R6, R7-privacy, or "none: infrastructure/governance" -->
 
 ## Summary
 
