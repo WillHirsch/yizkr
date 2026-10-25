@@ -18,6 +18,7 @@ import json
 import stat
 import subprocess
 import unicodedata
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -420,7 +421,11 @@ class TestReports:
         judgement notes were counted holds no `records` or `notes`: the
         diff reads it, and shows those figures absent, never 0."""
         first, second = two_runs(tmp_path, engine, monkeypatch)
-        older = report.build(first)
+        # made a second after the run ended: the report keeps whole
+        # seconds, so one made within the second the run ended in would
+        # read as made before it
+        ended = rundiff._time(rundiff._manifest(first)["ended_at"])
+        older = report.build(first, now=ended + timedelta(seconds=1))
         del older["aggregate"]["content"]["records"]
         del older["aggregate"]["content"]["notes"]
         stored = first / report.REPORT_DIR / report.JSON_FILE

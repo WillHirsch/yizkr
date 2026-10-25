@@ -53,6 +53,7 @@ from __future__ import annotations
 import datetime
 import html
 import json
+import logging
 import re
 import shutil
 import urllib.parse
@@ -82,6 +83,8 @@ from yizkr.core.wiki import WikiClient
 from yizkr.disagreement import Disagreement, Side
 from yizkr.model.schema import Acceptance, load_acceptance, load_manifest
 from yizkr.queries.publish import load_templates, prefix_block, render
+
+logger = logging.getLogger(__name__)
 
 # -- SPARQL ----------------------------------------------------------------
 
@@ -134,11 +137,13 @@ ORDER BY ?personLabel
 
 # the death statements that release each listed person, for the run
 # record's releases by cause (ADR-0040 §7): every best-rank statement of
-# the DEATH_EVIDENCE_PROPERTIES, as ?deceased reads them, with its value
-# (an unknown value comes as a blank node) and the type of each artifact
-# it is stated in (a fragment's whole), as ?sourceType
+# the DEATH_EVIDENCE_PROPERTIES, as ?deceased reads them, with whether its
+# value is an unknown value (?unknown: a blank node, or the skolem IRI the
+# query service gives one). It returns no value's own text, which the
+# count does not need; the source types are read apart
+# (RELEASE_SOURCES_QUERY), keyed by ?statement.
 RELEASES_QUERY = """\
-SELECT ?person ?releaseKey ?value ?sourceType
+SELECT ?person ?releaseKey ?statement ?unknown
 WHERE {{
 {people}
   VALUES (?claim ?statementValue ?releaseKey) {{
@@ -151,11 +156,27 @@ WHERE {{
   ?person ?claim ?statement .
   ?statement a wikibase:BestRank ;
              ?statementValue ?value .
-  OPTIONAL {{ ?statement prov:wasDerivedFrom/pr:{stated_in} ?source .
-             OPTIONAL {{ ?source wdt:{instance_of} wd:{artifact_fragment} ;
-                                 wdt:{part_of} ?whole . }}
-             BIND(COALESCE(?whole, ?source) AS ?artifact)
-             ?artifact wdt:{instance_of} ?sourceType . }}
+  BIND(isBlank(?value) || CONTAINS(STR(?value), "/.well-known/genid/")
+       AS ?unknown)
+}}
+"""
+
+# the sources of each best-rank date of death of unknown value, for the
+# releases by the type of their source: each stated-in source, with the
+# artifact a page fragment belongs to (?whole); the site maps each to its
+# artifact's type from ARTIFACTS_QUERY, in Python
+RELEASE_SOURCES_QUERY = """\
+SELECT ?statement ?source ?whole
+WHERE {{
+  ?person p:{date_of_death} ?statement .
+  ?statement a wikibase:BestRank ;
+             ps:{date_of_death} ?value .
+  FILTER(isBlank(?value) || CONTAINS(STR(?value), "/.well-known/genid/"))
+  ?statement prov:wasDerivedFrom/pr:{stated_in} ?source .
+  OPTIONAL {{
+    ?source wdt:{instance_of} wd:{artifact_fragment} ;
+            wdt:{part_of} ?whole .
+  }}
 }}
 """
 
@@ -988,7 +1009,11 @@ class SiteBuilder:
         return is_possibly_living(births, has_death, self._cutoff_year)[0]
 
     def privacy_record(
-        self, people: list[dict], releases: list[dict], kinds: dict[str, str]
+        self,
+        people: list[dict],
+        releases: list[dict],
+        sources: list[dict],
+        kinds: dict[str, str],
     ) -> dict:
         """The run record's possibly-living count and its releases by
         cause (ADR-0040 §7): each released person counts once under every
@@ -1000,18 +1025,28 @@ class SiteBuilder:
         for a person released with no death evidence. Families are left
         out, as the export leaves them. ``kinds`` gives each artifact's
         type, for the derived "died by" dates by the type of the document
-        each rests on. A source's type is its manifest key, UNSTATED_KIND
-        for none, and OTHER_KIND for a class the manifest does not hold."""
+        each rests on, and the type of each source of an unknown date of
+        death (``sources``, RELEASE_SOURCES_QUERY's rows: a fragment by its
+        whole). A source's type is its manifest key, UNSTATED_KIND for none,
+        and OTHER_KIND for a class the manifest does not hold."""
         causes: dict[str, set[str]] = defaultdict(set)
         unknown_by_kind: dict[str, set[str]] = defaultdict(set)
+        source_kinds: dict[str, set[str]] = defaultdict(set)
+        for row in sources:
+            artifact = qid_of(row, "whole") or qid_of(row, "source")
+            source_kinds[cell(row, "statement")].add(
+                kinds.get(artifact) or UNSTATED_KIND
+            )
         for row in releases:
             qid = qid_of(row, "person")
             key = cell(row, "releaseKey")
-            unknown = unknown_value(row)
+            unknown = cell(row, "unknown") == "true"
             if key == "date_of_death" and unknown:
                 causes["unknown_date_of_death"].add(qid)
-                kind = self._kind_key(row, "sourceType")
-                unknown_by_kind[kind].add(qid)
+                for kind in source_kinds.get(cell(row, "statement")) or {
+                    UNSTATED_KIND
+                }:
+                    unknown_by_kind[kind].add(qid)
             elif key == "burial_place" and unknown:
                 causes["unknown_burial_place"].add(qid)
             elif key in ("date_of_death", "age_at_death"):
@@ -1058,6 +1093,32 @@ class SiteBuilder:
             },
             "derived_by_source": dict(sorted(derived.items())),
         }
+
+    def _releases(self, people: list[dict], artifacts: list[dict]):
+        """The run record's releases by cause (``privacy_record``), or None
+        when the query service cannot answer their queries: they are run
+        evidence, so a failure is logged and leaves them out of the
+        record (the run report says they are not available), and never
+        stops the site."""
+        try:
+            releases = self.run(self._instance_query(RELEASES_QUERY))
+            sources = self.run(self._instance_query(RELEASE_SOURCES_QUERY))
+        except sparql.SparqlError as error:
+            logger.warning(
+                "the releases by cause are not counted: the query service "
+                "did not answer their query (%s)",
+                str(error)[:300],
+            )
+            return None
+        return self.privacy_record(
+            people,
+            releases,
+            sources,
+            {
+                qid_of(row, "artifact"): self._kind_key(row, "kind")
+                for row in artifacts
+            },
+        )
 
     def _kind_key(self, row: dict, name: str) -> str:
         """The manifest key of the class a row's ``name`` gives."""
@@ -1274,7 +1335,6 @@ class SiteBuilder:
             self.run(self._instance_query(UNIONS_QUERY)),
             self.run(self._instance_query(UNION_END_DATES_QUERY)),
         )
-        releases = self.run(self._instance_query(RELEASES_QUERY))
         self.people = {qid_of(row, "person"): row for row in people}
         self.artifact_qids = {qid_of(row, "artifact") for row in artifacts}
         self.artifact_labels = {
@@ -1354,14 +1414,7 @@ class SiteBuilder:
                 for via in died_by.VIA
             },
             "unions": len(unions),
-            "privacy": self.privacy_record(
-                people,
-                releases,
-                {
-                    qid_of(row, "artifact"): self._kind_key(row, "kind")
-                    for row in artifacts
-                },
-            ),
+            "privacy": self._releases(people, artifacts),
             "timeline_rows": len(timeline),
             "gallery_items": len(gallery),
             "inconsistencies": len(inconsistencies),

@@ -687,30 +687,31 @@ class TestAParentsKind:
         assert "kinship type: Adoptivvater" in text
 
 
-def release(person: str, key: str, value: dict, kind: str) -> dict:
-    """A row of the releases query: a death statement and the type of its
-    source (an item id)."""
+def release(person: str, key: str, statement: str, unknown=False) -> dict:
+    """A row of the releases query: a best-rank death statement, and
+    whether its value is an unknown value."""
     return {
         "person": uri(person),
         "releaseKey": literal(key),
-        "value": value,
-        "sourceType": uri(kind),
+        "statement": uri(statement),
+        "unknown": literal("true" if unknown else "false"),
     }
 
 
-def releases(vocabulary) -> list[dict]:
-    """Eugen's dated death and Felix's unknown one, both stated in a
-    certificate (hypothetically, the register's extract)."""
-    certificate = vocabulary[1]["certificate"]
+def releases() -> list[dict]:
+    """Eugen's dated death and Felix's unknown one."""
     return [
-        release(
-            "Q7",
-            "date_of_death",
-            time_literal("+1909-03-16T00:00:00Z"),
-            certificate,
-        ),
-        release("Q11", "date_of_death", GENID, certificate),
+        release("Q7", "date_of_death", "s1"),
+        release("Q11", "date_of_death", "s2", unknown=True),
     ]
+
+
+def stated_in(statement: str, source: str, whole: str | None = None):
+    """A row of the release sources query."""
+    found = {"statement": uri(statement), "source": uri(source)}
+    if whole:
+        found["whole"] = uri(whole)
+    return found
 
 
 class TestThePrivacyRecord:
@@ -724,12 +725,19 @@ class TestThePrivacyRecord:
         people=PEOPLE,
         rows=None,
         ended=("Q9", "Q7"),
+        sources=None,
+        kind="certificate",
     ):
+        typed = vocabulary[1].get(kind, kind)
         _, summary = build(
             tmp_path,
             vocabulary,
             {
-                "?releaseKey": releases(vocabulary) if rows is None else rows,
+                "?releaseKey": releases() if rows is None else rows,
+                # Felix's unknown date of death, in the register (Q23)
+                "SELECT ?statement ?source ?whole": (
+                    [stated_in("s2", "Q23")] if sources is None else sources
+                ),
                 # "Witwer der Cäcilie": the marriage ended by her death;
                 # and, hypothetically, a second marriage ended by Eugen's
                 "?named .": [{"person": uri(qid)} for qid in ended],
@@ -737,8 +745,7 @@ class TestThePrivacyRecord:
                 "GROUP_CONCAT(DISTINCT ?alias": people,
                 # every artifact typed a certificate
                 "?kind wdt:": [
-                    {**each, "kind": uri(vocabulary[1]["certificate"])}
-                    for each in ARTIFACTS
+                    {**each, "kind": uri(typed)} for each in ARTIFACTS
                 ],
             },
         )
@@ -767,12 +774,55 @@ class TestThePrivacyRecord:
         assert record["derived_by_source"] == {"certificate": 2}
 
     def test_a_source_of_no_stated_type(self, tmp_path, vocabulary):
-        row = {**releases(vocabulary)[1]}
-        del row["sourceType"]
-        record = self.record(tmp_path, vocabulary, rows=[row])
+        record = self.record(tmp_path, vocabulary, sources=[])
         assert record["unknown_date_of_death_by_source"] == {
             "no type stated": 1
         }
+
+    def test_a_fragment_is_typed_by_its_whole(self, tmp_path, vocabulary):
+        # the register's page 4 (Q30), part of the register (Q23)
+        record = self.record(
+            tmp_path, vocabulary, sources=[stated_in("s2", "Q30", "Q23")]
+        )
+        assert record["unknown_date_of_death_by_source"] == {"certificate": 1}
+
+    def test_the_queries_return_no_value_text(self):
+        from yizkr.staticsite import RELEASE_SOURCES_QUERY, RELEASES_QUERY
+
+        # a value's own text can hold any character, which a query
+        # service may fail to give back; the count needs none of it
+        select = RELEASES_QUERY.split("WHERE", 1)[0]
+        assert "?value" not in select
+        assert "?unknown" in select
+        assert "?value" not in RELEASE_SOURCES_QUERY.split("WHERE", 1)[0]
+        # and no nested OPTIONAL joining a computed artifact
+        assert "COALESCE" not in RELEASES_QUERY
+        assert "OPTIONAL" not in RELEASES_QUERY
+
+    def test_a_query_service_failure_leaves_the_site_standing(
+        self, tmp_path, vocabulary, caplog
+    ):
+        from tests.unit.test_staticsite import config
+        from yizkr.core.sparql import SparqlError
+        from yizkr.staticsite import SiteBuilder
+
+        given = responses()
+
+        def run(query: str):
+            if "?releaseKey" in query:
+                raise SparqlError("HTTP 500: QueryEvaluationException")
+            for marker, rows in given.items():
+                if marker in query:
+                    return rows
+            return []
+
+        builder = SiteBuilder(
+            config(), tmp_path / "site", run=run, vocabulary=vocabulary
+        )
+        summary = builder.build()
+        assert summary["privacy"] is None
+        assert (tmp_path / "site" / "timeline.html").is_file()
+        assert "releases by cause are not counted" in caplog.text
 
     def test_a_release_with_no_death_evidence_is_the_birth_cutoff(
         self, tmp_path, vocabulary
@@ -783,7 +833,7 @@ class TestThePrivacyRecord:
             *PEOPLE[1:],
         ]
         record = self.record(
-            tmp_path, vocabulary, people, releases(vocabulary)[1:], ("Q9",)
+            tmp_path, vocabulary, people, releases()[1:], ("Q9",)
         )
         assert record["releases"]["birth_cutoff"] == 1
         assert record["releases"]["date_of_death"] == 0
@@ -792,11 +842,10 @@ class TestThePrivacyRecord:
     def test_an_unknown_burial_place_and_other_properties(
         self, tmp_path, vocabulary
     ):
-        certificate = vocabulary[1]["certificate"]
         rows = [
-            release("Q7", "burial_place", GENID, certificate),
-            release("Q7", "place_of_death", uri("Q50"), certificate),
-            release("Q11", "age_at_death", literal("72"), certificate),
+            release("Q7", "burial_place", "s3", unknown=True),
+            release("Q7", "place_of_death", "s4"),
+            release("Q11", "age_at_death", "s5"),
         ]
         record = self.record(tmp_path, vocabulary, rows=rows)
         assert record["releases"]["unknown_burial_place"] == 1
@@ -817,6 +866,5 @@ class TestThePrivacyRecord:
     def test_a_class_the_manifest_does_not_hold_is_other(
         self, tmp_path, vocabulary
     ):
-        row = {**releases(vocabulary)[1], "sourceType": uri("Q99999")}
-        record = self.record(tmp_path, vocabulary, rows=[row])
+        record = self.record(tmp_path, vocabulary, kind="Q99999")
         assert record["unknown_date_of_death_by_source"] == {"other": 1}
