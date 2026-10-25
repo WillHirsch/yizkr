@@ -734,6 +734,54 @@ class TestUnsupportedCensus:
         }
 
 
+class TestDeferredParentage:
+    """ADR-0040 §4: PEDI, _FREL, _MREL and ADOP are counted and never
+    mapped until a source carries them: no `parentage` is written."""
+
+    def test_each_is_counted_and_none_is_read(self):
+        # Alfred's adoption by Leopold and Agnes, as an export may give it
+        text = "\n".join(
+            [
+                "0 @I1@ INDI",
+                "1 NAME Leopold /Löbig/",
+                "1 FAMS @F1@",
+                "0 @I2@ INDI",
+                "1 NAME Agnes /Nertler/",
+                "1 FAMS @F1@",
+                "0 @I3@ INDI",
+                "1 NAME Alfred /Luthorn/",
+                "1 FAMC @F1@",
+                "2 PEDI adopted",
+                "2 _FREL Adopted",
+                "2 _MREL Adopted",
+                "1 ADOP",
+                "2 FAMC @F1@",
+                "0 @F1@ FAM",
+                "1 HUSB @I1@",
+                "1 WIFE @I2@",
+                "1 CHIL @I3@",
+                "0 TRLR",
+                "",
+            ]
+        )
+        result = adapt_gedcom(text, artifact=EXPORT)
+        tags = result.unsupported_tags
+        for tag in ("PEDI", "_FREL", "_MREL", "ADOP"):
+            assert (
+                sum(
+                    count
+                    for name, count in tags.items()
+                    if name.split(".")[-1] == tag
+                )
+                == 1
+            ), tag
+        assert not [
+            claim
+            for claim in result.batch.claims
+            if any(q.property == "parentage" for q in claim.qualifiers)
+        ]
+
+
 class TestSourceCitations:
     """SOUR citations fold into the claim's reference (ADR-0021 step A)."""
 

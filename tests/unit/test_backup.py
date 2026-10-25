@@ -340,6 +340,35 @@ class TestExclusionReport:
         assert f"?person wdt:{properties['instance_of']} " not in facts
 
 
+class TestAnAgeAtDeathInTheExport:
+    """ADR-0040 Q1: an age at death alone releases its person, through the
+    facts query's own arm for it."""
+
+    def test_each_death_property_is_read_by_its_own_id(self, vocabulary):
+        properties, _ = vocabulary
+        _, calls = TestExclusionReport().report(vocabulary)
+        (facts,) = [query for query in calls if "SAMPLE(?deathDate)" in query]
+        # each property's own id, never another's, in its arm
+        for key in backup._DEATH_BINDINGS:
+            assert f"?person wdt:{properties[key]} ?" in facts, key
+        assert f"?person wdt:{properties['age_at_death']} ?deathAge ." in (
+            facts
+        )
+
+    def test_an_age_alone_releases(self, vocabulary):
+        # Eugen's "73 Jahre", with no other death evidence (hypothetical
+        # QID Q399)
+        aged = {
+            "person": uri("Q399"),
+            "deathAge": {"type": "literal", "value": "73 Jahre"},
+        }
+        found, _ = TestExclusionReport().report(
+            vocabulary, facts=[*FACTS, aged]
+        )
+        assert "Q399" in found.included
+        assert found.reasons["Q399"] == "death recorded"
+
+
 class TestEventsInTheExclusionReport:
     """A birth or death event is its principal's own (#345): the export
     releases the principal of a death, never an informant or a witness at

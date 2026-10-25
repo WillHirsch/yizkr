@@ -685,3 +685,77 @@ class TestEveryQualifierValue:
         )
         (death,) = d.from_rows(rows).deaths
         assert death.dating.bound() == day(1909, 3, 16)
+
+
+class TestEdges:
+    def test_touching_spans_give_only_no_later_than(self):
+        # Eugen's death in 1909 and Cäcilie's on 31 December 1909 (both
+        # hypothetical): the spans meet on that day, so neither lies
+        # wholly before the other; on 1 January 1910, Eugen's does
+        deaths = (
+            d.DeathStatement(
+                "eugen", d.Dating(d.When(1909, precision="year")), frozenset()
+            ),
+            d.DeathStatement(
+                "caecilie",
+                d.Dating(d.When(1909, 12, 31, "day")),
+                frozenset(),
+            ),
+        )
+        found = d.derived_end(["eugen", "caecilie"], deaths, (), ())
+        assert found == d.DerivedEnd(no_later_than=("caecilie", "eugen"))
+        apart = (
+            deaths[0],
+            d.DeathStatement(
+                "caecilie", d.Dating(day(1910, 1, 1)), frozenset()
+            ),
+        )
+        assert d.derived_end(
+            ["eugen", "caecilie"], apart, (), ()
+        ) == d.DerivedEnd(by_death_of="eugen")
+
+    def test_a_burial_alone_gives_no_bound(self):
+        # Q3: the register's "Beerdigt: 20. März 1909", with no death
+        # statement, gives no "died by" and no death span
+        batch = ClaimBatch.model_validate(
+            {
+                "extraction_run": TestEveryQualifierValue.RUN,
+                "claims": [
+                    {
+                        "subject": {"kind": "local", "local_id": "eugen"},
+                        "property": "burial_place",
+                        "value": {"type": "unknown"},
+                        "qualifiers": [
+                            {
+                                "property": "point_in_time",
+                                "value": {
+                                    "type": "time",
+                                    "year": 1909,
+                                    "month": 3,
+                                    "day": 20,
+                                },
+                            }
+                        ],
+                        "source": {
+                            "artifact": {"kind": "artifact", "sha1": "c" * 40},
+                            "transcription_excerpt": {
+                                "text": "Beerdigt: 20. März 1909.",
+                                "language": "de",
+                            },
+                        },
+                    },
+                    {
+                        "subject": {"kind": "artifact", "sha1": "c" * 40},
+                        "property": "inception",
+                        "value": {"type": "time", "year": 1909},
+                        "source": {
+                            "artifact": {"kind": "artifact", "sha1": "c" * 40}
+                        },
+                    },
+                ],
+            }
+        )
+        inputs = d.from_batch(batch)
+        assert inputs.deaths == ()
+        assert d.died_by(inputs) == []
+        assert d.death_span("eugen", inputs.deaths, ()) is None

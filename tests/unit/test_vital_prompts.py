@@ -127,3 +127,34 @@ class TestParentage:
     def test_a_parents_kind_only_where_the_source_states_it(self, prompt):
         assert "`parentage`" in prompt
         assert '"Adoptivvater"' in prompt
+
+
+class TestPinnedWords:
+    """The words a reworded prompt could lose without another test
+    noticing (ADR-0040 §4, §8)."""
+
+    def test_an_unnamed_reporter_makes_no_person_and_no_union(self):
+        assert (
+            '("Informant: husband", "the registrar"), is no entity at all, '
+            "even where the role word is a kinship word: it makes no person "
+            "and no union." in MANIFEST
+        )
+
+    def test_a_step_term_takes_a_step_class(self):
+        assert (
+            'A step term ("mein Stiefvater") is `relative` with '
+            "kinship_class kin_step_parent (kin_step_child, "
+            "kin_step_sibling) and the word in kinship_type" in CHUNK
+        )
+        assert (
+            'a half term ("Halbbruder") is `sibling` with the word in '
+            "kinship_type" in CHUNK
+        )
+
+    def test_the_critics_vital_category_flags_a_missing_claim(self):
+        from yizkr.pipeline.critique import CATEGORIES
+
+        assert CATEGORIES["vital_not_on_person"].startswith(
+            "a birth or a death the transcription states with a date or a "
+            "place, where no claim gives that person the date or the place"
+        )

@@ -363,6 +363,34 @@ class TestUnionEnds:
             END_NOT_PARTNER
         ]
 
+    def test_a_partner_is_one_by_their_qid_or_their_local_id(self):
+        # Eugen confirmed as Q7: the union end and the widowhood name him
+        # by QID, his participation by local id (Q9, §2.5)
+        entities = [
+            {**entity, "qid": "Q7"} if entity["id"] == "eugen" else entity
+            for entity in ENTITIES
+        ]
+        by_qid = {"type": "item", "value": {"kind": "qid", "qid": "Q7"}}
+        ended = claim("marriage", "ended_by_death_of", by_qid)
+        assert (
+            codes(
+                spouse("eugen"), spouse("caecilie"), ended, entities=entities
+            )
+            == []
+        )
+        widowed = {
+            **WIDOWED,
+            "subject": {"kind": "qid", "qid": "Q7"},
+        }
+        wrong = claim("marriage", "ended_by_death_of", item("eugen"))
+        assert codes(
+            spouse("eugen"),
+            spouse("caecilie"),
+            wrong,
+            widowed,
+            entities=entities,
+        ) == [WIDOWED_END]
+
     def test_with_no_roles_every_participant_is_of_the_couple(self):
         given = [
             claim("marriage", "participant", item(person))
@@ -571,6 +599,49 @@ class TestTheWriter:
             len(wiki.wbi.item.get(again.created_items["e1"]).claims.get("P60"))
             == 1
         )
+
+    def test_an_unknown_value_carries_both_references_and_its_excerpt(self):
+        from tests.fixtures.identity import write_mapped
+        from tests.unit.test_pipeline import _cited
+
+        wiki = UnknownWiki({"1" * 40: "Q900"}, detached=True)
+        result = write_mapped(BatchWriter(wiki), batch_of(self.late_felix()))
+        (statement,) = wiki.wbi.item.get(
+            result.created_items["e1"]
+        ).claims.get("P60")
+        assert _cited(statement, "stated_in") == ["Q900"]
+        assert _cited(statement, "inferred_from_extraction_run") == [
+            result.run_qid
+        ]
+        (excerpt,) = [
+            snak
+            for block in statement.references.references
+            for snak in block.snaks.get(PROPERTIES["transcription_excerpt"])
+            or []
+        ]
+        assert excerpt.datavalue["value"]["text"] == "der selige Felix"
+
+    def test_an_unknown_place_of_burial_is_a_somevalue_snak(self):
+        from tests.fixtures.identity import write_mapped
+
+        buried = {
+            **self.late_felix(),
+            "property": "burial_place",
+            "qualifiers": [
+                {
+                    "property": "point_in_time",
+                    "value": {"type": "time", "year": 1931},
+                }
+            ],
+        }
+        buried["source"]["transcription_excerpt"]["text"] = "beerdigt 1931"
+        wiki = UnknownWiki({"1" * 40: "Q900"}, detached=True)
+        result = write_mapped(BatchWriter(wiki), batch_of(buried))
+        assert (result.written, result.refused) == (1, [])
+        (statement,) = wiki.wbi.item.get(
+            result.created_items["e1"]
+        ).claims.get("P61")
+        assert statement.mainsnak.snaktype.value == "somevalue"
 
     def test_an_unknown_value_never_matches_a_no_value(self):
         """The writer compares snak types: a curator's "no value", which
