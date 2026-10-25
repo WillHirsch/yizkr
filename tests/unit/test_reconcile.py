@@ -2340,6 +2340,17 @@ class TestRosterDeaths:
                 time="1909-03-20T00:00:00Z",
                 timePrecision="11",
             ),
+            # one a curator deprecated, which gives the roster nothing
+            row(
+                "death",
+                "Q12",
+                "s3",
+                value={"type": "bnode", "value": "c"},
+                rank={
+                    "type": "uri",
+                    "value": "http://wikiba.se/ontology#DeprecatedRank",
+                },
+            ),
         ]
         properties = {
             key: f"P{n}" for n, key in enumerate(load_manifest_keys()[0], 1)

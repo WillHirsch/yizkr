@@ -360,14 +360,22 @@ class TestThePrivacyRecord:
     """The run record's releases by cause (ADR-0040 §7), counted on the
     written graph as the site's badge decides them."""
 
-    def record(self, tmp_path, vocabulary, people=PEOPLE, rows=None):
+    def record(
+        self,
+        tmp_path,
+        vocabulary,
+        people=PEOPLE,
+        rows=None,
+        ended=("Q9", "Q7"),
+    ):
         _, summary = build(
             tmp_path,
             vocabulary,
             {
                 "?releaseKey": releases(vocabulary) if rows is None else rows,
-                # "Witwer der Cäcilie": the marriage ended by her death
-                "?named .": [{"person": uri("Q9")}],
+                # "Witwer der Cäcilie": the marriage ended by her death;
+                # and, hypothetically, a second marriage ended by Eugen's
+                "?named .": [{"person": uri(qid)} for qid in ended],
                 **responses(),
                 "GROUP_CONCAT(DISTINCT ?alias": people,
                 # every artifact typed a certificate
@@ -390,11 +398,12 @@ class TestThePrivacyRecord:
             "age_at_death": 0,
             "unknown_burial_place": 0,
             "other_death_property": 0,
-            "ended_by_death_of": 1,
+            "ended_by_death_of": 2,
             "death_event": 0,
             "birth_cutoff": 0,
         }
-        # Cäcilie has no death statement: the union end alone releases her
+        # Cäcilie has no death statement: the union end alone releases
+        # her, and Eugen has his dated one besides
         assert record["ended_by_death_of_alone"] == 1
         assert record["unknown_date_of_death_by_source"] == {"certificate": 1}
         # her bound and Felix's, both resting on the register (Q23)
@@ -417,7 +426,7 @@ class TestThePrivacyRecord:
             *PEOPLE[1:],
         ]
         record = self.record(
-            tmp_path, vocabulary, people, releases(vocabulary)[1:]
+            tmp_path, vocabulary, people, releases(vocabulary)[1:], ("Q9",)
         )
         assert record["releases"]["birth_cutoff"] == 1
         assert record["releases"]["date_of_death"] == 0
