@@ -2011,6 +2011,15 @@ class TestUnknownValues:
                 "value": {"type": "unknown"},
             }
         )
+        # the register's pastor, who only certifies the entry (§2.8)
+        view["entities"].append(
+            {
+                "id": "pastor",
+                "label": "Pfarrer Gerlach",
+                "kind": "human",
+                "extract": False,
+            }
+        )
         (directory / "batch.json").write_text(json.dumps(view))
         covered = directory / "extraction" / "coverage.json"
         counts = json.loads(covered.read_text())
@@ -2024,6 +2033,7 @@ class TestUnknownValues:
             "date_of_death": 1
         }
         assert sum(content["claims"]["unknown_values_by_kind"].values()) == 1
+        assert content["entities"]["not_extracted_by_kind"]["human"] >= 1
         rejects = content["rejects"]
         assert rejects["manifest_vital_kind_by_kind"] == {
             "death": 2,
@@ -2036,6 +2046,8 @@ class TestUnknownValues:
     def test_report_md_gives_them(self, counted):
         text = render_markdown(counted["aggregate"])
         assert "Claims of unknown value by property: date_of_death 1;" in text
+        assert "not extracted (by kind: human" in text
+        assert "Gerlach" not in text
         assert (
             "Entity-manifest entities dropped for a kind only a curator "
             f"makes: death 2, {OTHER} 1"

@@ -289,7 +289,10 @@ writer refused, count here too, under their check and the stage
 
 **Content**, from the views of the stages that completed:
 
-- entities by kind, and those not extracted;
+- entities by kind, and those not extracted, by kind too
+  (`entities.not_extracted_by_kind`: the people who only certify,
+  register, officiate, examine, report or witness are among them,
+  ADR-0040 §2.8; which of those roles each had is not recorded);
 - claims by property, and the `name` claims, name forms of no stated
   type (ADR-0011), by source kind; and the claims of unknown value
   (ADR-0040 §2.2) by property and by source kind

@@ -1157,6 +1157,14 @@ def _read_views(document: Document, directory: Path, state: dict) -> None:
             "stage": stage,
             "entities": Counter(_text(e.get("kind")) or "?" for e in entities),
             "not_extracted": sum(e.get("extract") is False for e in entities),
+            # the mentions the manifest leaves out, by kind: officials who
+            # only certify, register, officiate, examine, report or witness
+            # among them (ADR-0040 §2.8)
+            "not_extracted_by_kind": Counter(
+                _text(e.get("kind")) or "?"
+                for e in entities
+                if e.get("extract") is False
+            ),
             "claims": Counter(_text(c.get("property")) or "?" for c in claims),
             # the claims of unknown value (ADR-0040 §2.2), by property
             "unknown_values": Counter(
@@ -2870,6 +2878,7 @@ def _aggregate_content(
     # those whose coverage gives no count
     languages_moved = moved_extractions = moved_absent = 0
     batches = not_extracted = zero_entities = 0
+    not_extracted_by_kind: Counter = Counter()
     # the extractions' marriages by their weddings (`_marriages`)
     marriages: Counter = Counter()
     marriage_extractions = 0
@@ -2893,6 +2902,7 @@ def _aggregate_content(
                 ].total()
             subject_forms.update(batch["subject_forms"])
             not_extracted += batch["not_extracted"]
+            not_extracted_by_kind.update(batch["not_extracted_by_kind"])
             if not batch["claims"].total():
                 zero_claims[_kind(document.kind)] += 1
             if batch["claims"].get("name"):
@@ -3013,6 +3023,10 @@ def _aggregate_content(
         "entities": {
             "total": entities.total(),
             "not_extracted": not_extracted,
+            "not_extracted_by_kind": _folded(
+                not_extracted_by_kind,
+                lambda value: _known(value, vocabulary.items),
+            ),
             "per_batch": _mean(entities.total(), batches),
             "by_kind": _folded(
                 entities, lambda value: _known(value, vocabulary.items)
@@ -3919,7 +3933,8 @@ def _content_sections(content: Mapping[str, Any]) -> list[_Section]:
             [
                 f"{_n(entities['total'])} entities, "
                 f"{_n(entities['per_batch'])} a batch; "
-                f"{_n(entities['not_extracted'])} not extracted.",
+                f"{_n(entities['not_extracted'])} not extracted (by kind: "
+                f"{_listed(entities['not_extracted_by_kind'])}).",
                 _table(
                     ("Kind", "Entities"),
                     entities["by_kind"].items(),

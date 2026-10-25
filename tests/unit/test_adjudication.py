@@ -1175,6 +1175,12 @@ class TestStage:
         monkeypatch.setitem(claims.WIKIBASE_PRECISION, "decade", 9)
         assert adjudication.code_digest() != digest
         monkeypatch.undo()
+        # how it shows an unknown value (ADR-0040 §2.2)
+        from yizkr.pipeline import review
+
+        monkeypatch.setattr(review, "UNKNOWN_SHOWN", "unbekannt")
+        assert adjudication.code_digest() != digest
+        monkeypatch.undo()
         # the module's own source: a copy with one line more
         copy = tmp_path / "adjudication.py"
         copy.write_text(

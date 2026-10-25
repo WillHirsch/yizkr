@@ -795,10 +795,11 @@ def stage_key(
 def code_digest() -> str:
     """The SHA-256 of what renders and reads the calls: this module's
     source, the date formatters it renders dates with (the claim date's
-    stamp, precision and span rule, and the site's formatter), and how it
-    names an artifact (critique.artifact_places and THIS_DOCUMENT)."""
+    stamp, precision and span rule, and the site's formatter), how it
+    shows an unknown value (review.UNKNOWN_SHOWN), and how it names an
+    artifact (critique.artifact_places and THIS_DOCUMENT)."""
     from yizkr import claims, staticsite
-    from yizkr.pipeline import critique
+    from yizkr.pipeline import critique, review
 
     return sha256_text(
         canonical_json(
@@ -819,6 +820,7 @@ def code_digest() -> str:
                     inspect.getsource(critique.artifact_places)
                     + repr(critique.THIS_DOCUMENT)
                 ),
+                "unknown": review.UNKNOWN_SHOWN,
             }
         )
     )
