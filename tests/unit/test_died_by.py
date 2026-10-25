@@ -525,7 +525,7 @@ class TestEveryQualifierValue:
     SHA1 = "b" * 40
 
     @staticmethod
-    def time(year, month, day_):
+    def stamp(year, month, day_):
         return {"type": "time", "year": year, "month": month, "day": day_}
 
     def batch(self, qualifiers, prop="civil_status") -> ClaimBatch:
@@ -573,8 +573,8 @@ class TestEveryQualifierValue:
     @pytest.mark.parametrize("reverse", [False, True])
     def test_a_batch_keeps_every_point_in_time(self, reverse):
         points = [
-            ("point_in_time", self.time(1905, 12, 15)),
-            ("point_in_time", self.time(1909, 3, 16)),
+            ("point_in_time", self.stamp(1905, 12, 15)),
+            ("point_in_time", self.stamp(1909, 3, 16)),
         ]
         if reverse:
             points.reverse()
@@ -586,8 +586,8 @@ class TestEveryQualifierValue:
         # a death "before 15 December 1905" and "before 16 March 1909" in
         # one claim: its bound is the later, never the narrower
         qualifiers = [
-            ("latest_date", self.time(1905, 12, 15)),
-            ("latest_date", self.time(1909, 3, 16)),
+            ("latest_date", self.stamp(1905, 12, 15)),
+            ("latest_date", self.stamp(1909, 3, 16)),
         ]
         if reverse:
             qualifiers.reverse()
@@ -603,7 +603,7 @@ class TestEveryQualifierValue:
                     {
                         **claim.model_dump(mode="json", exclude_none=True),
                         "subject": {"kind": "local", "local_id": "eugen"},
-                        "value": self.time(1904, 1, 1),
+                        "value": self.stamp(1904, 1, 1),
                         "qualifiers": [
                             {"property": k, "value": v} for k, v in qualifiers
                         ],
