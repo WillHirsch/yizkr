@@ -11,19 +11,26 @@ A person is *not* possibly living when the graph holds positive evidence
 of death, or when every birth it records lies beyond the cutoff. "Death
 evidence" is any source-asserted signal that presupposes death:
 
-* a `date of death`, `place of death`, or `cause of death`;
-* a `place of burial` (burial presupposes death — the requirement's
-  explicit example);
-* a `death` event that is the person's own (ADR-0014 models death as an
-  event like any other).
+* a `date of death`, dated or of unknown value (a source stated the death
+  and not its date, ADR-0040 §2.2), a `place of death`, a `cause of
+  death` or an `age at death` (ADR-0040 Q1);
+* a `place of burial`, a place or of unknown value (burial presupposes
+  death — the requirement's explicit example);
+* a union `ended by death of` the person (ADR-0040 Q9): a source states
+  the couple were married when that partner died;
+* a `death` event a curator makes that is the person's own (ADR-0040
+  Q5): no extraction or GEDCOM batch makes one.
 
 None of these requires *both* a date and a place — a cause of death, a
-burial place, or an undated death event each records "deceased" with no
-particulars. So a person can be identified as deceased without a
-time/place of death, and no curator "living/deceased" decision is ever
-demanded: privacy falls out of what sources already assert.
+burial place, an unknown date of death or a union's end each records
+"deceased" with no particulars. Each is read at its truthy value, so a
+deprecated statement releases no one, and a "no value" is no value. So a
+person can be identified as deceased without a time/place of death, and
+no curator "living/deceased" decision is ever demanded: privacy falls
+out of what sources already assert.
 
-A birth or a death event is its principal's own, the one it happens to,
+A birth or a death event, which only a curator makes, is its principal's
+own, the one it happens to,
 and no one else's who takes part in it (``event_principal``, ADR-0035
 §3.2): the one participant its statements name in the role `principal`.
 An event with no principal, with several, or with one of unknown value
@@ -89,16 +96,18 @@ from yizkr.model.schema import load_manifest
 DEFAULT_CUTOFF_YEARS = 123
 
 # Statement properties (manifest keys) that presuppose the subject's
-# death. `age_at_death` is intentionally absent: it is a qualifier on
-# `date of death`, never a standalone statement, so it adds nothing.
-# A death event is checked separately (it is a relation through an
-# event item, not a property on the person, and counts only for its
-# principal: ``event_principal``).
+# death, each read at its truthy value, an unknown value included: an age
+# at death is a statement on the person, which needs no date of death
+# beside it (ADR-0040 Q1). A union's end by the person's death and a
+# curator's death event are read separately (``read_evidence``): each is
+# a statement of another item, the union's or the event's, and counts
+# for the one it names.
 DEATH_EVIDENCE_PROPERTIES = (
     "date_of_death",
     "place_of_death",
     "cause_of_death",
     "burial_place",
+    "age_at_death",
 )
 
 # Person evidence (manifest keys): what marks an item as a person, read at
@@ -108,14 +117,13 @@ DEATH_EVIDENCE_PROPERTIES = (
 # statement, is the value of a `PERSON_VALUE_PROPERTIES` statement or
 # qualifier, or takes part in an event typed as one of `PERSON_EVENTS`.
 PERSON_CLASS = "human"
-# Properties that only a person is the subject of: a birth, a death and a
-# burial; kinship; the names only a person has (a birth or married name, a
-# nickname, a name form of no stated type, what they are referred to as:
-# ADR-0011, ADR-0018); a sex or
-# gender and a number of children; and an occupation, an employer, a
-# school, a citizenship and a residence. An official name, which a place
-# or an organization can have too, and the ties an organization shares
-# (a religion, a membership) are not evidence.
+# Properties that only a person is the subject of: a birth, a death, an age at
+# death and a burial; kinship; the names only a person has (a birth or married
+# name, a nickname, a name form of no stated type, what they are referred to
+# as: ADR-0011, ADR-0018); a sex or gender and a number of children; and an
+# occupation, an employer, a school, a citizenship and a residence. An official
+# name, which a place or an organization can have too, and the ties an
+# organization shares (a religion, a membership) are not evidence.
 PERSON_SUBJECT_PROPERTIES = (
     "date_of_birth",
     "date_of_death",
@@ -123,6 +131,7 @@ PERSON_SUBJECT_PROPERTIES = (
     "place_of_death",
     "burial_place",
     "cause_of_death",
+    "age_at_death",
     "father",
     "mother",
     "spouse",
@@ -142,9 +151,9 @@ PERSON_SUBJECT_PROPERTIES = (
     "country_of_citizenship",
     "residence",
 )
-# Properties whose value is only ever a person: kinship, and the one
-# given refuge. Their value marks a person in a statement and in a
-# qualifier alike.
+# Properties whose value is only ever a person: kinship, the one given
+# refuge, and the partner whose death ended a union (ADR-0040 §5). Their
+# value marks a person in a statement and in a qualifier alike.
 PERSON_VALUE_PROPERTIES = (
     "father",
     "mother",
@@ -153,10 +162,12 @@ PERSON_VALUE_PROPERTIES = (
     "sibling",
     "relative",
     "gave_refuge_to",
+    "ended_by_death_of",
 )
 # The kinds of event that happen to people, so that whoever takes part in
 # one is a person, unless one of `NON_PERSON_CLASSES` types them. A
-# participant in any other event may be an organization or a group.
+# participant in any other event may be an organization or a group. A
+# birth and a death stay among them for the events a curator makes.
 PERSON_EVENTS = (
     "birth",
     "death",
@@ -778,13 +789,37 @@ def principals_by_event(
     return events
 
 
+# Every person a union is `ended by death of` (ADR-0040 Q9), at the
+# statement's truthy value, items only: an unknown value names no one, and
+# a deprecated statement releases no one. The value is read through its
+# redirect, as the person the check assesses is the item it redirects to.
+ENDED_BY_DEATH_QUERY = """\
+SELECT DISTINCT ?person
+WHERE {{
+  ?union wdt:{ended_by_death_of} ?named .
+  FILTER(isIRI(?named))
+  ?named {same_as}* ?person .
+  FILTER NOT EXISTS {{ ?person {same_as} ?further . }}
+  FILTER(REGEX(STR(?person), "/entity/Q[1-9][0-9]*$"))
+}}
+"""
+
+
+def ended_by_death_query(properties: Mapping[str, str]) -> str:
+    """``ENDED_BY_DEATH_QUERY`` with an instance's ids."""
+    return ENDED_BY_DEATH_QUERY.format(
+        same_as=SAME_AS, ended_by_death_of=properties["ended_by_death_of"]
+    )
+
+
 @dataclass
 class LifeEvidence:
     """What the possibly-living call reads beside a person's own death
     statements: `births`, the latest year each birth allows by person
     (``latest_births``), those of birth events included
-    (``read_evidence``); and `died`, everyone who is the principal of a
-    death event (``event_principal``)."""
+    (``read_evidence``); and `died`, everyone a union is `ended by death
+    of`, and everyone who is the principal of a death event
+    (``event_principal``)."""
 
     births: dict[str, list[int | None]] = field(default_factory=dict)
     died: set[str] = field(default_factory=set)
@@ -796,10 +831,12 @@ def read_evidence(
     properties: Mapping[str, str],
     items: Mapping[str, str],
 ) -> LifeEvidence:
-    """The births and the death events the possibly-living call weighs,
-    read with `run` (a query runner, given `prefixes`): every `date of
-    birth` statement (``BIRTHS_QUERY``), and each dated birth event's
-    `point in time`, and the principals of the death events. A birth
+    """The births and the deaths the possibly-living call weighs beside a
+    person's own death statements, read with `run` (a query runner, given
+    `prefixes`): every `date of birth` statement (``BIRTHS_QUERY``), and
+    each dated birth event's `point in time`; everyone a union is `ended
+    by death of` (``ENDED_BY_DEATH_QUERY``, where the instance has the
+    property); and the principals of the death events. A birth
     event's date is a birth of its principal, as a `date of birth` is, so
     it may release them; a birth that is nobody's own only adds its date
     to the births of its participants who have one already, after the
@@ -822,4 +859,9 @@ def read_evidence(
                 if person in births:
                     births[person].extend(years)
     died = set().union(*events["death"].values())
+    if "ended_by_death_of" in properties:
+        died |= {
+            _cell(row, "person").rsplit("/", 1)[-1]
+            for row in run(prefixes + ended_by_death_query(properties))
+        }
     return LifeEvidence(births=births, died=died)

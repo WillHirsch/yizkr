@@ -56,6 +56,7 @@ from yizkr.core.config import Config
 from yizkr.core.dates import UnsupportedDate
 from yizkr.core.privacy import (
     BIRTHS_QUERY,
+    ended_by_death_query,
     family_type,
     participants_query,
     people_selection,
@@ -772,6 +773,8 @@ class TestTheBadgeReadsEveryBirth:
             + BIRTHS_QUERY.format(**properties),
             prefix_block(config().concept_uri)
             + participants_query(properties, items),
+            prefix_block(config().concept_uri)
+            + ended_by_death_query(properties),
         ]
 
 
@@ -890,7 +893,7 @@ class TestThePeopleAreTheExports:
 
         assert "participant" not in PEOPLE_QUERY
         assert "{death}" not in PEOPLE_QUERY
-        assert PEOPLE_QUERY.count("EXISTS {{ ?person wdt:") == 4
+        assert PEOPLE_QUERY.count("EXISTS {{ ?person wdt:") == 5
 
     def test_a_family_is_badged_whatever_the_check_says(
         self, tmp_path, vocabulary

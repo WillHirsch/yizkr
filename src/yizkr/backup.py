@@ -253,26 +253,39 @@ def dump_rdf(deploy_dir: Path, out_path: Path, compose_files=None) -> None:
 # One row per item with person evidence (``{people}``: the privacy
 # module's selection, at every rank), with a value per death signal of
 # the person's own statements, bound when the person has that signal:
-# only whether it is bound counts, so any value sampled does. Death events
-# and births are read apart (``yizkr.core.privacy.read_evidence``): a
-# death event counts only for its principal, and needs no date, so an
-# undated death marks its principal deceased just like a burial place or
-# a cause of death does.
+# only whether it is bound counts, so any value sampled does, an unknown
+# value (a blank node) included, since a source stated the death (ADR-0040
+# §2.2). A union's end by the person's death, curator-made death events
+# and births are read apart (``yizkr.core.privacy.read_evidence``): a death
+# event counts only for its principal, and needs no date, so an undated
+# death marks its principal deceased just like a burial place or a cause
+# of death does. Each of DEATH_EVIDENCE_PROPERTIES has its arm here,
+# bound by the name _DEATH_BINDINGS gives it.
 PERSON_FACTS_QUERY = """\
 SELECT ?person
        (SAMPLE(?deathDate) AS ?death) (SAMPLE(?deathPlace) AS ?deathPlace)
        (SAMPLE(?deathCause) AS ?deathCause) (SAMPLE(?burial) AS ?burial)
+       (SAMPLE(?deathAge) AS ?deathAge)
 WHERE {{
 {people}
   OPTIONAL {{ ?person wdt:{date_of_death} ?deathDate . }}
   OPTIONAL {{ ?person wdt:{place_of_death} ?deathPlace . }}
   OPTIONAL {{ ?person wdt:{cause_of_death} ?deathCause . }}
   OPTIONAL {{ ?person wdt:{burial_place} ?burial . }}
+  OPTIONAL {{ ?person wdt:{age_at_death} ?deathAge . }}
 }}
 GROUP BY ?person
 """
 
-_DEATH_BINDINGS = ("death", "deathPlace", "deathCause", "burial")
+# each of DEATH_EVIDENCE_PROPERTIES, by the binding PERSON_FACTS_QUERY
+# gives it
+_DEATH_BINDINGS = {
+    "date_of_death": "death",
+    "place_of_death": "deathPlace",
+    "cause_of_death": "deathCause",
+    "burial_place": "burial",
+    "age_at_death": "deathAge",
+}
 
 
 @dataclass
@@ -335,6 +348,7 @@ def exclusion_report(
             place_of_death=properties["place_of_death"],
             cause_of_death=properties["cause_of_death"],
             burial_place=properties["burial_place"],
+            age_at_death=properties["age_at_death"],
         )
     )
     evidence = read_evidence(run, prefixes, properties, items)
@@ -344,7 +358,8 @@ def exclusion_report(
     for binding in bindings:
         qid = binding["person"]["value"].rsplit("/", 1)[-1]
         has_death = qid in evidence.died or any(
-            binding.get(name, {}).get("value") for name in _DEATH_BINDINGS
+            binding.get(name, {}).get("value")
+            for name in _DEATH_BINDINGS.values()
         )
         possibly_living, reason = is_possibly_living(
             evidence.births.get(qid, []), has_death, cutoff_year
@@ -380,7 +395,10 @@ _ENTITY_DATA = re.compile(r"<[^<>]*/Special:EntityData/[QP][1-9]\d*>")
 # The properties by which a union, a marriage or a partnership, points to
 # the events that start and end it (ADR-0036 §6): they are the couple's, and
 # go with the union. Keys of the model manifest; one the instance's
-# vocabulary does not hold reads nothing.
+# vocabulary does not hold reads nothing. `ended_by_death_of` is not among
+# them: its value is a partner, who follows the person rule through
+# PERSON_VALUE_PROPERTIES alone, so a released partner stays in the export
+# when the union is left out (ADR-0040 §5).
 UNION_BOUNDS = ("started_by", "ended_by")
 
 # The class of every union, a partnership or a marriage (ADR-0036): an
@@ -510,7 +528,8 @@ def read_dump(
 
     So are read, at every rank, the events that start and
     end each union (``UNION_BOUNDS``), but a `death` event, which is a
-    partner's own; and each property's type, and every sitelink, whose
+    partner's own: no batch makes one, and `ended_by` takes none, so this
+    guards a curator's; and each property's type, and every sitelink, whose
     page is anything but an entity's data node.
 
     Lines are read as they end, at a newline alone."""
@@ -779,6 +798,8 @@ def read_dump(
     for statement, owner in owners.items():
         if statement in named:
             reading.names.setdefault(owner, set()).update(named[statement])
+    # a curator's death event that a union is ended by stays its
+    # principal's own, never the union's bound
     deaths = typed_as({items["death"]})
     for statement, event in bounds.items():
         if statement in unions and event not in deaths:

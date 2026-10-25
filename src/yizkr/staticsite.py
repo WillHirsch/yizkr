@@ -95,10 +95,13 @@ def qid_of(binding: dict, name: str) -> str:
 # deprecated or outranked, or who has no type but other evidence, is listed and
 # badged too, and an event is not listed on the death it states. ?deceased is
 # true when the graph holds any death-implying statement of the person's own
-# (date/place/cause of death, place of burial),
-# none of which needs a date. Death events, whose principal alone they mark
-# deceased, and births, for the birth-recency cutoff, are read apart, with the
-# reading the non-privileged export uses (core/privacy.py's read_evidence).
+# (date of death, dated or of unknown value, place, cause or age at death,
+# place of burial), none of which needs a date; each of the privacy module's
+# DEATH_EVIDENCE_PROPERTIES has its arm. A union's end by the person's
+# death, curator-made death events, whose principal alone they mark
+# deceased, and births, for the birth-recency cutoff, are read apart, with
+# the reading the non-privileged export uses (core/privacy.py's
+# read_evidence).
 # ?family is true for
 # a family (``{family_type}``, the privacy module's test), which never
 # enters the non-privileged export, released or not. No stored "living"
@@ -115,6 +118,7 @@ WHERE {{
      || EXISTS {{ ?person wdt:{place_of_death} [] }}
      || EXISTS {{ ?person wdt:{cause_of_death} [] }}
      || EXISTS {{ ?person wdt:{burial_place} [] }}
+     || EXISTS {{ ?person wdt:{age_at_death} [] }}
        ) AS ?deceased)
   SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en" . }}
 }}
