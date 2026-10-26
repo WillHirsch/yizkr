@@ -179,6 +179,8 @@ from yizkr.pipeline.stage_planning import (
     MODEL_ROLES,
     PHASES,
     STAGE_ROLES,
+    batch_stage,
+    stages_for,
 )
 from yizkr.pipeline.stages import read_jsonl
 
@@ -845,6 +847,9 @@ class ScratchDriver(Orchestrator):
                 f"{', '.join(self.stage_names())}"
             )
         self.until = until
+        # None keeps helpers usable before discovery; each invocation binds
+        # preflight to the kinds actually present before checking the host.
+        self._planned_kinds: set[str] | None = None
         self.kept_state = KEPT_STATE if kept_state is None else kept_state
         self.min_free = min_free
         self._clock = clock or (lambda: datetime.now(UTC))
@@ -910,12 +915,36 @@ class ScratchDriver(Orchestrator):
 
     # -- preflight --------------------------------------------------------
 
+    def _plan_documents(self, docs: Sequence[DocumentRun]) -> None:
+        self._planned_kinds = {
+            doc.kind for doc in docs if doc.unreadable is None
+        }
+
+    def _preflight_roles(self, past: bool = False) -> tuple[str, ...]:
+        """Model roles in the declared document and corpus stages in range."""
+        kinds = (
+            DOCUMENT_STAGES
+            if self._planned_kinds is None
+            else self._planned_kinds
+        )
+        roles = {
+            stage.role
+            for kind in kinds
+            for stage in stages_for(kind)
+            if not past
+            and stage.process != "deterministic"
+            and self._within(stage.name)
+        }
+        if any(stage.calls_engine for stage in self._corpus_in_range()):
+            roles.update(MODEL_ROLES)
+        return tuple(role for role in MODEL_ROLES if role in roles)
+
     def _pacing(self) -> dict[str, float] | None:
         """The engine's pacing (docs/LLM_CACHE.md, Subscription limits):
         the share of each usage window left to development sessions and
         the longest a call waits for the subscription. ValueError for a
         setting the engine would refuse."""
-        if self.llm != "claude-code":
+        if not self._preflight_roles() or self.llm != "claude-code":
             return None
         from yizkr.pipeline.llm import _max_wait_setting, _reserve_setting
 
@@ -925,6 +954,8 @@ class ScratchDriver(Orchestrator):
         }
 
     def _engine_problems(self) -> list[str]:
+        if not self._preflight_roles():
+            return []
         if self.llm == "claude-code":
             from yizkr.pipeline.llm import ClaudeCodeClient
 
@@ -948,10 +979,10 @@ class ScratchDriver(Orchestrator):
     def _disk_problems(self) -> list[str]:
         problems = []
         gib = 1024**3
-        for what, path in (
-            ("the run directory", self.state_dir),
-            ("the LLM cache", self.cache_dir),
-        ):
+        paths = [("the run directory", self.state_dir)]
+        if self._preflight_roles():
+            paths.append(("the LLM cache", self.cache_dir))
+        for what, path in paths:
             free = _free_bytes(path)
             if free < self.min_free:
                 problems.append(
@@ -1006,13 +1037,14 @@ class ScratchDriver(Orchestrator):
         """What is wrong with the models the roles run: a model named by
         an alias, or a role that names none. The LLM cache's keys name
         each role's model, so every one must be a full model id."""
+        roles = self._preflight_roles()
         problems = []
         try:
-            self._refuse_model_aliases()
+            self._refuse_model_aliases(roles)
         except ModelAliasRefused as exc:
             problems.append(str(exc))
         unnamed = [
-            role for role in MODEL_ROLES if not self._configured_model(role)[0]
+            role for role in roles if not self._configured_model(role)[0]
         ]
         if unnamed:
             problems.append(
@@ -1064,10 +1096,10 @@ class ScratchDriver(Orchestrator):
         return []
 
     def _preflight_host(self) -> None:
-        """Everything that needs no document: the models, the pacing, the
-        anomaly thresholds, the engine and its login, disk space, and the
-        wiki when a stage to run touches it. PreflightFailed lists every
-        problem."""
+        """Check host resources the discovered stage plans need, including
+        the engine and cache only when a stage can use them. Also check
+        anomaly settings, run disk space and any required wiki boundary.
+        PreflightFailed lists every problem."""
         problems = self._model_problems() + self._pacing_problems()
         problems += self._anomaly_problems()
         problems += self._engine_problems()
@@ -1085,13 +1117,7 @@ class ScratchDriver(Orchestrator):
         engine (CorpusStage.calls_engine), since none says which. It reads
         no run state: a stage whose view the invocation will reuse counts
         all the same."""
-        roles: set[str] = set()
-        if not past:
-            roles = {
-                STAGE_ROLES[stage] for stage in PHASES if self._within(stage)
-            }
-        if any(stage.calls_engine for stage in self._corpus_in_range()):
-            roles = set(MODEL_ROLES)
+        roles = self._preflight_roles(past)
         pairs: dict[tuple[str | None, str | None], str] = {}
         for role in MODEL_ROLES:
             if role in roles:
@@ -1473,7 +1499,7 @@ class ScratchDriver(Orchestrator):
         if stage == "transcription":
             self._transcription(doc)
             doc.state.status = TRANSCRIBED
-        elif stage in ("extraction", "gedcom"):
+        elif stage == batch_stage(doc.kind).name:
             self._batches[doc.sha1] = self._derive(doc)
             doc.state.status = BATCHED
         else:
@@ -1833,8 +1859,9 @@ class ScratchDriver(Orchestrator):
         # fail closed: no never-ingest list, nothing read
         if self.exclusions is None:
             raise ExclusionConfigError(MISSING_LIST)
-        self._preflight_host()
         found = self.documents()
+        self._plan_documents(found)
+        self._preflight_host()
         if not found:
             self.log(f"no supported documents in {self.folder}")
             return EXIT_OK

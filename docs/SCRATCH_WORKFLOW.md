@@ -2,7 +2,7 @@
 
 This guide expands the [whole-corpus overview](ARCHITECTURE.md#whole-corpus-scratch-runs) into the inputs, processing and outputs of each implemented stage. Use the [scratch-run runbook](runbooks/scratch-run.md) for commands and operational procedures.
 
-This is the implemented disposable rebuild mode. The [current contract](CONTRACT.md) also requires retained ingestion and permits explicit graph-snapshot inputs for reconciliation; shared text-stage operations and freshness planning are implemented, while durable identity/review state and remaining adapter migrations (#719, #720) remain implementation work. Current scratch writes refuse retained instances and never confer human approval.
+This is the implemented disposable rebuild mode. The [current contract](CONTRACT.md) also requires retained ingestion and permits explicit graph-snapshot inputs for reconciliation; shared text and deterministic GEDCOM operations and their freshness planning are implemented, while durable identity/review state and media adapter migration (#719) remain implementation work. Current scratch writes refuse retained instances and never confer human approval.
 
 In the paths below, `R` is a run directory such as `var/scratch/<run-id>`, and `D` is one document's directory within it. Ordinary documents use `R/<document-directory>/`; independently read embedded images use `R/excerpts/<media-sha1>/`. These are path templates, not example corpus contents. For real corpus runs, all these products are local-only runtime data.
 
@@ -10,7 +10,7 @@ Rectangles represent processing or explicitly labelled transient data; cylinders
 
 ## Stage contracts
 
-The contracts below describe current data products and processing. [Shared text-stage operations](ARCHITECTURE.md#shared-text-stage-operations) implement text reading, extraction and critique; format-specific readers, GEDCOM and corpus stages retain their own adapters. Publication remains caller-owned. A fixed registry declares stages, roles and artifacts for execution, estimation and reports; execution and estimation share read-only view observation and a pure freshness decision. Text documents compare declared generation dependencies as well as input hashes. Older text records missing that metadata recompute once; legacy media/container and GEDCOM adapters retain their existing reuse rules. See [view and response reuse](LLM_CACHE.md#views). Stage names in the logs are `transcription`, `extraction`, `critique`, `gedcom`, `clustering`, `reset`, `register`, `write`, `places` and `site`. `transcribe` and `extract` are the model-role names used by configuration and flags such as `--refresh`, rather than the logged stage names.
+The contracts below describe current data products and processing. [Shared operations](ARCHITECTURE.md#shared-text-stage-operations) implement text reading, extraction, critique and deterministic GEDCOM adaptation; media/container readers and corpus stages retain their own adapters. Publication remains caller-owned. A fixed registry declares stages, roles and artifacts for execution, estimation and reports; execution and estimation share read-only view observation and a pure freshness decision. Text and GEDCOM documents compare declared generation dependencies as well as input hashes. Older records for those kinds missing that metadata recompute once; legacy media/container adapters retain their existing reuse rules. See [view and response reuse](LLM_CACHE.md#views). Stage names in the logs are `transcription`, `extraction`, `critique`, `gedcom`, `clustering`, `reset`, `register`, `write`, `places` and `site`. `transcribe` and `extract` are the model-role names used by configuration and flags such as `--refresh`, rather than the logged stage names.
 
 ### Per-document stages
 
@@ -19,7 +19,7 @@ The contracts below describe current data products and processing. [Shared text-
 | Transcription | Deterministic routing, text reading and validation; LLM vision where needed (`transcribe` role) | Source bytes and media SHA-1; optional `D/transcription.corrected.txt`; language and engine settings | `D/transcription.json`; language resolution in `D/state.json`; for containers, `D/derived-media.json`, image bytes and independent image transcriptions |
 | Extraction | LLM entity discovery, preparation reading and claim extraction (`extract` role); deterministic chunk packing, merging and validation | `D/transcription.json`, source SHA-1, claim schema, model vocabulary and optional `D/preparation.pointer.txt` | `D/batch.json`; `D/extraction/coverage.json`; optional `rejects.json`, `gaps.ndjson`, `containers.json`, `quotes.json` and `preparation.json` in that extraction directory; `D/gaps.csv` when gaps are surfaced |
 | Critique | Advisory LLM assessment (`critique` role), followed by deterministic finding validation | `D/batch.json`, the full numbered transcription and model vocabulary | `D/critique.json`; stage attention and anomaly records where applicable |
-| GEDCOM | Deterministic parser and adapter; no model calls | GEDCOM text and source SHA-1 | `D/batch.json`; warnings, unsupported tags and adaptation outcomes in `D/state.json` |
+| GEDCOM | Shared deterministic parser/adapter operation; no model calls | One GEDCOM byte snapshot and its expected source identity; declared adapter/schema/resources | `D/batch.json`; complete/failed execution status, dependencies, warnings, unsupported tags and adaptation outcomes in `D/state.json`; processing fingerprint in `D/derivations.json` |
 
 Non-GEDCOM documents run transcription, extraction and critique in that order. GEDCOM documents run only `gedcom`. An excerpt follows the ordinary three stages, but adopts its container's checked image transcription without a second vision call.
 
@@ -172,11 +172,11 @@ Implementation: [critic](../src/yizkr/pipeline/critique.py) and [critique persis
 
 ## GEDCOM: a deterministic route to the same batch contract
 
-The GEDCOM adapter parses structured records rather than transcribing them. It emits the same `ClaimBatch` contract used by extraction, making its output available to corpus clustering and writing without a transcription or critique stage.
+The shared GEDCOM operation parses structured records rather than transcribing them. Standalone, reviewed and scratch ingestion all submit `GedcomRequest` to `derive_gedcom`. The request identifies the source and may bind it to the discovery-time artifact hash. The operation reads bytes once, hashes and decodes that snapshot, and returns a complete validated `ClaimBatch` with diagnostics and invocation dependencies. A changed source, decoding failure, unsupported date or invalid adaptation raises without publishing output. Callers publish the batch and apply workflow policy; the operation does not create approval or access the graph.
 
 ```mermaid
 flowchart LR
-    source[("GEDCOM text and media SHA-1")] --> parse["Parse records and cross-references<br/>deterministic"]
+    source[("GEDCOM bytes + expected identity")] --> parse["Parse records and cross-references<br/>deterministic"]
     parse --> records["Record tree<br/>transient"]
     records --> adapt["Adapt names, dates and relations<br/>deterministic"]
     vocabulary[("Model vocabulary")] --> adapt
@@ -186,7 +186,11 @@ flowchart LR
 
 The adapter preserves the GEDCOM export as the source of its assertions and keeps supported source-citation information in its mapped claims. Name interpretation in this path is deterministic too. The diagnostic keys in document state are `gedcom_warnings`, `gedcom_unsupported` and `gedcom_outcomes`; unsupported records are visible rather than silently becoming invented claims.
 
-Implementation: [GEDCOM adapter](../src/yizkr/pipeline/gedcom.py) and [adapter invocation](../src/yizkr/pipeline/orchestrate.py).
+Freshness uses the same planner and persisted generation record as text stages. Adapter, schema or declared resource changes recompute the batch; model configuration and cache availability do not. A legacy record without processing metadata recomputes once. Canonically unchanged output preserves the stored batch, process provenance and review basis. A failed refresh records failure and leaves any previous batch unavailable as a current generation until a successful retry.
+
+Scratch execution and estimation use the discovered documents' declared stages within `--until` to select model and cache preflight. A GEDCOM-only run stopping at extraction needs neither a provider login/model configuration nor the LLM cache; it still checks exclusions, run storage and anomaly configuration. A corpus stage declaring `calls_engine`, such as clustering, retains the engine checks even when every document is GEDCOM. Estimation counts no GEDCOM model call. Reports continue to read recorded completed `gedcom` stages and the same batch/diagnostic fields in historical runs.
+
+Implementation: [shared GEDCOM operation](../src/yizkr/pipeline/gedcom_stages.py), [GEDCOM adapter](../src/yizkr/pipeline/gedcom.py), [stage declarations and freshness](../src/yizkr/pipeline/stage_planning.py) and [caller-owned publication](../src/yizkr/pipeline/orchestrate.py).
 
 ## Clustering: deterministic evidence and model adjudication
 

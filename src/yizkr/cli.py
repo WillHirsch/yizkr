@@ -751,15 +751,17 @@ def cmd_resolve(args) -> int:
 
 
 def cmd_gedcom(args) -> int:
-    from yizkr.claims import ArtifactRef
-    from yizkr.pipeline.gedcom import adapt_gedcom, format_unsupported_tags
+    from yizkr.pipeline.gedcom import format_unsupported_tags
+    from yizkr.pipeline.gedcom_stages import GedcomRequest, derive_gedcom
+    from yizkr.pipeline.stages import atomic_write_text
+    from yizkr.pipeline.text_stages import validate_paths
 
     _refuse_if_excluded(args, args.file)
-    result = adapt_gedcom(
-        args.file.read_text(), artifact=ArtifactRef.from_path(args.file)
-    )
+    validate_paths(inputs=(args.file,), outputs=(args.out,))
+    result = derive_gedcom(GedcomRequest(args.file))
+    batch = result.require_complete()
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(result.batch.model_dump_json(indent=2))
+    atomic_write_text(args.out, batch.model_dump_json(indent=2))
     print(
         f"wrote {args.out} ({len(result.batch.claims)} claims, "
         f"{len(result.batch.entities)} entities) — deterministic, no LLM; "

@@ -62,6 +62,7 @@ from yizkr.pipeline.orchestrate import (
     CHECKED_ROUTES,
     TRANSCRIBERS,
     Orchestrator,
+    ProcessingUnavailable,
 )
 from yizkr.pipeline.rundir import RunDir, RunSettingsConflict
 from yizkr.pipeline.scratch import (
@@ -379,6 +380,37 @@ def tree(*roots: Path) -> dict:
 
 
 class TestCounts:
+    def test_fresh_deterministic_stage_requires_observable_dependencies(
+        self, tmp_path, monkeypatch
+    ):
+        corpus = Corpus(tmp_path / "corpus")
+        corpus.gedcom("f-example-family.ged")
+        estimator = Quiet(
+            corpus.folder,
+            tmp_path / "run",
+            cache_dir=tmp_path / "cache",
+            until="gedcom",
+            corpus_stages=(),
+        )
+        (doc,) = estimator.documents()
+
+        def missing(*args):
+            raise ProcessingUnavailable("fictional adapter policy missing")
+
+        def no_model(*args, **kwargs):
+            pytest.fail("a deterministic stage tried to create a model")
+
+        monkeypatch.setattr(
+            estimator, "_require_processing_dependencies", missing
+        )
+        monkeypatch.setattr(llm, "make_client", no_model)
+        with pytest.raises(
+            ProcessingUnavailable, match="adapter policy missing"
+        ):
+            estimator._count(doc)
+        assert not estimator.state_dir.exists()
+        assert not Path(estimator.cache_dir).exists()
+
     def test_processing_change_recomputes_with_cached_responses(
         self, tmp_path, engine, monkeypatch
     ):
