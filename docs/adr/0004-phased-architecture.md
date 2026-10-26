@@ -10,7 +10,7 @@ The archive is private by default and exploration serves authorized readers. Pub
 
 ## Independent capabilities
 
-Deliver useful ingestion, curation and exploration incrementally. Face automation, a richer viewer or a future interface does not gate useful text ingestion or require extraction to stop evolving. Disposable rebuilds and retained ingestion are permanent modes: rebuilds are unratified development artifacts; retained state requires the supported review, identity and recovery safeguards. The current pipeline's one-map restriction still limits incremental writes; [#708](https://github.com/WillHirsch/yizkr/issues/708), [#130](https://github.com/WillHirsch/yizkr/issues/130) and [#142](https://github.com/WillHirsch/yizkr/issues/142) own the missing contracts and workflows.
+Deliver useful ingestion, curation and exploration incrementally. Face automation, a richer viewer or a future interface does not gate useful text ingestion or require extraction to stop evolving. Disposable rebuilds and retained ingestion are permanent modes: rebuilds are unratified development artifacts; retained state requires the supported review, identity and recovery safeguards. The current pipeline's one-map restriction still limits incremental writes; [the ingestion contract](../INGESTION_CONTRACT.md) defines the target boundary, and [#130](https://github.com/WillHirsch/yizkr/issues/130) and [#142](https://github.com/WillHirsch/yizkr/issues/142) own the missing workflows.
 
 Use additional services only when a demonstrated workflow needs them:
 
