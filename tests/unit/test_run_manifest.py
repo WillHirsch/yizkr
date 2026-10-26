@@ -261,8 +261,12 @@ class TestIngestRunManifest:
         assert after["started_at"] == before["started_at"]
         assert after["roles"]["extract"]["model"] == "claude-sonnet-5"
         assert after["roles"]["critique"]["refresh"] is True
-        # the batch view stood, so no extraction engine started this time
-        assert after["roles"]["extract"]["client"] is None
+        # Changed generation settings start extraction again; the latest
+        # invocation records the client it actually used.
+        assert after["roles"]["extract"]["client"]["model"] == (
+            "claude-sonnet-5"
+        )
+        assert before["roles"]["extract"]["client"]["model"] == "claude-5-x"
         assert [i["outcome"] for i in after["invocations"]] == [
             "finished",
             "finished",
