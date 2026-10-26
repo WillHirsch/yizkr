@@ -1204,14 +1204,36 @@ class Orchestrator:
             self.rundir.emit("held", reason=stopped, **where)
             raise DispatchStopped(f"{stage} not dispatched: {stopped}")
         self.rundir.emit("started", **where)
+        typed_result = stage in {"extraction", "critique"}
+        if typed_result:
+            detail = dict(doc.state.detail or {})
+            outcomes = dict(detail.get("stage_results") or {})
+            outcomes.pop(stage, None)
+            doc.state.detail = detail | {"stage_results": outcomes}
         try:
             result = compute()
-        except Exception as exc:
-            reason = f"{type(exc).__name__}: {exc}"
-            self.rundir.emit("failed", reason=reason[:500], **where)
-            from yizkr.pipeline import anomalies
+        except BaseException as exc:
+            if typed_result:
+                from yizkr.pipeline.llm import PassPaused
 
-            anomalies.failed(self.rundir, doc, stage)
+                outcomes = doc.state.detail["stage_results"]
+                # Preserve an explicit incomplete result and its diagnostics;
+                # otherwise an earlier successful attempt cannot describe this
+                # failed, paused or cancelled computation.
+                if stage not in outcomes:
+                    outcomes[stage] = {
+                        "status": "paused"
+                        if isinstance(exc, PassPaused)
+                        else "cancelled"
+                        if isinstance(exc, KeyboardInterrupt)
+                        else "failed"
+                    }
+            if isinstance(exc, Exception):
+                reason = f"{type(exc).__name__}: {exc}"
+                self.rundir.emit("failed", reason=reason[:500], **where)
+                from yizkr.pipeline import anomalies
+
+                anomalies.failed(self.rundir, doc, stage)
             raise
         reasons = list(attention(result)) if attention is not None else []
         detail = dict(doc.state.detail or {})
@@ -1222,6 +1244,12 @@ class Orchestrator:
         doc.state.detail = detail | ({"attention": noted} if noted else {})
         self.rundir.emit("done", attention=reasons or None, **where)
         return result
+
+    def _refresh_requested(
+        self, doc: DocumentRun, role: str, stage: str
+    ) -> bool:
+        """Whether invocation policy requires this view to be recomputed."""
+        return role in self.refresh
 
     def _reused_view(
         self,
@@ -1238,7 +1266,9 @@ class Orchestrator:
         `set-aside` event that gives the reason, and its record is
         forgotten. None when the view is to be made."""
         role, stage = doc.views[view]
-        if role in self.refresh or not doc.derivations.current(view):
+        if self._refresh_requested(doc, role, stage) or not (
+            doc.derivations.current(view)
+        ):
             return None
         try:
             loaded = load(view.read_text())
@@ -1973,78 +2003,82 @@ class Orchestrator:
                 )
 
     def _transcribe_text_file(self, doc: DocumentRun):
-        from yizkr.pipeline.transcribe import TextFileTranscriber
+        from yizkr.pipeline.text_stages import TextReadRequest, read_text
 
-        transcriber = TextFileTranscriber(
-            doc.source,
-            language=self.language,
-            fallback_language=self.fallback_language,
+        result = read_text(
+            TextReadRequest(
+                source=doc.source,
+                text_file=doc.source,
+                language=self.language,
+                fallback_language=self.fallback_language,
+            )
         )
-        transcription = transcriber.transcribe(doc.source)
-        return transcription, transcriber.last_resolution
+        return result.transcription, result.resolution
 
     def _transcribe_correction(self, doc: DocumentRun):
-        from yizkr.pipeline.language import resolve_language
-        from yizkr.pipeline.transcribe import Transcription
+        from yizkr.pipeline.text_stages import TextReadRequest, read_text
 
-        text = doc.correction.read_text()
-        resolution = resolve_language(
-            text, self.language, fallback=self.fallback_language
+        result = read_text(
+            TextReadRequest(
+                source=doc.source,
+                text_file=doc.correction,
+                language=self.language,
+                fallback_language=self.fallback_language,
+                correction=True,
+            )
         )
-        transcription = Transcription(
-            artifact=ArtifactRef(sha1=doc.sha1),
-            text=text,
-            language=resolution.code,
-            engine="correction",
-        )
-        return transcription, resolution
+        return result.transcription, result.resolution
 
     def _step_extract(self, doc: DocumentRun, transcription) -> ClaimBatch:
-        from yizkr.pipeline.chunking import ChunkedClaimExtractor
+        from yizkr.pipeline import text_stages
 
-        # always entity-first (ADR-0007), even for documents that fit a
-        # single call: the batch carries the entity manifest, which the
-        # writer takes each entity's label, aliases and kind from, the
-        # critic and serial mode's sequencer read, and identity matching
-        # blocks on — every entity must be in it, however short the
-        # document. Chunking a small document costs a few extra calls and
-        # is never incorrect (ADR-0006 §7).
-        extractors: list[ChunkedClaimExtractor] = []
+        # Run ingestion requires the entity manifest for identity/review,
+        # so its explicit strategy is chunked even for a short document.
+        results: list[text_stages.ExtractionResult] = []
 
         def extract() -> ClaimBatch:
-            # the engine starts inside the stage, so an engine that cannot
-            # start fails the stage, with its event
-            extractor = ChunkedClaimExtractor(
+            result = text_stages.extract(
+                text_stages.ExtractionRequest(
+                    transcription=transcription,
+                    artifact=ArtifactRef(sha1=doc.sha1),
+                    strategy="chunked",
+                    state_dir=doc.extraction,
+                    diagnostic_dump=doc.extraction / "incomplete.json",
+                    concurrency=self.chunk_concurrency,
+                    read_preparation=True,
+                    pointer=doc.pointed(),
+                ),
                 self._llm("extract", doc),
-                state_dir=doc.extraction,
-                concurrency=self.chunk_concurrency,
                 log=self.log,
-                read_preparation=True,
-                pointer=doc.pointed(),
             )
-            extractors.append(extractor)
-            batch = extractor.extract(
-                transcription, ArtifactRef(sha1=doc.sha1)
-            )
-            failed = extractor.failed_chunks
-            if failed:
-                first = extractor.failure_reasons.get(failed[0], "")
-                plural = "" if len(failed) == 1 else "s"
-                raise RuntimeError(
-                    f"{len(failed)} chunk{plural} failed "
-                    f"({', '.join(failed)}; "
-                    f"{failed[0]}: {first}); re-run to retry them"
-                )
-            return batch
+            results.append(result)
+            self._record_stage_result(doc, "extraction", result)
+            return result.require_complete()
 
         batch = self._run_stage(
             doc,
             "extraction",
             extract,
-            attention=lambda _batch: extractors[0].attention,
+            attention=lambda _batch: results[0].attention,
         )
-        doc.gaps_found = extractors[0].gaps
+        doc.gaps_found = results[0].gaps
         return batch
+
+    @staticmethod
+    def _record_stage_result(doc: DocumentRun, stage: str, result) -> None:
+        """Keep execution outcomes beside the existing view dependency record.
+
+        This describes computed products; Derivations remains the authority
+        for persisted-view reuse and the caller publishes the accepted view.
+        """
+        detail = dict(doc.state.detail or {})
+        outcomes = dict(detail.get("stage_results") or {})
+        outcomes[stage] = {
+            "status": result.status,
+            "dependencies": result.dependencies,
+            "artifacts": [str(path) for path in result.artifacts],
+        }
+        doc.state.detail = detail | {"stage_results": outcomes}
 
     def _step_reconcile(self, doc: DocumentRun, batch: ClaimBatch) -> int:
         """Write the document's identity proposals, `equivalences.csv`,
@@ -2160,20 +2194,27 @@ class Orchestrator:
         A critique the engine gave up on at its output limit has none, and
         needs attention, so that neither this run nor one that reuses the
         view takes it for a sound extraction's."""
-        from yizkr.pipeline.critique import run_critique
+        from yizkr.pipeline import text_stages
 
-        attention: list[str] = []
+        results: list[text_stages.CritiqueResult] = []
         transcription = self._transcription(doc)
+
+        def critique():
+            result = text_stages.critique(
+                text_stages.CritiqueRequest(
+                    batch=batch, transcription=transcription
+                ),
+                self._llm("critique", doc),
+            )
+            results.append(result)
+            self._record_stage_result(doc, "critique", result)
+            return result.findings
+
         return self._run_stage(
             doc,
             "critique",
-            lambda: run_critique(
-                self._llm("critique", doc),
-                batch,
-                transcription,
-                attention=attention,
-            ),
-            attention=lambda _findings: attention,
+            critique,
+            attention=lambda _findings: results[0].attention,
         )
 
     def _critique_notes(
@@ -2522,12 +2563,12 @@ class Orchestrator:
         return result
 
     def _derive(self, doc: DocumentRun) -> ClaimBatch:
-        """Bring the views before the gates up to date, each after the
-        view it is made from: the transcription, the batch and the
-        critique (a GEDCOM file has only its batch). A view that stands is
-        reused (`_reused_view`); one that does not is made again, and a
-        batch whose content changed invalidates everything derived from
-        the old one."""
+        """Bring the transcription and proposed batch up to date.
+
+        A view that stands is reused; a changed batch invalidates its
+        downstream views and review basis. The caller schedules critique
+        separately, after a complete batch is available.
+        """
         extracted = doc.kind != "gedcom"
         if extracted:
             self._transcription(doc)
@@ -2574,9 +2615,6 @@ class Orchestrator:
             # gates below re-derive the real status
             doc.state.status = BATCHED
             doc.save()
-        # the extraction critic reviews each batch (ADR-0013)
-        if extracted:
-            self._critique(doc, batch)
         return batch
 
     # -- the state machine ----------------------------------------------------
@@ -2741,6 +2779,8 @@ class Orchestrator:
         batch = self._derived.get(doc.sha1)
         if batch is None:
             batch = self._derive(doc)
+            if doc.kind != "gedcom":
+                self._critique(doc, batch)
             self._derived[doc.sha1] = batch
         elif doc.state.status in (PENDING, FAILED, PAUSED):
             doc.state.status = BATCHED

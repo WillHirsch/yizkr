@@ -702,6 +702,7 @@ def run_critique(
     transcription: Any = None,
     *,
     attention: list[str] | None = None,
+    incomplete_reasons: list[str] | None = None,
     vocabulary: tuple[Mapping[str, str], Iterable[str]] | None = None,
 ) -> list[Finding | Invalid]:
     """Review the batch; return its findings (possibly none), each valid
@@ -730,7 +731,9 @@ def run_critique(
     answer: there are no findings, and nothing to reject, since the cache
     keeps nothing for it. So that an empty critique of that kind never
     passes for a sound extraction's, GAVE_UP is added to `attention`, when
-    given, for the stage to show.
+    given, for the stage to show. `incomplete_reasons`, when given,
+    records why the final answer is unfinished, including an output-limit
+    give-up; a rejected cached answer replaced by a complete one adds none.
     """
     if not batch.entities and not batch.claims:
         return []
@@ -759,7 +762,11 @@ def run_critique(
         logger.warning(GAVE_UP)
         if attention is not None:
             attention.append(GAVE_UP)
+        if incomplete_reasons is not None:
+            incomplete_reasons.append(GAVE_UP)
         return []
+    if unfinished and incomplete_reasons is not None:
+        incomplete_reasons.append(unfinished)
     return findings
 
 

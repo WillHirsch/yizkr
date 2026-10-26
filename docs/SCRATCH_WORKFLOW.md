@@ -2,7 +2,7 @@
 
 This guide expands the [whole-corpus overview](ARCHITECTURE.md#whole-corpus-scratch-runs) into the inputs, processing and outputs of each implemented stage. Use the [scratch-run runbook](runbooks/scratch-run.md) for commands and operational procedures.
 
-This is the implemented disposable rebuild mode. The [current contract](CONTRACT.md) also requires retained ingestion and permits explicit graph-snapshot inputs for reconciliation; the corresponding durable identity, review and stage APIs remain implementation work. Current scratch writes refuse retained instances and never confer human approval.
+This is the implemented disposable rebuild mode. The [current contract](CONTRACT.md) also requires retained ingestion and permits explicit graph-snapshot inputs for reconciliation; shared text-stage operations are implemented, while durable identity/review state, remaining adapter migrations and shared planning remain implementation work. Current scratch writes refuse retained instances and never confer human approval.
 
 In the paths below, `R` is a run directory such as `var/scratch/<run-id>`, and `D` is one document's directory within it. Ordinary documents use `R/<document-directory>/`; independently read embedded images use `R/excerpts/<media-sha1>/`. These are path templates, not example corpus contents. For real corpus runs, all these products are local-only runtime data.
 
@@ -10,7 +10,7 @@ Rectangles represent processing or explicitly labelled transient data; cylinders
 
 ## Stage contracts
 
-The contracts below describe current data products and processing, not a shared stage API already implemented in the code. Stage names in the logs are `transcription`, `extraction`, `critique`, `gedcom`, `clustering`, `reset`, `register`, `write`, `places` and `site`. `transcribe` and `extract` are the model-role names used by configuration and flags such as `--refresh`, rather than the logged stage names.
+The contracts below describe current data products and processing. [Shared text-stage operations](ARCHITECTURE.md#shared-text-stage-operations) implement text reading, extraction and critique; format-specific readers, GEDCOM and corpus stages retain their own adapters. Publication and reuse remain caller-owned. Stage names in the logs are `transcription`, `extraction`, `critique`, `gedcom`, `clustering`, `reset`, `register`, `write`, `places` and `site`. `transcribe` and `extract` are the model-role names used by configuration and flags such as `--refresh`, rather than the logged stage names.
 
 ### Per-document stages
 
@@ -135,7 +135,7 @@ Rejected objects are recorded separately from accepted claims. Raw model respons
 
 If the engine answered but its entity manifest remains unusable after its attempts, extraction falls back to LLM line-range segmentation, then deterministic line windows if segmentation's answers are unusable too. Output-limit give-ups can also trigger fallback. If every call of a tier fails without an answer, extraction fails the document instead of falling back. Chunk packing remains deterministic. A valid empty entity manifest means no claims and needs attention; it does not force a fallback. Coverage records the tier and reasons used.
 
-An exhausted chunk failure fails the document's extraction stage, so no successful batch view is retained for downstream stages. Extraction also fails when its merged batch has no claims because output could not be parsed or all claims were rejected. Accepted claim-free output can produce an empty batch with attention. These outcomes are distinct from individual unreadable or rejected objects in an otherwise usable batch.
+An exhausted chunk failure fails the document's extraction stage. Salvaged claims are kept only in the diagnostic envelope `D/extraction/incomplete.json`; they cannot supply an accepted batch. A previous batch file can remain after a failed refresh, but the failed document is excluded from corpus-stage inputs. Extraction also fails when its merged batch has no claims because output could not be parsed or all claims were rejected. Accepted claim-free output can produce an empty batch with attention. These outcomes are distinct from individual unreadable or rejected objects in an otherwise usable batch.
 
 Implementation: [chunked extraction](../src/yizkr/pipeline/chunking.py), [claim parsing and validation](../src/yizkr/pipeline/extract.py) and [stage orchestration](../src/yizkr/pipeline/orchestrate.py).
 
@@ -166,7 +166,7 @@ The critic receives the batch's entities and claims, vocabulary and the whole nu
 
 A valid finding names an entity, optionally a claim, alias or place container, an axis, category, issue and suggestion. Code checks those references against the batch and vocabulary. An invalid finding is retained with its validation reasons. Both are stored in `D/critique.json`; neither rewrites, approves or removes anything in `D/batch.json`. The critique view depends on both the batch and the transcription, so changed citation context invalidates it too.
 
-Scratch writing consumes the original batch regardless of the critic's concerns. A stage failure can prevent the document completing its required stages, but findings or `needs attention` alone do not. An empty critique can mean no concerns or an output-limit give-up; stage attention records the latter. A batch with no entities and no claims needs no critique model call.
+Scratch writing consumes the original batch regardless of the critic's concerns. A stage failure can prevent the document completing its required stages, but findings or `needs attention` alone do not. An empty critique can mean no concerns or an unfinished answer: the shared operation reports completeness explicitly, and `D/state.json` records it under `detail.stage_results.critique`, alongside stage attention for unfinished output. Findings from an incomplete answer remain advisory and create no approval. A batch with no entities and no claims needs no critique model call.
 
 Implementation: [critic](../src/yizkr/pipeline/critique.py) and [critique persistence](../src/yizkr/pipeline/orchestrate.py).
 

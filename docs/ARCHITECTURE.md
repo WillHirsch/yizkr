@@ -2,7 +2,7 @@
 
 These diagrams describe the implemented system. Each has at most ten nodes; the overview abstracts subsystems that the later diagrams and the [pipeline guide](../src/yizkr/pipeline/README.md) expand. Arrows show data flow or processing order unless labelled otherwise.
 
-The [current contract](CONTRACT.md) defines approved outcomes and lifecycle policy; the [ingestion contract](INGESTION_CONTRACT.md) defines target source, identity and stage boundaries. These diagrams show current code, including its writer tied to one identity map and its disposable scratch path; shared stage APIs, graph-snapshot reconciliation and incremental retained ingestion remain tracked implementation work.
+The [current contract](CONTRACT.md) defines approved outcomes and lifecycle policy; the [ingestion contract](INGESTION_CONTRACT.md) defines target source, identity and stage boundaries. These diagrams show current code, including shared text-stage operations, its writer tied to one identity map and its disposable scratch path. Format-specific adapter migration, graph-snapshot reconciliation and incremental retained ingestion remain tracked implementation work.
 
 ## System overview
 
@@ -75,6 +75,34 @@ Implementation: [claim contract](../src/yizkr/claims.py), [writer](../src/yizkr/
 The [ingestion overview and preparation detail](../src/yizkr/pipeline/README.md#the-ingest-loop-one-command-two-gates-repeat) show how `yizkr ingest run` advances documents through transcription, extraction, identity review where proposals exist, claim review and writing. Saving a reviewed CSV and rerunning the same command advances the workflow. Registration occurs at write time; the current document stages before write do not access the wiki.
 
 The same guide expands [serial ingestion](../src/yizkr/pipeline/README.md#resolving-entities-across-artifacts) and corpus clustering. These views complement the unattended development path below. The current writer refuses a different identity map on an instance already written under another map; reviewed CSVs alone do not make it an incremental retained workflow. The contract permits explicit, recorded graph snapshots for reconciliation, with relevant write-precondition checks, but that path and durable assignment/review state are not implemented (#85, #107, #130, #723).
+
+## Shared text-stage operations
+
+[text_stages.py](../src/yizkr/pipeline/text_stages.py) provides ordinary Python operations used by standalone commands and the reviewed/scratch drivers. Requests carry explicit source inputs, configuration and diagnostic destinations. Clients are borrowed from the invocation, which owns their lifetime; operations receive no graph client or orchestrator. CLI commands remain adapters.
+
+```mermaid
+flowchart LR
+    callers["Standalone / reviewed / scratch"] --> read["read_text<br/>deterministic"]
+    read --> reading["Transcription + language resolution"]
+    reading --> extract["extract<br/>model or prepared file + validation"]
+    extract -->|complete| batch["Proposed ClaimBatch"]
+    extract -->|incomplete| diagnostic["Diagnostic envelope<br/>no accepted batch"]
+    batch --> critic["critique<br/>advisory model + validation"]
+    reading --> critic
+    critic --> findings["Findings + completion status"]
+```
+
+| Operation | Explicit inputs | Result |
+| --- | --- | --- |
+| `read_text` | Media path, separate text representation or curator correction, language settings | Located transcription, language resolution and input dependency metadata. The media bytes identify the source even when its text comes from another file. |
+| `extract` | Transcription and source identity, strategy, chunk/retry/concurrency settings, preparation pointer, borrowed client or prepared claims file, diagnostic destinations | Complete proposed batch, or an incomplete result with a separate diagnostic batch; attention, failed-chunk reasons, gaps, emitted artifact paths and dependencies. |
+| `critique` | Complete proposed batch, full transcription and borrowed client | Advisory findings, explicit complete/incomplete status, attention and dependencies. No approval or modification of the batch. |
+
+Run ingestion explicitly selects entity-first chunked extraction because its identity and review steps use entity records. Standalone extraction retains `auto`, `single`, `chunked` and prepared-file modes; use the same explicit strategy/settings to compare equivalent invocations. Neither a failed chunk nor an unfinished single-call answer can supply an accepted batch. An unfinished critique preserves its findings and reports attention; it does not create another human gate.
+
+The callers retain exclusion checks, scheduling, publication, view reuse and review invalidation. Reviewed ingestion schedules critique after deriving a complete batch; scratch schedules it as its own stage. Scratch's refresh decision consults the successful-refresh record without changing the invocation's settings. A refresh is recorded only after its output and document state are saved.
+
+Result dependency metadata describes the computation; it does not replace `derivations.json` as the authority for persisted-view reuse. This slice does not implement a new atomic multi-file generation store or shared freshness planner. Media/container reading and GEDCOM still use their format-specific adapters (#719, #720); unified planning, worker cancellation and provider-session separation remain #721, #724 and #726. Existing model prompts and response-cache keys are unchanged.
 
 ## Whole-corpus scratch runs
 

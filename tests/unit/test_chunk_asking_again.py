@@ -785,7 +785,8 @@ class TestTheStageNamesTheRefusal:
 
         class OneChunkPerPerson(chunking.ChunkedClaimExtractor):
             def __init__(self, *args, **kwargs):
-                super().__init__(*args, budget=LINE_LENGTH, **kwargs)
+                kwargs["budget"] = LINE_LENGTH
+                super().__init__(*args, **kwargs)
 
         monkeypatch.setattr(
             chunking, "ChunkedClaimExtractor", OneChunkPerPerson
@@ -829,15 +830,20 @@ class TestTheStageNamesTheRefusal:
         assert orchestrator.run() == 1
         (doc,) = orchestrator.documents()
         assert doc.state.status == FAILED
-        assert doc.state.error.startswith(
-            "RuntimeError: 1 chunk failed (c001; c001: ClassifierRefused: "
+        assert (
+            doc.state.detail["stage_results"]["extraction"]["status"]
+            == "incomplete"
         )
+        assert not doc.batch.exists()
+        assert doc.state.error.startswith("ExtractionFailed: ")
+        assert "1 chunk" in doc.state.error
+        assert "c001: ClassifierRefused: " in doc.state.error
         assert doc.state.error.endswith("); re-run to retry them")
         assert orchestrator.calls.count("chunk:page.txt") == 2
 
     def test_a_refused_chunk_and_a_retried_one(self, tmp_path, monkeypatch):
-        """The reason counts and lists every failed chunk, and quotes the
-        first one's error (#659)."""
+        """The failure names both chunks and the refusal; an ordinary
+        engine error still receives its configured retries."""
         text = f"{DOC}\nRahel Löbig, b. 1871 in Flörburg."
         ref = ArtifactRef.from_bytes(text.encode()).model_dump()
         manifest = json.loads(entity_manifest_json())
@@ -867,11 +873,16 @@ class TestTheStageNamesTheRefusal:
         assert orchestrator.run() == 1
         (doc,) = orchestrator.documents()
         assert doc.state.status == FAILED
-        assert doc.state.error.startswith(
-            "RuntimeError: 2 chunks failed (c001, c002; c001: "
-            "ClassifierRefused: "
+        assert (
+            doc.state.detail["stage_results"]["extraction"]["status"]
+            == "incomplete"
         )
-        assert "engine down" not in doc.state.error
+        assert not doc.batch.exists()
+        assert doc.state.error.startswith("ExtractionFailed: ")
+        assert "2 chunks" in doc.state.error
+        assert "c001" in doc.state.error
+        assert "c002" in doc.state.error
+        assert "ClassifierRefused: " in doc.state.error
         # c001 once, c002 with its two retries, c003 once
         assert orchestrator.calls.count("chunk:page.txt") == 5
 

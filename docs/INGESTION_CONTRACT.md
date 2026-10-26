@@ -165,13 +165,13 @@ These cases use [the example universe](EXAMPLES.md) and specify target behavior;
 
 ## Implementation boundaries and task ownership
 
-The current code has byte-addressed media, located source references, derivation files, review CSVs, clustering maps and guarded writers. It does not yet supply all the durable boundaries above: PDF routes can change image inventory, derived images can be re-encoded, presentation records deduplicate occurrences, notes are flattened, mention/cluster fingerprints depend on content, and writer lookup uses generated display terms. Document freshness and estimation have separate implementations; the cache also manages provider sessions. These are implementation limits, not exceptions to the target contract.
+The current code has byte-addressed media, located source references, derivation files, review CSVs, clustering maps and guarded writers. [Shared text-stage operations](ARCHITECTURE.md#shared-text-stage-operations) provide explicit computation inputs/results and separate incomplete extraction from accepted proposals across standalone, reviewed and scratch callers. They retain caller-owned publication and reuse; they do not implement all the durable boundaries above. PDF routes can change image inventory, derived images can be re-encoded, presentation records deduplicate occurrences, notes are flattened, mention/cluster fingerprints depend on content, and writer lookup uses generated display terms. Document freshness and estimation have separate implementations; the cache also manages provider sessions. These are implementation limits, not exceptions to the target contract.
 
 | Work | Implementing tasks |
 | --- | --- |
 | Source inventory, distinct notes/occurrences, all PDF routes, migration of consumers | [#714](https://github.com/WillHirsch/yizkr/issues/714), [#715](https://github.com/WillHirsch/yizkr/issues/715), [#716](https://github.com/WillHirsch/yizkr/issues/716) |
 | Shared semantic subject validation | [#717](https://github.com/WillHirsch/yizkr/issues/717) |
-| First text-stage operations, then media and GEDCOM adapters | [#718](https://github.com/WillHirsch/yizkr/issues/718), [#719](https://github.com/WillHirsch/yizkr/issues/719), [#720](https://github.com/WillHirsch/yizkr/issues/720) |
+| Media and GEDCOM migration onto the shared operations | [#719](https://github.com/WillHirsch/yizkr/issues/719), [#720](https://github.com/WillHirsch/yizkr/issues/720) |
 | Shared dependency descriptors/planning; narrow write invalidation | [#721](https://github.com/WillHirsch/yizkr/issues/721), [#713](https://github.com/WillHirsch/yizkr/issues/713) |
 | Matching-policy detail/calibration; persistent reviewed decisions | [#66](https://github.com/WillHirsch/yizkr/issues/66), [#107](https://github.com/WillHirsch/yizkr/issues/107) |
 | Durable bindings/assignment revisions, graph-readable provenance and migration; interrupted-write recovery | [#130](https://github.com/WillHirsch/yizkr/issues/130), [#85](https://github.com/WillHirsch/yizkr/issues/85) |
