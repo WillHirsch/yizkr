@@ -19,7 +19,7 @@ Use focused checks while implementing and CI's broad offline result for the revi
 
 Tests establish intended behavior: provenance, uncertainty, identity, review, isolation and recovery. Prompt literals, exact query syntax, helper structure and historical prose are not substitutes for semantic results. Replace obsolete assertions with the affected implementation rather than preserving defects or requiring a repository-wide test rewrite first.
 
-A small semantic acceptance set may allow multiple valid interpretations or require abstention. Deterministic acceptance checks are sufficient for #709; real-model evaluation is a separate bounded activity. A canned engine establishes orchestration, not inference quality. Whole-corpus evidence is required when cross-document interactions or material uncertainty remain beyond bounded checks; record the reason and affected stages. A prompt, model or pre-write code edit alone does not require a corpus run. The procedure and local-only boundary are in [AGENT_PROTOCOL.md §5](AGENT_PROTOCOL.md#5-integration-and-corpus-evidence).
+The [small semantic acceptance set](#semantic-acceptance) checks deterministic archive behavior; real-model evaluation is a separate bounded activity. A canned engine establishes orchestration, not inference quality. Whole-corpus evidence is required when cross-document interactions or material uncertainty remain beyond bounded checks; record the reason and affected stages. A prompt, model or pre-write code edit alone does not require a corpus run. The procedure and local-only boundary are in [AGENT_PROTOCOL.md §5](AGENT_PROTOCOL.md#5-integration-and-corpus-evidence).
 
 ## Current test layers and limits
 
@@ -34,6 +34,46 @@ The network guard rejects non-loopback lookups and connections, removes proxy va
 **Live integration.** Tests under `tests/integration`, marked `live`, exercise the configured stack or a real model. Their current availability checks can skip tests. The separate, required fictional integration lane is pending #722; see below. Query-string unit assertions do not establish the rows returned by an actual engine.
 
 **Real-model checks.** `tests/integration/test_live_chunked.py` exercises extraction and conversation resumption through the claude CLI and response cache. It needs a logged-in CLI and skips if unavailable. `$YIZKR_LIVE_CACHE` selects its cache; the default is `var/live-cache`. It does not acquire the stack lock. These checks do not establish broad extraction quality across the corpus, and a reused response establishes only the request/configuration it matches.
+
+## Semantic acceptance
+
+Run the compact deterministic set with:
+
+```sh
+uv run pytest -q tests/unit/test_semantic_identity.py tests/unit/test_semantic_evidence.py
+```
+
+These tests run in the ordinary offline suite and inherit its host-settings and network isolation. [The reusable scenarios](../tests/fixtures/semantic_acceptance.py) select fictional evidence from [the example universe](EXAMPLES.md). They separate source text and intended outcomes from the current `ClaimBatch` adapters. No model supplies the deterministic inputs.
+
+| Scenario | Required observation | Production boundary exercised |
+| --- | --- | --- |
+| Gustav's register extract gives 7 January 1919; his naturalisation certificate gives 1 July 1919 | Both birth dates retain their precision, normal rank and separate source/location/process support. Repeating the write preserves both without duplicate support. | Claim review and writer serialization |
+| Two Ursula Löbigs: the daughter born in 1911 and the unrelated widow in the 1912 directory | The identical name does not merge these incompatible people, including after temporary IDs and input order change. | Corpus identity construction |
+| Two mentions proposed as the same Gustav | A confident machine verdict alone changes no identity. Only an explicitly approved displayed match resolves to the chosen item; rejected/unreviewed matches do not. The contradictory evidence and its provenance survive resolution. | Equivalence review and application |
+| A face-region proposal for a known fictional person | Unreviewed and bulk approval cannot authorize the association. Explicit approval permits the displayed person/region with provenance; a changed association cannot reuse that approval. | Face proposal construction, claim review and writer enforcement |
+
+The writer tests use the real `BatchWriter` and WikibaseIntegrator serialization with the existing detached in-memory transport from `test_pipeline.py`. Assertions inspect emitted statements and references; the transport supplies scripted reads and storage. This establishes transformation and gate behavior, not Wikibase acceptance, durable persistence, WDQS results, recovery or concurrency. [The isolated integration lane](#live-integration-and-the-transition) remains necessary for those boundaries. The face case uses synthetic detections and embeddings; it does not establish recognition quality.
+
+When replacing evidence, stage or identity implementations, keep the source cases and semantic expectations and adapt their small input/output adapters. Compare attributed values, identity membership and approved associations; do not require prompt literals, generated IDs, record order or helper calls. Extend the set for a consequential new behavior rather than duplicating every existing unit case. These checks do not claim that all [target ingestion cases](INGESTION_CONTRACT.md#fictional-contract-cases) pass: durable assignments, approval carry-forward after rereading, retained-state splits and crash recovery still need their implementing tasks and boundary checks. Do not freeze known defects as expected semantic results.
+
+### Optional real-model evaluation
+
+This evaluation is separate from the deterministic checks and is not a prerequisite for using them in refactors. Its purpose is to observe interpretation quality against independently specified expectations. The source texts in the scenario fixture are usable inputs; their prepared batches, expected outcomes and curator decisions are gold data, never model input.
+
+1. Declare the question and sample before calling a model. A bounded extraction sample is `birth-extract-1938`, `naturalisation-1952`, `family-tree-1984` and `directory-1912` from the scenario fixture. Use each complete selected reading, preserving its language, source identity and location; do not combine unrelated sources into one witness. Face approval is a deterministic policy check, not an extraction-quality score. A face-recognition evaluation needs separately specified fictional images and expected regions; the synthetic embeddings here are insufficient.
+2. Record a reproducible configuration: repository commit (including prompts, vocabulary and adapters), fixture source keys and content hashes, engine/provider, requested full model ID and actual reported model, client/CLI version, effort and any sampling controls the provider supports, extraction strategy, chunk/retry/concurrency settings, and cache policy. Record unavailable controls explicitly. Retain the exact requests and raw responses, parsed batches, rejects, incomplete-output reports and any later review decisions in a dedicated evaluation directory outside tracked files. These records let another evaluator reconstruct the calls; they cannot guarantee identical new samples from a hosted model.
+3. Feed the fixture's transcription adapter to the production `LlmClaimExtractor.extract(transcription, transcription.artifact)` for a single-call extraction check. Supply an explicitly configured client from `yizkr.pipeline.llm.make_client`, with dedicated transcript storage, and the extractor's `raw_dump` and `rejects_dump` paths. If the change concerns chunking, critique or reconciliation, name and invoke that actual stage and record its additional inputs/settings instead. Do not infer its quality from a single-call extraction check. Close the client after the run. Stop before graph writes.
+4. Inspect outputs against the expectations below, resolving temporary references by source and described role, not generated identifiers. Record each obligation as satisfied, failed or unassessable, with the observed evidence and missing information. Abstention can be correct for an unsupported identity; omitting an explicitly stated birth date is a coverage failure. A parsing error, failed call or skipped input is not a passing abstention. Keep machine proposals separate from later human decisions.
+5. A useful initial budget is three fresh repetitions of each selected input per configuration, serially. Use a separate initially empty response cache per repetition, or disable response reuse; record actual engine calls and cache hits. A replay is useful for reproducibility but is not another independent sample. Report all attempts, including failures and retries, and per-case variability rather than selecting the best answer or treating a small pass rate as a general quality estimate. If a different budget is needed, declare it before inspecting outputs.
+
+| Evaluation obligation | Required or permitted result |
+| --- | --- |
+| Contradictory dates | Extract each explicitly stated date with day precision and the correct source. When the two readings are considered together, retain both; do not choose a canonical birth date or invent an explanation for the disagreement. Other supported assertions from the reading are allowed. |
+| Homonyms | Preserve the daughter's birth evidence and the widow's stated status with their own attribution. Keep their identities separate or unresolved; matching names alone do not justify equivalence. Do not invent the widow's birth date or a family relationship. |
+| Provenance and uncertainty | Preserve available source locations and trace machine interpretations to their process. Do not fabricate citations, precision or independent corroboration. Distinct defensible names/representations are allowed if their evidence remains inspectable. |
+| Human decisions | A proposed identity match or face link may remain unresolved. No machine confidence or textual name match counts as curator approval. Model outputs must not acquire human approval state. |
+
+A canned response can prove request/response wiring and downstream handling but cannot establish whether a model read the source correctly. These few fictional readings also do not measure handwriting, layout, multilingual coverage, face recognition or corpus-wide interactions. Use suitable media samples for those questions and complementary corpus review when the risk requires it, following the local-only procedure above. Report deterministic results, observed model results and corpus evidence separately; an unrun optional evaluation contributes no quality evidence.
 
 ## Focused and broad runs
 
