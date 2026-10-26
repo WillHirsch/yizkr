@@ -1,5 +1,7 @@
 # ADR-0031: The relation decides the kind — places, and organisations that act
 
+> **Temporary deprecated material — TODO [#733](https://github.com/WillHirsch/yizkr/issues/733):** this document still mixes current design details with development history and superseded prescriptions. Its historical material is not authoritative for new policy; use [REQUIREMENTS](../REQUIREMENTS.md), [CONTRACT](../CONTRACT.md) and the implemented code. Remove this note only after rewriting the document as current guidance with necessary rationale, or consolidating it elsewhere and deleting this file. The linked task tracks removal of all remaining historical and obsolete passages.
+
 Status: **accepted** (owner decision 2026-09-29, #202). Like ADR-0024 and ADR-0025, it records a decision the owner has made, so the owner's merge of the PR that adds it is its acceptance. It settles #47 and amends ADR-0012 (Forks C and F) and ADR-0009 in place. #89 implements it, within #385's extraction revision. Amended by #407 (2026-09-29): the extraction prompts carry the rule (#89). The entity-manifest prompt types an entity by the relations its source states, in place of the rule that a hospital, school or congregation is an organisation wherever it is named; the chunk prompt points each relation at an entity of a kind it accepts, and `issued_by` and `carried_out_by` are offered. The critic's relation/kind category names both agency relations too.
 
 ## Context

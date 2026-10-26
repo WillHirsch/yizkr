@@ -1,5 +1,7 @@
 # ADR-0015: Per-document language detection
 
+> **Temporary deprecated material — TODO [#730](https://github.com/WillHirsch/yizkr/issues/730):** this document still mixes current design details with development history and superseded prescriptions. Its historical material is not authoritative for new policy; use [REQUIREMENTS](../REQUIREMENTS.md), [CONTRACT](../CONTRACT.md) and the implemented code. Remove this note only after rewriting the document as current guidance with necessary rationale, or consolidating it elsewhere and deleting this file. The linked task tracks removal of all remaining historical and obsolete passages.
+
 Status: accepted — implemented. `--language` defaults to `auto`; each document's language is detected from its full transcription with an offline statistical identifier, with a confidence floor and a `--fallback-language` for documents too short to judge.  
 Amended by #389 (2026-09-29): a vision transcription's language comes from its transcription record (ADR-0037), whose pages name the languages they are written in: the document's is the one that holds most of its text (resolution `record`), and a record that names none falls back. Detection runs only on a text that has no record (a text file, a correction, slide text, a PDF read page by page), and reads it outside its editorial marks (`[illegible]`, `[?]`, `[redacted]`, page markers), which a short text would otherwise be read by.
 

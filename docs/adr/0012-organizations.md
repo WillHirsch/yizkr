@@ -1,5 +1,7 @@
 # ADR-0012: Organizations as agents
 
+> **Temporary deprecated material — TODO [#733](https://github.com/WillHirsch/yizkr/issues/733):** this document still mixes current design details with development history and superseded prescriptions. Its historical material is not authoritative for new policy; use [REQUIREMENTS](../REQUIREMENTS.md), [CONTRACT](../CONTRACT.md) and the implemented code. Remove this note only after rewriting the document as current guidance with necessary rationale, or consolidating it elsewhere and deleting this file. The linked task tracks removal of all remaining historical and obsolete passages.
+
 Status: accepted  
 Amended by [ADR-0031](0031-the-relation-decides-the-kind.md) (#202, 2026-09-29): the relation a source states decides an entity's kind (Fork C), and a source that uses one institution both ways gives two items, a place and an organisation located at it, never one entity of its dominant use (Forks C and F).
 

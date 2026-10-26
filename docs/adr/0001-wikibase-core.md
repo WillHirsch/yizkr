@@ -1,25 +1,23 @@
 # ADR-0001: Self-hosted Wikibase Suite as the core knowledge store
 
-Status: accepted
-
-## Context
-
-Six essential requirements (docs/REQUIREMENTS.md). A survey of candidate cores was performed: Gramps/Gramps Web (genealogy-native), OpenAtlas and ResearchSpace (CIDOC-CRM platforms), Omeka S + modules, custom RDF store (named graphs / RDF-star), custom claim nodes in a property graph (Neo4j-style), nodegoat (near-miss: strong on model, uncertainty and sources; no image-region annotation; hosted, not open source). No single system satisfies all six requirements; R2 (assertion-level provenance with coexisting contradictions) and R5 (face-region linking) disqualify most.
+Status: accepted. The [current contract](../CONTRACT.md) governs product and engineering policy; this ADR describes the working storage choice and its limits.
 
 ## Decision
 
-Use **self-hosted Wikibase Suite** (MediaWiki + Wikibase, WDQS query service, Elasticsearch, via Docker) as the single system of record. Self-hosted rather than a hosted public instance because the archive contains living people's data.
+Use self-hosted Wikibase Suite as the authoritative store of accepted assertions. MediaWiki supplies editing and revision history, Wikibase supplies statements with references, qualifiers and ranks, and the query service supplies SPARQL reads. The Python package supplies ingestion, review tooling and exploration views.
+
+This is the working implementation, not a requirement that every source inventory, proposal, approval record, response cache or job record live in Wikibase. Those records have distinct authority and lifecycle requirements. There must be one authoritative representation of accepted assertions, with explicit ownership of the other state.
 
 ## Rationale
 
-- The Wikibase statement model (references + qualifiers + ranks) is the most battle-tested implementation of assertion-level provenance with natively coexisting contradictions (Wikidata scale; precedent: Enslaved.org for source-attributed historical persons).
-- Ready-made accessible curation: statement editor, QuickStatements, OpenRefine reconciliation (R4).
-- SPARQL endpoint and standard RDF export for longevity and for driving frontends (R6).
-- Schema is extensible in-instance without redesign (R1).
+- Statements can retain attributed, conflicting values without requiring a preferred value.
+- The statement editor, OpenRefine and review CSVs provide useful curation tools. Their availability does not by itself establish that a nontechnical contributor can complete the required curation tasks.
+- SPARQL and RDF export support exploration and portability.
+- Properties and classes can be added in-instance. New matching, validation or presentation semantics may require code and a documented migration; extensibility does not promise arbitrary new behavior without implementation.
+- Self-hosting gives the owner control of access and operation for an archive containing living people's information. It does not make an export suitable for every audience.
 
-## Consequences
+## Implementation limits
 
-- We operate a multi-service stack (acceptable; home-server ops experience exists).
-- Public no-foreknowledge exploration requires a custom frontend layer (accepted as the one unavoidable build – true in every stack).
-- Fragment/region anchoring is done by convention (ADR-0003) rather than a native mechanism.
-- Faces need a companion engine (ADR-0005).
+The stack requires several services and operational maintenance. Artifact regions use the conventions in [ADR-0003](0003-statement-provenance.md); the exploration and face flows use the components described in [ADR-0004](0004-phased-architecture.md) and [ADR-0005](0005-faces-strategy.md).
+
+The current writer still uses one identity map per instance and generated label/description pairs to find cluster items. Stable retained-state identity and migration are work under [#708](https://github.com/WillHirsch/yizkr/issues/708), [#130](https://github.com/WillHirsch/yizkr/issues/130) and [#142](https://github.com/WillHirsch/yizkr/issues/142); adopting the contract does not implement them. Keep the current guards until their supported replacements are verified. A platform replacement is outside this cleanup.

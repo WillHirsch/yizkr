@@ -7,9 +7,9 @@ body:
       value: >-
         **Pseudonymous text only** (docs/AGENT_PROTOCOL.md §7). Examples
         come only from the fictional universe (docs/EXAMPLES.md). Cite
-        people by QID and give metrics as aggregates only. A decision that
-        sets architecture is recorded as an ADR: claim its number in the
-        registry (#19) first.
+        people by QID and give metrics as aggregates only. An accepted
+        decision updates the relevant current documentation, including
+        the rationale needed to understand it; no new ADR is required.
   - type: textarea
     id: question
     attributes:
@@ -34,10 +34,10 @@ body:
     attributes:
       label: Recommendation
   - type: input
-    id: adrs
+    id: current-docs
     attributes:
-      label: ADRs affected
-      description: E.g. "amends ADR-0020" or "new ADR (number claimed in #19)".
+      label: Current documentation affected
+      description: The requirement, contract or implementation sections that must reflect the decision.
   - type: input
     id: waiting
     attributes:

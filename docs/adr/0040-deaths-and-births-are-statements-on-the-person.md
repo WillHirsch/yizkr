@@ -1,5 +1,7 @@
 # ADR-0040: Deaths and births are sourced statements on the person, and a parent's kind is stated only where the source states it
 
+> **Temporary deprecated material — TODO [#733](https://github.com/WillHirsch/yizkr/issues/733):** this document still mixes current design details with development history and superseded prescriptions. Its historical material is not authoritative for new policy; use [REQUIREMENTS](../REQUIREMENTS.md), [CONTRACT](../CONTRACT.md) and the implemented code. Remove this note only after rewriting the document as current guidance with necessary rationale, or consolidating it elsewhere and deleting this file. The linked task tracks removal of all remaining historical and obsolete passages.
+
 Status: **accepted on the owner's merge** (owner decisions of 2026-10-24 on #658, and the owner's answers to its questions of the same day, recorded as #658's two newest comments). Like ADR-0024, ADR-0025 and ADR-0031, it records decisions the owner has made, so the owner's merge of the PR that adds it is its acceptance (AGENT_PROTOCOL §8, §9). Every owner question is answered (§9). The owner accepted Q1, Q3, Q4, Q7, Q8, Q10, Q11, Q12 and the lean-only list on their leans; amended Q2; reversed Q9; and decided Q5 and Q6.
 
 It reverses ADR-0020 §2's death event, ADR-0021's #323 death event, ADR-0035 §3.2's birth and death events and ADR-0036 §1's `ended_by` → death. It amends ADR-0023, ADR-0033, ADR-0039 §10.1(c) and MODELING.md (§1). Each passage it reverses or amends keeps its text, followed by a line dated 2026-10-24 that names this ADR.

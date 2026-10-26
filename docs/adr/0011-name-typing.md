@@ -1,5 +1,7 @@
 # ADR-0011: Typed, referenced names
 
+> **Temporary deprecated material — TODO [#732](https://github.com/WillHirsch/yizkr/issues/732):** this document still mixes current design details with development history and superseded prescriptions. Its historical material is not authoritative for new policy; use [REQUIREMENTS](../REQUIREMENTS.md), [CONTRACT](../CONTRACT.md) and the implemented code. Remove this note only after rewriting the document as current guidance with necessary rationale, or consolidating it elsewhere and deleting this file. The linked task tracks removal of all remaining historical and obsolete passages.
+
 Status: accepted (typed name properties + GEDCOM emission + reconciler evidence implemented; given/family components and promoting the primary name to a referenced statement deferred, see "Consequences" and #171)  
 Amended by [ADR-0035](0035-mention-records.md) (owner decision 2026-09-29, #385): the GEDCOM adapter no longer reads a bracketed part of a name as a nickname, since a bracket may hold a maiden name, a later name or a note; it becomes an alias with no type, counted, and only a quoted part stays a nickname (ADR-0035 §6).  
 Amended by #408 (2026-09-29): implemented as ADR-0035 §6 says; the label leaves the bracketed part out, and the language tag of a GEDCOM name is the export's HEAD.LANG, or `und`, no longer a fixed "en".  

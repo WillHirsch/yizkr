@@ -1,5 +1,7 @@
 # ADR-0035: Extraction hands over structure — mention records, participant roles and kinship classes
 
+> **Temporary deprecated material — TODO [#732](https://github.com/WillHirsch/yizkr/issues/732):** this document still mixes current design details with development history and superseded prescriptions. Its historical material is not authoritative for new policy; use [REQUIREMENTS](../REQUIREMENTS.md), [CONTRACT](../CONTRACT.md) and the implemented code. Remove this note only after rewriting the document as current guidance with necessary rationale, or consolidating it elsewhere and deleting this file. The linked task tracks removal of all remaining historical and obsolete passages.
+
 Status: **accepted** (owner decision 2026-09-29, #385). Like ADR-0031 and ADR-0036, the owner's merge of the PR that adds it records its acceptance; #385's implementation carries it out.
 
 Superseded in part by [ADR-0040](0040-deaths-and-births-are-statements-on-the-person.md) (2026-10-24, the owner's decisions and answers of 2026-10-24):
