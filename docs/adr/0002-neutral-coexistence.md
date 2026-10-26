@@ -18,6 +18,6 @@ Recording an assertion is distinct from accepting it as true, confirming an iden
 
 ## Implementation limits
 
-The current writer adds statements and references and respects curator ranks; it does not provide a general retained-state retraction or recovery workflow. That contract and implementation belong to [#708](https://github.com/WillHirsch/yizkr/issues/708), [#130](https://github.com/WillHirsch/yizkr/issues/130) and [#142](https://github.com/WillHirsch/yizkr/issues/142). This policy is not permission to bypass existing write guards or delete data.
+The current writer adds statements and references and respects curator ranks; it does not provide a general retained-state retraction or recovery workflow. The [ingestion contract](../INGESTION_CONTRACT.md) defines that boundary; implementation remains under [#130](https://github.com/WillHirsch/yizkr/issues/130) and [#142](https://github.com/WillHirsch/yizkr/issues/142). This policy is not permission to bypass existing write guards or delete data.
 
 The current disagreement report compares non-deprecated values attributed to different artifacts, counting a fragment as its parent artifact. It does not detect every genuine within-source contradiction. The report's scope is an implementation limit, not the definition of permissible historical evidence. [MODELING.md](../MODELING.md#contradictions) describes its comparison rules.

@@ -2,7 +2,7 @@
 
 These diagrams describe the implemented system. Each has at most ten nodes; the overview abstracts subsystems that the later diagrams and the [pipeline guide](../src/yizkr/pipeline/README.md) expand. Arrows show data flow or processing order unless labelled otherwise.
 
-The [current contract](CONTRACT.md) defines approved outcomes and lifecycle policy. These diagrams show current code, including its writer tied to one identity map and its disposable scratch path; shared stage APIs, graph-snapshot reconciliation and incremental retained ingestion remain tracked implementation work.
+The [current contract](CONTRACT.md) defines approved outcomes and lifecycle policy; the [ingestion contract](INGESTION_CONTRACT.md) defines target source, identity and stage boundaries. These diagrams show current code, including its writer tied to one identity map and its disposable scratch path; shared stage APIs, graph-snapshot reconciliation and incremental retained ingestion remain tracked implementation work.
 
 ## System overview
 
@@ -74,7 +74,7 @@ Implementation: [claim contract](../src/yizkr/claims.py), [writer](../src/yizkr/
 
 The [ingestion overview and preparation detail](../src/yizkr/pipeline/README.md#the-ingest-loop-one-command-two-gates-repeat) show how `yizkr ingest run` advances documents through transcription, extraction, identity review where proposals exist, claim review and writing. Saving a reviewed CSV and rerunning the same command advances the workflow. Registration occurs at write time; the current document stages before write do not access the wiki.
 
-The same guide expands [serial ingestion](../src/yizkr/pipeline/README.md#resolving-entities-across-artifacts) and corpus clustering. These views complement the unattended development path below. The current writer refuses a different identity map on an instance already written under another map; reviewed CSVs alone do not make it an incremental retained workflow. The contract permits explicit, recorded graph snapshots for reconciliation, with relevant write-precondition checks, but that path and durable assignment/review state are not implemented (#708, #85, #107, #130, #723).
+The same guide expands [serial ingestion](../src/yizkr/pipeline/README.md#resolving-entities-across-artifacts) and corpus clustering. These views complement the unattended development path below. The current writer refuses a different identity map on an instance already written under another map; reviewed CSVs alone do not make it an incremental retained workflow. The contract permits explicit, recorded graph snapshots for reconciliation, with relevant write-precondition checks, but that path and durable assignment/review state are not implemented (#85, #107, #130, #723).
 
 ## Whole-corpus scratch runs
 

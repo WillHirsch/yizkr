@@ -197,7 +197,7 @@ A real corpus run's outputs, normally under `var/` or the configured external ru
 
 ## Not yet
 
-- Retained incremental ingestion, durable review carry-forward and graph-snapshot reconciliation are tracked separately (#708, #85, #107, #130, #723). The current map/write guards remain in force. The first retained dataset still requires the owner's readiness decision under #159; unchanged extraction outputs are not a prerequisite.
+- Retained incremental ingestion, durable review carry-forward and graph-snapshot reconciliation follow the [ingestion contract](../INGESTION_CONTRACT.md) and remain implementation work (#85, #107, #130, #723). The current map/write guards remain in force. The first retained dataset still requires the owner's readiness decision under #159; unchanged extraction outputs are not a prerequisite.
 - The isolated fictional writer/query integration lane is tracked in #722. Until it exists, centralized checks may use an explicitly disposable target; never use a retained archive for destructive tests.
 
 - The estimate counts the per-document stages' calls, and clustering's adjudication calls as up to the count the newest identity map planned (this run's, or else the latest run's in the runs directory; not estimated before any run has one), since its pairs depend on the batches the run makes. It says which corpus stages make none (the write side but the place stage) and names the one it does not count: `places`, whose questions depend on the graph the write makes.

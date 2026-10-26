@@ -11,6 +11,7 @@ Start here:
 - `docs/TESTING.md` – the test layers, which test runs to use when, and the shared tools: the mutation harness, the query-engine sandbox and the live-stack lock
 - [Requirements](docs/REQUIREMENTS.md) – intended user outcomes
 - [Current contract](docs/CONTRACT.md) – evidence, human authority, privacy, retained operation, verification and documentation policy
+- [Ingestion and identity contracts](docs/INGESTION_CONTRACT.md) – source ownership, durable assignments, review, stage products and recovery boundaries for implementation
 - [Architecture and workflow diagrams](docs/ARCHITECTURE.md) – Mermaid overviews of the implemented services, provenance, ingestion, scratch runs, cache, face review and exploration, with subsystem details
 - [Scratch-run stages and data products](docs/SCRATCH_WORKFLOW.md) – detailed input/output contracts and process types for every stage
 - `docs/adr/` – focused design guidance and rationale; remaining historical material is marked with open removal tasks and is not an authority for new policy
