@@ -20,11 +20,11 @@ The implemented scratch write path and reset guards refuse an instance marked ke
 
 ### 2. Stage-level reuse
 
-Document views persist separately from the model-response cache. The implemented reuse rules are in [ADR-0032](0032-output-reuse-at-the-engine-boundary.md) and [LLM_CACHE.md](../LLM_CACHE.md): content hashes track view inputs, while response keys track the calls actually sent to the engine. A new scratch run makes fresh document views and can reuse responses from earlier runs. Current views do not automatically invalidate for every prompt, model or code change; use the documented refresh/new-run controls.
+Document views persist separately from the model-response cache. The implemented reuse rules are in [ADR-0032](0032-output-reuse-at-the-engine-boundary.md) and [LLM_CACHE.md](../LLM_CACHE.md): content hashes track view inputs, text documents also record declared generation dependencies, and response keys track calls actually sent to the engine. Execution and estimation share a pure freshness decision and view observation; reports consume the same fixed stage descriptors. A new scratch run makes fresh document views and can reuse responses from earlier runs. Media/container and GEDCOM adapters retain input-based reuse and current validity checks until migrated (#719, #720).
 
 Current document stages and corpus clustering read no live wiki. Their inputs are source material, recorded views and configuration. The contract also permits reconciliation/planning to consume an explicitly acquired, recorded graph snapshot or relevant projection, with relevant write preconditions checked before application. Source extraction must still derive source assertions from the source. The retained snapshot path and durable identity/review contracts are implementation work under #85, #107 and #130, following the [ingestion contract](../INGESTION_CONTRACT.md); they are not supplied by the present empty reconciliation step in `ingest run`.
 
-The scratch write key and instance watermark guard reset/register/write reuse. The key currently includes whole batches, their process stamps and a broad package digest; narrowing its dependencies is separate work. Interrupted or outside writes can invalidate the watermark and require rebuilding. Keep those protections until a verified replacement exists.
+The scratch write key and instance watermark guard reset/register/write reuse. The key includes whole batches and their process stamps, identity and registration inputs, exclusions, the writer version and declared executable/runtime resources. Python coverage remains conservative; model and pipeline YAML, Markdown prompts and published queries are included, while prose package documentation is excluded. Adopting this dependency policy changes an older recorded key once and can require rebuilding a disposable instance; later documentation-only edits leave the key stable. Interrupted or outside writes can still invalidate the watermark and require rebuilding. No reset or retained-instance protection is relaxed.
 
 ### 3. Run feedback
 
@@ -58,7 +58,7 @@ The code already reads both the `Project:Kept state` page and the host's `kept.j
 
 ### 7. Implementation and readiness boundaries
 
-The contract is agreed policy; future code is not assumed implemented. [Shared text-stage operations](../ARCHITECTURE.md#shared-text-stage-operations) are implemented; remaining adapter migrations, shared freshness planning, durable identity/review state and provider-session separation remain tracked work. Existing approval, exclusion, provenance and reset guards stay in force until replacements are implemented and verified. Approving policy does not authorize a keeper run or a migration of real data.
+The contract is agreed policy; future code is not assumed implemented. [Shared text-stage operations](../ARCHITECTURE.md#shared-text-stage-operations) and text-stage freshness planning are implemented; remaining adapter migrations, durable identity/review state and provider-session separation remain tracked work. Existing approval, exclusion, provenance and reset guards stay in force until replacements are implemented and verified. Approving policy does not authorize a keeper run or a migration of real data.
 
 ### 8. Protocol consequences
 

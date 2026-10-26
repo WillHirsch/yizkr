@@ -68,6 +68,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
+from yizkr.pipeline.stage_planning import ROLE_STAGES
+
 logger = logging.getLogger(__name__)
 
 # the kinds of call a client makes: one-shot, the opening turn of a
@@ -2988,12 +2990,6 @@ CALL_STREAM_FIELDS = (
 # what a call event carries of the report of an engine with no streams,
 # each field kept only as the plain token its pattern takes whole
 ENGINE_REPORT = {"model": _MODEL_ID, "stop_reason": _STOP_REASON}
-# the stage each role's calls are made in (yizkr.pipeline.orchestrate)
-ROLE_STAGES = {
-    "transcribe": "transcription",
-    "extract": "extraction",
-    "critique": "critique",
-}
 
 
 class ObservedClient:

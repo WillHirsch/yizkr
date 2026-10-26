@@ -124,7 +124,6 @@ from yizkr.pipeline.critique import run_critique
 from yizkr.pipeline.orchestrate import (
     BATCH_VOLATILE,
     CHECKED_ROUTES,
-    DOCUMENT_STAGES,
     EXCERPT,
     PAGED,
     TRANSCRIPTION_VOLATILE,
@@ -142,7 +141,6 @@ from yizkr.pipeline.rundir import (
 from yizkr.pipeline.scratch import (
     CORPUS_DIR,
     DEFAULT_RUNS,
-    PHASES,
     PreflightFailed,
     ScratchDriver,
     ScratchRefused,
@@ -151,6 +149,7 @@ from yizkr.pipeline.scratch import (
     runs_in,
     runs_refusal,
 )
+from yizkr.pipeline.stage_planning import DOCUMENT_STAGES, PHASES, STAGE_ROLES
 from yizkr.pipeline.stages import content_hash
 from yizkr.pipeline.transcribe import ImageReading, Transcription
 from yizkr.pipeline.transcription_record import BLANK, NOT_A_DOCUMENT_PAGE
@@ -198,7 +197,11 @@ _READ_FILES = tuple(sorted(VISION_SUFFIXES))
 _FIRST, _CHUNK_CALLS = "first turns", "chunks"
 # the role whose engine an excerpt's stage calls: its transcription is the
 # reading its container made of it, which asks no model
-_EXCERPT_ROLES = {"extraction": "extract", "critique": "critique"}
+_EXCERPT_ROLES = {
+    stage: STAGE_ROLES[stage]
+    for stage in DOCUMENT_STAGES[EXCERPT]
+    if stage != "transcription"
+}
 
 
 class _Unanswered(BaseException):
@@ -728,22 +731,13 @@ class Estimator(ScratchDriver):
         load: Callable[[str], Any],
         recheck: Callable[[Any], str | None] | None = None,
     ) -> Any:
-        """The view, loaded, when the driver would reuse it
-        (_reused_view), without a word of it said: current, not refreshed
-        in this invocation unless a refresh made it in the run already,
-        and passing `recheck`. None when the view is to be made."""
-        role, stage = doc.views[view]
-        if role in self.refresh and (doc.sha1, stage) not in self._refreshed:
-            return None
-        if not doc.derivations.current(view):
-            return None
-        try:
-            loaded = load(view.read_text())
-        except (OSError, ValueError):
-            return None
-        if recheck is not None and recheck(loaded) is not None:
-            return None
-        return loaded
+        """Inspect reuse through the driver's read-only view planner.
+
+        Publication, events and approval bindings belong to execution;
+        observation applies the same dependencies, refresh policy and
+        validation without changing any persisted state.
+        """
+        return self._inspect_view(doc, view, load, recheck).require_value()
 
     def _count(self, doc: DocumentRun) -> dict[str, _Made]:
         """What each stage the invocation plans for the document comes to,
@@ -770,6 +764,11 @@ class Estimator(ScratchDriver):
         }
         before = _Made()
         for stage in planned:
+            if doc.kind == "text":
+                # Fresh views and changed upstream products cannot be
+                # reused, but still need inspectable generation inputs
+                # before any model client or estimated call is planned.
+                self._require_processing_dependencies(doc, stage)
             self._tally = _Tally(self._asked)
             if stage == "critique":
                 # the critique reads the batch and the transcription

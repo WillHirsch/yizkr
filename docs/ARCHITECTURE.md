@@ -102,7 +102,7 @@ Run ingestion explicitly selects entity-first chunked extraction because its ide
 
 The callers retain exclusion checks, scheduling, publication, view reuse and review invalidation. Reviewed ingestion schedules critique after deriving a complete batch; scratch schedules it as its own stage. Scratch's refresh decision consults the successful-refresh record without changing the invocation's settings. A refresh is recorded only after its output and document state are saved.
 
-Result dependency metadata describes the computation; it does not replace `derivations.json` as the authority for persisted-view reuse. This slice does not implement a new atomic multi-file generation store or shared freshness planner. Media/container reading and GEDCOM still use their format-specific adapters (#719, #720); unified planning, worker cancellation and provider-session separation remain #721, #724 and #726. Existing model prompts and response-cache keys are unchanged.
+Result dependency metadata describes the computation; `derivations.json` records persisted-view inputs and, for text documents, generation dependencies. A fixed stage registry and shared freshness planner support execution and estimation, as described below. Media/container and GEDCOM adapters retain their existing reuse rules pending #719 and #720. This does not implement an atomic multi-file generation store or a general workflow engine. Worker cancellation and provider-session separation remain #724 and #726; model prompts and response-cache keys are unchanged.
 
 ## Whole-corpus scratch runs
 
@@ -148,13 +148,31 @@ flowchart TD
     compute -->|persist| view
 ```
 
-In the current implementation, view reuse depends on its inputs' content hashes. A prompt, model or code change alone does not invalidate an existing view; reused transcriptions are also checked against the current transcription validator. A new scratch run rebuilds views, so changed parsing and validation run even when every model response comes from the cache.
+For text documents, reuse compares both input content and recorded generation dependencies. The fixed descriptors in [stage_planning.py](../src/yizkr/pipeline/stage_planning.py) declare document stages, roles, artifacts and semantic code/resources; execution, estimation and reports consume that registry. Execution and estimation share view observation and the side-effect-free freshness decision (`reuse`, `recompute` or `blocked`), without creating a client during that decision. Legacy media/container and GEDCOM adapters still compare their existing input hashes and validity checks; a prompt, model or code change alone does not stale their views. A new scratch run makes fresh document views for every kind.
+
+The text fingerprint records source identity, relevant declared engine/model/effort/epoch, language/route and chunk settings, exact stage code and prompt/resource hashes, and installed Pydantic, PyYAML and py3langid versions. Whole-file code hashes conservatively recompute a stage even for an edit that proves neutral. This is distinct from the actual engine configuration, installed provider CLI version and response-cache key, which are checked when a call is prepared. An unspecified model denotes the declared provider default: planning cannot detect a remote default or alias changing. Use a full model identifier for reproducible configuration.
+
+```mermaid
+flowchart TD
+    inputs["Inputs + declared generation settings"] --> plan{"1. Generation freshness"}
+    saved["Saved derivation record"] --> plan
+    plan -->|reuse| product["Product used downstream"]
+    plan -->|recompute| compute["Run stage<br/>reuse compatible responses"]
+    compute --> meaning{"2. Canonical output comparison"}
+    meaning -->|same: retain existing batch| product
+    meaning -->|changed: invalidate dependents| product
+    product --> basis{"3. Review basis comparison"}
+    basis -->|unchanged| keep["Keep existing approval"]
+    basis -->|changed| review["Requeue affected review"]
+```
+
+These comparisons use the implemented canonical hashes and CSV review bindings; they are not a general semantic-equivalence or durable approval engine. Recomputing the same canonical batch preserves its existing file and original producer provenance, and does not by itself revoke approvals. Changed batch content invalidates its dependent views and sets aside its reviewed CSVs; a changed re-exported review sheet requeues that sheet's decision. Missing processing metadata makes an older text view recompute once, after which its new dependency record supports reuse. Publication remains caller-owned and is not an atomic multi-file generation commit.
 
 Call keys include prompt and file content hashes, engine/model/effort and configuration, call kind, conversation ancestry where applicable, attempt and role epoch. Input-file paths are replaced by content hashes in the key; sources are identified by media SHA-1 rather than artifact QID, and mtimes do not key calls. This allows reuse across fresh document directories and wiki resets while the engine configuration stays the same.
 
 Persisted views and review state are separate from the response cache; cache removal alone does not invalidate them. Conversation forks bind to the opening answer whose context they assume. The current cache also owns provider session restoration and holds a process-wide lock; separating those responsibilities is future work (#726), not a feature shown in this diagram.
 
-`--refresh ROLE` rebuilds that role's views and bypasses cached answers once per key in the run. `--epoch ROLE=N` changes keys for calls that are made; combine it with refresh when existing views must be rebuilt. The [cache guide](LLM_CACHE.md) covers rejection, retries and resume semantics; implementation lives in [orchestration](../src/yizkr/pipeline/orchestrate.py) and [the LLM cache](../src/yizkr/pipeline/llmcache.py).
+`--refresh ROLE` rebuilds that role's views and bypasses cached answers once per key in the run. Changing `--epoch ROLE=N` also stales that role's text extraction or critique view; legacy adapters still need refresh or a fresh directory when their current views must be rebuilt. The [cache guide](LLM_CACHE.md) covers rejection, retries and resume semantics; implementation lives in [orchestration](../src/yizkr/pipeline/orchestrate.py) and [the LLM cache](../src/yizkr/pipeline/llmcache.py).
 
 ## Human-confirmed face links
 

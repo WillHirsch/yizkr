@@ -160,10 +160,8 @@ from yizkr.pipeline.monitor import (
     reason_label,
 )
 from yizkr.pipeline.orchestrate import (
-    DOCUMENT_STAGES,
     EXCERPT,
     EXCERPTS_DIR,
-    MODEL_ROLES,
 )
 from yizkr.pipeline.rundir import (
     ALERTS,
@@ -191,6 +189,7 @@ from yizkr.pipeline.rundir import (
     invocation_records,
 )
 from yizkr.pipeline.scratch import BARRIER, CORPUS_DIR, CORPUS_STAGES
+from yizkr.pipeline.stage_planning import DOCUMENT_STAGES, MODEL_ROLES, VIEWS
 from yizkr.pipeline.stages import read_jsonl, staging_path
 from yizkr.pipeline.writer import REFUSAL_REASONS
 from yizkr.staticsite import RELEASE_CAUSES, UNSTATED_KIND
@@ -265,14 +264,6 @@ PLACE_COUNTS = {
 # how many times the report reads run.json and the events while an
 # invocation starts or ends as it reads them, as run_state reads them
 _READS = 5
-
-# the view each stage makes, in a document's directory
-VIEWS = {
-    "transcription": "transcription.json",
-    "extraction": "batch.json",
-    "gedcom": "batch.json",
-    "critique": "critique.json",
-}
 
 # -- the aggregates' vocabulary -----------------------------------------------
 #
