@@ -30,7 +30,7 @@ Parked work and owner decisions are not agent implementation tasks. Batch genuin
 
 Corpus inputs, corpus-run state and caches, private archives, backups, exclusion lists, detailed reports and real-data graphs remain local-only. Only sessions authorized for that data may read them; they are not copied into repository changes, GitHub text or cloud sessions. Only aggregate report and diff summaries that satisfy the disclosure rules may leave the private area.
 
-Repository fictional fixtures are different: an appropriately configured cloud session may use a separately isolated fictional Wikibase/query instance under the execution controls. That permission does not extend to the archive or corpus-run deployment. The repeatable integration lane is tracked in #722; its approval does not mean it is already implemented.
+Repository fictional fixtures are different: an appropriately configured cloud session may use a separately isolated fictional Wikibase/query instance under the execution controls. That permission does not extend to the archive or corpus-run deployment. The [required fictional integration lane](../TESTING.md#live-integration-and-the-transition) runs in CI and through `make test-integration`, with independent settings, state, locks and volumes and no archive mounts or credentials.
 
 Never-ingest exclusions remain a fail-closed boundary. Sending source content to a model is subject to the owner's processing authorization, independently of where orchestration runs.
 

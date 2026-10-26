@@ -62,7 +62,7 @@ The contract is agreed policy; future code is not assumed implemented. Shared st
 
 ### 8. Protocol consequences
 
-Real writer/query checks use an independently configured disposable instance with repository fictional fixtures, separate from archive and corpus-run volumes, settings, instance records and locks. #722 implements that repeatable lane. Until it is available, centralized checks may provide evidence on an explicitly disposable target; never target retained data. A persistence-boundary change waits if its necessary evidence is unavailable, but unrelated code work need not wait.
+Real writer/query checks use the [required fictional integration lane](../TESTING.md#live-integration-and-the-transition) in CI or through `make test-integration`. Its disposable instance uses repository fictional fixtures and stays separate from archive and corpus-run volumes, settings, instance records and locks. Additional centralized checks may provide evidence on an explicitly disposable target; never target retained data. A persistence-boundary change waits if its necessary evidence is unavailable, but unrelated code work need not wait.
 
 An appropriately configured cloud session may use the fictional test environment under the execution controls. Corpus runs, real-data graphs and detailed corpus evidence remain local-only under [AGENT_PROTOCOL.md](../AGENT_PROTOCOL.md). Continue coordinating access to the current shared stack and model subscription.
 
