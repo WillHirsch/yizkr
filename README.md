@@ -21,7 +21,7 @@ Start here:
 - `deploy/` – Wikibase Suite deployment (Docker Compose + runbook)
 - `docs/runbooks/stack-recovery.md` – recovering a stopped or crashed stack: volume archives first, then the database, the full stack, the derived indexes and a smoke test, and a backup only where the stage or a decision asks for one
 - `src/yizkr/` – the tooling package: model manifest + bootstrap (`model/`), the claim JSON contract (`claims.py`), the ingestion pipeline (`pipeline/`), and the SPARQL query library (`queries/`)
-- `tests/` – offline unit tests plus live integration tests (`pytest -m live`, needs the running stack)
+- `tests/` – offline unit tests, a required disposable fictional writer/query lane, and optional live integration tests against an explicitly configured disposable stack
 
 ## Working on the tooling
 
@@ -32,6 +32,7 @@ uv sync --dev            # or: make install
 make hooks               # once per clone: Ruff + Prettier on commit; protect main
 uv run yizkr --help      # bootstrap / smoke-test / publish-queries / ingest
 make test                # offline tests
+make test-integration    # required fictional writer/query lane; Docker needed
 make up bootstrap smoke  # start the stack, apply the model, verify
 make test-live           # explicitly disposable target only; see docs/TESTING.md
 ```
