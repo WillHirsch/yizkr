@@ -11,9 +11,9 @@ from __future__ import annotations
 import time
 
 import pytest
+
 from tests.fixtures.identity import mapped
 from tests.fixtures.semantic_acceptance import birth_batch, source_case
-
 from yizkr.claims import QidRef
 from yizkr.core import sparql
 from yizkr.model.bootstrap import bootstrap_instance
