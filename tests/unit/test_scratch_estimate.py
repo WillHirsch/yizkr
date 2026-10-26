@@ -54,7 +54,7 @@ from tests.unit.test_scratch import (  # noqa: F401
 )
 from yizkr import cli
 from yizkr.core.corpus import ExclusionConfigError, ExclusionList
-from yizkr.pipeline import estimate, llm, scratch
+from yizkr.pipeline import estimate, llm, scratch, stage_planning
 from yizkr.pipeline.chunking import parse_chunk_response, parse_chunk_unread
 from yizkr.pipeline.estimate import FIRST_TURNS, Estimator, StageCalls
 from yizkr.pipeline.llmcache import CacheRefused
@@ -379,6 +379,59 @@ def tree(*roots: Path) -> dict:
 
 
 class TestCounts:
+    def test_processing_change_recomputes_with_cached_responses(
+        self, tmp_path, engine, monkeypatch
+    ):
+        """Preview and execution share generation freshness while equal
+        output preserves the critique. A changed processing dependency
+        needs no new model answer when the actual requests are unchanged.
+        """
+        package = Path(stage_planning.__file__).parents[1]
+        copied = tmp_path / "processing-resources"
+        for name in {
+            name
+            for names in stage_planning.PROCESSING_RESOURCES.values()
+            for name in names
+        }:
+            target = copied / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes((package / name).read_bytes())
+        monkeypatch.setattr(stage_planning, "files", lambda _package: copied)
+
+        corpus = one_letter(tmp_path)
+        run(tmp_path, corpus, engine)
+        (run_dir,) = scratch.runs_in(runs_dir(tmp_path))
+        before_events = len(RunDir(run_dir).events())
+        # Change only extraction's declared processing bytes. Runtime and
+        # model answers are the same, so this isolates generation identity
+        # from semantic output and from the response cache's keys.
+        resource = copied / "pipeline/preparation.py"
+        resource.write_bytes(resource.read_bytes() + b"\n")
+        before = tree(runs_dir(tmp_path), tmp_path / "cache")
+        calls = len(engine.calls)
+
+        counted = estimate_of(tmp_path, corpus, engine, resume=LATEST)
+        assert tree(runs_dir(tmp_path), tmp_path / "cache") == before
+        assert len(engine.calls) == calls
+        assert per_stage(counted, "made") == {"extraction": 1}
+        assert per_stage(counted, "reused") == {
+            "transcription": 1,
+            "critique": 1,
+        }
+        assert per_stage(counted, "hits") == {"extraction": 2}
+        assert run(tmp_path, corpus, engine, resume=LATEST) == Counter()
+        events = RunDir(run_dir).events()[before_events:]
+        assert [
+            event["stage"]
+            for event in events
+            if event["event"] == "started" and event.get("subject")
+        ] == ["extraction"]
+        assert {
+            event["stage"]
+            for event in events
+            if event["event"] == "reused" and event.get("subject")
+        } == {"transcription", "critique"}
+
     def test_a_first_run_is_counted_as_it_runs(self, tmp_path, engine):
         """An empty cache: every call reaches the engine. The images'
         readings and the letters' entity manifests are known calls; what
@@ -1516,6 +1569,66 @@ class TestCacheAsIs:
 
 
 class TestNothingTouched:
+    @pytest.mark.parametrize("resume", [False, True], ids=["fresh", "changed"])
+    def test_missing_processing_blocks_after_an_upstream_read(
+        self, tmp_path, engine, monkeypatch, resume
+    ):
+        corpus = one_letter(tmp_path)
+        if resume:
+            run(tmp_path, corpus, engine)
+            (run_dir,) = scratch.runs_in(runs_dir(tmp_path))
+            (
+                run_dir / "a-postcard-1938" / "transcription.corrected.txt"
+            ).write_text(
+                next(s.text for s in u.SOURCES if s.key == "directory-1912")
+            )
+        previous = stage_planning.processing_dependencies
+
+        def unreadable_extraction(stage, **kwargs):
+            if stage == "extraction":
+                raise OSError("fictional extraction resource is unreadable")
+            return previous(stage, **kwargs)
+
+        monkeypatch.setattr(
+            stage_planning, "processing_dependencies", unreadable_extraction
+        )
+        before = tree(tmp_path)
+        calls, closed = len(engine.calls), engine.closed
+        options = {"resume": LATEST} if resume else {}
+
+        with pytest.raises(
+            RuntimeError, match="cannot inspect extraction processing"
+        ):
+            estimate_of(tmp_path, corpus, engine, **options)
+
+        assert tree(tmp_path) == before
+        assert len(engine.calls) == calls
+        assert engine.closed == closed
+
+    def test_unreadable_processing_dependencies_refuse_the_preview(
+        self, tmp_path, engine, monkeypatch
+    ):
+        corpus = one_letter(tmp_path)
+        run(tmp_path, corpus, engine)
+        before = tree(runs_dir(tmp_path), tmp_path / "cache")
+        calls = len(engine.calls)
+        closed = engine.closed
+
+        def unreadable(*args, **kwargs):
+            raise OSError("fictional processing resource is unreadable")
+
+        monkeypatch.setattr(
+            stage_planning, "processing_dependencies", unreadable
+        )
+        with pytest.raises(
+            RuntimeError, match="cannot inspect transcription processing"
+        ):
+            estimate_of(tmp_path, corpus, engine, resume=LATEST)
+
+        assert tree(runs_dir(tmp_path), tmp_path / "cache") == before
+        assert len(engine.calls) == calls
+        assert engine.closed == closed
+
     def test_it_writes_nothing_and_asks_nothing(
         self, tmp_path, engine, request
     ):

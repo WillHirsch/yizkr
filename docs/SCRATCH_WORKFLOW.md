@@ -2,7 +2,7 @@
 
 This guide expands the [whole-corpus overview](ARCHITECTURE.md#whole-corpus-scratch-runs) into the inputs, processing and outputs of each implemented stage. Use the [scratch-run runbook](runbooks/scratch-run.md) for commands and operational procedures.
 
-This is the implemented disposable rebuild mode. The [current contract](CONTRACT.md) also requires retained ingestion and permits explicit graph-snapshot inputs for reconciliation; shared text-stage operations are implemented, while durable identity/review state, remaining adapter migrations and shared planning remain implementation work. Current scratch writes refuse retained instances and never confer human approval.
+This is the implemented disposable rebuild mode. The [current contract](CONTRACT.md) also requires retained ingestion and permits explicit graph-snapshot inputs for reconciliation; shared text-stage operations and freshness planning are implemented, while durable identity/review state and remaining adapter migrations (#719, #720) remain implementation work. Current scratch writes refuse retained instances and never confer human approval.
 
 In the paths below, `R` is a run directory such as `var/scratch/<run-id>`, and `D` is one document's directory within it. Ordinary documents use `R/<document-directory>/`; independently read embedded images use `R/excerpts/<media-sha1>/`. These are path templates, not example corpus contents. For real corpus runs, all these products are local-only runtime data.
 
@@ -10,7 +10,7 @@ Rectangles represent processing or explicitly labelled transient data; cylinders
 
 ## Stage contracts
 
-The contracts below describe current data products and processing. [Shared text-stage operations](ARCHITECTURE.md#shared-text-stage-operations) implement text reading, extraction and critique; format-specific readers, GEDCOM and corpus stages retain their own adapters. Publication and reuse remain caller-owned. Stage names in the logs are `transcription`, `extraction`, `critique`, `gedcom`, `clustering`, `reset`, `register`, `write`, `places` and `site`. `transcribe` and `extract` are the model-role names used by configuration and flags such as `--refresh`, rather than the logged stage names.
+The contracts below describe current data products and processing. [Shared text-stage operations](ARCHITECTURE.md#shared-text-stage-operations) implement text reading, extraction and critique; format-specific readers, GEDCOM and corpus stages retain their own adapters. Publication remains caller-owned. A fixed registry declares stages, roles and artifacts for execution, estimation and reports; execution and estimation share read-only view observation and a pure freshness decision. Text documents compare declared generation dependencies as well as input hashes. Older text records missing that metadata recompute once; legacy media/container and GEDCOM adapters retain their existing reuse rules. See [view and response reuse](LLM_CACHE.md#views). Stage names in the logs are `transcription`, `extraction`, `critique`, `gedcom`, `clustering`, `reset`, `register`, `write`, `places` and `site`. `transcribe` and `extract` are the model-role names used by configuration and flags such as `--refresh`, rather than the logged stage names.
 
 ### Per-document stages
 
@@ -229,7 +229,7 @@ Implementation: [deterministic clustering](../src/yizkr/pipeline/clustering.py),
 
 ## Reset and registration: crossing into the live instance
 
-These stages introduce instance I/O. The write key describes what the run would put on the instance: batches with their run stamps, identity map, registration metadata, exclusions, code and model manifest. The place key extends it with the place-stage prompt, version, batch size and model configuration. A full run's final instance-contents key is the place key, because the instance then includes the place stage's additional statements.
+These stages introduce instance I/O. The write key describes what the run would put on the instance: whole batches with their original run provenance, identity map, registration metadata, exclusions, writer version, executable/runtime dependencies and model manifest. Declared resource patterns include Python, model/pipeline YAML, Markdown prompts and published queries; package prose documentation is excluded. The changed dependency policy differs from an older recorded write key once, so its first use may rebuild the disposable instance. Later documentation-only edits preserve the key. The place key extends it with the place-stage prompt, version, batch size and model configuration. A full run's final instance-contents key is the place key, because the instance then includes the place stage's additional statements.
 
 ```mermaid
 flowchart TD
@@ -353,7 +353,7 @@ The driver observes control requests between stages; the monitor does not execut
 | `R/alerts.jsonl` | Anomalies and registration flags |
 | `R/control.jsonl` | Pause/resume/abort requests and invocation markers |
 | `D/state.json` | Source identity, document status, errors and stage-specific details |
-| `D/derivations.json` | Input/content hashes for persisted-view reuse |
+| `D/derivations.json` | Input/content hashes and text-stage processing dependencies for persisted-view reuse; review bindings remain separate |
 
 Report reads run files and the model manifest, without the corpus, wiki, engine or cache. Diff reads two runs and optionally cache-key components for attribution, never cached response contents or the live graph. The default baseline is the latest earlier completed run on main. Reports include the written claims' outcomes, clustering decisions, place-stage counts and the site record's disagreement/privacy counts. They do not reconstruct missing graph results from source files: absent stage evidence is reported as unavailable. Detailed HTML/JSON stays local; `report.md` and `diff.md` contain the aggregate summaries used as development evidence.
 

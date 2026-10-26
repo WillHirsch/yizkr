@@ -24,9 +24,10 @@ directory: the transcription (`transcription.json`), the batch
 critique (`critique.json`). A view is reused while the inputs recorded
 for it are unchanged, and made again when they change, or when
 `--refresh` names the role that makes it (MODEL_ROLES), which makes it
-again in place. A changed prompt, model or piece of code does not by
-itself make a view stale; a scratch run starts from fresh state
-directories instead. The one check a view must still pass is the
+again in place. Text documents also record their declared generation
+settings and semantic code/resource dependencies; execution and estimation
+use the same side-effect-free freshness plan. Other adapters retain
+input-only compatibility until they migrate. Reused readings still pass the
 transcription check: a transcription made by a route whose transcriber
 checks its output (CHECKED_ROUTES) is checked again whenever it is
 reused, and one that now fails is moved aside and made again in the
@@ -170,6 +171,7 @@ from yizkr.core.corpus import (
     is_excluded,
 )
 from yizkr.core.wiki import WikiClient
+from yizkr.pipeline import stage_planning
 from yizkr.pipeline.rundir import (
     ALERTS,
     CONTROL,
@@ -188,6 +190,7 @@ from yizkr.pipeline.rundir import (
     exclusions_record,
     model_alias,
 )
+from yizkr.pipeline.stage_planning import DOCUMENT_STAGES, MODEL_ROLES, VIEWS
 from yizkr.pipeline.stages import (
     atomic_write_text,
     content_hash,
@@ -246,19 +249,6 @@ TRANSCRIBERS = {
     EXCERPT: "_transcribe_excerpt",
 }
 
-# the stages each kind of document runs before the gates, in order
-_EXTRACTED = ("transcription", "extraction", "critique")
-DOCUMENT_STAGES = {
-    "gedcom": ("gedcom",),
-    "presentation": _EXTRACTED,
-    PDF: _EXTRACTED,
-    "text": _EXTRACTED,
-    "media": _EXTRACTED,
-    EXCERPT: _EXTRACTED,
-}
-# the roles the engine is called in: each has its own effort and model,
-# and its own epoch and refresh setting in the LLM cache
-MODEL_ROLES = ("transcribe", "extract", "critique")
 # the model a role runs when the run names none of its own; the engines
 # read it themselves (yizkr.pipeline.llm)
 MODEL_VARIABLE = "YIZKR_LLM_MODEL"
@@ -365,9 +355,9 @@ class DocumentState:
 class Derivations:
     """What each derived file of a document was made from, by content hash.
 
-    The make-style dependency record behind safe re-runs, kept in
-    `derivations.json`: a derived file, a view included, is current while
-    the inputs it was made from still hash the same; a reviewed CSV
+    The dependency record behind safe re-runs, kept in `derivations.json`:
+    `current` compares file inputs; the shared view planner additionally
+    compares migrated stages' `processing` metadata. A reviewed CSV
     consents while neither it nor the CSV it reviews has changed since it
     was first seen; and the canonical content hashes of the transcription
     and batch views say whether a view made again is really new.
@@ -396,8 +386,10 @@ class Derivations:
             data = json.loads(self.path.read_text())
         except (OSError, ValueError, RecursionError):
             data = {}
-        for section in ("derived", "reviews", "content"):
+        for section in ("derived", "reviews", "content", "processing"):
             data.setdefault(section, {})
+        if not isinstance(data["processing"], dict):
+            data["processing"] = {}
         return data
 
     def _save(self, data: dict) -> None:
@@ -431,16 +423,26 @@ class Derivations:
         recorded = self._load()["derived"].get(output.name)
         return recorded == self._inputs(output)
 
-    def record(self, output: Path) -> None:
+    def record(
+        self,
+        output: Path,
+        *,
+        inputs: Mapping[str, str | None] | None = None,
+        processing: Mapping[str, Any] | None = None,
+    ) -> None:
         data = self._load()
-        data["derived"][output.name] = self._inputs(output)
+        data["derived"][output.name] = (
+            self._inputs(output) if inputs is None else dict(inputs)
+        )
+        if processing is not None:
+            data["processing"][output.name] = dict(processing)
         self._save(data)
 
     def forget(self, *outputs: Path) -> None:
         """Forget what `outputs` were made from, and their content."""
         data = self._load()
         for output in outputs:
-            for section in ("derived", "reviews", "content"):
+            for section in ("derived", "reviews", "content", "processing"):
                 data[section].pop(output.name, None)
         self._save(data)
 
@@ -472,6 +474,28 @@ class Derivations:
         data = self._load()
         data["content"][name] = digest
         self._save(data)
+
+
+@dataclass(frozen=True)
+class ViewInspection:
+    """A read-only freshness decision and an admissible saved value."""
+
+    plan: stage_planning.FreshnessPlan
+    value: Any = None
+    invalid_reason: str | None = None
+    blocked_reason: str | None = None
+    processing: Mapping[str, Any] | None = None
+    inputs: Mapping[str, str | None] | None = None
+
+    def require_value(self) -> Any:
+        """A saved value or a recompute; an uninspectable plan must stop."""
+        if self.plan.action == "blocked":
+            raise RuntimeError(self.blocked_reason or "stage planning blocked")
+        return self.value
+
+
+class ProcessingUnavailable(RuntimeError):
+    """A stage cannot establish its required generation dependencies."""
 
 
 def slugify(name: str) -> str:
@@ -632,14 +656,14 @@ class DocumentRun:
         self.source = source
         self.dir = state_dir / (dirname or slugify(source.stem))
         self.state_path = self.dir / "state.json"
-        self.transcription = self.dir / "transcription.json"
+        self.transcription = self.dir / VIEWS["transcription"]
         # a curator's corrected transcription (plain text); when present
         # it is the document's transcription
         self.correction = self.dir / "transcription.corrected.txt"
         # a curator's pointer to the document's statement about how its
         # text was prepared, by its words (yizkr.pipeline.preparation)
         self.pointer = self.dir / "preparation.pointer.txt"
-        self.batch = self.dir / "batch.json"
+        self.batch = self.dir / VIEWS["extraction"]
         # the extractor's advisory side outputs: coverage, rejects, gaps
         self.extraction = self.dir / "extraction"
         self.equivalences = self.dir / "equivalences.csv"
@@ -651,28 +675,25 @@ class DocumentRun:
         self.write_result = self.dir / "write.json"
         # open-schema harness (ADR-0013)
         self.gaps = self.dir / "gaps.csv"
-        self.critique = self.dir / "critique.json"
-        gedcom = self.kind == "gedcom"
+        self.critique = self.dir / VIEWS["critique"]
         # each view the stages before the gates make -> (the model role
         # that makes it, the stage that makes it)
+        descriptors = [
+            stage_planning.STAGES[name] for name in DOCUMENT_STAGES[self.kind]
+        ]
         self.views = {
-            self.transcription: ("transcribe", "transcription"),
-            self.batch: ("extract", "gedcom" if gedcom else "extraction"),
-            self.critique: ("critique", "critique"),
+            self.dir / stage.artifact: (stage.role, stage.name)
+            for stage in descriptors
         }
         self.derivations = Derivations(
             self.dir / "derivations.json",
             made_from={
-                self.transcription: (self.correction,),
-                # the GEDCOM adapter reads the source alone, whose bytes
-                # the directory is kept for (a changed source sets it
-                # aside)
-                self.batch: ()
-                if gedcom
-                else (self.transcription, self.pointer),
-                # the critic reads each citation where it stands in the
-                # transcription (ADR-0003)
-                self.critique: (self.batch, self.transcription),
+                **{
+                    self.dir / stage.artifact: tuple(
+                        self.dir / name for name in stage.input_artifacts
+                    )
+                    for stage in descriptors
+                },
                 self.equivalences: (self.batch,),
                 self.resolved: (self.batch, self.equivalences_reviewed),
                 self.review: (self.resolved, self.critique),
@@ -923,6 +944,10 @@ class Orchestrator:
         # run: each view is decided once per run, a refreshed one made
         # again once
         self._views: dict[tuple[str, str], Any] = {}
+        # Dependencies admitted before computation, recorded only after the
+        # product is published. Later edits cannot relabel an old computation
+        # as having used the newly changed resources or configuration.
+        self._view_dependencies: dict[tuple[Path, str], ViewInspection] = {}
         # image SHA-1 -> the excerpt found for it in this run
         # (_excerpts_of): one document however many containers place it
         self._excerpts: dict[str, ExcerptRun] = {}
@@ -1251,6 +1276,128 @@ class Orchestrator:
         """Whether invocation policy requires this view to be recomputed."""
         return role in self.refresh
 
+    def _processing_dependencies(
+        self, doc: DocumentRun, stage: str
+    ) -> dict[str, Any] | None:
+        """Declared generation dependencies for the migrated text path.
+
+        This does not start an engine or calculate its response-cache key.
+        Provider installation/session checks remain at client dispatch.
+        Other input adapters retain their existing file-based reuse rules.
+        """
+        if doc.kind != "text":
+            return None
+        if stage == "transcription":
+            configuration = {
+                "route": self._route(doc),
+                "language": self.language,
+                "fallback_language": self.fallback_language,
+            }
+        else:
+            role = stage_planning.STAGES[stage].role
+            effort, _ = self._engine_settings(role)
+            model, _ = self._configured_model(role)
+            configuration = {
+                "engine": self.llm,
+                "model": model,
+                "effort": effort if self.llm != "anthropic" else None,
+                "epoch": self.epochs.get(role, 0),
+            }
+            if stage == "extraction":
+                from yizkr.pipeline.text_stages import ExtractionRequest
+
+                configuration.update(
+                    strategy="chunked",
+                    budget=ExtractionRequest.budget,
+                    retries=ExtractionRequest.retries,
+                    concurrency=self.chunk_concurrency,
+                    read_preparation=True,
+                )
+        return stage_planning.processing_dependencies(
+            stage, configuration=configuration, source_sha1=doc.sha1
+        )
+
+    def _require_processing_dependencies(
+        self, doc: DocumentRun, stage: str
+    ) -> dict[str, Any] | None:
+        """Observe required processing inputs before a stage may execute."""
+        try:
+            return self._processing_dependencies(doc, stage)
+        except OSError as exc:
+            raise ProcessingUnavailable(
+                f"cannot inspect {stage} processing dependencies: {exc}"
+            ) from exc
+
+    def _inspect_view(
+        self,
+        doc: DocumentRun,
+        view: Path,
+        load: Callable[[str], Any],
+        recheck: Callable[[Any], str | None] | None = None,
+    ) -> ViewInspection:
+        """Observe and plan reuse without writing or creating a client.
+
+        Execution and estimation share this observation and pure decision.
+        Review binding is deliberately outside this path: observing a view
+        cannot authorize it. Downstream stages compare semantic products
+        after a producer runs, not the producer's generation fingerprint.
+        """
+        role, stage = doc.views[view]
+        recorded = doc.derivations._load()
+        inputs = doc.derivations._inputs(view)
+        try:
+            processing = self._require_processing_dependencies(doc, stage)
+        except ProcessingUnavailable as exc:
+            return ViewInspection(
+                stage_planning.plan_view(
+                    exists=view.is_file(),
+                    recorded_inputs=None,
+                    current_inputs={},
+                    blocked_reason="processing-unavailable",
+                ),
+                blocked_reason=str(exc),
+            )
+        plan = stage_planning.plan_view(
+            exists=view.is_file(),
+            recorded_inputs=recorded["derived"].get(view.name),
+            current_inputs=inputs,
+            recorded_processing=recorded["processing"].get(view.name),
+            processing=processing,
+            refresh=self._refresh_requested(doc, role, stage),
+        )
+        if plan.action != "reuse":
+            return ViewInspection(plan, processing=processing, inputs=inputs)
+        try:
+            value = load(view.read_text())
+        except (OSError, ValueError, RecursionError):
+            return ViewInspection(
+                stage_planning.FreshnessPlan(
+                    "recompute", ("unreadable-output",), ()
+                ),
+                processing=processing,
+                inputs=inputs,
+            )
+        failure = recheck(value) if recheck is not None else None
+        if failure is not None:
+            return ViewInspection(
+                stage_planning.FreshnessPlan(
+                    "recompute", ("invalid-output",), ()
+                ),
+                invalid_reason=failure,
+                processing=processing,
+                inputs=inputs,
+            )
+        return ViewInspection(
+            plan, value, processing=processing, inputs=inputs
+        )
+
+    def _record_view(self, doc: DocumentRun, view: Path) -> None:
+        """Record a published product and its generation dependencies."""
+        observed = self._view_dependencies.pop((doc.dir, view.name))
+        doc.derivations.record(
+            view, inputs=observed.inputs, processing=observed.processing
+        )
+
     def _reused_view(
         self,
         doc: DocumentRun,
@@ -1258,23 +1405,20 @@ class Orchestrator:
         load: Callable[[str], Any],
         recheck: Callable[[Any], str | None] | None = None,
     ) -> Any:
-        """The document's `view`, loaded, when it stands: it is current
-        (Derivations.current), `--refresh` does not name its role, and
-        `recheck`, when given, finds no reason it fails. A reuse is an
+        """The document's `view`, loaded, when the shared plan reuses it.
+
+        Inputs and migrated processing dependencies must match, refresh
+        must not request recomputation, and `recheck` must pass. A reuse is an
         event, with the attention reasons noted when the view was made.
         A view `recheck` fails is moved aside, never deleted, with a
         `set-aside` event that gives the reason, and its record is
         forgotten. None when the view is to be made."""
-        role, stage = doc.views[view]
-        if self._refresh_requested(doc, role, stage) or not (
-            doc.derivations.current(view)
-        ):
-            return None
-        try:
-            loaded = load(view.read_text())
-        except (OSError, ValueError, RecursionError):
-            return None
-        failure = recheck(loaded) if recheck is not None else None
+        _role, stage = doc.views[view]
+        inspected = self._inspect_view(doc, view, load, recheck)
+        inspected.require_value()
+        if inspected.plan.action == "recompute":
+            self._view_dependencies[(doc.dir, view.name)] = inspected
+        failure = inspected.invalid_reason
         if failure is not None:
             kept = _supersede(view)
             doc.derivations.forget(view)
@@ -1293,6 +1437,9 @@ class Orchestrator:
                 f"again"
             )
             return None
+        if inspected.plan.action != "reuse":
+            return None
+        loaded = inspected.value
         noted = (doc.state.detail or {}).get("attention") or {}
         self.rundir.emit(
             REUSED,
@@ -1603,7 +1750,7 @@ class Orchestrator:
                     volatile=TRANSCRIPTION_VOLATILE,
                 ),
             )
-            doc.derivations.record(doc.transcription)
+            self._record_view(doc, doc.transcription)
             from yizkr.pipeline import anomalies
 
             anomalies.stored(self.rundir, doc, "transcription", transcription)
@@ -2164,7 +2311,7 @@ class Orchestrator:
                 indent=2,
             ),
         )
-        doc.derivations.record(doc.critique)
+        self._record_view(doc, doc.critique)
         from yizkr.pipeline import anomalies
 
         anomalies.stored(self.rundir, doc, "critique", findings)
@@ -2579,7 +2726,7 @@ class Orchestrator:
         if batch is None:
             batch = self._step_batch(doc)
             changed = self._update_batch_view(doc, batch)
-            doc.derivations.record(doc.batch)
+            self._record_view(doc, doc.batch)
             from yizkr.pipeline import anomalies
 
             anomalies.stored(self.rundir, doc, doc.views[doc.batch][1], batch)

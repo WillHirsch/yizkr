@@ -654,6 +654,37 @@ class TestRefusals:
 
 
 class TestReuse:
+    def test_package_documentation_does_not_reset_or_rewrite(
+        self, run, monkeypatch
+    ):
+        import shutil
+
+        package = run.tmp_path / "package"
+        shutil.copytree(
+            scratchwrite.PACKAGE,
+            package,
+            ignore=shutil.ignore_patterns("__pycache__"),
+        )
+        monkeypatch.setattr(
+            scratchwrite,
+            "code_digest",
+            lambda: scratchwrite.package_digest(package),
+        )
+        run.past_the_barrier()
+        key = _key(run, exclusions=ExclusionList())
+        writes = run.wiki.writes
+
+        for name in ("pipeline/README.md", "queries/README.md"):
+            (package / name).write_text("# Updated documentation\n")
+        (package / "model/README.md").unlink()
+        (package / "pipeline/OVERVIEW.md").write_text("# Stage overview\n")
+
+        assert _key(run, exclusions=ExclusionList()) == key
+        run.past_the_barrier()
+        assert run.resets == 1
+        assert run.wiki.writes == writes
+        assert run.record("reset")["action"] == scratchwrite.SKIPPED
+
     def test_a_rerun_with_the_recorded_key_resets_and_writes_nothing(
         self, run, tmp_path, monkeypatch
     ):
@@ -1227,6 +1258,26 @@ class TestTheKey:
         monkeypatch.setattr(scratchwrite, "code_digest", lambda: "0" * 64)
         assert _key(run, exclusions=ExclusionList()) != key
 
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("model_identifier", "authored-fictional-model"),
+            ("pipeline_version", "0.2.0"),
+            ("software_commit", "a" * 40),
+            ("started_at", "2026-10-07T09:00:00Z"),
+        ],
+    )
+    def test_changed_written_run_provenance_changes_the_key(
+        self, keyed, field, value
+    ):
+        run, key = keyed
+        doc = run.documents[0]
+        contents = json.loads(doc.batch.read_text())
+        contents["extraction_run"][field] = value
+        changed = ClaimBatch.model_validate(contents)
+        doc.batch.write_text(changed.model_dump_json())
+        assert _key(run, exclusions=ExclusionList()) != key
+
     def test_another_kind_is_another_key(self, keyed, monkeypatch):
         from yizkr.pipeline import orchestrate
 
@@ -1258,6 +1309,11 @@ class TestTheKey:
             "pipeline/clustering.py",
             "pipeline/presentation.py",
             "pipeline/orchestrate.py",
+            "pipeline/clustering.yaml",
+            "pipeline/gedcom_placeholders.yaml",
+            "pipeline/prompts/extraction.md",
+            "pipeline/prompts/place-adjudication.md",
+            "queries/publish.py",
             "queries/kinship.rq",
         ],
     )
@@ -1274,6 +1330,18 @@ class TestTheKey:
         with open(package / module, "a") as handle:
             handle.write("\n# a change\n")
         assert scratchwrite.package_digest(package) != before
+
+    def test_adding_or_removing_a_runtime_resource_changes_the_digest(
+        self, tmp_path
+    ):
+        package = tmp_path / "package"
+        prompt = package / "pipeline/prompts/extraction.md"
+        prompt.parent.mkdir(parents=True)
+        before = scratchwrite.package_digest(package)
+        prompt.write_text("Read the supplied fictional source.\n")
+        assert scratchwrite.package_digest(package) != before
+        prompt.unlink()
+        assert scratchwrite.package_digest(package) == before
 
     @pytest.mark.parametrize("module", sorted(scratchwrite.READ_ONLY))
     def test_a_change_to_a_reader_is_the_same_digest(self, tmp_path, module):

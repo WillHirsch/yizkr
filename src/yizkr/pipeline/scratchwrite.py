@@ -12,7 +12,7 @@ since the run item's label holds them, and what registration reads of it
 (its kind, its title, its file name, which its artifact's description
 gives, the record of its derived media and, for an excerpt, the PDFs
 and decks that place it); the never-ingest list's hash; the writer's version
-(WRITER_VERSION and the package's source, code_digest); and the model
+(WRITER_VERSION and its code/resource dependencies, code_digest); and the model
 manifest's hash. Never a QID, an mtime or a timestamp. A batch's run
 stamps differ from run to run, so a new run resets and writes again,
 and only a later invocation of the run that wrote finds the instance
@@ -215,14 +215,23 @@ from yizkr.pipeline.stages import (
     sha256_text,
 )
 
-# the version of what the write side writes for the same inputs: a change
-# that writes something else for them bumps it, as does a change to the
-# package's source, which the key hashes too (code_digest)
+# the version of what the write side writes for the same inputs; code and
+# runtime resource dependencies also invalidate the key (code_digest)
 WRITER_VERSION = 3
-# the package whose source the key hashes, and the modules it leaves out:
-# those that only read the run directory or the instance, and decide
-# nothing a write puts on it
+# The write includes registration, provenance and reset's published model
+# and query pages. Keep conservative executable coverage, while naming the
+# runtime resource families explicitly: prose documentation is not an input.
+# Add new runtime resource locations here when they can affect these products.
 PACKAGE = Path(__file__).resolve().parents[1]
+PACKAGE_INPUTS = (
+    "**/*.py",
+    "model/*.yaml",
+    "pipeline/*.yaml",
+    "pipeline/prompts/*.md",
+    "queries/*.rq",
+)
+# These modules only read the run directory or instance, and decide nothing
+# written to it. Site rendering has its own invocation, outside the write key.
 READ_ONLY = frozenset(
     {
         "cli.py",
@@ -348,15 +357,20 @@ def _file_hash(path: Path) -> str | None:
 
 
 def package_digest(package: Path) -> str:
-    """The SHA-256 of every file of the package, by its path within it,
-    the query pages the reset publishes among them, but the READ_ONLY
-    modules and compiled bytecode. What registers and writes reaches far
-    into the package (the claim contract's values, dates, the manifest,
-    the review's entity records, the identity map's terms), so the whole
-    of it is hashed, and a change anywhere in it resets and writes again,
-    which costs no model call."""
+    """Hash declared code/resources by their paths and exact contents.
+
+    Registration and writing depend on shared claim, date, review and
+    identity code; reset also publishes model and query resources. Keep
+    that executable coverage conservative, excluding READ_ONLY modules
+    and bytecode. Markdown prompts remain behavior resources, while adding,
+    editing or removing package documentation leaves this digest unchanged.
+    Batch process provenance is separately retained whole in write_key.
+    """
     found = {}
-    for path in sorted(package.rglob("*")):
+    paths = {
+        path for pattern in PACKAGE_INPUTS for path in package.glob(pattern)
+    }
+    for path in sorted(paths):
         relative = path.relative_to(package).as_posix()
         if (
             not path.is_file()

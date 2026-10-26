@@ -143,10 +143,8 @@ from yizkr.core.exits import EXIT_OK as EXIT_OK
 from yizkr.core.exits import EXIT_STOPPED as EXIT_STOPPED
 from yizkr.pipeline.orchestrate import (
     BATCHED,
-    DOCUMENT_STAGES,
     DUPLICATE,
     FAILED,
-    MODEL_ROLES,
     MODEL_VARIABLE,
     PAUSED,
     PDF,
@@ -176,6 +174,12 @@ from yizkr.pipeline.rundir import (
     summarise,
 )
 from yizkr.pipeline.rundir import FAILED as STAGE_FAILED
+from yizkr.pipeline.stage_planning import (
+    DOCUMENT_STAGES,
+    MODEL_ROLES,
+    PHASES,
+    STAGE_ROLES,
+)
 from yizkr.pipeline.stages import read_jsonl
 
 # the run manifest's mode for a scratch run
@@ -194,19 +198,11 @@ BARRIER = "barrier"
 # the event that says a document's stage was made again under a refresh of
 # its role, which the run's later invocations reuse
 REFRESHED = "refreshed"
-# the role whose calls each per-document stage makes
-STAGE_ROLES = {
-    "transcription": "transcribe",
-    "extraction": "extract",
-    "gedcom": "extract",
-    "critique": "critique",
-}
 # a document whose transcription is its last stage done so far
 TRANSCRIBED = "transcribed"
 # the rank of each per-document stage: the rest of the documents take them
 # rank by rank, after the canaries; the barrier and the corpus stages come
 # after them
-PHASES = {"transcription": 0, "extraction": 1, "gedcom": 1, "critique": 2}
 _BARRIER_RANK = max(PHASES.values()) + 1
 # a stage's states that end it: done, needing attention, or failed
 _ENDED = frozenset({DONE, NEEDS_ATTENTION, STAGE_FAILED})
