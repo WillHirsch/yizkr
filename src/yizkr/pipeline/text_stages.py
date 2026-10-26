@@ -251,7 +251,15 @@ def extract(
 
         if request.claims_file is None:
             raise ValueError("file extraction requires claims_file")
-        dependencies["claims_file_sha256"] = sha256_file(request.claims_file)
+        try:
+            dependencies["claims_file_sha256"] = sha256_file(
+                request.claims_file
+            )
+        except OSError as exc:
+            raise ExtractionFailed(
+                f"cannot read the claims file {request.claims_file}: "
+                f"{exc.strerror or exc}"
+            ) from exc
         extractor = ClaimFileExtractor(request.claims_file)
     elif strategy in ("chunked", "single"):
         if client is None:

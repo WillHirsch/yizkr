@@ -1,6 +1,6 @@
 # Ingestion pipeline (`yizkr.pipeline`)
 
-The current pipeline takes digitised files through inspectable source-referenced proposals and graph writes (R3, ADR-0003). Reviewed ingestion pauses at CSV gates; disposable scratch runs write unratified development output. The CLI calls Python stage code directly and keeps intermediate products in files for inspection and resume. The [current contract](../../../docs/CONTRACT.md) governs lifecycle and review outcomes; the shared stage APIs and retained incremental workflow are not yet implemented.
+The current pipeline takes digitised files through inspectable source-referenced proposals and graph writes (R3, ADR-0003). Reviewed ingestion pauses at CSV gates; disposable scratch runs write unratified development output. The CLI calls Python stage code directly and keeps intermediate products in files for inspection and resume. The [current contract](../../../docs/CONTRACT.md) governs lifecycle and review outcomes; [shared text-stage operations](../../../docs/ARCHITECTURE.md#shared-text-stage-operations) are implemented, while format-specific adapter migration and the retained incremental workflow remain tracked work.
 
 Prompt text lives in the packaged Markdown resources under `prompts/`. Keep prose unwrapped and run the Prettier pre-commit hook when editing them. Templates that interpolate values use Python `str.format` fields and double literal braces; static prompts need no brace escaping. Formatting changes to prompt text change the LLM cache key, even when the wording stays the same (ADR-0032).
 

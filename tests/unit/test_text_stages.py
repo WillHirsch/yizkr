@@ -285,6 +285,36 @@ def test_prepared_claims_need_no_client_and_record_the_supplied_file(tmp_path):
     assert "model" not in result.dependencies
 
 
+def test_unreadable_prepared_claims_keep_the_adapters_failure_classification(
+    tmp_path, monkeypatch
+):
+    from yizkr.pipeline import text_stages
+
+    transcription = source_transcription()
+    claims = tmp_path / "claims.json"
+    claims.write_text('{"claims":[]}')
+    unreadable = PermissionError("prepared claims are unreadable")
+
+    def denied(path):
+        assert path == claims
+        raise unreadable
+
+    monkeypatch.setattr(text_stages, "sha256_file", denied)
+    with pytest.raises(
+        ExtractionFailed, match="cannot read the claims file"
+    ) as error:
+        extract(
+            ExtractionRequest(
+                transcription,
+                transcription.artifact,
+                strategy="file",
+                claims_file=claims,
+            )
+        )
+    assert error.value.__cause__ is unreadable
+    assert claims.read_text() == '{"claims":[]}'
+
+
 @pytest.mark.parametrize(
     "error", [RuntimeError("failed"), PassPaused(), KeyboardInterrupt()]
 )

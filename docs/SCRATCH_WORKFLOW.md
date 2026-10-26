@@ -2,7 +2,7 @@
 
 This guide expands the [whole-corpus overview](ARCHITECTURE.md#whole-corpus-scratch-runs) into the inputs, processing and outputs of each implemented stage. Use the [scratch-run runbook](runbooks/scratch-run.md) for commands and operational procedures.
 
-This is the implemented disposable rebuild mode. The [current contract](CONTRACT.md) also requires retained ingestion and permits explicit graph-snapshot inputs for reconciliation; the corresponding durable identity, review and stage APIs remain implementation work. Current scratch writes refuse retained instances and never confer human approval.
+This is the implemented disposable rebuild mode. The [current contract](CONTRACT.md) also requires retained ingestion and permits explicit graph-snapshot inputs for reconciliation; shared text-stage operations are implemented, while durable identity/review state, remaining adapter migrations and shared planning remain implementation work. Current scratch writes refuse retained instances and never confer human approval.
 
 In the paths below, `R` is a run directory such as `var/scratch/<run-id>`, and `D` is one document's directory within it. Ordinary documents use `R/<document-directory>/`; independently read embedded images use `R/excerpts/<media-sha1>/`. These are path templates, not example corpus contents. For real corpus runs, all these products are local-only runtime data.
 
@@ -10,7 +10,7 @@ Rectangles represent processing or explicitly labelled transient data; cylinders
 
 ## Stage contracts
 
-The contracts below describe current data products and processing, not a shared stage API already implemented in the code. Stage names in the logs are `transcription`, `extraction`, `critique`, `gedcom`, `clustering`, `reset`, `register`, `write`, `places` and `site`. `transcribe` and `extract` are the model-role names used by configuration and flags such as `--refresh`, rather than the logged stage names.
+The contracts below describe current data products and processing. [Shared text-stage operations](ARCHITECTURE.md#shared-text-stage-operations) implement text reading, extraction and critique; format-specific readers, GEDCOM and corpus stages retain their own adapters. Publication and reuse remain caller-owned. Stage names in the logs are `transcription`, `extraction`, `critique`, `gedcom`, `clustering`, `reset`, `register`, `write`, `places` and `site`. `transcribe` and `extract` are the model-role names used by configuration and flags such as `--refresh`, rather than the logged stage names.
 
 ### Per-document stages
 

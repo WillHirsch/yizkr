@@ -886,6 +886,48 @@ class TestIngestExtract:
         )
         assert not out.exists()
 
+    def test_unreadable_claims_file_keeps_its_expected_failure_status(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        import builtins
+        import io
+
+        claims = tmp_path / "claims.json"
+        original = _citing(MEDIA_SHA1).model_dump_json()
+        claims.write_text(original)
+        out = tmp_path / "batch.json"
+        out.write_text(self.EARLIER)
+
+        def refuse_claims_read(opener):
+            def guarded(file, *args, **kwargs):
+                if isinstance(file, (str, Path)) and Path(file) == claims:
+                    raise PermissionError(
+                        13, "fictional permission denied", str(file)
+                    )
+                return opener(file, *args, **kwargs)
+
+            return guarded
+
+        # Deny both binary hashing and the adapter's text read, including
+        # when filesystem permissions would not stop a privileged test user.
+        with monkeypatch.context() as denied:
+            denied.setattr(builtins, "open", refuse_claims_read(builtins.open))
+            denied.setattr(io, "open", refuse_claims_read(io.open))
+            status, _ = self.extract(tmp_path)
+
+        assert status == EXIT_FAILED
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        _no_traceback(captured.err)
+        assert captured.err.startswith(
+            f"extraction failed: cannot read the claims file {claims}: "
+            "fictional permission denied; "
+        )
+        assert captured.err.count("\n") == 1
+        assert not out.exists()
+        assert (tmp_path / "batch.json.stale").read_text() == self.EARLIER
+        assert claims.read_text() == original
+
     def test_a_bug_in_the_single_call_extractor_keeps_its_traceback(
         self, tmp_path, monkeypatch, capsys
     ):

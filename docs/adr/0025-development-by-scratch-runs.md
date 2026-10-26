@@ -58,7 +58,7 @@ The code already reads both the `Project:Kept state` page and the host's `kept.j
 
 ### 7. Implementation and readiness boundaries
 
-The contract is agreed policy; future code is not assumed implemented. Shared stage APIs, freshness planning, durable identity/review state and provider-session separation remain tracked work. Existing approval, exclusion, provenance and reset guards stay in force until replacements are implemented and verified. Approving policy does not authorize a keeper run or a migration of real data.
+The contract is agreed policy; future code is not assumed implemented. [Shared text-stage operations](../ARCHITECTURE.md#shared-text-stage-operations) are implemented; remaining adapter migrations, shared freshness planning, durable identity/review state and provider-session separation remain tracked work. Existing approval, exclusion, provenance and reset guards stay in force until replacements are implemented and verified. Approving policy does not authorize a keeper run or a migration of real data.
 
 ### 8. Protocol consequences
 
