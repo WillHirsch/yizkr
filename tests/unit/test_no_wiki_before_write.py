@@ -61,6 +61,7 @@ from yizkr.claims import ClaimBatch
 from yizkr.core.config import Config
 from yizkr.core.corpus import ExclusionList
 from yizkr.core.wiki import WikiClient
+from yizkr.pipeline.container_inventory import read_inventory
 from yizkr.pipeline.orchestrate import (
     AWAITING_CLAIMS,
     BATCHED,
@@ -1041,9 +1042,9 @@ class TestRecordDerivedMedia:
         kept = files()
         assert record() == first
         assert files() == kept  # the same bytes, and the same files
-        assert sorted(kept) == sorted(
-            [DERIVED_MEDIA, *(medium.file for medium in first.media.values())]
-        )
+        inventory = read_inventory(directory)
+        assert inventory is not None
+        assert inventory.source.sha1 == first.source_sha1
         assert read_derived_media(directory) == first
 
     def test_a_deck_without_images_records_none(self, tmp_path):

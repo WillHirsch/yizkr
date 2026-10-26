@@ -20,6 +20,7 @@ from tests.unit.test_pdf_pages import (
     document,
     run,
 )
+from tests.unit.test_presentation import DECK_TIME
 from yizkr.core.corpus import ExclusionList
 from yizkr.pipeline.container_inventory import read_inventory
 from yizkr.pipeline.orchestrate import AWAITING_CLAIMS
@@ -139,7 +140,12 @@ def test_unreferenced_excluded_alias_cannot_send_the_shared_image(tmp_path):
     corpus = talk_folder(tmp_path)
     with zipfile.ZipFile(corpus / "library-talk-2018.pptx", "a") as archive:
         original = archive.read("ppt/media/image2.png")
-        archive.writestr("ppt/media/excluded-copy.png", original)
+        archive.writestr(
+            zipfile.ZipInfo(
+                "ppt/media/excluded-copy.png", date_time=DECK_TIME
+            ),
+            original,
+        )
     reader = Reader({})
     doc = document(
         run(
