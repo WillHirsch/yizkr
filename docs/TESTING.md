@@ -23,7 +23,7 @@ The [small semantic acceptance set](#semantic-acceptance) checks deterministic a
 
 ## Current test layers and limits
 
-**Offline unit tests.** `tests/unit` is the default for `uv run pytest -q` or `make test`; `pyproject.toml` excludes the `live` marker unless requested. CI runs lint and the offline suite on pull-request pushes and main commits. It currently installs all optional extras and runs `pytest -n auto --dist loadfile`; it does not run the full Wikibase stack or real models.
+**Offline unit tests.** `tests/unit` is the default for `uv run pytest -q` or `make test`; `pyproject.toml` excludes the `live` marker unless requested. CI runs lint and the offline suite on pull-request pushes and main commits. The offline job installs all optional extras and runs `pytest -n auto --dist loadfile`. A separate `fictional-integration` job runs the required real writer/query lane described below; neither job evaluates real models.
 
 The fixtures in `tests/unit/conftest.py` isolate host settings, model login and instance records. Tests provide their own configuration. Most filesystem sync calls are replaced; use `@pytest.mark.real_fsync` when actual sync behavior matters. Anomaly timers are recorded rather than started. A test that calls `monkeypatch.undo()` removes these function-scoped protections too; use `monkeypatch.context()` for a temporary patch.
 
@@ -31,7 +31,16 @@ The network guard rejects non-loopback lookups and connections, removes proxy va
 
 **Offline pipeline coverage.** `tests/unit/test_fixture_corpus.py` exercises per-document stages, the barrier, clustering, response reuse, reports and fixture identity traps with a canned engine behind the real LLM cache. The autouse `_no_write_side` fixture removes reset, registration, writing, places and site from the driver's corpus stages unless a test uses `write_side`. Separate write-side unit tests use an in-memory instance and stand-ins for reset, locking or site generation. These checks do not demonstrate a complete real-stack ingestion, query result or model interpretation. Existing fixture traps and strict expected failures need review when their subsystem changes.
 
-**Live integration.** Tests under `tests/integration`, marked `live`, exercise the configured stack or a real model. Their current availability checks can skip tests. The separate, required fictional integration lane is pending #722; see below. Query-string unit assertions do not establish the rows returned by an actual engine.
+The substitutions are explicit boundaries of offline coverage:
+
+| Stage or service | Default offline substitution | Boundary left to integration |
+| --- | --- | --- |
+| Transcription, extraction and critique in the fixture corpus | Authored engine responses through the real response cache | Actual model interpretation is not evaluated. |
+| Corpus reset, registration, writing, place reconciliation and site generation | `_no_write_side` removes every `touches_wiki` corpus stage; `write_side` tests provide their own fake wiki and service stand-ins | Real Wikibase acceptance, persistence and query results are not established. |
+| Host settings, login and instance records | `_no_host_settings`, `_no_claude_config` and the instance-record fixtures use only test-supplied settings and temporary paths | No permission to use archive settings, credentials or runtime state is implied. |
+| Network, filesystem flushes and pause timers | The network guard rejects off-host access; flushes are replaced unless `real_fsync`; pause timers are recorded | These defaults do not establish external-service, crash-durability or real-timer behavior. |
+
+**Live integration.** `tests/fictional_integration`, marked `live`, exercises the required disposable writer/query lane and fails when its setup is missing. Tests under `tests/integration`, also marked `live`, exercise an explicitly configured stack or a real model; their availability checks can skip tests. These are separate invocations. Query-string unit assertions do not establish the rows returned by an actual engine.
 
 **Real-model checks.** `tests/integration/test_live_chunked.py` exercises extraction and conversation resumption through the claude CLI and response cache. It needs a logged-in CLI and skips if unavailable. `$YIZKR_LIVE_CACHE` selects its cache; the default is `var/live-cache`. It does not acquire the stack lock. These checks do not establish broad extraction quality across the corpus, and a reused response establishes only the request/configuration it matches.
 
@@ -92,11 +101,35 @@ For concurrent behavior, coordinate with events, barriers or pipes rather than t
 
 ## Live integration and the transition
 
-The target for real writer/query verification is a disposable Wikibase/WDQS instance populated exclusively from repository fictional fixtures. #722 must provide separate volumes, explicit connections, instance-state records and locks, without archive credentials, mounts or inherited connection defaults. Its required invocation must fail if the intended checks cannot run. It may run centrally or in CI under the [fictional-instance exception](AGENT_PROTOCOL.md#6-the-data-boundary). This lane must be runnable and demonstrated before #159 retains the currently shared instance; documentation of this policy does not implement the lane.
+The designated lane is CI's `fictional-integration` job, run on pull requests, main pushes and manual workflow dispatch. The same required invocation runs locally or in an authorized cloud session:
 
-Until then, a centrally coordinated local session may use an explicitly disposable existing target. Corpus-derived graphs remain local-only even when a test adds fictional entities. Test runs, mutants and development resets must never mutate retained data. A boundary change waits when necessary evidence cannot be obtained; unrelated work need not wait.
+```sh
+make test-integration
+# Select an explicit evidence/lock directory when needed:
+make test-integration ARGS="--state /tmp/yizkr-fictional-evidence"
+```
 
-The existing command is:
+The launcher needs Python 3.11+, Git and Docker with Compose on the local socket; host package installation and `deploy/.env` are unnecessary. It stages only its allowlisted repository source, fixtures and deployment controls into a build context, builds the test image with the locked Python dependencies, and starts a new MariaDB, Wikibase and WDQS stack. Setup failure, test failure, a skipped case or omission of the required roundtrip all fail the invocation. The default offline command deselects these tests; invoking the test directly without its dedicated setup fails rather than falling back to another deployment.
+
+[The dedicated Compose file](../deploy/fictional-integration/compose.yml) is independent of the archive deployment. Its fixed fictional credentials and connection settings, project-specific volumes, instance records and locks never inherit archive defaults. The services use an internal network with no published ports; no archive credentials, corpus directories, runtime state or Docker socket are mounted into them. The only host bind mount is a staged copy of the tracked upload configuration. The checkout and selected state directory determine a separate project identity, and a nonblocking lock refuses concurrent use of that lane. Different worktrees have separate projects and locks.
+
+The single required case in [test_write_query.py](../tests/fictional_integration/test_write_query.py) bootstraps the real model, uploads the two authored fictional birth-source texts, creates their person through a declared identity map and writes both contradictory birth dates through `BatchWriter`. Fresh API reads verify two normal-rank values at day precision with separate source and process references, page locations and excerpts. Before querying, the test waits until WDQS's `schema:version` reaches each entity's current MediaWiki revision, including the query vocabulary. It then runs the production disagreement-report query and checks both attributed rows. A fresh client repeats bootstrap, registration and both writes; entity IDs, statements, references and query results must remain unchanged. No inferred model response or complete pipeline execution is claimed, and this case does not replace the other live checks needed for a changed boundary.
+
+Every invocation starts from empty volumes and removes its own containers, volumes and network after success or failure. It keeps `evidence.json`, JUnit `results.xml` when the test process ran, and `services.log` under the selected state directory (by default a checkout-specific directory beneath the system temporary directory). Evidence records the tested Git revision, dirty-tree flag, source-content hash, image IDs and actual non-skipped case. CI uploads these files as `fictional-integration-evidence`. A dirty-tree run identifies its source hash but is not evidence for an unchanged commit; record the relevant revision and command in the PR. Before #159 retains the shared instance, retain a successful demonstration of this lane and its real checks.
+
+The launcher handles ordinary interruption with teardown. After a hard kill or failed cleanup, recover only this lane with the same state selection:
+
+```sh
+make integration-down
+# If the run selected an explicit directory, use that same directory:
+make integration-down ARGS="--state /tmp/yizkr-fictional-evidence"
+```
+
+Recovery refuses while another invocation holds that lane's lock. It does not reset or stop the archive deployment. The fixture clears only its own instance-contents record at entry and exit. Missing integration evidence still blocks affected persistence changes, not unrelated work.
+
+### Additional live checks on an explicit disposable target
+
+The optional existing suite remains available to a centrally coordinated local session that has checked its configured target is disposable. Corpus-derived graphs remain local-only even when a test adds fictional entities. Test runs, mutants and development resets must never mutate retained data:
 
 ```sh
 make test-live
@@ -106,7 +139,7 @@ uv run pytest -m live tests/integration -v
 
 These commands use the configured stack; they do not create or prove an isolated target. Check the target before running them. `tests/integration/conftest.py` skips for missing configuration or an unreachable stack, so a zero exit status alone is insufficient: inspect whether the intended tests ran. Record the commit, relevant tests and result as integration evidence.
 
-Current sessions acquire the live-stack lock and clear the instance-contents key at entry and exit, so a scratch run cannot mistake fixture writes for its own contents. Fixtures mark their own entities, and repeated writes within a session check reuse. Global graph invariants still inspect other sessions' data; an invalid fixture or mutant can contaminate later runs despite unique labels. Recovery is a supported reset of the disposable target, not a reset of retained data.
+These configured-stack sessions acquire the live-stack lock and clear the instance-contents key at entry and exit, so a scratch run cannot mistake fixture writes for its own contents. Fixtures mark their own entities, and repeated writes within a session check reuse. Global graph invariants still inspect other sessions' data; an invalid fixture or mutant can contaminate later runs despite unique labels. Recovery is a supported reset of the disposable target, not a reset of retained data.
 
 `test_live_scratch_reset.py` and `test_live_scratch_write.py` require `YIZKR_LIVE_RESET=1`, run in separate sessions from other modules, and refuse retained instances. A failed reset stops the session. Keep those safeguards; the general live suite does not provide equivalent isolation merely because these modules do.
 

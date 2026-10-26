@@ -29,3 +29,19 @@ jobs:
       # one worker, so its module fixtures and test order hold as in a
       # serial run. Local runs stay serial unless -n is given.
       - run: uv run pytest -n auto --dist loadfile
+
+  fictional-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - name: Required real writer/query checks
+        run: make test-integration ARGS="--state /tmp/fictional-integration-evidence"
+      - name: Recover interrupted fictional stack
+        if: always()
+        run: make integration-down ARGS="--state /tmp/fictional-integration-evidence"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: fictional-integration-evidence
+          path: /tmp/fictional-integration-evidence/

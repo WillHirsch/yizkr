@@ -103,6 +103,10 @@ An image a document embeds is matched too: a deck's image by its SHA-1 and by it
 
 In the containerised CLI (`docker-compose.localhost.yml`), a set path that does not exist stops the container from starting; nothing is created in its place. Neither the corpus nor the list belongs in the repository; back them up with the other private data.
 
+## Fictional integration lane
+
+`make test-integration` from the repository root builds and removes a separate fictional Wikibase/WDQS deployment. It uses `fictional-integration/compose.yml`, without this deployment's settings, credentials, ports, volumes or mounts. CI runs it as the `fictional-integration` job. See [TESTING](../docs/TESTING.md#live-integration-and-the-transition) for setup, evidence, limitations and recovery after interruption.
+
 ## Smoke test
 
 Verifies item creation via the API and the SPARQL round-trip through the wdqs-updater. Idempotent — re-runs reuse the marker item it creates. It reads `deploy/.env` for hosts and admin credentials.

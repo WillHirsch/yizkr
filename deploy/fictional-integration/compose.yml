@@ -1,0 +1,130 @@
+# Deliberately independent of deploy/docker-compose.yml and deploy/.env.
+# Only scripts/fictional_integration.py supplies the project and build image.
+x-no-proxy: &no-proxy
+  HTTP_PROXY: ""
+  HTTPS_PROXY: ""
+  ALL_PROXY: ""
+  NO_PROXY: ""
+  http_proxy: ""
+  https_proxy: ""
+  all_proxy: ""
+  no_proxy: ""
+
+services:
+  mysql:
+    image: mariadb:10.11
+    environment:
+      <<: *no-proxy
+      MYSQL_DATABASE: fictional
+      MYSQL_USER: fictional
+      MYSQL_PASSWORD: fictional-database-only
+      MYSQL_ROOT_PASSWORD: fictional-root-only
+    volumes:
+      - database:/var/lib/mysql
+    healthcheck:
+      test: [CMD, healthcheck.sh, --connect, --innodb_initialized]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+
+  wikibase:
+    image: wikibase/wikibase:7
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      <<: *no-proxy
+      DEPLOY_VERSION: "7.0.0"
+      METADATA_CALLBACK: "false"
+      MW_ADMIN_NAME: FictionalAdmin
+      MW_ADMIN_PASS: fictional-integration-only
+      MW_ADMIN_EMAIL: fictional@example.invalid
+      MW_WG_SERVER: http://wikibase
+      MW_WG_SITENAME: Fictional integration
+      MW_WG_LANGUAGE_CODE: en
+      DB_SERVER: mysql:3306
+      DB_USER: fictional
+      DB_PASS: fictional-database-only
+      DB_NAME: fictional
+    volumes:
+      - wiki-config:/config
+      - media:/var/www/html/images
+      - ./Uploads.php:/var/www/html/LocalSettings.d/91_Uploads.php:ro
+    healthcheck:
+      test: [CMD, curl, --silent, --fail, http://localhost/wiki/Main_Page]
+      interval: 5s
+      timeout: 10s
+      retries: 90
+
+  wdqs:
+    image: wikibase/wdqs:2
+    # The stock journal reserves 1000 write buffers. A small fictional
+    # graph needs eight; leave room for both the updater and test process.
+    entrypoint: [/bin/bash, -ec]
+    command:
+      - |
+        sed -i 's/writeCacheBufferCount=.*/writeCacheBufferCount=8/' /wdqs/RWStore.properties
+        exec /runBlazegraph.sh
+    environment:
+      <<: *no-proxy
+      HEAP_SIZE: 512m
+    ulimits:
+      nofile:
+        soft: 32768
+        hard: 32768
+    volumes:
+      - query-data:/wdqs/data
+    healthcheck:
+      test: [CMD, curl, --silent, --fail, http://localhost:9999/bigdata/namespace/wdq/sparql]
+      interval: 5s
+      timeout: 10s
+      retries: 60
+
+  updater:
+    image: wikibase/wdqs:2
+    depends_on:
+      wikibase:
+        condition: service_healthy
+      wdqs:
+        condition: service_healthy
+    entrypoint: [/bin/bash, -ec]
+    # Start before this fresh database's first entity, including bootstrap.
+    # Explicit initialization also handles an initially empty query store.
+    command:
+      - |
+        cd /wdqs
+        exec ./runUpdate.sh -h http://wdqs:9999 -- --wikibaseUrl http://wikibase --conceptUri http://wikibase --entityNamespaces 120,122 --init --start "$$(date -u +%Y%m%d000000)"
+    environment:
+      <<: *no-proxy
+      HEAP_SIZE: 256m
+    ulimits:
+      nofile:
+        soft: 32768
+        hard: 32768
+
+  tests:
+    image: ${YIZKR_FICTIONAL_IMAGE:?runner must supply its isolated image}
+    profiles: [test]
+    environment:
+      <<: *no-proxy
+      YIZKR_FICTIONAL_INTEGRATION: "1"
+      MW_ADMIN_PASS: fictional-integration-only
+      YIZKR_ENV_FILE: /nonexistent
+      YIZKR_INSTANCE_STATE: /state/instances
+      YIZKR_LIVE_LOCK: /state/live.lock
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - test-state:/state
+    command: [python, -m, pytest, -o, "addopts=", -m, live, tests/fictional_integration, -v, --junitxml=/state/results.xml]
+
+networks:
+  default:
+    internal: true
+
+volumes:
+  database:
+  wiki-config:
+  media:
+  query-data:
+  test-state:

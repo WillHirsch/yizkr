@@ -7,7 +7,7 @@ COMPOSE_LOCAL = docker compose -f docker-compose.yml -f docker-compose.localhost
 export UID := $(shell id -u)
 export GID := $(shell id -g)
 
-.PHONY: install hooks test test-live lint fmt up down up-local cli bootstrap smoke publish-queries scratch-reset wdqs-sandbox-up wdqs-sandbox-down
+.PHONY: install hooks test test-live test-integration integration-down lint fmt up down up-local cli bootstrap smoke publish-queries scratch-reset wdqs-sandbox-up wdqs-sandbox-down
 
 install:            ## create/update the uv-managed venv (with dev tools)
 	$(UV) sync --dev
@@ -34,6 +34,12 @@ test:               ## offline unit tests
 
 test-live:          ## integration tests against the running stack (make up first)
 	$(UV) run pytest -m live tests/integration -v
+
+test-integration:   ## required fictional writer/query lane; creates and removes its own stack
+	python3 scripts/fictional_integration.py run $(ARGS)
+
+integration-down:   ## recover only this checkout's fictional lane after a hard kill
+	python3 scripts/fictional_integration.py down $(ARGS)
 
 lint:
 	$(UV) run ruff check .
