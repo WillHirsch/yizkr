@@ -261,37 +261,159 @@ class TestIngestWrite:
 
 
 class TestIngestExtract:
-    def test_a_partial_batch_is_a_failure_not_a_refusal(
-        self, tmp_path, monkeypatch, capsys
+    @pytest.mark.parametrize(
+        "collision",
+        [
+            "claims",
+            "media",
+            "transcription-symlink",
+            "transcription-hardlink",
+            "chunk-workspace",
+        ],
+    )
+    def test_output_aliases_are_refused_without_changing_inputs(
+        self, tmp_path, monkeypatch, capsys, collision
     ):
-        from yizkr.pipeline import extract
+        from tests.unit.test_pipeline import MEDIA
+        from yizkr.pipeline import llm
         from yizkr.pipeline.transcribe import Transcription
 
-        transcription = tmp_path / "transcription.json"
-        transcription.write_text(
+        def no_engine(*args, **kwargs):
+            raise AssertionError("an aliased output reached the engine")
+
+        monkeypatch.setattr(llm, "make_client", no_engine)
+        out = tmp_path / "batch.json"
+        media = out if collision == "media" else tmp_path / "source.png"
+        media.write_bytes(MEDIA)
+        reading = tmp_path / "transcription.json"
+        if collision == "chunk-workspace":
+            reading = tmp_path / "batch.json.chunks" / "transcription.json"
+            reading.parent.mkdir()
+        reading.write_text(
             Transcription(
-                artifact=MEDIA_REF, text="a page", engine="test"
+                artifact=MEDIA_REF,
+                text="Leopold Löbig, born May 1914",
+                engine="authored-fictional-text",
             ).model_dump_json()
         )
-
-        def partial(self, transcription, artifact):
-            self.failed_chunks = ["c002"]
-            return _citing(MEDIA_SHA1)
-
-        monkeypatch.setattr(extract.ClaimFileExtractor, "extract", partial)
-        out = tmp_path / "batch.json"
-
-        status = cli.main(
-            [
-                *("ingest", "extract", "--transcription", str(transcription)),
-                *("--claims-file", str(tmp_path / "claims.json")),
-                *("--out", str(out)),
+        claims = tmp_path / (
+            "batch.json.partial.json"
+            if collision == "claims"
+            else "claims.json"
+        )
+        claims.write_text(_citing(MEDIA_SHA1).model_dump_json())
+        if collision.startswith("transcription-"):
+            raw = tmp_path / "batch.json.raw.txt"
+            if collision.endswith("symlink"):
+                raw.symlink_to(reading)
+            else:
+                raw.hardlink_to(reading)
+        before = {
+            path: path.read_bytes()
+            for path in tmp_path.rglob("*")
+            if path.is_file()
+        }
+        engine_args = (
+            ["--engine", "file", "--claims-file", str(claims)]
+            if collision in {"claims", "media"}
+            else [
+                "--engine",
+                "llm",
+                "--strategy",
+                "chunked" if collision == "chunk-workspace" else "single",
             ]
         )
 
+        status = cli.main(
+            [
+                "ingest",
+                "extract",
+                "--transcription",
+                str(reading),
+                "--media",
+                str(media),
+                "--out",
+                str(out),
+                *engine_args,
+            ]
+        )
+
+        assert status == EXIT_REFUSED
+        assert "refusing" in capsys.readouterr().err
+        assert {
+            path: path.read_bytes()
+            for path in tmp_path.rglob("*")
+            if path.is_file()
+        } == before
+
+    def test_partial_chunks_are_diagnostic_not_an_accepted_batch(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        from pydantic import ValidationError
+
+        from tests.unit.test_chunking import (
+            LINE_LENGTH,
+            PlainLlm,
+            claim,
+            entity_manifest_json,
+            ndjson,
+        )
+        from tests.unit.test_chunking import (
+            transcription as reading,
+        )
+        from yizkr.claims import ClaimBatch
+        from yizkr.pipeline import llm
+
+        engine = PlainLlm(
+            [
+                entity_manifest_json(),
+                RuntimeError("engine down"),
+                ndjson([claim("e2", "Sebastian Löbig", 1862)]),
+            ]
+        )
+        monkeypatch.setattr(llm, "make_client", lambda *a, **kw: engine)
+        transcription = tmp_path / "transcription.json"
+        transcription.write_text(reading().model_dump_json())
+        out = tmp_path / "batch.json"
+        out.write_text(self.EARLIER)
+
+        argv = [
+            *("ingest", "extract", "--transcription", str(transcription)),
+            *("--engine", "llm", "--strategy", "chunked"),
+            *("--chunk-budget", str(LINE_LENGTH), "--chunk-retries", "0"),
+            *("--out", str(out)),
+        ]
+        status = cli.main(argv)
+
         assert status == EXIT_FAILED
-        assert "batch is PARTIAL" in capsys.readouterr().err
-        assert out.exists()
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "not a completed batch" in captured.err
+        assert not out.exists()
+        assert (tmp_path / "batch.json.stale").read_text() == self.EARLIER
+        diagnostic = tmp_path / "batch.json.partial.json"
+        payload = json.loads(diagnostic.read_text())
+        assert payload["status"] == "incomplete"
+        salvage = ClaimBatch.model_validate(payload["diagnostic_batch"])
+        assert [(c.subject.label, c.value.year) for c in salvage.claims] == [
+            ("Sebastian Löbig", 1862)
+        ]
+        with pytest.raises(ValidationError):
+            ClaimBatch.model_validate_json(diagnostic.read_text())
+
+        engine.responses = [
+            entity_manifest_json(),
+            ndjson([claim("e1", "Hildegard Löbig", 1876)]),
+            ndjson([claim("e2", "Sebastian Löbig", 1862)]),
+        ]
+        assert cli.main(argv) == EXIT_OK
+        complete = ClaimBatch.model_validate_json(out.read_text())
+        assert {(c.subject.label, c.value.year) for c in complete.claims} == {
+            ("Hildegard Löbig", 1876),
+            ("Sebastian Löbig", 1862),
+        }
+        assert not diagnostic.exists()
+        assert (tmp_path / "batch.json.stale").read_text() == self.EARLIER
 
     @staticmethod
     def extract(tmp_path, *argv: str, transcription: bytes | None = None):
@@ -388,10 +510,8 @@ class TestIngestExtract:
     def test_an_earlier_batch_that_cannot_be_moved_is_named(
         self, tmp_path, monkeypatch, capsys
     ):
-        """When the move fails (here no <out>.stale name can be made: it
-        is too long, which holds as root too), the line says the batch
-        still at --out is not this run's, and the step still fails in one
-        line (#639)."""
+        """A denied rename leaves the earlier batch intact and identified
+        as stale, while extraction still reports its original failure."""
         self.fail_extraction(monkeypatch)
         from yizkr.pipeline.transcribe import Transcription
 
@@ -401,8 +521,16 @@ class TestIngestExtract:
                 artifact=MEDIA_REF, text="a page", engine="test"
             ).model_dump_json()
         )
-        out = tmp_path / ("b" * 250 + ".json")
+        out = tmp_path / "batch.json"
         out.write_text(self.EARLIER)
+        replace = Path.replace
+
+        def refuse_output_move(path, target):
+            if path == out:
+                raise PermissionError("fictional output is read-only")
+            return replace(path, target)
+
+        monkeypatch.setattr(Path, "replace", refuse_output_move)
 
         status = cli.main(
             [
@@ -418,8 +546,8 @@ class TestIngestExtract:
         assert captured.err == (
             "extraction failed: no claims extracted: 1 of 1 chunks failed; "
             f"{out} not written; an earlier batch is still at {out} and "
-            "could not be moved aside (File name too long): it is not this "
-            "run's\n"
+            "could not be moved aside (fictional output is read-only): "
+            "it is not this run's\n"
         )
         assert out.read_text() == self.EARLIER
         assert sorted(p.name for p in tmp_path.iterdir()) == sorted(
@@ -451,7 +579,15 @@ class TestIngestExtract:
         )
 
     @staticmethod
-    def extract_single(tmp_path, monkeypatch, response: str, client=None):
+    def extract_single(
+        tmp_path,
+        monkeypatch,
+        response: str,
+        client=None,
+        *,
+        cache=None,
+        strategy="single",
+    ):
         """`ingest extract --engine llm --strategy single` on a
         transcription of MEDIA, its engine answering `response` (or
         `client` as its engine); its status and its batch's path."""
@@ -471,11 +607,119 @@ class TestIngestExtract:
         status = cli.main(
             [
                 *("ingest", "extract", "--transcription", str(path)),
-                *("--engine", "llm", "--strategy", "single"),
+                *("--engine", "llm", "--strategy", strategy),
                 *("--out", str(out)),
+                *(["--cache", str(cache)] if cache is not None else []),
             ]
         )
         return status, out
+
+    @pytest.mark.parametrize("strategy", ["single", "auto"])
+    @pytest.mark.parametrize(
+        ("sentinel", "stop_reason"),
+        [(False, "end_turn"), (True, "max_tokens")],
+        ids=["missing-sentinel", "output-limit"],
+    )
+    def test_unfinished_single_answers_are_only_diagnostic(
+        self, tmp_path, monkeypatch, capsys, strategy, sentinel, stop_reason
+    ):
+        from tests.unit.test_pipeline import CLAIMS, Stopping
+        from yizkr.claims import ClaimBatch
+
+        answer = json.dumps(CLAIMS[1])
+        if sentinel:
+            answer += '\n{"done": true}'
+        engine = Stopping(answer, stop_reason)
+        out = tmp_path / "batch.json"
+        out.write_text(self.EARLIER)
+
+        status, _ = self.extract_single(
+            tmp_path, monkeypatch, answer, client=engine, strategy=strategy
+        )
+
+        assert status == EXIT_FAILED
+        assert not out.exists()
+        assert (tmp_path / "batch.json.stale").read_text() == self.EARLIER
+        assert (tmp_path / "batch.json.raw.txt").read_text() == answer
+        diagnostic = json.loads(
+            (tmp_path / "batch.json.partial.json").read_text()
+        )
+        assert diagnostic["status"] == "incomplete"
+        salvage = ClaimBatch.model_validate(diagnostic["diagnostic_batch"])
+        assert len(salvage.claims) == 1
+        assert salvage.claims[0].source.artifact == MEDIA_REF
+        assert capsys.readouterr().out == ""
+
+    @pytest.mark.parametrize(
+        ("outcome", "expected", "cleanup_fails"),
+        [
+            (None, EXIT_OK, False),
+            (OutputLimitReached(), EXIT_FAILED, False),
+            (KeyboardInterrupt(), EXIT_INTERRUPTED, False),
+            (
+                UsageLimitReached("fictional quota", reason="usage"),
+                EXIT_STOPPED,
+                False,
+            ),
+            (OutputLimitReached(), EXIT_FAILED, True),
+            (KeyboardInterrupt(), EXIT_INTERRUPTED, True),
+            (
+                UsageLimitReached("fictional quota", reason="usage"),
+                EXIT_STOPPED,
+                True,
+            ),
+        ],
+        ids=[
+            "complete",
+            "failed",
+            "interrupted",
+            "paused",
+            "failed-cleanup",
+            "interrupted-cleanup",
+            "paused-cleanup",
+        ],
+    )
+    def test_the_invocation_closes_its_client_behind_the_cache(
+        self, tmp_path, monkeypatch, capsys, outcome, expected, cleanup_fails
+    ):
+        from tests.unit.test_pipeline import CLAIMS, FakeLlm
+
+        class OwnedClient(FakeLlm):
+            closed = 0
+            config_hash = "fictional-lifecycle-client"
+
+            def complete(self, prompt, image_paths=()):
+                if outcome is not None:
+                    raise outcome
+                return super().complete(prompt, image_paths)
+
+            def close(self):
+                self.closed += 1
+                if cleanup_fails:
+                    raise RuntimeError("fictional cleanup failure")
+
+        answer = json.dumps(CLAIMS[1]) + '\n{"done": true}'
+        engine = OwnedClient(answer)
+        out = tmp_path / "batch.json"
+        out.write_text(self.EARLIER)
+
+        status, _ = self.extract_single(
+            tmp_path,
+            monkeypatch,
+            answer,
+            client=engine,
+            cache=tmp_path / "cache",
+        )
+
+        assert status == expected
+        assert engine.closed == 1
+        if cleanup_fails:
+            assert "fictional cleanup failure" in capsys.readouterr().err
+        if outcome is None:
+            assert out.exists()
+        else:
+            assert not out.exists()
+            assert (tmp_path / "batch.json.stale").read_text() == self.EARLIER
 
     def test_a_single_call_answer_without_claim_json_is_one_line(
         self, tmp_path, monkeypatch, capsys
@@ -753,17 +997,19 @@ class TestIngestExtract:
             self.extract(tmp_path)
         assert not (tmp_path / "batch.json").exists()
 
-    def test_an_extractor_without_attention_writes_its_empty_batch(
+    def test_an_empty_prepared_batch_reports_its_empty_result(
         self, tmp_path, capsys
     ):
-        """The claims-file extractor keeps no attention: an empty claims
-        file gives a batch without claims and nothing more to say."""
+        """An explicitly empty prepared file succeeds with an explanation,
+        distinguishable from missing or unusable model output."""
         (tmp_path / "claims.json").write_text('{"claims": []}')
         status, out = self.extract(tmp_path)
         assert status == EXIT_OK
         captured = capsys.readouterr()
         assert captured.out == f"wrote {out} (0 claims)\n"
-        assert captured.err == ""
+        assert "attention:" in captured.err
+        assert "empty" in captured.err
+        assert json.loads(out.read_text())["claims"] == []
 
     def test_a_batch_with_claims_prints_no_attention(
         self, tmp_path, monkeypatch, capsys

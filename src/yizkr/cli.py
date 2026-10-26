@@ -444,6 +444,22 @@ def _refuse_archive_for_vision(path: Path) -> None:
         )
 
 
+def _close_owned_client(client) -> None:
+    """Release an invocation's client without masking its primary failure."""
+    primary = sys.exception()
+    try:
+        close = getattr(client, "close", None)
+        if callable(close):
+            close()
+    except Exception as exc:
+        if primary is None:
+            raise
+        print(
+            f"warning: client cleanup failed: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+
+
 def cmd_transcribe(args) -> int:
     if args.engine == "llm":
         _refuse_archive_for_vision(args.file)
@@ -451,13 +467,16 @@ def cmd_transcribe(args) -> int:
     if args.engine == "textfile":
         if not args.text_file:
             sys.exit("--engine textfile requires --text-file")
-        from yizkr.pipeline.transcribe import TextFileTranscriber
+        from yizkr.pipeline.text_stages import TextReadRequest, read_text
 
-        transcriber = TextFileTranscriber(
-            args.text_file,
-            language=args.language,
-            fallback_language=args.fallback_language,
-        )
+        transcription = read_text(
+            TextReadRequest(
+                source=args.file,
+                text_file=args.text_file,
+                language=args.language,
+                fallback_language=args.fallback_language,
+            )
+        ).transcription
     elif args.engine == "llm":
         from yizkr.pipeline.llm import make_client
         from yizkr.pipeline.transcribe import (
@@ -470,18 +489,24 @@ def cmd_transcribe(args) -> int:
             preflight_vision_transcription([args.file])
         except MissingPrerequisite as exc:
             sys.exit(str(exc))
-        transcriber = LlmVisionTranscriber(
-            make_client(args.llm),
-            language=args.language,
-            fallback_language=args.fallback_language,
-        )
+        client = make_client(args.llm)
+        try:
+            transcriber = LlmVisionTranscriber(
+                client,
+                language=args.language,
+                fallback_language=args.fallback_language,
+            )
+            transcription = transcriber.transcribe(args.file)
+        finally:
+            _close_owned_client(client)
     else:  # htr
         from yizkr.pipeline.transcribe import HtrPlatformAdapter
 
         transcriber = HtrPlatformAdapter()
-    transcription = transcriber.transcribe(args.file)
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(transcription.model_dump_json(indent=2))
+        transcription = transcriber.transcribe(args.file)
+    from yizkr.pipeline.stages import atomic_write_text
+
+    atomic_write_text(args.out, transcription.model_dump_json(indent=2))
     print(
         f"wrote {args.out} ({len(transcription.text)} chars, "
         f"engine {transcription.engine})"
@@ -580,50 +605,73 @@ def cmd_extract(args) -> int:
         )
     if args.out.is_dir():
         sys.exit(f"--out {args.out} is a folder, not a batch file; refusing")
-    if args.engine == "file":
-        if not args.claims_file:
-            sys.exit("--engine file requires --claims-file")
-        from yizkr.pipeline.extract import ClaimFileExtractor
-
-        extractor = ClaimFileExtractor(args.claims_file)
-    else:
-        from yizkr.pipeline.chunking import (
-            AUTO_CHUNK_THRESHOLD,
-            ChunkedClaimExtractor,
-        )
-        from yizkr.pipeline.extract import LlmClaimExtractor
-        from yizkr.pipeline.llm import cached_client, make_client, open_cache
-
-        client = make_client(args.llm)
-        if args.cache is not None:
-            client = cached_client(
-                client, open_cache(args.cache), role="extract"
-            )
-        chunked = args.strategy == "chunked" or (
-            args.strategy == "auto"
-            and len(transcription.text) > AUTO_CHUNK_THRESHOLD
-        )
-        if chunked:
-            extractor = ChunkedClaimExtractor(
-                client,
-                state_dir=args.out.with_name(args.out.name + ".chunks"),
-                budget=args.chunk_budget,
-                retries=args.chunk_retries,
-                concurrency=args.chunk_concurrency,
-                read_preparation=True,
-            )
-        else:
-            raw_dump = args.out.with_name(args.out.name + ".raw.txt")
-            rejects_dump = args.out.with_name(args.out.name + ".rejected.json")
-            extractor = LlmClaimExtractor(
-                client,
-                raw_dump=raw_dump,
-                rejects_dump=rejects_dump,
-            )
+    if args.engine == "file" and not args.claims_file:
+        sys.exit("--engine file requires --claims-file")
     from yizkr.pipeline.extract import ExtractionFailed
+    from yizkr.pipeline.stages import atomic_write_text
+    from yizkr.pipeline.text_stages import (
+        ExtractionRequest,
+        extract,
+        validate_paths,
+    )
 
+    request = ExtractionRequest(
+        transcription=transcription,
+        artifact=transcription.artifact,
+        strategy="file" if args.engine == "file" else args.strategy,
+        claims_file=args.claims_file if args.engine == "file" else None,
+        state_dir=args.out.with_name(args.out.name + ".chunks"),
+        raw_dump=args.out.with_name(args.out.name + ".raw.txt"),
+        rejects_dump=args.out.with_name(args.out.name + ".rejected.json"),
+        diagnostic_dump=args.out.with_name(args.out.name + ".partial.json"),
+        budget=args.chunk_budget,
+        retries=args.chunk_retries,
+        concurrency=args.chunk_concurrency,
+        read_preparation=True,
+    )
+    outputs = [args.out, request.diagnostic_dump]
+    workspaces = []
+    if request.resolved_strategy == "single":
+        outputs.extend((request.raw_dump, request.rejects_dump))
+    elif request.resolved_strategy == "chunked":
+        workspaces.append(request.state_dir)
     try:
-        batch = extractor.extract(transcription, transcription.artifact)
+        validate_paths(
+            inputs=(args.transcription, args.media, request.claims_file),
+            outputs=outputs,
+            workspaces=workspaces,
+        )
+    except ValueError as exc:
+        sys.exit(f"{exc}; refusing")
+    owned_client = None
+    try:
+        try:
+            client = None
+            if args.engine == "llm":
+                from yizkr.pipeline.llm import (
+                    cached_client,
+                    make_client,
+                    open_cache,
+                )
+
+                owned_client = make_client(args.llm)
+                client = owned_client
+                if args.cache is not None:
+                    client = cached_client(
+                        client, open_cache(args.cache), role="extract"
+                    )
+            result = extract(request, client)
+            if request.diagnostic_dump in result.artifacts:
+                print(
+                    "partial extraction kept for diagnosis at "
+                    f"{request.diagnostic_dump}; "
+                    "not a completed batch",
+                    file=sys.stderr,
+                )
+            batch = result.require_complete()
+        finally:
+            _close_owned_client(owned_client)
+        atomic_write_text(args.out, batch.model_dump_json(indent=2))
     except BaseException as exc:
         # whatever ends the extraction (a failure, a pause, Ctrl-C, a bug),
         # an earlier run's batch at --out is moved aside to a free
@@ -647,31 +695,19 @@ def cmd_extract(args) -> int:
             file=sys.stderr,
         )
         return EXIT_FAILED
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(batch.model_dump_json(indent=2))
     print(f"wrote {args.out} ({len(batch.claims)} claims)")
     if not batch.claims:
         # why a batch without claims is empty, as the extractor accepted it
-        for reason in getattr(extractor, "attention", None) or ():
+        for reason in result.attention:
             print(f"attention: {reason}", file=sys.stderr)
-    rejects_path = getattr(extractor, "rejects_dump", None)
-    if rejects_path is not None and rejects_path.exists():
+    rejects_path = request.rejects_dump
+    if rejects_path in result.artifacts:
         rejected = len(json.loads(rejects_path.read_text()))
         print(
             f"warning: {rejected} claims failed validation and were NOT "
             f"written; reasons in {rejects_path}",
             file=sys.stderr,
         )
-    failed = getattr(extractor, "failed_chunks", None)
-    if failed:
-        print(
-            f"warning: {len(failed)} chunks failed "
-            f"({', '.join(failed)}); batch is PARTIAL — re-run to retry "
-            f"them (with --cache DIR, the calls that completed are "
-            f"answered from the cache)",
-            file=sys.stderr,
-        )
-        return EXIT_FAILED
     return 0
 
 
@@ -1707,7 +1743,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("batch.json"),
         help="the claim batch file; when the extraction does not complete, "
         "an earlier batch here is moved to the first free <out>.stale "
-        "(or <out>.stale.N). Beside it go <out>.chunks/ (chunked) or "
+        "(or <out>.stale.N), and salvaged claims go only to a diagnostic "
+        "<out>.partial.json envelope. Beside it go <out>.chunks/ (chunked) or "
         "<out>.raw.txt and <out>.rejected.json (single call)",
     )
     p.add_argument(

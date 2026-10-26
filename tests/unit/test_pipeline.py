@@ -678,6 +678,62 @@ class TestExtractedClaimsCiteTheirDocument:
         assert unapproved_depicts(batch) == [claim_id(claim)]
 
 
+class TestIngestTranscribe:
+    @pytest.mark.parametrize(
+        ("interrupted", "cleanup_fails"),
+        [(False, False), (True, False), (True, True)],
+    )
+    def test_vision_command_closes_its_client(
+        self, tmp_path, monkeypatch, capsys, interrupted, cleanup_fails
+    ):
+        from yizkr import cli
+        from yizkr.core.exits import EXIT_INTERRUPTED, EXIT_OK
+        from yizkr.pipeline import llm
+
+        class OwnedClient(FakeLlm):
+            closed = 0
+
+            def complete(self, prompt, image_paths=()):
+                if interrupted:
+                    raise KeyboardInterrupt()
+                return super().complete(prompt, image_paths)
+
+            def close(self):
+                self.closed += 1
+                if cleanup_fails:
+                    raise RuntimeError("fictional cleanup failure")
+
+        engine = OwnedClient(record_answer("Leopold Löbig, geboren 1914"))
+        monkeypatch.setattr(llm, "make_client", lambda *a, **kw: engine)
+        image = tmp_path / "marriage-certificate.png"
+        image.write_bytes(MEDIA)
+        out = tmp_path / "transcription.json"
+
+        status = cli.main(
+            [
+                "ingest",
+                "transcribe",
+                "--engine",
+                "llm",
+                "--file",
+                str(image),
+                "--out",
+                str(out),
+            ]
+        )
+
+        assert engine.closed == 1
+        assert status == (EXIT_INTERRUPTED if interrupted else EXIT_OK)
+        if cleanup_fails:
+            assert "fictional cleanup failure" in capsys.readouterr().err
+        if interrupted:
+            assert not out.exists()
+        else:
+            reading = Transcription.model_validate_json(out.read_text())
+            assert reading.artifact == MEDIA_REF
+            assert "Leopold Löbig, geboren 1914" in reading.text
+
+
 class TestIngestExtract:
     """`yizkr ingest extract`: its claims cite the artifact its
     transcription names, by the SHA-1 of its media (#102, #127). A

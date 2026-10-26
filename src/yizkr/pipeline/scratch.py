@@ -1415,12 +1415,6 @@ class ScratchDriver(Orchestrator):
             self.log(f"  derived media: {len(record.media)} recorded")
         self._prepared.add(doc.dir)
 
-    def _critique(self, doc: DocumentRun, batch: Any) -> None:
-        """Keep the batch for the critique stage: the orchestrator asks for
-        the critique right after the batch, and a scratch run makes it in
-        its own turn (_run_stage_of)."""
-        self._batches[doc.sha1] = batch
-
     # -- refreshes ------------------------------------------------------------
 
     def _refreshes_made(self) -> set[tuple[str, str]]:
@@ -1465,23 +1459,16 @@ class ScratchDriver(Orchestrator):
             )
         self._refreshing = []
 
-    def _reused_view(self, doc, view, load, recheck=None):
-        """The orchestrator's reuse of a view, with a view a refresh of
-        its role has made already in this run standing as any current
-        view does: a refresh makes each view again once in a run, however
-        many invocations it takes."""
-        role, stage = doc.views[view]
-        if (
-            role not in self.refresh
-            or (doc.sha1, stage) not in self._refreshed
-        ):
-            return super()._reused_view(doc, view, load, recheck)
-        refresh = self.refresh
-        self.refresh = tuple(other for other in refresh if other != role)
-        try:
-            return super()._reused_view(doc, view, load, recheck)
-        finally:
-            self.refresh = refresh
+    def _refresh_requested(
+        self, doc: DocumentRun, role: str, stage: str
+    ) -> bool:
+        """Refresh a requested role only until its view is saved in this run.
+
+        A successfully refreshed view stands across later invocations;
+        deciding whether to reuse it does not change the run's settings.
+        """
+        refreshed = (doc.sha1, stage) in self._refreshed
+        return super()._refresh_requested(doc, role, stage) and not refreshed
 
     def _run_stage_of(self, doc: DocumentRun, stage: str) -> None:
         """One per-document stage of one document, through the
@@ -1491,10 +1478,10 @@ class ScratchDriver(Orchestrator):
             self._transcription(doc)
             doc.state.status = TRANSCRIBED
         elif stage in ("extraction", "gedcom"):
-            self._derive(doc)
+            self._batches[doc.sha1] = self._derive(doc)
             doc.state.status = BATCHED
         else:
-            super()._critique(doc, self._batches[doc.sha1])
+            self._critique(doc, self._batches[doc.sha1])
 
     def _dispatch_one(self, doc: DocumentRun, stage: str) -> str:
         """Run a stage of a document, and fail only the document when it

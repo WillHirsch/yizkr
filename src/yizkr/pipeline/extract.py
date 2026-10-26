@@ -776,6 +776,7 @@ class LlmClaimExtractor:
         self.client = client
         self.raw_dump = raw_dump
         self.rejects_dump = rejects_dump
+        self.incomplete_reasons: list[str] = []
 
     def extract(
         self, transcription: Transcription, artifact: ArtifactRef
@@ -786,6 +787,7 @@ class LlmClaimExtractor:
         cites, where the transcription's record gives one (cite_artifact).
         The prompt carries the transcription's text with each printed page
         number beside its page's marker (Transcription.prompt_text)."""
+        self.incomplete_reasons = []
         property_keys, item_keys = vocabulary_prompt_lines()
         prompt = EXTRACTION_PROMPT.format(
             schema=claim_schema_prompt_text(),
@@ -820,6 +822,8 @@ class LlmClaimExtractor:
         places (`placed`, salvage_valid_claims). A rejected answer the
         client kept from an earlier call raises _KeptAnswerRejected,
         unless this is the call made `again` after one."""
+
+        self.incomplete_reasons = []
 
         def reject_answer(response: str, reason: str) -> None:
             if reject_response(self.client, response, reason) and not again:
@@ -871,9 +875,13 @@ class LlmClaimExtractor:
                 f"({len(rejects)} rejects{where})"
             )
         if cut_off:
-            reject_answer(response, f"extraction: {CUT_OFF_AT_LIMIT}")
+            reason = f"extraction: {CUT_OFF_AT_LIMIT}"
+            self.incomplete_reasons.append(reason)
+            reject_answer(response, reason)
         elif not finished:
-            reject_answer(response, "extraction: no terminal sentinel")
+            reason = "extraction: no terminal sentinel"
+            self.incomplete_reasons.append(reason)
+            reject_answer(response, reason)
         return batch
 
 

@@ -564,6 +564,61 @@ class TestOrder:
         assert command(tmp_path, corpus, fakes) == 0
         assert len(scratch.runs_in(runs_dir(tmp_path))) == 2
 
+    @pytest.mark.parametrize("stop", ["after-extraction", "during-critique"])
+    def test_text_critique_resumes_from_the_completed_batch(
+        self, tmp_path, fakes, stop
+    ):
+        corpus = Corpus(tmp_path / "corpus")
+        corpus.text(TEXT, "postcard-1938")
+
+        def interrupt_critique(what, name):
+            if what == "critique":
+                raise KeyboardInterrupt
+
+        if stop == "during-critique":
+            fakes.hook = interrupt_critique
+        driver = a_run(
+            tmp_path,
+            corpus,
+            fakes,
+            until="extraction" if stop == "after-extraction" else "critique",
+            refresh=["extract", "critique"],
+        )
+        if stop == "during-critique":
+            with pytest.raises(KeyboardInterrupt):
+                driver.run()
+        else:
+            assert driver.run() == EXIT_OK
+
+        (doc,) = driver.documents()
+        batch_before = doc.batch.read_bytes()
+        assert not doc.critique.exists()
+        states = run_state(RunDir(driver.state_dir))
+        assert states[(doc.sha1, "extraction")].status == DONE
+        assert states[(doc.sha1, "critique")].status == (
+            PENDING if stop == "after-extraction" else INTERRUPTED
+        )
+
+        fakes.hook = None
+        fakes.calls.clear()
+        resumed = Driver(
+            corpus.folder,
+            driver.state_dir,
+            until="critique",
+            refresh=["extract", "critique"],
+        )
+        assert resumed.run() == EXIT_OK
+        assert started(driver.state_dir, invocation=-1) == [
+            (doc.sha1, "critique")
+        ]
+        assert {what for what, _ in fakes.calls} == {"critique"}
+        assert doc.batch.read_bytes() == batch_before
+        assert json.loads(doc.critique.read_text()) == []
+        assert (
+            run_state(RunDir(driver.state_dir))[(doc.sha1, "critique")].status
+            == DONE
+        )
+
     def test_identical_bytes_are_one_document(self, tmp_path, fakes):
         corpus = small(tmp_path)
         shutil.copy(corpus.folder / TEXT, corpus.folder / "z-postcard.txt")
@@ -1468,6 +1523,57 @@ def corpus_events(run) -> list[tuple[str, str]]:
 
 
 class TestCorpusStages:
+    def test_incomplete_text_refresh_cannot_admit_the_old_batch(
+        self, tmp_path, fakes, monkeypatch
+    ):
+        from yizkr.pipeline import text_stages
+
+        corpus = Corpus(tmp_path / "corpus")
+        corpus.text(TEXT, "postcard-1938")
+        driver = a_run(tmp_path, corpus, fakes, until="critique")
+        assert driver.run() == EXIT_OK
+        (doc,) = driver.documents()
+        batch_before = doc.batch.read_bytes()
+        diagnostic = ClaimBatch.model_validate_json(batch_before)
+        diagnostic.claims = []
+
+        def incomplete(request, client, **kwargs):
+            return text_stages.ExtractionResult(
+                status="incomplete",
+                batch=None,
+                diagnostic_batch=diagnostic,
+                attention=["a source span remains unread"],
+                failed_chunks=["unfinished"],
+                failure_reasons={"unfinished": "source span unread"},
+                gaps=[],
+                artifacts=(),
+                dependencies={"source_sha1": request.artifact.sha1},
+                incomplete_reasons=["a source span remains unread"],
+            )
+
+        monkeypatch.setattr(text_stages, "extract", incomplete)
+        clustering = Recorder()
+        resumed = Driver(
+            corpus.folder,
+            driver.state_dir,
+            refresh=["extract"],
+            corpus_stages=[CorpusStage("clustering", clustering)],
+        )
+        fakes.calls.clear()
+        assert resumed.run() == EXIT_FAILED
+        assert doc.batch.read_bytes() == batch_before
+        assert not any(what == "critique" for what, _ in fakes.calls)
+        assert (doc.sha1, "critique") not in started(
+            driver.state_dir, invocation=-1
+        )
+        (context,) = clustering.contexts
+        assert context.documents == ()
+        (barrier,) = events(driver.state_dir, BARRIER, invocation=-1)
+        assert (barrier["documents"], barrier["failed"]) == (0, 1)
+        assert (doc.sha1, "extraction") not in stages_of(
+            driver.state_dir, scratch.REFRESHED, invocation=-1
+        )
+
     def test_they_run_once_past_the_barrier_over_the_completed_documents(
         self, tmp_path, fakes
     ):

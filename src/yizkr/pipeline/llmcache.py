@@ -1356,6 +1356,11 @@ class CachingClient:
     def model_identifier(self) -> str:
         return self._engine.model_identifier
 
+    @property
+    def config_hash(self) -> str:
+        """The engine configuration fingerprint used in this client's keys."""
+        return self._engine.config_hash
+
     def attempt(self, number: int) -> CachingClient:
         """This client for attempt `number` of the same call: each attempt
         is keyed, and kept, apart (llm.for_attempt), a give-up at the
