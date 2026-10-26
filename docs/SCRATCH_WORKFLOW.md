@@ -16,7 +16,7 @@ The contracts below describe current data products and processing. [Shared text-
 
 | Stage | Process type | Inputs | Persisted products |
 | --- | --- | --- | --- |
-| Transcription | Deterministic routing, text reading and validation; LLM vision where needed (`transcribe` role) | Source bytes and media SHA-1; optional `D/transcription.corrected.txt`; language and engine settings | `D/transcription.json`; language resolution in `D/state.json`; for containers, `D/derived-media.json`, image bytes and independent image transcriptions |
+| Transcription | Deterministic routing, text reading and validation; LLM vision where needed (`transcribe` role) | Source bytes and media SHA-1; optional `D/transcription.corrected.txt`; language and engine settings | `D/transcription.json`; language resolution in `D/state.json`; PPTX preparation also keeps `D/container-inventory.json`; container readers keep `D/derived-media.json`, image bytes and independent image transcriptions |
 | Extraction | LLM entity discovery, preparation reading and claim extraction (`extract` role); deterministic chunk packing, merging and validation | `D/transcription.json`, source SHA-1, claim schema, model vocabulary and optional `D/preparation.pointer.txt` | `D/batch.json`; `D/extraction/coverage.json`; optional `rejects.json`, `gaps.ndjson`, `containers.json`, `quotes.json` and `preparation.json` in that extraction directory; `D/gaps.csv` when gaps are surfaced |
 | Critique | Advisory LLM assessment (`critique` role), followed by deterministic finding validation | `D/batch.json`, the full numbered transcription and model vocabulary | `D/critique.json`; stage attention and anomaly records where applicable |
 | GEDCOM | Deterministic parser and adapter; no model calls | GEDCOM text and source SHA-1 | `D/batch.json`; warnings, unsupported tags and adaptation outcomes in `D/state.json` |
@@ -58,6 +58,7 @@ The main products have different meanings:
 
 | Product | Data shape | Used by |
 | --- | --- | --- |
+| `container-inventory.json` | Version 1 common container inventory; PPTX source parts, original-byte references, placement occurrences, eligibility, reading outcomes and limitations | PPTX preparation and local inspection; downstream citation and registration migration remains #716 |
 | `transcription.json` | `Transcription`: artifact SHA-1, text, language and engine; optional document class, pages and check flag | Extraction and critique; image locations for adjudication; source evidence for places; report/diff; reuse checks |
 | `batch.json` | `ClaimBatch`: `schema_version`, `extraction_run`, `entities[]`, `claims[]` | Critique, clustering, registration preflight, writing, report/diff |
 | `critique.json` | List of validated `Finding` records or `Invalid` records retaining the model's object and validation reasons | Report/diff and anomaly checks; claim-review notes in the separate reviewed-ingest workflow |
@@ -97,11 +98,13 @@ flowchart TD
     excerpt --> adopted[("R/excerpts/SHA1/<br/>transcription.json")]
 ```
 
-The vision response is a `TranscriptionRecord`: document class and pages with physical page index, printed page number, status, text, languages and notes. Code validates it and constructs the persisted `Transcription`. Its page records also locate text within the assembled transcription and record image SHA-1s and reading provenance. Text-file and correction transcriptions have no page records. Page notes are not source text.
+PPTX preparation also keeps the [structural inventory](ARCHITECTURE.md#container-inventory) before transcription, including when a transcription can be reused. `D/container-inventory.json` separates slide bodies from speaker notes and retains repeated placement occurrences; `D/container-parts/<sha1><original-suffix>` keeps their original bytes. It records native body/notes readings separately; image outcomes distinguish unattempted, unsupported, failed and read, including a successful blank reading. Eligibility follows the current exclusions. A missing, invalid or incompatible inventory, or missing/invalid original-byte files, is rebuilt from the original PPTX; legacy `derived-media.json` cannot reconstruct its occurrences. The current readers and graph consumers still use their existing products pending #716, and PDF inventory production remains #715.
+
+The vision response is a `TranscriptionRecord`: document class and pages with physical page index, printed page number, status, text, languages and notes. Code validates it and constructs the persisted `Transcription`. Its page records also locate text within the assembled transcription and record image SHA-1s and reading provenance. Text-file and correction transcriptions have no page records. These page notes are process commentary, distinct from a PPTX's source speaker notes; the existing deck transcription still combines the latter with slide text behind a notes marker.
 
 For a paged container, the additional products are:
 
-- `D/derived-media.json`: image identities, filenames and placements in the container.
+- `D/derived-media.json`: the legacy image record, with byte identities, filenames and page/slide lists; repeated occurrences on one page or slide are collapsed.
 - `D/derived-media/<sha1><suffix>`: the retained image bytes.
 - `D/derived-media/<sha1>.transcription.json`: an independently read image's checked transcription, when available.
 
