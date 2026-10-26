@@ -1543,15 +1543,6 @@ class TestUnifiedWindowsDocs:
         assert "`unifiedWindows`" in text and "`limitScope`" in text
         assert "the engine reads neither" in text
 
-    def test_adr_0025_is_amended(self):
-        text = (
-            ROOT / "docs" / "adr" / "0025-development-by-scratch-runs.md"
-        ).read_text()
-        amendment = text.split("Amended by #452 (2026-10-04):", 1)[1]
-        amendment = self.normalised(amendment.split("\n\n", 1)[0])
-        assert "`unifiedWindows`" in amendment
-        assert "reads neither" in amendment
-
     def test_limit_scope_comes_only_when_the_server_reports_one(self):
         """The CLI sends limitScope only when the server reports an
         overage scope, on 2.1.288 and 2.1.296 alike (#526), and 2.1.309
@@ -1562,20 +1553,6 @@ class TestUnifiedWindowsDocs:
             "when the server reports one, `limitScope`"
             in texts["LLM_CACHE.md"]
         )
-        assert "`limitScope` only when the server reports one" in (
-            adr_0025_amendment("Amended by #526 (2026-10-16):")
-        )
-
-
-def adr_0025_amendment(header: str) -> str:
-    """The paragraph of ADR-0025 that opens with `header`, up to the next
-    blank line, its whitespace folded."""
-    text = (
-        ROOT / "docs" / "adr" / "0025-development-by-scratch-runs.md"
-    ).read_text()
-    assert header in text, header
-    amendment = text.split(header, 1)[1].split("\n\n", 1)[0]
-    return " ".join(amendment.split())
 
 
 class TestPinDocs:
@@ -1630,16 +1607,6 @@ class TestPinDocs:
                 name,
                 versions,
             )
-
-    def test_adr_0025_is_amended_for_the_pin(self):
-        amendment = adr_0025_amendment("Amended by #559 (2026-10-23):")
-        assert f"claude CLI {self.PIN}" in amendment
-        assert "`_READ_ERRORS`" in amendment
-        assert "`usageCreditOffer`" in amendment
-        # #526's amendment stays, and its correction of #452's line holds
-        earlier = adr_0025_amendment("Amended by #526 (2026-10-16):")
-        assert "claude CLI 2.1.296" in earlier
-        assert "`limitScope` only when the server reports one" in earlier
 
     def test_the_readme_names_the_pin_and_both_settings(self):
         text = self.README.read_text()

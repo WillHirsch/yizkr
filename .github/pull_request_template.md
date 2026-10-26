@@ -1,93 +1,47 @@
 Closes #
 
 <!--
-Agent PRs open as drafts (`gh pr create --draft --base main`) and are
-marked ready only after the adversarial review passes and its fixes land
-(docs/AGENT_PROTOCOL.md §4). Work through the self-check at the end
-before the first push for review. One issue, one PR, one reviewable diff.
-Examples come only from the fictional universe (docs/EXAMPLES.md). Cite
-people by QID, and give metrics as aggregates only.
+Open agent PRs as drafts; mark ready after review and required fixes.
+Follow docs/AGENT_PROTOCOL.md. Use fictional examples only. Never include
+corpus content; real-data references use QIDs and aggregate metrics.
 -->
 
 **Exec label:** <!-- exec:local-agent | exec:cloud-agent-ok | exec:owner -->  
-**Requirement:** <!-- R1 to R6, R7-privacy, or "none: infrastructure/governance" -->
+**Requirement:** <!-- R1–R6, privacy, or none: infrastructure/governance -->
 
-## Summary
+## Change
 
-<!-- What changed and why, in a few lines. -->
+<!-- The problem, resulting behavior and material limitations. -->
 
-## Evidence
+## Verification
 
 <!--
-Commands run and their results, aggregates only:
-- `make lint` (Ruff and Prettier checks), and the full
-  `uv run pytest -q` once before the push that opens the PR for review,
-  and once per fix round (docs/TESTING.md)
-- needs:live-test: `make test-live` results from the central live run,
-  started when the draft opened, the commit it ran at, and how it cleared
-  the instance-contents key (docs/AGENT_PROTOCOL.md §5)
+Give relevant commands/results and explain what they establish. Use the
+risk-based guidance in docs/TESTING.md. Rely on CI's broad offline result
+for the reviewed revision; no duplicate full local run is required merely
+because a push or fix round occurred. Report meaningful gaps or failures.
+Mutation evidence is optional, not a required table for every edited test.
+For real-boundary checks, name the tested commit and intended tests that
+actually ran. An all-skipped run is not integration evidence.
 -->
 
-**Mutation evidence:**
-
 <!--
-For each new or changed test: the regression it guards, and the Markdown
-table from `uv run python scripts/mutate.py SPEC` showing its mutant
-killed, with the TOML spec in a collapsed <details> block so a reviewer
-can re-run it (docs/TESTING.md). Explain any survivor. For a new or
-changed live test, give a spec whose mutation has `live = true`: the
-central live run (docs/AGENT_PROTOCOL.md §5) runs it and posts the table.
-Or write "no new or changed tests".
--->
-
-**Edge cases:**
-
-<!--
-The edge cases considered, each with the test that covers it or the
-reason none is needed.
--->
-
-## Scratch-diff evidence
-
-<!--
-For needs:scratch-diff PRs only (docs/AGENT_PROTOCOL.md §5, ADR-0025). A
-local session fills this in; a cloud agent leaves it for one. Aggregates
-only: never paste report.html, report.json or the detailed diff.
-- Scratch run: its run id and commit, and the other PRs it batched, if any
-- Baseline: the latest completed run on main it diffs against, and whose
-  cached model calls it reuses
-- Stages whose outputs changed, each with the call components that
-  changed (the cache entries keep them; ADR-0032)
-- The aggregate report.md and the diff summary
-- Verdict: who read it (the owner, or a reviewer agent in a local session),
-  and whether any change is a regression; a PR whose effect stays unclear
-  in a batch gets a run of its own
-Write "not applicable" if the PR has no needs:scratch-diff label.
+When needs:scratch-diff applies, include the reason bounded evidence was
+insufficient, tested commit and baseline, stages, any batched PRs, aggregate
+report/diff summary and verdict. Detailed corpus reports remain local-only.
+Otherwise omit corpus-run evidence; changing a pre-write file alone does
+not require it.
 -->
 
 ## Owner actions
 
-<!--
-Everything the owner must run or decide, in one place, each with what to
-run or decide (docs/AGENT_PROTOCOL.md §9): a CLAUDE.md change's proposed
-wording, a merge order, a decision the merge accepts. Or write "none".
--->
+<!-- Required decisions or commands in one place, or "none". Identify any
+CLAUDE.md wording that still needs approval; do not request it again when
+already authorized. The owner merges after review. -->
 
-## Self-check
+## Self-review
 
-<!--
-Worked through before the first push for review: the reviewer's usual
-checklist (docs/AGENT_PROTOCOL.md §4). A fix round runs it again over
-what its own commits change.
--->
-
-- [ ] Docs move with code (ADRs, MODELING.md, READMEs, docs/). A CLAUDE.md change needs the owner's approval, so its proposed wording goes under Owner actions, not into the diff.
-- [ ] **Tests fail under their regressions.** Each new or changed test is shown, with `scripts/mutate.py`, to fail under the regression it guards (Mutation evidence above). A new or changed live test's spec (`live = true`) is given above, and the central live run runs it.
-- [ ] The edge cases considered are listed above.
-- [ ] **Current with main.** If origin/main had moved on, it is merged in: a merge commit, never a rebase.
-- [ ] Every example comes from the fictional universe (docs/EXAMPLES.md), in code, tests, docs, commit messages and this text.
-- [ ] Comments and docstrings in `src/yizkr/` describe how the code works now, with no development history (no issue or PR numbers, "previously" notes or bug-hunt accounts); ADR references are fine.
-- [ ] **Stages.** This PR changes no stage before write, or only in ways that cannot change its outputs (a comment, a rename, a refactor). Or it can change them (its code, a prompt, the manifest, a model, effort or parameters), and this PR and its issue carry the matching `stage:*` label, plus `needs:scratch-diff` if the stage already runs. Until the first whole-corpus scratch run (#145) starts, no PR carries `needs:scratch-diff` (the pre-baseline exception, docs/AGENT_PROTOCOL.md §2).
-- [ ] **Test runs.** Targeted tests while iterating, then the full `uv run pytest -q` once before the push that opens the PR for review, and once per fix round.
-- [ ] **No real data (self-reviewed, docs/AGENT_PROTOCOL.md §7).** I re-read the whole commit range (`git log -p origin/main..HEAD`) and this text. Nothing quotes, paraphrases or identifies corpus content. Issues are cited by #number and decisions by ADR number, with no plan-internal codes.
-- [ ] Owner actions, if any, are listed in one place, under Owner actions above.
+- [ ] The diff stays in scope; affected current documentation is accurate.
+- [ ] Relevant behavior and edge cases have evidence, with limitations reported above.
+- [ ] Examples are fictional; outgoing text and commits disclose no private corpus content.
+- [ ] Required owner actions are listed above, and existing approvals are identified.

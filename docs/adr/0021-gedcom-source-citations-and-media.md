@@ -1,5 +1,7 @@
 # ADR-0021: GEDCOM source citations (SOUR) and multimedia (OBJE)
 
+> **Temporary deprecated material — TODO [#730](https://github.com/WillHirsch/yizkr/issues/730):** this document still mixes current design details with development history and superseded prescriptions. Its historical material is not authoritative for new policy; use [REQUIREMENTS](../REQUIREMENTS.md), [CONTRACT](../CONTRACT.md) and the implemented code. Remove this note only after rewriting the document as current guidance with necessary rationale, or consolidating it elsewhere and deleting this file. The linked task tracks removal of all remaining historical and obsolete passages.
+
 Status: **accepted** — implemented in the GEDCOM adapter (`pipeline/gedcom.py`): SOUR citations fold into each claim's reference (step A) and OBJE objects become un-held media items linked with the new `image` property. Follows the honest census of the preceding change (issue #8). Step B (promoting a cited SOUR to its own artifact item) remains deferred to a future ADR (#168).  
 Amended by #308 (2026-09-28): the census reads each tag where it stands, so a divorce's PLAC, a MARR's TYPE and an undated DIV are counted: see Amendments.  
 Amended by #322 (2026-09-28): the adapter reads every occurrence of an event, of a DATE, PLAC or CAUS beneath one where it reads that tag, of a NAME's TYPE or NICK, and of a SEX or NCHI, so a repeated event or detail gives claims of its own, and a further HUSB or WIFE is counted: see Amendments.  

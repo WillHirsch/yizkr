@@ -1,5 +1,7 @@
 # ADR-0006: Semantically chunked claim extraction
 
+> **Temporary deprecated material — TODO [#730](https://github.com/WillHirsch/yizkr/issues/730):** this document still mixes current design details with development history and superseded prescriptions. Its historical material is not authoritative for new policy; use [REQUIREMENTS](../REQUIREMENTS.md), [CONTRACT](../CONTRACT.md) and the implemented code. Remove this note only after rewriting the document as current guidance with necessary rationale, or consolidating it elsewhere and deleting this file. The linked task tracks removal of all remaining historical and obsolete passages.
+
 Status: accepted (implemented in `pipeline/chunking.py`; validated by re-extracting the first trial's family tree chunked and diffing against the reviewed single-shot batch — 99% of facts identical, the remainder explained: richer symmetric spouse claims, and an ambiguous date correctly downgraded to year precision instead of silently guessed).  
 Amended by #87 (2026-09-27): chunk state lives in the stage store (§5).  
 Amended by #225 (2026-09-27): the stage store gives way to the LLM cache of ADR-0032, and `--cache` replaces `--resume` (§5, §7).  

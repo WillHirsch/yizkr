@@ -1,5 +1,7 @@
 # ADR-0037: The transcription record — a record per page, read by code instead of the wording
 
+> **Temporary deprecated material — TODO [#730](https://github.com/WillHirsch/yizkr/issues/730):** this document still mixes current design details with development history and superseded prescriptions. Its historical material is not authoritative for new policy; use [REQUIREMENTS](../REQUIREMENTS.md), [CONTRACT](../CONTRACT.md) and the implemented code. Remove this note only after rewriting the document as current guidance with necessary rationale, or consolidating it elsewhere and deleting this file. The linked task tracks removal of all remaining historical and obsolete passages.
+
 Status: **accepted** (owner decision 2026-09-29, #389). Like ADR-0031 and ADR-0036, the owner's merge of the PR that adds it is its acceptance. It takes in #214 (its split of the check into fail and flag becomes the fallback for wording), amends ADR-0008 and ADR-0015 in place, and resolves the transcription items of ADR-0035 §10. It lands before scratch run 1.
 
 Amended by #424 (2026-10-02): extraction locates claims by the printed page numbers the record gives. Every extraction prompt shows a page's printed number beside its `[Page N]` marker, on the marker's own line; a claim keeps the physical page as its `page number` and gains the printed one, from the record and never guessed, as a `printed page number` in its source block (§2, "Page numbers for extraction").

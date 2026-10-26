@@ -1,5 +1,7 @@
 # ADR-0034: Dates before the common era and in the Julian calendar are unsupported, and refused with an explicit failure
 
+> **Temporary deprecated material — TODO [#733](https://github.com/WillHirsch/yizkr/issues/733):** this document still mixes current design details with development history and superseded prescriptions. Its historical material is not authoritative for new policy; use [REQUIREMENTS](../REQUIREMENTS.md), [CONTRACT](../CONTRACT.md) and the implemented code. Remove this note only after rewriting the document as current guidance with necessary rationale, or consolidating it elsewhere and deleting this file. The linked task tracks removal of all remaining historical and obsolete passages.
+
 Status: **accepted** (owner decision 2026-09-28, #338). Like ADR-0031 and ADR-0036, the owner's merge of the PR that adds it is its acceptance. It amends ADR-0033 (§2's count of a century before the common era) and replaces the handling #333 and #340 gave such dates.
 
 ## Context

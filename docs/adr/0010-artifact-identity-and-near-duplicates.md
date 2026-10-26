@@ -1,5 +1,7 @@
 # ADR-0010: Artifact identity and near-duplicate handling
 
+> **Temporary deprecated material — TODO [#731](https://github.com/WillHirsch/yizkr/issues/731):** this document still mixes current design details with development history and superseded prescriptions. Its historical material is not authoritative for new policy; use [REQUIREMENTS](../REQUIREMENTS.md), [CONTRACT](../CONTRACT.md) and the implemented code. Remove this note only after rewriting the document as current guidance with necessary rationale, or consolidating it elsewhere and deleting this file. The linked task tracks removal of all remaining historical and obsolete passages.
+
 Status: accepted (content-hash key implemented; near-duplicate linking deferred, see "2 & 3. Near-duplicates and versions" and #162).  
 Amended by #186 (2026-09-27): uploads honour MediaWiki's warnings, with a file-naming rule for changed sources (§1, "Media files").  
 Amended by #225 (2026-09-27): a document directory without `derivations.json`, or whose files have lost their `state.json`, is set aside like a changed source's, and no held document seeds content dedup (§1).  

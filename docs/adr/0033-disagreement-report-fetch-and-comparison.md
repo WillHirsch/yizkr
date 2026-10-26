@@ -1,5 +1,7 @@
 # ADR-0033: Disagreement report: SPARQL fetch, Python comparison
 
+> **Temporary deprecated material — TODO [#734](https://github.com/WillHirsch/yizkr/issues/734):** this document still mixes current design details with development history and superseded prescriptions. Its historical material is not authoritative for new policy; use [REQUIREMENTS](../REQUIREMENTS.md), [CONTRACT](../CONTRACT.md) and the implemented code. Remove this note only after rewriting the document as current guidance with necessary rationale, or consolidating it elsewhere and deleting this file. The linked task tracks removal of all remaining historical and obsolete passages.
+
 Status: **proposed** — drafted for #266, which carries out the owner's decision of 2026-09-28 to land #227 as reviewed and then split the report.  
 Cites ADR-0002 (coexistence), ADR-0004 (the exploration tier), ADR-0009 (the place hierarchy) and ADR-0023 §4 (coexistence is cross-source only), which points here.  
 Amended by #231 (2026-09-28): the open question of which qualifier carries a marriage date is settled (MODELING.md, "Marriages, residences and other periods"), so a residence's or a spouse's start and end each have a range of their own, the fetch lists the two bounds that are new, and `compared_as_stated` is gone (§1, §2, §5).  

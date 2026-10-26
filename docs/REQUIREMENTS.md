@@ -1,29 +1,37 @@
 # Requirements
 
-These six requirements are all **essential**. A tool or design that cannot satisfy one of them elegantly is disqualified; the correct response to a gap is to build at a lower level, not to soften the requirement.
+The project helps people preserve, understand, connect and explore historical family records, and improve those interpretations without losing evidence or human work. Judge designs by representative workflows, evidence fidelity, disclosure control, recoverability and the cost of operating and changing the system.
 
-## R1 – Extensible, expressive knowledge graph
+These are intended outcomes, not a claim that every capability is implemented. Deliver useful capabilities incrementally; retaining a database need not wait for extraction development to finish. Make limitations explicit and prevent silent corruption or disclosure. [The current contract](CONTRACT.md) defines cross-cutting policy and outstanding implementation boundaries; [MODELING](MODELING.md) describes the implemented data conventions.
 
-People, points in time and time periods, places, and artifacts as first-class nodes, with typed relations between them. The schema must be extensible without redesign (new entity types and properties can be minted as needed).
+## R1 – Expressive, evolvable representation
 
-## R2 – Assertion-level provenance, uncertainty, and contradiction
+Represent entities, relationships, time and uncertainty faithfully, with independent identity where it is useful. This does not require a separate node for every date or value. Ordinary vocabulary additions should preserve existing evidence; new semantics may require code changes or a migration. Unsupported information must remain visible as a limitation or inspectable proposal, rather than being silently discarded or coerced into a misleading form.
 
-Every unit of knowledge is traceable to the _specific part_ of the specific artifact that asserts it. The model represents uncertain and doubtful assertions as stated by their sources.
+## R2 – Traceable evidence and interpretations
 
-**Clarified stance (see ADR-0002):** the core requirement is to _see_ disagreements, not to resolve them. The system must hold a neutral collection of potentially contradictory assertions – e.g. "Gustav Löbig was born on 7 January 1919 per his birth register extract, on 1 July 1919 per his naturalisation certificate, and in 1919 per a family tree" – so a reader can weigh the evidence even when no curator or algorithm has expressed a view. Resolution mechanisms are a bonus feature, never a dependency.
+Trace historical assertions to their sources and reliable locations within them. Distinguish uncertainty expressed by a source from uncertainty in machine interpretation or identity matching. Genuine disagreements may coexist, including within one source, without requiring a canonical answer.
 
-## R3 – Automated LLM ingestion, first-class
+Use appropriate provenance for each kind of information: source assertions, curator attestations, derived conclusions and operational or schema metadata have different origins. Do not invent precision, citations or independent witnesses. A second machine reading of the same source is an interpretation, not independent corroboration.
 
-Artifacts are ingested as-is and passed through an automated pipeline (transcription → structured claim extraction → entity resolution → review → write), with every written statement carrying both source and process provenance.
+## R3 – Automated, recoverable ingestion
 
-## R4 – Accessible manual curation
+Accept supported inputs as supplied and use deterministic processing or models as appropriate. Produce inspectable proposals with source and process provenance, and require scoped human authorization for retained results. Support retries, corrections, incremental additions and reprocessing without losing established identities or human work. Rebuilding a disposable database and extending a retained one are both enduring workflows.
 
-Manual curation is facilitated in an accessible way alongside automation, including for non-technical contributors.
+## R4 – Accessible, accountable curation
 
-## R5 – Face-region-to-person linking
+Nontechnical contributors should be able to inspect evidence, add source information or an explicit personal attestation, correct transcription or attribution, review identities and recover from mistakes. Give these actions an intelligible audit trail. Core tasks must not require CLI or schema knowledge; bulk tools can supplement accessible interfaces.
 
-With initial manual inputs, the system detects faces in photographs and links those _regions_ to person entities. The region and the identity link both carry provenance (who/what proposed, who confirmed).
+## R5 – Confirmed face-region associations
 
-## R6 – Interactive public exploration without foreknowledge
+Support detection and manual marking of photograph regions, and manual or automated proposals to associate those regions with people. Record how each region was created and who or what proposed and who confirmed each association. Every asserted face-to-person association (`depicts`) needs affirmative human confirmation. Several explicitly displayed associations may be confirmed together; general document or run approval must not silently approve faces. The detection or matching engine is replaceable.
 
-Interactive presentation that requires no knowledge of the underlying model or curation methods: graphical timelines, per-person image galleries, and interactive maps of places in context. Displays are plural-by-default (contradictory attributed values shown side by side, labeled by source).
+## R6 – Exploration for authorized audiences
+
+Provide timelines, image galleries, maps and other useful views that require no knowledge of the internal model. Begin with private access; disclosure to additional audiences and publication are separate, deliberate capabilities.
+
+Make disagreement visible and attributed detail accessible without requiring a preferred value. Honest summaries, grouping, pagination and filters are permitted; silently manufacturing consensus is not.
+
+## Privacy boundary
+
+Existing privacy controls remain in force. A non-privileged export is not a public-safe copy of the archive. Final wording of the additional privacy requirement and its cutoff remains in [#70](https://github.com/WillHirsch/yizkr/issues/70) and [#72](https://github.com/WillHirsch/yizkr/issues/72); no change to disclosure permissions or the existing cutoff is implied here.

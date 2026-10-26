@@ -2,6 +2,8 @@
 
 These diagrams describe the implemented system. Each has at most ten nodes; the overview abstracts subsystems that the later diagrams and the [pipeline guide](../src/yizkr/pipeline/README.md) expand. Arrows show data flow or processing order unless labelled otherwise.
 
+The [current contract](CONTRACT.md) defines approved outcomes and lifecycle policy. These diagrams show current code, including its writer tied to one identity map and its disposable scratch path; shared stage APIs, graph-snapshot reconciliation and incremental retained ingestion remain tracked implementation work.
+
 ## System overview
 
 The `yizkr` Python CLI coordinates ingestion, model bootstrap and presentation. Wikibase is the system of record for assertions; document views, proposal batches and model responses are resumable runtime files.
@@ -70,9 +72,9 @@ Implementation: [claim contract](../src/yizkr/claims.py), [writer](../src/yizkr/
 
 ## Reviewed ingestion
 
-The [ingestion overview and preparation detail](../src/yizkr/pipeline/README.md#the-ingest-loop-one-command-two-gates-repeat) show how `yizkr ingest run` advances documents through transcription, extraction, identity review where proposals exist, claim review and writing. Saving a reviewed CSV and rerunning the same command advances the workflow. Registration occurs at write time; stages before write do not access the wiki.
+The [ingestion overview and preparation detail](../src/yizkr/pipeline/README.md#the-ingest-loop-one-command-two-gates-repeat) show how `yizkr ingest run` advances documents through transcription, extraction, identity review where proposals exist, claim review and writing. Saving a reviewed CSV and rerunning the same command advances the workflow. Registration occurs at write time; the current document stages before write do not access the wiki.
 
-The same guide expands [serial ingestion](../src/yizkr/pipeline/README.md#resolving-entities-across-artifacts) and corpus clustering. These views complement the unattended development path below.
+The same guide expands [serial ingestion](../src/yizkr/pipeline/README.md#resolving-entities-across-artifacts) and corpus clustering. These views complement the unattended development path below. The current writer refuses a different identity map on an instance already written under another map; reviewed CSVs alone do not make it an incremental retained workflow. The contract permits explicit, recorded graph snapshots for reconciliation, with relevant write-precondition checks, but that path and durable assignment/review state are not implemented (#708, #85, #107, #130, #723).
 
 ## Whole-corpus scratch runs
 
@@ -97,7 +99,7 @@ Independently read images from PDFs or slide decks can join as documents of thei
 
 Scratch writes have no human approval stop, mark their run items as unratified development output, and omit `depicts` claims. A kept instance refuses this write path. Resuming unchanged work can reuse the instance or continue a recorded write phase; it does not unconditionally reset on every invocation. The pipeline guide details the [write side](../src/yizkr/pipeline/README.md#the-scratch-runs-write-side-scratchwritepy-adr-0025-1-2).
 
-Reports and diffs are explicit commands and can also inspect partial runs. The default baseline is the latest completed run on main. Detailed reports and diffs stay local; aggregate summaries supply development evidence. The [monitor](MONITOR.md) reads run events and writes pause/resume/abort requests that the driver observes between stages.
+Reports and diffs are explicit commands and can also inspect partial runs. The default baseline is the latest completed run on main. Detailed corpus reports and diffs stay local; aggregate summaries supply development evidence. Use whole-corpus comparisons when cross-document risk warrants them, alongside focused evidence selected under [TESTING.md](TESTING.md). Retained readiness is a separate owner decision based on supported workflows, not convergence of extraction outputs. The [monitor](MONITOR.md) reads run events and writes pause/resume/abort requests that the driver observes between stages.
 
 Implementation: [scratch driver](../src/yizkr/pipeline/scratch.py), [adjudication](../src/yizkr/pipeline/adjudication.py), [write stages](../src/yizkr/pipeline/scratchwrite.py), [runbook](runbooks/scratch-run.md), [reports](RUN_REPORT.md) and [diffs](RUN_DIFF.md).
 
@@ -118,9 +120,11 @@ flowchart TD
     compute -->|persist| view
 ```
 
-View reuse depends on its inputs' content hashes. A prompt, model or code change alone does not invalidate an existing view; reused transcriptions are also checked against the current transcription validator. A new scratch run rebuilds views, so changed parsing and validation run even when every model response comes from the cache.
+In the current implementation, view reuse depends on its inputs' content hashes. A prompt, model or code change alone does not invalidate an existing view; reused transcriptions are also checked against the current transcription validator. A new scratch run rebuilds views, so changed parsing and validation run even when every model response comes from the cache.
 
 Call keys include prompt and file content hashes, engine/model/effort and configuration, call kind, conversation ancestry where applicable, attempt and role epoch. Input-file paths are replaced by content hashes in the key; sources are identified by media SHA-1 rather than artifact QID, and mtimes do not key calls. This allows reuse across fresh document directories and wiki resets while the engine configuration stays the same.
+
+Persisted views and review state are separate from the response cache; cache removal alone does not invalidate them. Conversation forks bind to the opening answer whose context they assume. The current cache also owns provider session restoration and holds a process-wide lock; separating those responsibilities is future work (#726), not a feature shown in this diagram.
 
 `--refresh ROLE` rebuilds that role's views and bypasses cached answers once per key in the run. `--epoch ROLE=N` changes keys for calls that are made; combine it with refresh when existing views must be rebuilt. The [cache guide](LLM_CACHE.md) covers rejection, retries and resume semantics; implementation lives in [orchestration](../src/yizkr/pipeline/orchestrate.py) and [the LLM cache](../src/yizkr/pipeline/llmcache.py).
 

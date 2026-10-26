@@ -2,13 +2,15 @@
 
 This guide expands the [whole-corpus overview](ARCHITECTURE.md#whole-corpus-scratch-runs) into the inputs, processing and outputs of each implemented stage. Use the [scratch-run runbook](runbooks/scratch-run.md) for commands and operational procedures.
 
-In the paths below, `R` is a run directory such as `var/scratch/<run-id>`, and `D` is one document's directory within it. Ordinary documents use `R/<document-directory>/`; independently read embedded images use `R/excerpts/<media-sha1>/`. These are path templates, not example corpus contents. All these products are local runtime data.
+This is the implemented disposable rebuild mode. The [current contract](CONTRACT.md) also requires retained ingestion and permits explicit graph-snapshot inputs for reconciliation; the corresponding durable identity, review and stage APIs remain implementation work. Current scratch writes refuse retained instances and never confer human approval.
+
+In the paths below, `R` is a run directory such as `var/scratch/<run-id>`, and `D` is one document's directory within it. Ordinary documents use `R/<document-directory>/`; independently read embedded images use `R/excerpts/<media-sha1>/`. These are path templates, not example corpus contents. For real corpus runs, all these products are local-only runtime data.
 
 Rectangles represent processing or explicitly labelled transient data; cylinders represent persisted files and stores. Process labels distinguish **LLM** inference, **deterministic** local code and **instance I/O**. A stage can combine these. Stage model calls use the [response cache](LLM_CACHE.md) when configured; an LLM-labelled operation can therefore reuse a response without contacting the engine.
 
 ## Stage contracts
 
-Stage names in the logs are `transcription`, `extraction`, `critique`, `gedcom`, `clustering`, `reset`, `register`, `write`, `places` and `site`. `transcribe` and `extract` are the model-role names used by configuration and flags such as `--refresh`, rather than the logged stage names.
+The contracts below describe current data products and processing, not a shared stage API already implemented in the code. Stage names in the logs are `transcription`, `extraction`, `critique`, `gedcom`, `clustering`, `reset`, `register`, `write`, `places` and `site`. `transcribe` and `extract` are the model-role names used by configuration and flags such as `--refresh`, rather than the logged stage names.
 
 ### Per-document stages
 
@@ -252,7 +254,9 @@ Host-side state lives under the configured instance-state directory, outside `R`
 
 Implementation: [reset and registration stages](../src/yizkr/pipeline/scratchwrite.py), [instance state](../src/yizkr/core/instance.py), [reset](../src/yizkr/reset.py) and [registrar](../src/yizkr/pipeline/registrar.py).
 
-## Writing: accepted claims become graph statements
+<a id="writing-accepted-claims-become-graph-statements"></a>
+
+## Writing: validated scratch claims become graph statements
 
 ```mermaid
 flowchart TD
@@ -265,6 +269,8 @@ flowchart TD
     write --> wiki[("Wikibase statements<br/>and marked run items")]
     write --> result[("R/corpus/write/record.json<br/>outcomes and created_items")]
 ```
+
+Validation here means the code accepted the claim shape and write policy; it is not human approval or a finding that the historical assertion is true. The resulting statements remain unratified development output.
 
 Write supplies the original batch as `mapped_from` when resolving mentions, so omitting `depicts` claims does not change their identity. Scratch does not create or consume `batch.approved.json`, `batch.resolved.json` or identity and claim-review CSVs as part of this path. Extraction can still produce the diagnostic `gaps.csv`.
 

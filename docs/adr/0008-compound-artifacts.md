@@ -1,5 +1,7 @@
 # ADR-0008: Compound artifacts — presentations and derived media
 
+> **Temporary deprecated material — TODO [#731](https://github.com/WillHirsch/yizkr/issues/731):** this document still mixes current design details with development history and superseded prescriptions. Its historical material is not authoritative for new policy; use [REQUIREMENTS](../REQUIREMENTS.md), [CONTRACT](../CONTRACT.md) and the implemented code. Remove this note only after rewriting the document as current guidance with necessary rationale, or consolidating it elsewhere and deleting this file. The linked task tracks removal of all remaining historical and obsolete passages.
+
 Status: accepted  
 Amended by #50 (2026-09-27) and #128 (2026-09-28): see Amendments.  
 Amended by #289 (2026-09-28): an original excerpt that a compilation embeds is an artifact of its own, `part of` the compilation, as the owner decided on #178: see Amendments.  
