@@ -150,7 +150,7 @@ flowchart LR
 
 ## Fictional contract cases
 
-These cases use [the example universe](EXAMPLES.md) and specify target behavior; they do not claim the present pipeline passes them. [#709](https://github.com/WillHirsch/yizkr/issues/709) turns the relevant cases into a small deterministic acceptance set, without freezing temporary IDs or prompt wording.
+These cases use [the example universe](EXAMPLES.md) and specify target behavior; they do not claim the present pipeline passes them. The [small deterministic acceptance set](TESTING.md#semantic-acceptance) checks current contradictory-value, homonym, equivalence-review and face-approval behavior without freezing temporary IDs or prompt wording. The additional durability, correction and reuse requirements below remain acceptance work for their implementing tasks.
 
 | Case | Required outcome |
 | --- | --- |
