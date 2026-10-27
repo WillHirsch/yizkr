@@ -664,7 +664,7 @@ class DocumentRun:
         # a curator's pointer to the document's statement about how its
         # text was prepared, by its words (yizkr.pipeline.preparation)
         self.pointer = self.dir / "preparation.pointer.txt"
-        self.batch = self.dir / VIEWS["extraction"]
+        self.batch = self.dir / stage_planning.batch_stage(self.kind).artifact
         # the extractor's advisory side outputs: coverage, rejects, gaps
         self.extraction = self.dir / "extraction"
         self.equivalences = self.dir / "equivalences.csv"
@@ -677,11 +677,9 @@ class DocumentRun:
         # open-schema harness (ADR-0013)
         self.gaps = self.dir / "gaps.csv"
         self.critique = self.dir / VIEWS["critique"]
-        # each view the stages before the gates make -> (the model role
+        # each view the stages before the gates make -> (the refresh role
         # that makes it, the stage that makes it)
-        descriptors = [
-            stage_planning.STAGES[name] for name in DOCUMENT_STAGES[self.kind]
-        ]
+        descriptors = stage_planning.stages_for(self.kind)
         self.views = {
             self.dir / stage.artifact: (stage.role, stage.name)
             for stage in descriptors
@@ -1002,13 +1000,15 @@ class Orchestrator:
             return model, "the extraction model (--extract-model)"
         return os.environ.get(MODEL_VARIABLE) or None, f"${MODEL_VARIABLE}"
 
-    def _refuse_model_aliases(self) -> None:
+    def _refuse_model_aliases(
+        self, roles: Sequence[str] = MODEL_ROLES
+    ) -> None:
         """Refuse a run whose configuration names a model by an alias
         (rundir.model_alias): the engine would choose the model, and
         neither the run manifest nor the LLM cache's keys could say
         which."""
         refused = {}
-        for role in MODEL_ROLES:
+        for role in roles:
             model, where = self._configured_model(role)
             if model_alias(model):
                 refused.setdefault((where, model), []).append(role)
@@ -1230,7 +1230,7 @@ class Orchestrator:
             self.rundir.emit("held", reason=stopped, **where)
             raise DispatchStopped(f"{stage} not dispatched: {stopped}")
         self.rundir.emit("started", **where)
-        typed_result = stage in {"extraction", "critique"}
+        typed_result = stage in {"extraction", "gedcom", "critique"}
         if typed_result:
             detail = dict(doc.state.detail or {})
             outcomes = dict(detail.get("stage_results") or {})
@@ -1280,15 +1280,18 @@ class Orchestrator:
     def _processing_dependencies(
         self, doc: DocumentRun, stage: str
     ) -> dict[str, Any] | None:
-        """Declared generation dependencies for the migrated text path.
+        """Declared generation dependencies for text and deterministic stages.
 
         This does not start an engine or calculate its response-cache key.
         Provider installation/session checks remain at client dispatch.
         Other input adapters retain their existing file-based reuse rules.
         """
-        if doc.kind != "text":
+        descriptor = stage_planning.STAGES[stage]
+        if descriptor.process == "deterministic":
+            configuration = {}
+        elif doc.kind != "text":
             return None
-        if stage == "transcription":
+        elif stage == "transcription":
             configuration = {
                 "route": self._route(doc),
                 "language": self.language,
@@ -1737,22 +1740,27 @@ class Orchestrator:
         keep_inventory(inventory, {}, doc.dir)
 
     def _step_batch(self, doc: DocumentRun) -> ClaimBatch:
-        """Make the document's batch: the GEDCOM adapter's, or extraction
-        from its transcription view."""
-        if doc.kind == "gedcom":
-            return self._step_gedcom(doc)
-        return self._step_extract(doc, self._transcription(doc))
+        """Dispatch the batch producer declared by the document's plan."""
+        producers = {
+            "gedcom": self._step_gedcom,
+            "extraction": lambda doc: self._step_extract(
+                doc, self._transcription(doc)
+            ),
+        }
+        return producers[stage_planning.batch_stage(doc.kind).name](doc)
 
     def _step_gedcom(self, doc: DocumentRun) -> ClaimBatch:
-        from yizkr.pipeline.gedcom import adapt_gedcom, format_unsupported_tags
+        from yizkr.pipeline.gedcom import format_unsupported_tags
+        from yizkr.pipeline.gedcom_stages import GedcomRequest, derive_gedcom
 
-        result = self._run_stage(
-            doc,
-            "gedcom",
-            lambda: adapt_gedcom(
-                doc.source.read_text(), artifact=ArtifactRef(sha1=doc.sha1)
-            ),
-        )
+        def compute():
+            result = derive_gedcom(
+                GedcomRequest(doc.source, ArtifactRef(sha1=doc.sha1))
+            )
+            self._record_stage_result(doc, "gedcom", result)
+            return result
+
+        result = self._run_stage(doc, "gedcom", compute)
         detail = doc.state.detail or {}
         # the adapter is deterministic: say what it could not adapt when
         # that is news, not on every run
@@ -1780,7 +1788,7 @@ class Orchestrator:
             "gedcom_unsupported": result.unsupported_tags,
             "gedcom_outcomes": result.outcomes,
         }
-        return result.batch
+        return result.require_complete()
 
     def _transcription(self, doc: DocumentRun):
         """The document's transcription view, reused when it stands
@@ -2783,8 +2791,8 @@ class Orchestrator:
         downstream views and review basis. The caller schedules critique
         separately, after a complete batch is available.
         """
-        extracted = doc.kind != "gedcom"
-        if extracted:
+        producer = stage_planning.batch_stage(doc.kind)
+        if "transcription.json" in producer.input_artifacts:
             self._transcription(doc)
         batch = self._reused_view(
             doc, doc.batch, ClaimBatch.model_validate_json
@@ -2993,7 +3001,7 @@ class Orchestrator:
         batch = self._derived.get(doc.sha1)
         if batch is None:
             batch = self._derive(doc)
-            if doc.kind != "gedcom":
+            if doc.critique in doc.views:
                 self._critique(doc, batch)
             self._derived[doc.sha1] = batch
         elif doc.state.status in (PENDING, FAILED, PAUSED):
@@ -3210,8 +3218,6 @@ class Orchestrator:
         # never-ingest list, so a missing list cannot pass as an empty one
         if self.exclusions is None:
             raise ExclusionConfigError(MISSING_LIST)
-        # only full model ids enter the run manifest and the cache's keys
-        self._refuse_model_aliases()
         found = self.documents()
         if not found:
             self.log(f"no supported documents in {self.folder}")
@@ -3221,6 +3227,16 @@ class Orchestrator:
         # and the run goes on with the others
         unread = [doc for doc in found if doc.unreadable is not None]
         docs = [doc for doc in found if doc.unreadable is None]
+        # Only stages that can call a model need an engine configuration.
+        roles = {
+            stage.role
+            for doc in docs
+            for stage in stage_planning.stages_for(doc.kind)
+            if stage.process != "deterministic"
+        }
+        self._refuse_model_aliases(
+            tuple(role for role in MODEL_ROLES if role in roles)
+        )
         # once for the whole run, before any document: a PDF needs the
         # renderer the vision engine reads it through and the page count
         # the transcription check takes, whether its transcription comes

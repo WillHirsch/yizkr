@@ -20,7 +20,7 @@ The implemented scratch write path and reset guards refuse an instance marked ke
 
 ### 2. Stage-level reuse
 
-Document views persist separately from the model-response cache. The implemented reuse rules are in [ADR-0032](0032-output-reuse-at-the-engine-boundary.md) and [LLM_CACHE.md](../LLM_CACHE.md): content hashes track view inputs, text documents also record declared generation dependencies, and response keys track calls actually sent to the engine. Execution and estimation share a pure freshness decision and view observation; reports consume the same fixed stage descriptors. A new scratch run makes fresh document views and can reuse responses from earlier runs. Media/container and GEDCOM adapters retain input-based reuse and current validity checks until migrated (#719, #720).
+Document views persist separately from the model-response cache. The implemented reuse rules are in [ADR-0032](0032-output-reuse-at-the-engine-boundary.md) and [LLM_CACHE.md](../LLM_CACHE.md): content hashes track view inputs, text and GEDCOM documents also record declared generation dependencies, and response keys track calls actually sent to the engine. Execution and estimation share a pure freshness decision and view observation; reports consume the same fixed stage descriptors. A new scratch run makes fresh document views and can reuse responses from earlier runs. GEDCOM generation records its deterministic adapter/schema/resources, excluding model and cache settings. Media/container adapters retain input-based reuse and current validity checks until migrated (#719).
 
 Current document stages and corpus clustering read no live wiki. Their inputs are source material, recorded views and configuration. The contract also permits reconciliation/planning to consume an explicitly acquired, recorded graph snapshot or relevant projection, with relevant write preconditions checked before application. Source extraction must still derive source assertions from the source. The retained snapshot path and durable identity/review contracts are implementation work under #85, #107 and #130, following the [ingestion contract](../INGESTION_CONTRACT.md); they are not supplied by the present empty reconciliation step in `ingest run`.
 
@@ -58,7 +58,7 @@ The code already reads both the `Project:Kept state` page and the host's `kept.j
 
 ### 7. Implementation and readiness boundaries
 
-The contract is agreed policy; future code is not assumed implemented. [Shared text-stage operations](../ARCHITECTURE.md#shared-text-stage-operations) and text-stage freshness planning are implemented; remaining adapter migrations, durable identity/review state and provider-session separation remain tracked work. Existing approval, exclusion, provenance and reset guards stay in force until replacements are implemented and verified. Approving policy does not authorize a keeper run or a migration of real data.
+The contract is agreed policy; future code is not assumed implemented. [Shared text and deterministic GEDCOM operations](../ARCHITECTURE.md#shared-text-stage-operations) and their freshness planning are implemented; remaining adapter migrations, durable identity/review state and provider-session separation remain tracked work. Existing approval, exclusion, provenance and reset guards stay in force until replacements are implemented and verified. Approving policy does not authorize a keeper run or a migration of real data.
 
 ### 8. Protocol consequences
 
