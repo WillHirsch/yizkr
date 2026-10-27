@@ -316,11 +316,18 @@ def _value(claim: Claim) -> str:
 
 
 def artifact_places(transcription: Any) -> dict[str, str]:
-    """The place of each image the transcription places, by its SHA-1, as
-    the extraction prompts list it (extract.placed_lines): its first
-    place, "page 6, image 1" or "slide 2, image 1". None places none."""
+    """Located source occurrences shared with extraction, by media owner.
+
+    Readings without context retain their first legacy image marker.
+    """
     if transcription is None:
         return {}
+    if getattr(transcription, "source_context", None) is not None:
+        from yizkr.pipeline.source_context import (
+            artifact_places as source_places,
+        )
+
+        return source_places(transcription)
     unit = "slide" if transcription.engine == DECK_ENGINE else "page"
     places: dict[str, str] = {}
     for page in transcription.pages or ():

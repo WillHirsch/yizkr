@@ -21,12 +21,14 @@ from pydantic import (
     ConfigDict,
     Field,
     JsonValue,
+    PrivateAttr,
     field_validator,
     model_validator,
 )
 
 from yizkr.claims import ArtifactRef
 from yizkr.pipeline.stages import canonical_json, staging_path
+from yizkr.source_structure import StructuralLocator as StructuralLocator
 
 CONTAINER_INVENTORY = "container-inventory.json"
 Identifier = Annotated[str, Field(min_length=1)]
@@ -51,22 +53,6 @@ def _relative_file(value: str) -> str:
     ):
         raise ValueError("a product must name a safe relative file")
     return value
-
-
-class StructuralLocator(_Record):
-    """A native part or occurrence, before eligibility and reading filters.
-
-    ``position`` is the physical page/slide order, not a printed label or
-    an ordinal among the images selected for reading. ``path`` preserves a
-    native object/shape occurrence path when no native identifier suffices.
-    """
-
-    kind: Identifier
-    package_part: str | None = None
-    position: int | None = Field(default=None, ge=1)
-    path: str | None = None
-    native_id: str | None = None
-    relationship_id: str | None = None
 
 
 def structural_id(source: ArtifactRef, locator: StructuralLocator) -> str:
@@ -131,10 +117,31 @@ class SourceRepresentation(_Record):
     media_type: str
     method: Identifier
     eligibility: Eligibility = Field(default_factory=Eligibility)
+    placement_ids: list[Identifier] = Field(default_factory=list)
 
     @field_validator("file")
     @classmethod
     def representation_path(cls, value: str | None) -> str | None:
+        return _relative_file(value) if value is not None else None
+
+
+class MediaOwnerBinding(_Record):
+    """An explicit compatibility owner, retaining its canonical media bytes.
+
+    Reading representations may change without replacing this binding. This
+    records existing media-owner semantics, not a retained identity registry.
+    """
+
+    artifact: ArtifactRef
+    file: str | None
+    media_type: str
+    basis: Literal[
+        "original-media", "verified-legacy-reading", "prepared-part"
+    ]
+
+    @field_validator("file")
+    @classmethod
+    def owner_path(cls, value: str | None) -> str | None:
         return _relative_file(value) if value is not None else None
 
 
@@ -152,6 +159,14 @@ class SourcePart(_Record):
     eligibility: Eligibility = Field(default_factory=Eligibility)
     reading: ReadingOutcome = Field(default_factory=ReadingOutcome)
     representations: list[SourceRepresentation] = Field(default_factory=list)
+    source_role: (
+        Literal[
+            "independent", "page-representation", "auxiliary", "unresolved"
+        ]
+        | None
+    ) = None
+    owner_binding: MediaOwnerBinding | None = None
+    ownership_issue: str | None = None
     limitations: list[str] = Field(default_factory=list)
 
     @field_validator("file")
@@ -171,6 +186,11 @@ def _byte_files(parts: list[SourcePart]) -> Iterator[tuple[str, ArtifactRef]]:
         for product in (part, *part.representations):
             if product.file is not None:
                 yield product.file, product.byte_object
+        if (
+            part.owner_binding is not None
+            and part.owner_binding.file is not None
+        ):
+            yield part.owner_binding.file, part.owner_binding.artifact
 
 
 class Placement(_Record):
@@ -179,6 +199,7 @@ class Placement(_Record):
     child: Identifier
     locator: StructuralLocator
     order: int = Field(ge=1)
+    occurrence: Literal["paint", "reference", "annotation"] = "reference"
     layout: list[dict[str, JsonValue]] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
 
@@ -191,6 +212,7 @@ class ContainerInventory(_Record):
     placements: list[Placement] = Field(default_factory=list)
     complete: bool = True
     limitations: list[str] = Field(default_factory=list)
+    _new_bindings: set[str] = PrivateAttr(default_factory=set)
 
     @field_validator("format", mode="before")
     @classmethod
@@ -214,6 +236,16 @@ class ContainerInventory(_Record):
                 raise ValueError("a placement must reference recorded parts")
             if placement.parent == placement.child:
                 raise ValueError("a part cannot be placed inside itself")
+        children = {p.id: p.child for p in self.placements}
+        for part in self.parts:
+            if any(
+                children.get(placement) != part.id
+                for representation in part.representations
+                for placement in representation.placement_ids
+            ):
+                raise ValueError(
+                    "a representation must name its own placements"
+                )
         bindings: dict[str, str] = {}
         for file, byte_object in _byte_files(self.parts):
             digest = byte_object.sha1
@@ -303,7 +335,9 @@ def keep_inventory(
     )
 
 
-def read_inventory(directory: Path) -> ContainerInventory | None:
+def read_inventory(
+    directory: Path, *, verify_bytes: bool = True
+) -> ContainerInventory | None:
     """Load a supported inventory with intact references and named bytes."""
     saved = _read_regular(directory, CONTAINER_INVENTORY)
     if saved is None:
@@ -315,7 +349,9 @@ def read_inventory(directory: Path) -> ContainerInventory | None:
         inventory = ContainerInventory.model_validate(contents)
     except (ValueError, RecursionError):
         return None
-    for file, byte_object in _byte_files(inventory.parts):
+    for file, byte_object in (
+        _byte_files(inventory.parts) if verify_bytes else ()
+    ):
         payload = _read_regular(directory, file)
         if (
             payload is None

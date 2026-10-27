@@ -365,6 +365,11 @@ class PptxPackage:
                     child=child.id,
                     locator=locator,
                     order=order,
+                    occurrence="paint"
+                    if shapes
+                    and element.tag == A_NS + "blip"
+                    and attribute in {"embed", "link"}
+                    else "reference",
                     layout=[
                         _layout(shape, location) for shape, location in shapes
                     ],

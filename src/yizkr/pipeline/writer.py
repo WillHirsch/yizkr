@@ -478,6 +478,7 @@ from yizkr.claims import (
     document_subject_form,
     has_excerpt,
     load_vocabulary,
+    source_support_locators,
     vital_problems,
 )
 from yizkr.core.dates import UnsupportedDate
@@ -1676,6 +1677,13 @@ def pre_plan_refusals(
             for where, text in locators
             if (unknown := unknown_characters(text or ""))
         )
+        for supported in (source, stated):
+            if supported is not None and supported.support is not None:
+                faults.extend(
+                    f"its source-part locator {fault}"
+                    for text in source_support_locators(supported.support)
+                    for fault in _faults(text)
+                )
         faults.extend(
             f"it mentions entity {local_id!r}, whose label "
             f"{_unknown_fault(unnamed[local_id])}, so that no item is "
@@ -2943,6 +2951,16 @@ class BatchWriter:
                     language=excerpt.language,
                 )
             )
+        if source is not None and source.support is not None:
+            for locator in source_support_locators(source.support):
+                if len(locator) > TEXT_LIMIT:
+                    raise ValueError("source-part locator cannot be truncated")
+                source_ref.add(
+                    String(
+                        prop_nr=self.properties["source_part_locator"],
+                        value=locator,
+                    )
+                )
         return source_ref
 
     def _note_snaks(self, note: JudgementNote | None) -> list:
@@ -3706,6 +3724,14 @@ class BatchWriter:
         self._clusters, self._document, self._terms, self._identity_hash = (
             check_batch(batch, identity, mapped_from)
         )
+        if "source_part_locator" not in self.properties and any(
+            source is not None and source.support is not None
+            for claim in batch.claims
+            for source in (claim.source, claim.circumstance_source)
+        ):
+            raise ValueError(
+                "source-part provenance needs the current model bootstrap"
+            )
         # a bulk-accepted batch (whole-sheet accept-all, ADR-0023) gets a
         # distinct edit summary so MediaWiki history is the low-scrutiny
         # reappraisal queue — no graph flag, no staleness.

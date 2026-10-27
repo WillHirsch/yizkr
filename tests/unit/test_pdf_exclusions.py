@@ -171,6 +171,12 @@ def test_allowed_whole_pdf_is_rebuilt_without_unused_excluded_bytes(tmp_path):
     try:
         assert EXTRACT in result.text
         assert result.artifact.sha1 == hashlib.sha1(original).hexdigest()
+        assert result.source_context is not None
+        (reading,) = result.source_context.readings
+        assert reading.state == "attributed"
+        assert reading.owner == result.artifact
+        assert reading.support.locator.position == 1
+        assert result.text[reading.start : reading.end] == EXTRACT
         assert len(client.sent()) == 1
         submitted = client.sent()[0]
         assert submitted.startswith(b"%PDF-")

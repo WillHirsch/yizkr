@@ -186,6 +186,7 @@ def plan_view(
 # Prompt/resource bytes remain exact: whitespace can change a model request.
 _SCHEMA = (
     "claims.py",
+    "source_structure.py",
     "core/dates.py",
     "core/verbatim.py",
     "model/schema.py",
@@ -193,6 +194,7 @@ _SCHEMA = (
 )
 _READING = (
     "pipeline/transcribe.py",
+    "pipeline/source_context.py",
     "pipeline/language.py",
     "pipeline/transcription_record.py",
     "pipeline/transcription_check.py",

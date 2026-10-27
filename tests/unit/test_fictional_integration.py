@@ -152,18 +152,23 @@ def results(path: Path, cases) -> Path:
 
 
 def test_required_results_accept_completed_boundary_case(tmp_path):
-    path = results(tmp_path / "results.xml", [(*lane.REQUIRED_CASE, None)])
+    path = results(
+        tmp_path / "results.xml",
+        [(*case, None) for case in lane.REQUIRED_CASES],
+    )
     assert lane.verify_results(path) == {
-        "passed": 1,
+        "passed": len(lane.REQUIRED_CASES),
         "skipped": 0,
-        "cases": [lane.REQUIRED_CASE],
+        "cases": list(lane.REQUIRED_CASES),
     }
 
 
 @pytest.mark.parametrize("outcome", ["skipped", "failure", "error"])
 def test_required_results_refuse_unexecuted_or_failed_check(tmp_path, outcome):
     # In particular, pytest can exit zero with a skipped required case.
-    path = results(tmp_path / "results.xml", [(*lane.REQUIRED_CASE, outcome)])
+    path = results(
+        tmp_path / "results.xml", [(*lane.REQUIRED_CASES[0], outcome)]
+    )
     with pytest.raises(lane.LaneError, match="failed or skipped"):
         lane.verify_results(path)
 
@@ -176,8 +181,22 @@ def test_required_results_refuse_missing_boundary_case(tmp_path, cases):
 
 
 def test_required_results_refuse_duplicate_boundary_case(tmp_path):
-    case = (*lane.REQUIRED_CASE, None)
+    case = (*lane.REQUIRED_CASES[0], None)
     path = results(tmp_path / "results.xml", [case, case])
+    with pytest.raises(lane.LaneError, match="did not run exactly once"):
+        lane.verify_results(path)
+
+
+@pytest.mark.parametrize("omitted", range(len(lane.REQUIRED_CASES)))
+def test_required_results_refuse_any_omitted_boundary_case(tmp_path, omitted):
+    path = results(
+        tmp_path / "results.xml",
+        [
+            (*case, None)
+            for index, case in enumerate(lane.REQUIRED_CASES)
+            if index != omitted
+        ],
+    )
     with pytest.raises(lane.LaneError, match="did not run exactly once"):
         lane.verify_results(path)
 
@@ -356,7 +375,9 @@ def test_leftover_test_volume_fails_lane_and_keeps_recovery_marker(
         if args[:3] == ["git", "rev-parse", "HEAD"]:
             output = "fixture-revision\n"
         elif "cp" in args:
-            results(Path(args[-1]), [(*lane.REQUIRED_CASE, None)])
+            results(
+                Path(args[-1]), [(*case, None) for case in lane.REQUIRED_CASES]
+            )
         elif "volume" in args and "ls" in args:
             assert any(
                 arg.startswith("label=com.docker.compose.project=")
@@ -377,7 +398,7 @@ def test_leftover_test_volume_fails_lane_and_keeps_recovery_marker(
     assert (state / "instance.json").exists()
     if command == "run":
         evidence = json.loads((state / "evidence.json").read_text())
-        assert evidence["checks"]["passed"] == 1
+        assert evidence["checks"]["passed"] == len(lane.REQUIRED_CASES)
         assert evidence["status"] == "failed"
         assert evidence["teardown"] == "failed"
         assert evidence["remaining_resources"]["volume"] == 1

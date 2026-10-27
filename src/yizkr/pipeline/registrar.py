@@ -25,10 +25,13 @@ registration writes:
   its media file and SHA-1, ``part of`` the container once per slide of a
   deck, or page of a PDF, it is on.
 
-**Identity is the SHA-1 alone.** An artifact is the item whose `media
-SHA-1` is the SHA-1 of its file's bytes, and with none a new item is made.
-A title never finds an item, so two files that share a title are two
-artifacts. A new item whose title is already another item's label takes
+**Owner lookup uses canonical media SHA-1.** An artifact is found by its
+recorded media bytes; a title never finds an item. Common container
+projection supplies verified owner bindings separately from current reading
+representations. A generated image may reuse an existing graph owner only
+with matching original-part composition evidence; identical rendered pixels
+alone do not establish source equivalence. A new item whose title is
+already another item's label takes
 a short content tag, ``"<title> [<sha1[:8]>]"``: a label convention the
 writer's flagging of registered artifacts reads, and that keeps clear of
 Wikibase's refusal of two items with one label and description, not a
@@ -126,7 +129,13 @@ import unicodedata
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
+from typing import TYPE_CHECKING
 
+from yizkr.claims import (
+    PlacementSupport,
+    SourceSupport,
+    source_support_locators,
+)
 from yizkr.core.corpus import ExclusionList, file_sha1, is_excluded
 from yizkr.core.wiki import WikiClient
 from yizkr.pipeline.presentation import IMAGE_SUFFIXES, DerivedMediaRecord
@@ -143,12 +152,33 @@ from yizkr.pipeline.presentation import IMAGE_SUFFIXES, DerivedMediaRecord
 # tagged label too (media_object_label)
 from yizkr.pipeline.writer import (
     TERM_LIMIT,
+    TEXT_LIMIT,
     extends,
     half_flag,
     media_object_label,
     unknown_characters,
 )
 from yizkr.pipeline.writer import stored_term as _stored_term
+
+if TYPE_CHECKING:
+    from yizkr.pipeline.container_sources import ContainerSources
+
+
+@dataclass
+class _RegistrationMedium:
+    names: list[str]
+    slides: list[int]
+    file: str
+    locators: dict[int, tuple[str, ...]] = field(default_factory=dict)
+
+
+@dataclass
+class _RegistrationMedia:
+    source_sha1: str
+    container: str
+    title: str
+    media: dict[str, _RegistrationMedium]
+
 
 # the categories of the characters that show nothing: format characters
 # (such as the zero-width space and the bidirectional marks), controls,
@@ -436,16 +466,6 @@ def _statement_key(claim) -> tuple:
     )
 
 
-def _cites(claim, stated_in_pid: str, source_qid: str) -> bool:
-    """Does any reference block on `claim` cite `stated in -> source`?"""
-    for reference in claim.references.references:
-        for snak in reference.snaks.get(stated_in_pid) or []:
-            value = (snak.datavalue or {}).get("value") or {}
-            if isinstance(value, dict) and value.get("id") == source_qid:
-                return True
-    return False
-
-
 def _ensure_referenced(
     entity, claim, stated_in_pid: str, source_qid: str
 ) -> str:
@@ -453,10 +473,10 @@ def _ensure_referenced(
 
     * no equal statement (same property, value AND qualifiers): `claim`
       is appended as a new statement -> "added";
-    * an equal statement exists but cites no `stated in -> source`: the
-      claim's reference blocks are appended to it, an agreeing second
-      source (the writer's rule; ADR-0002, ADR-0003) -> "referenced";
-    * already cited -> "present" (safe re-run).
+    * an equal statement exists but lacks a proposed reference's facts:
+      that block is appended, preserving earlier evidence while adding a
+      source or a more precise native locator -> "referenced";
+    * every proposed reference's facts are already held -> "present".
 
     Existing statements and their references are never removed or
     rewritten (CLAUDE.md rule 3). The caller writes the entity.
@@ -465,13 +485,65 @@ def _ensure_referenced(
     for existing in entity.claims.get(claim.mainsnak.property_number):
         if _statement_key(existing) != key:
             continue
-        if _cites(existing, stated_in_pid, source_qid):
-            return "present"
+        added = False
         for reference in claim.references.references:
+            wanted = _reference_snaks(reference)
+            if any(
+                wanted <= _reference_snaks(held)
+                for held in existing.references.references
+            ):
+                continue
             existing.references.add(reference)
-        return "referenced"
+            added = True
+        return "referenced" if added else "present"
     _append(entity, claim)
     return "added"
+
+
+def _reference_snaks(reference) -> frozenset[str]:
+    """Reference facts, ignoring API hashes and order."""
+    return frozenset(
+        json.dumps(snak, sort_keys=True, separators=(",", ":"))
+        for snaks in reference.get_json()["snaks"].values()
+        for snak in snaks
+    )
+
+
+def _composition_source_parts(
+    entity, properties: Mapping[str, str], container: str, source_sha1: str
+) -> set[str]:
+    """Original parts that this item already records as its composition.
+
+    A matching caption or other claim citation is not an ownership binding.
+    Only the container's own located ``part of`` evidence establishes it.
+    """
+    locator_pid = properties.get("source_part_locator")
+    if locator_pid is None:
+        return set()
+    result = set()
+    for claim in entity.claims.get(properties["part_of"]) or ():
+        target = (claim.mainsnak.datavalue or {}).get("value", {})
+        if not isinstance(target, dict) or target.get("id") != container:
+            continue
+        for reference in claim.references.references:
+            if not any(
+                isinstance(value := (snak.datavalue or {}).get("value"), dict)
+                and value.get("id") == container
+                for snak in reference.snaks.get(properties["stated_in"]) or ()
+            ):
+                continue
+            for snak in reference.snaks.get(locator_pid) or ():
+                try:
+                    value = json.loads((snak.datavalue or {}).get("value"))
+                except (TypeError, ValueError):
+                    continue
+                if (
+                    isinstance(value, dict)
+                    and value.get("container") == source_sha1
+                    and isinstance(value.get("part"), str)
+                ):
+                    result.add(value["part"])
+    return result
 
 
 def _item_claim(pid: str, qid: str, stated_in_pid: str, source_qid: str):
@@ -497,13 +569,27 @@ def _string_claim(pid: str, value: str, stated_in_pid: str, source_qid: str):
 
 
 def _part_of_claim(
-    part_of: str, page_number: str, stated_in: str, whole: str, page: int
+    part_of: str,
+    page_number: str,
+    stated_in: str,
+    whole: str,
+    page: int,
+    *,
+    locator_property: str | None = None,
+    locators: Iterable[str] = (),
 ):
     """``part of -> whole`` on page `page`, stated in the whole."""
     from wikibaseintegrator.datatypes import String
 
     claim = _item_claim(part_of, whole, stated_in, whole)
     claim.qualifiers.add(String(prop_nr=page_number, value=str(page)))
+    for locator in locators:
+        if locator_property is None or len(locator) > TEXT_LIMIT:
+            raise ValueError(
+                "source-part locator cannot be omitted or truncated"
+            )
+        for reference in claim.references.references:
+            reference.add(String(prop_nr=locator_property, value=locator))
     return claim
 
 
@@ -1168,8 +1254,120 @@ class Registrar:
         instance.fragments[key] = fragment.id
         return fragment.id
 
+    def register_container_sources(
+        self,
+        sources: ContainerSources,
+        directory: Path,
+        *,
+        title: str,
+    ) -> dict[str, str]:
+        """Register verified bound owners from the common container projection.
+
+        Canonical owner bytes retain the existing media-SHA lookup and upload
+        identity even when a current reading representation changes. Native
+        source/placement identities enrich composition references; they never
+        allocate another owner or rewrite an established artifact binding.
+        Unresolved source parts are not in the admitted ``sources`` mapping.
+        A prepared image cannot adopt an existing graph owner by matching
+        reading bytes alone: its original-part composition must already be
+        recorded. Complete original media and verified legacy bindings keep
+        their explicit compatibility semantics.
+        """
+        inventory = sources.inventory
+        parts = {part.id: part for part in inventory.parts}
+        prepared = {
+            key: {
+                part_id
+                for part_id in bound.part_ids
+                if (binding := parts[part_id].owner_binding) is not None
+                and binding.basis == "prepared-part"
+            }
+            for key, bound in sources.sources.items()
+        }
+        if any(prepared.values()):
+            instance = self._read()
+            properties, _ = self.client.vocabulary()
+            container = instance.by_sha1.get(inventory.source.sha1)
+            for key, required in prepared.items():
+                found = instance.by_sha1.get(key)
+                if not required or found is None:
+                    continue
+                item = self.client.wbi.item.get(found)
+                held = (
+                    _composition_source_parts(
+                        item, properties, container, inventory.source.sha1
+                    )
+                    if container is not None
+                    else set()
+                )
+                if not required <= held:
+                    raise ValueError(
+                        f"prepared source {key} matches "
+                        f"existing owner {found} "
+                        "without its original source-part binding; "
+                        "verify the binding before registration"
+                    )
+        media = {}
+        for key, bound in sources.sources.items():
+            if key != bound.owner.sha1:
+                raise ValueError("bound source key differs from its owner")
+            located: dict[int, set[str]] = {}
+            for placement in bound.placements:
+                if placement.occurrence != "paint":
+                    continue
+                page = placement.locator.position
+                if page is None:
+                    continue
+                part = parts[placement.child]
+                support = SourceSupport(
+                    container=inventory.source,
+                    part_id=part.id,
+                    locator=part.locator,
+                    placements=[
+                        PlacementSupport(
+                            id=placement.id, locator=placement.locator
+                        )
+                    ],
+                )
+                located.setdefault(page, set()).update(
+                    source_support_locators(support)
+                )
+            if any(
+                len(locator) > TEXT_LIMIT
+                for values in located.values()
+                for locator in values
+            ):
+                raise ValueError("source-part locator cannot be truncated")
+            media[key] = _RegistrationMedium(
+                names=list(bound.names),
+                slides=sorted(located),
+                file=bound.file,
+                locators={
+                    page: tuple(sorted(values))
+                    for page, values in located.items()
+                },
+            )
+        record = _RegistrationMedia(
+            source_sha1=inventory.source.sha1,
+            container=inventory.container,
+            title=title,
+            media=media,
+        )
+        return self._register_media(record, directory)
+
     def register_derived_media(
         self, record: DerivedMediaRecord, directory: Path
+    ) -> dict[str, str]:
+        """Compatibility adapter for an explicit older byte-owner record.
+
+        It supplies no native occurrence evidence. Container runs use
+        ``register_container_sources`` after reconstructing inventory from
+        their original bytes, preserving verified existing owner bindings.
+        """
+        return self._register_media(record, directory)
+
+    def _register_media(
+        self, record: DerivedMediaRecord | _RegistrationMedia, directory: Path
     ) -> dict[str, str]:
         """Ensure each medium a container embeds has its artifact item and
         its file on the wiki, from the record of them kept in `directory`
@@ -1178,10 +1376,11 @@ class Registrar:
         {media SHA-1 -> QID}.
 
         The container is the item whose `media SHA-1` is the record's
-        source SHA-1, registered before its media. Each medium is found by
-        its own SHA-1 (ADR-0010), so an image that several decks or PDFs
-        embed, or that is also ingested on its own, is one item, `part of`
-        each container. It is labelled ``"<container title> — <name>"`` by
+        source SHA-1, registered before its media. Each admitted medium is
+        found by its canonical owner's SHA-1 (ADR-0010). Complete original
+        image bytes shared across containers retain one item, `part of`
+        each container; prepared images reach this loop after their owner
+        binding check. It is labelled ``"<container title> — <name>"`` by
         its first name: in the deck's archive (``image1.png``), or its
         first place in the PDF (``page 6, image 1``; ADR-0008), of the
         names that show something once stored (_shows), or ``image N``
@@ -1220,6 +1419,13 @@ class Registrar:
                 f"register the container before the media it embeds"
             )
         properties, items = self.client.vocabulary()
+        located = any(
+            getattr(medium, "locators", {}) for medium in record.media.values()
+        )
+        if located and "source_part_locator" not in properties:
+            raise ValueError(
+                "source-part provenance needs the current model bootstrap"
+            )
         instance_of = properties["instance_of"]
         stated_in = properties["stated_in"]
         media_file = properties["media_file"]
@@ -1318,6 +1524,10 @@ class Registrar:
                         stated_in,
                         container,
                         slide,
+                        locator_property=properties.get("source_part_locator"),
+                        locators=getattr(medium, "locators", {}).get(
+                            slide, ()
+                        ),
                     )
                     for slide in medium.slides
                 ),

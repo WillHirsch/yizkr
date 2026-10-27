@@ -27,22 +27,17 @@ retain their identity when eligibility or reading outcomes change. XML text
 order and raw transforms are preserved without inferring visual reading order
 or composed page geometry (yizkr.pipeline.pptx_inventory).
 
-`record_derived_media` persists this inventory and its original bytes, then
-projects the existing image-only `derived-media.json` for consumers still using
-that record. The compatibility projection deduplicates image bytes and retains
-relationship-only images; it does not establish visible placements. PDFs still
-produce their legacy records independently. Beside each independently read
-image's bytes, its transcription names the image by its SHA-1.
+Readers and registration use `container_sources` to project that inventory's
+verified owner bindings, current reading inputs and native paint occurrences.
+Canonical owner bytes are separate from a newly prepared reading input.
+Speaker notes and slide-body text have separate source-part support even when
+they cite the same container. Relationship-only media remains structural
+evidence without gaining a visible placement or a fresh independent owner.
 
-The write registers a container's derived media from that record
-(`Registrar.register_derived_media` in yizkr.pipeline.registrar), after
-the container itself: every statement a container contributes to a
-derived item is referenced ``stated in -> that container`` (MODELING.md;
-ADR-0003). Derived items are keyed on content (ADR-0010), so an image
-shared by several decks or PDFs is one item that is ``part of`` each of
-them. A PDF's or a deck's image with a transcription of its own is also a
-document of its own, whose claims cite the image
-(yizkr.pipeline.orchestrate, ExcerptRun; ADR-0008).
+`record_derived_media` and its reader remain compatibility adapters for an
+explicit old record; the current pipeline publishes `container-inventory.json`.
+Independently read images keep per-owner transcription files, whose claims cite
+that owner and carry the original source part and placement support.
 """
 
 from __future__ import annotations
@@ -72,7 +67,6 @@ from yizkr.pipeline.containers import (
     VISION_SUFFIXES,
     ContainerPage,
     ContainerPages,
-    PlacedImage,
     image_size,
     is_decoration,
 )
@@ -306,48 +300,51 @@ def slide_pages(
 ) -> ContainerPages:
     """`read_slides` of a deck already unpacked. Its media are known by
     their paths in the archive, as the slides' relationships name them."""
+    from yizkr.pipeline.container_sources import (
+        materialize_images,
+        prepare_sources,
+        project_sources,
+    )
+
     _require_slide_bodies(content)
-    media: dict[str, tuple[str, bytes]] = {}
-    names: dict[str, list[str]] = {}
-    for medium in content.media:
-        sha1 = hashlib.sha1(medium.data).hexdigest()
-        names.setdefault(sha1, []).append(medium.name)
-        media[medium.target] = (sha1, medium.data)
-    suffix = {sha1: record_suffix(found) for sha1, found in names.items()}
-    all_names = inventory_aliases(content.inventory)
-    read = ContainerPages([])
-    noted: set[str] = set()
-    for slide in content.slides:
-        page = ContainerPage(slide.number, SLIDE_XML, slide_text(slide))
-        read.pages.append(page)
-        for target in slide.media:
-            if target not in media:
-                continue
-            sha1, data = media[target]
-            if excluded(sha1, all_names.get(sha1, names[sha1])):
-                continue
-            reason = unread_reason(suffix[sha1], data)
-            if reason is not None:
-                if reason != DECORATION and sha1 not in noted:
-                    noted.add(sha1)
-                    read.notes.append(
-                        f"{UNREAD_IMAGE}: slide {slide.number}, "
-                        f"{PurePosixPath(target).name} (sha1 {sha1[:12]}): "
-                        f"{reason}, so it is not read"
+    if content.inventory is None:
+        raise ValueError(
+            "presentation source inventory is required; "
+            "unpack the original package"
+        )
+    content.inventory = prepare_sources(
+        content.inventory,
+        content.inventory_bytes,
+        directory,
+        excluded=excluded,
+    )
+    sources = project_sources(
+        content.inventory,
+        directory,
+        data=content.inventory_bytes,
+        excluded=excluded,
+    )
+    notes = {part.locator.position: part.text or "" for part in sources.notes}
+    read = ContainerPages(
+        [
+            ContainerPage(
+                part.locator.position,
+                SLIDE_XML,
+                slide_text(
+                    Slide(
+                        part.locator.position,
+                        part.text or "",
+                        notes.get(part.locator.position, ""),
                     )
-                continue
-            if any(known == sha1 for _place, known in page.images):
-                continue
-            image = read.images.get(sha1)
-            if image is None:
-                path = directory / f"{sha1}{suffix[sha1]}"
-                path.write_bytes(data)
-                image = read.images[sha1] = PlacedImage(
-                    sha1, suffix[sha1], path
-                )
-            place = len(page.images) + 1
-            image.places.append((slide.number, place))
-            page.images.append((place, sha1))
+                ),
+            )
+            for part in sources.bodies
+        ],
+        inventory=content.inventory,
+        inventory_bytes=content.inventory_bytes,
+        sources=sources,
+    )
+    materialize_images(sources, content.inventory_bytes, directory, read)
     return read
 
 

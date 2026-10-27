@@ -50,6 +50,7 @@ from tests.unit.test_scratch import (  # noqa: F401
     fakes,
     quiet,
     runs_dir,
+    scripted_source,
     small,
 )
 from yizkr import cli
@@ -125,6 +126,7 @@ class Engine:
         self.cli_version = fake.cli
         self.config_hash = f"fake-{self.cli_version}-{self.model}-{effort}"
         self.model_identifier = f"claude-code/{self.cli_version}:{self.model}"
+        self.openings = {}
 
     def _call(self, what: str, name: str | None) -> int | None:
         """Log the call, run the hook, and number the answer, while
@@ -202,12 +204,14 @@ class Engine:
                     {"id": "e1", "label": "the reading room", "kind": "room"}
                 ]
             }
-        return note + json.dumps(answer), str(uuid.uuid4())
+        handle = str(uuid.uuid4())
+        self.openings[handle] = prompt
+        return note + json.dumps(answer), handle
 
     def fork(self, handle, prompt):
-        return self._chunk(prompt)
+        return self._chunk(prompt, opening=self.openings[handle])
 
-    def _chunk(self, prompt: str) -> str:
+    def _chunk(self, prompt: str, *, opening: str | None = None) -> str:
         name = self._document(prompt)
         number = self._call("chunk", name)
         seed = self.config_hash + ("" if self.fakes.same_claims else name)
@@ -218,12 +222,9 @@ class Engine:
             "subject": {"kind": "local", "local_id": "e1", "label": "Eugen"},
             "property": "date_of_birth",
             "value": {"type": "time", "year": year},
-            "source": {
-                "artifact": {
-                    "kind": "artifact",
-                    "sha1": self.fakes.corpus.sha1(name),
-                }
-            },
+            "source": scripted_source(
+                self.fakes.corpus, name, opening or prompt
+            ),
         }
         return json.dumps(claim) + '\n{"done": true, "claims_emitted": 1}'
 
@@ -234,7 +235,9 @@ class Engine:
         transcripts = [name for name in files if name.endswith(".jsonl")]
         if len(transcripts) != 1:
             raise ValueError("the kept files hold no single transcript")
-        return str(uuid.UUID(Path(transcripts[0]).stem))
+        handle = str(uuid.UUID(Path(transcripts[0]).stem))
+        self.openings[handle] = prompt
+        return handle
 
     def close_conversation(self, handle):
         pass
@@ -947,6 +950,57 @@ class TestCounts:
         assert (transcription.made, transcription.engine_calls) == (2, 0)
         assert per_stage(counted, "known") == {"extraction": 2}
         assert per_stage(counted, "engine_calls") == made
+
+    def test_fresh_container_estimate_reuses_the_attributed_batch_and_critique(
+        self, tmp_path, engine
+    ):
+        """A fresh run reproduces source support before keying its critique."""
+        corpus = Corpus(tmp_path / "corpus")
+        corpus.deck("Hutmacherei.pptx", "gegr. 1863, Brunnenring 35")
+        run(tmp_path, corpus, engine)
+        counted = estimate_of(tmp_path, corpus, engine, new=True)
+        assert counted.stages["critique"].hits == 1
+        assert not per_stage(counted, "engine_calls")
+        assert run(tmp_path, corpus, engine, new=True) == Counter()
+
+    def test_cached_incomplete_source_attribution_stops_before_critique(
+        self, tmp_path, engine
+    ):
+        """A usable claim cannot hide another claim's unsupported source."""
+        corpus = Corpus(tmp_path / "corpus")
+        corpus.deck("Hutmacherei.pptx", "gegr. 1863, Brunnenring 35")
+        run(tmp_path, corpus, engine)
+        (fork,) = entries(tmp_path / "cache", role="extract", call="fork")
+        response = json.loads(fork.read_text())["response"]
+        good = json.loads(response.splitlines()[0])
+        unsupported = good | {
+            "property": "date_of_death",
+            "source": good["source"]
+            | {
+                "transcription_excerpt": {
+                    "text": "No such words occur in this fictional reading.",
+                    "language": "en",
+                }
+            },
+        }
+        answer_with(
+            fork,
+            "\n".join(
+                [
+                    json.dumps(good),
+                    json.dumps(unsupported),
+                    '{"done": true, "claims_emitted": 2}',
+                ]
+            ),
+        )
+        counted = estimate_of(tmp_path, corpus, engine, new=True)
+        assert counted.stages["extraction"].failing == 1
+        assert "critique" not in counted.stages
+        assert not per_stage(counted, "engine_calls")
+        assert (
+            run(tmp_path, corpus, engine, new=True, status=EXIT_FAILED)
+            == Counter()
+        )
 
     def test_the_mean_for_a_kind_counts_a_document_no_run_measured(
         self, tmp_path, engine

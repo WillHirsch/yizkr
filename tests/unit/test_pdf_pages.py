@@ -59,7 +59,6 @@ from yizkr.pipeline.orchestrate import (
 from yizkr.pipeline.presentation import (
     DERIVED_MEDIA,
     derived_transcription,
-    read_derived_media,
 )
 from yizkr.pipeline.rundir import RunDir, RunSettingsConflict
 from yizkr.pipeline.scratch import EXIT_OK, LATEST, runs_in
@@ -72,6 +71,16 @@ from yizkr.pipeline.transcribe import (
     TranscribedPage,
     Transcription,
 )
+
+
+def saved_sources(directory):
+    from yizkr.pipeline.container_inventory import read_inventory
+    from yizkr.pipeline.container_sources import project_sources
+
+    inventory = read_inventory(directory)
+    assert inventory is not None
+    return project_sources(inventory, directory)
+
 
 SOURCES = {source.key: source for source in u.SOURCES}
 HISTORY = SOURCES["family-history-2008"].text
@@ -152,6 +161,47 @@ def extract() -> bytes:
     return pdfs.pdf([scanned()])
 
 
+def reading_location(prompt: str, page: str | None = None):
+    """A real page and text line from the scripted engine's input reading."""
+    current = None
+    for line in re.findall(r"^\d+: (.*)$", prompt, re.M):
+        marker = re.match(r"\[(?:Page|Slide) (\d+)\]", line)
+        if marker:
+            current = marker[1]
+        elif (
+            current is not None
+            and line.strip()
+            and not line.startswith("[")
+            and (page is None or page == current)
+        ):
+            return current, line
+    return None
+
+
+def located_pipeline_answers(kind, prompt, opening):
+    """The canned pipeline claim with support present in its input reading.
+
+    These answers exercise pipeline wiring, not model interpretation quality.
+    Unpaged fixtures retain their existing response shape.
+    """
+    answer = pipeline_answers(kind, prompt, opening)
+    location = reading_location(opening or prompt)
+    if location is None:
+        return answer
+    page, quote = location
+    lines = []
+    for line in answer.splitlines():
+        value = json.loads(line) if line.startswith("{") else None
+        if isinstance(value, dict) and isinstance(value.get("source"), dict):
+            value["source"] |= {
+                "page_number": page,
+                "transcription_excerpt": {"text": quote, "language": "en"},
+            }
+            line = json.dumps(value)
+        lines.append(line)
+    return "\n".join(lines)
+
+
 class Reader(Engine):
     """The scripted engine, reading the file each vision call gives it
     from `readings`, by the file's name or stem: a whole PDF by its name, a
@@ -162,7 +212,7 @@ class Reader(Engine):
     read, by name, with the SHA-1 of its bytes."""
 
     def __init__(self, readings: dict[str, str | list[str]], **kwargs):
-        super().__init__(pipeline_answers, **kwargs)
+        super().__init__(located_pipeline_answers, **kwargs)
         self.readings = {
             name: list(reading) if isinstance(reading, list) else [reading]
             for name, reading in readings.items()
@@ -591,13 +641,12 @@ class TestImages:
         assert kept.text == page_text(EXCERPT)
         assert kept.language == "de"
         # and the image is recorded as the booklet's derived medium
-        record = read_derived_media(doc.dir)
-        assert record.source_sha1 == doc.sha1
-        assert record.title == "booklet"
-        medium = record.media[LETTER_SHA1]
+        record = saved_sources(doc.dir)
+        assert record.inventory.source.sha1 == doc.sha1
+        medium = record.sources[LETTER_SHA1]
         assert medium.names == ["page 6, image 1"]
         assert medium.slides == [6]
-        assert medium.file == f"derived-media/{LETTER_SHA1}.png"
+        assert medium.file == f"representations/{LETTER_SHA1}.png"
 
     def test_the_claims_read_from_the_booklet_cite_it_alone(self, tmp_path):
         corpus = folder(tmp_path, booklet=booklet())
@@ -618,15 +667,18 @@ class TestImages:
         assert not any("Angerring 11" in prompt for prompt in extraction)
 
     def test_one_image_placed_twice_is_read_once(self, tmp_path):
-        page = typed(TITLE).image(LETTER_IMAGE, 72, 400, 300, 120)
+        page = typed(TITLE).image(SHARED_LETTER_IMAGE, 72, 400, 300, 120)
         data = pdfs.pdf(
-            [page, typed(SOFTWARE).image(LETTER_IMAGE, 72, 400, 300, 120)]
+            [
+                page,
+                typed(SOFTWARE).image(SHARED_LETTER_IMAGE, 72, 400, 300, 120),
+            ]
         )
         corpus = folder(tmp_path, booklet=data)
-        reader = Reader({LETTER_SHA1: EXCERPT})
+        reader = Reader({SHARED_LETTER_SHA1: EXCERPT})
         doc = document(run(tmp_path, corpus, reader), "booklet.pdf")
-        assert reader.names() == [f"{LETTER_SHA1}.png"]
-        medium = read_derived_media(doc.dir).media[LETTER_SHA1]
+        assert reader.names() == [f"{SHARED_LETTER_SHA1}.jpg"]
+        medium = saved_sources(doc.dir).sources[SHARED_LETTER_SHA1]
         assert medium.names == ["page 1, image 1", "page 2, image 1"]
         assert medium.slides == [1, 2]
 
@@ -649,7 +701,7 @@ class TestImages:
         transcription = transcription_of(doc)
         assert LETTER_SHA1 not in transcription.text
         assert transcription.pages[5].images == []
-        assert read_derived_media(doc.dir).media == {}
+        assert saved_sources(doc.dir).sources == {}
         assert not (doc.dir / "derived-media").exists()
 
     def test_an_image_whose_reading_fails_needs_attention(self, tmp_path):
@@ -673,7 +725,7 @@ class TestImages:
         )
         assert "(not-a-record)" in reason
         assert not derived_transcription(doc.dir, LETTER_SHA1).exists()
-        assert LETTER_SHA1 in read_derived_media(doc.dir).media
+        assert LETTER_SHA1 in saved_sources(doc.dir).sources
 
     def test_an_image_that_cannot_be_read_needs_attention(self, tmp_path):
         broken = pdfs.Image(
@@ -690,10 +742,9 @@ class TestImages:
             for event in this_run(orchestrator, "done")
             if event["stage"] == "transcription"
         ]
-        assert done["attention"] == [
-            "image not read on its own: page 6, image 1: PDFium could not "
-            "give its bytes, so it is not read"
-        ]
+        (attention,) = done["attention"]
+        assert attention.startswith("image not read on its own:")
+        assert "PDFium image preparation failed" in attention
 
     def test_nothing_is_written_until_the_stage_keeps_it(self, tmp_path):
         """The route writes nothing into the document's directory, so a
@@ -838,10 +889,16 @@ class TestAScratchRun:
         assert not list(scratch.glob("yizkr-pdf-*"))
 
 
+# The two compilations share these original JPEG bytes, not merely a decoded
+# PNG. Original-media identity establishes their common letter owner.
+SHARED_LETTER_IMAGE = pdfs.jpeg()
+SHARED_LETTER_SHA1 = hashlib.sha1(SHARED_LETTER_IMAGE.data).hexdigest()
+
+
 def album() -> bytes:
     """A second compilation: a typed title page, and a page that places
     the letter's top, as the booklet does, beside two other images."""
-    page = pdfs.Page().image(LETTER_IMAGE, 72, 600, 200, 80)
+    page = pdfs.Page().image(SHARED_LETTER_IMAGE, 72, 600, 200, 80)
     for shade, x in ((1, 300), (2, 72)):
         page.image(pdfs.gray(300, 120, shade=shade), x, 480, 200, 80)
     page.text(pdfs.lines(CAPTION, TRANSLATION), y=400)
@@ -857,7 +914,12 @@ def gray_sha1(shade: int) -> str:
 def compilations(tmp_path: Path) -> Corpus:
     """The booklet and the album, the engine reading each image as the
     letter excerpt and each compilation as its translation."""
-    corpus = the_booklet(tmp_path)
+    corpus = Corpus(tmp_path / "corpus")
+    (corpus.folder / "booklet.pdf").write_bytes(booklet(SHARED_LETTER_IMAGE))
+    corpus.texts["booklet.pdf"] = "\n".join(
+        pdfs.lines(CAPTION, TRANSLATION, COMMENT)
+    )
+    corpus.texts[f"{SHARED_LETTER_SHA1}.jpg"] = EXCERPT
     (corpus.folder / "album.pdf").write_bytes(album())
     corpus.texts["album.pdf"] = "\n".join(pdfs.lines(TITLE))
     for sha1 in (gray_sha1(1), gray_sha1(2)):
@@ -994,10 +1056,8 @@ class TestTheCallEstimateCountsExcerpts:
         if held:
             run_scratch(tmp_path, corpus, engine, until="transcription")
             assert len(list(runs_dir(tmp_path).glob("*/excerpts/*"))) == 3
-        (corpus.folder / "letter.png").write_bytes(
-            png(300, 120, 1, LETTER_IMAGE.data)
-        )
-        corpus.texts["letter.png"] = EXCERPT
+        (corpus.folder / "letter.jpg").write_bytes(SHARED_LETTER_IMAGE.data)
+        corpus.texts["letter.jpg"] = EXCERPT
         excerpts = estimate_of(tmp_path, corpus, engine).excerpts
         # the booklet places the letter's top alone, so only the album
         # places an image that may become an excerpt
@@ -1364,8 +1424,8 @@ class TestTheCallEstimateCountsExcerpts:
         (excerpt,) = (runs_dir(tmp_path)).glob("*/excerpts/*")
         transcription = excerpt / "transcription.json"
         assert transcription.is_file()
+        reread_the_letter(tmp_path, corpus, engine)
         transcription.unlink()
-        reread_the_letter(tmp_path)
         counted = estimate_of(tmp_path, corpus, engine, resume=LATEST)
         assert counted.stages["transcription"].reused == 1
         assert counted.excerpts.images == 1
@@ -1428,7 +1488,7 @@ class TestTheCallEstimateCountsExcerpts:
         run_scratch(tmp_path, corpus, engine)
         held = runs_dir(tmp_path).glob("*/excerpts/*")
         excerpts = {path.name: path for path in held}
-        for sha1 in (gray_sha1(1), LETTER_SHA1):
+        for sha1 in (gray_sha1(1), SHARED_LETTER_SHA1):
             for path in excerpts[sha1].glob("critique*"):
                 path.unlink()
         (excerpts[gray_sha1(2)] / "batch.json").unlink()
@@ -1641,15 +1701,25 @@ class TestTheCallEstimateCountsExcerpts:
         ]
 
 
-def reread_the_letter(tmp_path: Path) -> None:
-    """Make the booklet's kept reading of the letter's image read one
-    house number otherwise, as a reading made again may: the check passes
-    it, and the excerpt's transcription made from it differs."""
-    (container,) = runs_dir(tmp_path).glob("*/booklet")
-    reading = derived_transcription(container, LETTER_SHA1)
-    text = reading.read_text()
-    assert text.count("Angerring 11") == 1
-    reading.write_text(text.replace("Angerring 11", "Angerring 71"))
+def reread_the_letter(tmp_path: Path, corpus: Corpus, fake) -> None:
+    """Refresh the real stage with a different fictional model reading.
+
+    Its inventory outcome and located context must be recorded by the same
+    path as normal readings; editing a saved product would damage integrity.
+    """
+    name = f"{LETTER_SHA1}.png"
+    assert corpus.texts[name].count("Angerring 11") == 1
+    corpus.texts[name] = corpus.texts[name].replace(
+        "Angerring 11", "Angerring 71"
+    )
+    run_scratch(
+        tmp_path,
+        corpus,
+        fake,
+        resume=LATEST,
+        refresh=["transcribe"],
+        until="transcription",
+    )
 
 
 def excerpt_calls(fake, before: int) -> list[str]:
@@ -1936,8 +2006,10 @@ class TestReuse:
         kept.write_text(json.dumps(view))
         again = run(tmp_path, corpus, reader)
         (aside,) = set_asides(again)
-        assert "(not-a-record)" in aside["reason"]
-        assert aside["reason"].endswith(f"(image {LETTER_SHA1[:12]})")
+        assert aside["reason"] == (
+            f"the recorded transcription of image {LETTER_SHA1[:12]} "
+            "has changed"
+        )
         assert "document_class" in json.loads(kept.read_text())
 
     def test_a_pdf_read_whole_is_checked_for_its_page_count_on_reuse(

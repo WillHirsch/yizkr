@@ -329,14 +329,14 @@ class TestPages:
         assert result.pages[0].text.endswith("\ufffd")
 
     def test_a_page_with_no_text_layer_is_read_by_vision(self, tmp_path):
-        """A page that draws a picture and no text at all, with room
-        around it: nothing on it can be read but by vision, which reads it
-        whole, as the compilation's page."""
+        """The page needs vision; its inset image is also discovered as
+        an independent source before that reading route is chosen."""
         photo = pdfs.Page().image(pdfs.gray(200, 150), 100, 300, 400, 300)
         result = read(tmp_path, typed(TITLE), photo)
         assert methods(result) == [TEXT_LAYER, VISION]
-        assert result.pages[1].images == []
-        assert result.images == {}
+        assert len(result.pages[1].images) == 1
+        assert result.pages[1].images[0][1] in result.sources.sources
+        assert len(result.images) == 1
 
     def test_a_page_that_draws_only_paths_is_read_by_vision(self, tmp_path):
         """Text drawn as outlines is paths, and no text layer: the page is
@@ -745,7 +745,9 @@ class TestImages:
         assert placed.path.read_bytes() == png(150, 100, 3, image.data)
 
     def test_one_image_placed_twice_is_one_image(self, tmp_path):
-        image = pdfs.gray(300, 120)
+        # Complete original JPEG bytes prove shared media across these
+        # distinct PDF image objects; equal decoded PNGs would not.
+        image = pdfs.jpeg()
         twice = self.booklet_page(image).image(image, 72, 100, 150, 60)
         result = read(tmp_path, twice, typed(TITLE), self.booklet_page(image))
         (placed,) = result.images.values()
@@ -814,16 +816,16 @@ class TestImages:
         result = read(tmp_path, page)
         assert result.images == {}
         assert result.pages[0].images == []
-        assert result.notes == [
-            "image not read on its own: page 1, image 1: PDFium could not "
-            "give its bytes, so it is not read"
-        ]
+        assert any("PDFium" in reason for reason in result.notes)
 
-    def test_no_image_is_read_on_a_page_read_by_vision(self, tmp_path):
+    def test_inner_sources_are_read_independently_of_the_page_route(
+        self, tmp_path
+    ):
         page = scan().image(pdfs.gray(300, 120), 72, 480, 300, 200)
         result = read(tmp_path, typed(TITLE), page)
         assert methods(result) == [TEXT_LAYER, VISION]
-        assert result.images == {}
+        assert len(result.images) == 1
+        assert result.pages[1].images[0][1] in result.sources.sources
 
 
 class TestUnionArea:

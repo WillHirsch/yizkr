@@ -1704,6 +1704,7 @@ PROPERTIES = {
     "cause_of_death": "P24",
     "sibling": "P25",
     "printed_page_number": "P26",
+    "source_part_locator": "P27",
 }
 ITEMS = {
     "human": "Q1",

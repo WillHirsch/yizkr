@@ -43,6 +43,7 @@ from yizkr.pipeline.rundir import (
     CONTROL,
     DONE,
     INTERRUPTED,
+    NEEDS_ATTENTION,
     PENDING,
     RunDir,
     RunSettingsConflict,
@@ -180,6 +181,29 @@ class Fakes:
         self.preflight_closes = 0
 
 
+def scripted_source(corpus: Corpus, name: str, prompt: str) -> dict:
+    """The canned claim's source, located in its fictional input reading.
+
+    Conversation forks have already seen this text in their opening. These
+    fixtures exercise pipeline wiring, not interpretation of the birth claim.
+    """
+    from tests.unit.test_pdf_pages import reading_location
+
+    source = {"artifact": {"kind": "artifact", "sha1": corpus.sha1(name)}}
+    location = (
+        reading_location(prompt)
+        if Path(name).suffix.lower() in {".pdf", ".pptx"}
+        else None
+    )
+    if location is not None:
+        page, quote = location
+        source |= {
+            "page_number": page,
+            "transcription_excerpt": {"text": quote, "language": "en"},
+        }
+    return source
+
+
 # the clustering stage's adjudication prompt, and a pair it asks of
 ADJUDICATION_PROMPT = "You adjudicate IDENTITY for a family archive"
 ADJUDICATED_PAIR = re.compile(r"^(\d+)\. clustering's comparison", re.M)
@@ -269,9 +293,7 @@ class Engine:
             "subject": {"kind": "local", "local_id": "e1", "label": "Eugen"},
             "property": "date_of_birth",
             "value": {"type": "time", "year": 1836},
-            "source": {
-                "artifact": {"kind": "artifact", "sha1": corpus.sha1(name)}
-            },
+            "source": scripted_source(corpus, name, prompt),
         }
         return json.dumps(claim) + '\n{"done": true, "claims_emitted": 1}'
 
@@ -504,7 +526,13 @@ class TestOrder:
             s["ged"],
             s["deck"],
         ]
-        assert statuses(driver.state_dir) == {DONE}
+        assert statuses(driver.state_dir) == {DONE, NEEDS_ATTENTION}
+        assert (
+            run_state(RunDir(driver.state_dir))[
+                s["deck"], "transcription"
+            ].status
+            == NEEDS_ATTENTION
+        )
 
     def test_nothing_before_the_barrier_asks_the_wiki_and_faces_never_run(
         self, tmp_path, fakes, request, monkeypatch
@@ -540,7 +568,11 @@ class TestOrder:
         (deck,) = [
             doc for doc in driver.documents() if doc.kind == "presentation"
         ]
-        assert (deck.dir / "derived-media.json").is_file()
+        from yizkr.pipeline.container_inventory import read_inventory
+
+        inventory = read_inventory(deck.dir)
+        assert inventory is not None
+        assert inventory.source.sha1 == deck.sha1
 
     def test_until_stops_after_a_stage_and_the_same_command_goes_on(
         self, tmp_path, fakes

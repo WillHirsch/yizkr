@@ -824,7 +824,9 @@ class Estimator(ScratchDriver):
             except PdfExclusionError as exc:
                 return _Made(fails=_why(exc))
             if view is not None:
-                return _Made(reused=True, view=view, changed=False)
+                located = self._locate_transcription(doc, view)
+                changed = located.source_context != view.source_context
+                return _Made(reused=True, view=located, changed=changed)
         if method in ("vision", PAGED):
             self._engine_for("transcribe")
         made = _Made(tally=self._tally)
@@ -834,6 +836,7 @@ class Estimator(ScratchDriver):
             keyed.reading_pages, keyed.stood_in = True, 0
         try:
             transcription, _resolution = self._transcribe(doc, method)
+            transcription = self._locate_transcription(doc, transcription)
         except _Unanswered:
             return made
         except Exception as exc:
@@ -896,6 +899,9 @@ class Estimator(ScratchDriver):
             keyed.answering = False
         if extractor.failed_chunks:
             made.fails = f"{len(extractor.failed_chunks)} chunks failed"
+            return made
+        if extractor.incomplete_reasons:
+            made.fails = "; ".join(extractor.incomplete_reasons)
             return made
         if not made.tally.answered:
             made.view = batch

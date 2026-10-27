@@ -32,6 +32,7 @@ from tests.unit.test_pdf_pages import (
     CAPTION,
     COMMENT,
     EXCERPT,
+    EXTRACT,
     LETTER_IMAGE,
     LETTER_SHA1,
     SOFTWARE,
@@ -41,6 +42,7 @@ from tests.unit.test_pdf_pages import (
     document,
     excerpt_of,
     folder,
+    reading_location,
     renderer,  # noqa: F401
     run,
     scanned,
@@ -765,7 +767,7 @@ class TestTheWriter:
 
 
 # the booklet as a PDF: its title page and the note on its translations
-# typed, page 5 a scan that shows only its printed number, 3, and page 6
+# typed, page 5 a register scan with printed number 3, and page 6
 # typed, with the image of the letter's top above its own text
 def booklet_pdf() -> bytes:
     six = pdfs.Page().image(LETTER_IMAGE, 72, 520, 300, 200)
@@ -779,26 +781,31 @@ def booklet_pdf() -> bytes:
 FOLIO = json.dumps(
     {
         "document_class": UNCLASSIFIED,
-        "pages": [record_page(1, "", printed_page="3")],
+        "pages": [record_page(1, EXTRACT, printed_page="3")],
     }
 )
 
 
 def on_page(page: str):
-    """pipeline_answers, with every claim citing `page` and a printed
-    page number of the model's own, which the extractor drops."""
+    """Cite the chosen container page or the image's own first page."""
 
     def answer(kind, prompt, opening):
         given = pipeline_answers(kind, prompt, opening)
         if prompt.startswith(TRANSCRIPTION_PROMPT):
             return given
+        location = reading_location(opening or prompt, page)
+        if location is None:
+            location = reading_location(opening or prompt)
         lines = []
         for line in given.splitlines():
             found = json.loads(line) if line.startswith("{") else None
             if isinstance(found, dict) and "source" in found:
+                assert location is not None
+                physical_page, quote = location
                 found["source"] |= {
-                    "page_number": page,
+                    "page_number": physical_page,
                     "printed_page_number": "99",
+                    "transcription_excerpt": {"text": quote, "language": "en"},
                 }
                 line = json.dumps(found)
             lines.append(line)
@@ -827,8 +834,7 @@ class TestAnExcerpt:
         # the booklet's page 5 is printed as 3; the image shows no number
         assert transcription_of(doc).printed_pages() == {5: "3"}
         assert transcription_of(excerpt).printed_pages() == {}
-        # the same answer, page 5: the booklet's claims take its printed
-        # number, the excerpt's none
+        # Each reading uses its own physical page and printed-page lookup.
         assert {
             (c.source.page_number, c.source.printed_page_number)
             for c in batch_of(doc).claims
@@ -836,7 +842,7 @@ class TestAnExcerpt:
         assert {
             (c.source.page_number, c.source.printed_page_number)
             for c in batch_of(excerpt).claims
-        } == {("5", None)}
+        } == {("1", None)}
         # only the booklet's extraction prompts show a printed number,
         # beside page 5 (a critique prompt never holds its document's own
         # SHA-1, though it carries the numbered transcription, image

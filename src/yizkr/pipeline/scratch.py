@@ -1412,8 +1412,8 @@ class ScratchDriver(Orchestrator):
         orchestrator does before a document's stages, without its
         registration: a directory whose source bytes changed, or whose
         files nothing records, is set aside and started afresh (ADR-0010);
-        the directory's record comes first; and a deck's derived media are
-        recorded in it (ADR-0025 §2)."""
+        the directory's record comes first; and a presentation's common
+        source inventory is published before reading."""
         if doc.dir in self._prepared:
             return
         doc.state.error = None
@@ -1432,9 +1432,8 @@ class ScratchDriver(Orchestrator):
         doc.derivations.begin()
         doc.state.content_sha1 = doc.sha1
         doc.state.file = str(doc.source)
-        if doc.kind == "presentation" and not self._derived_media_current(doc):
-            record = self._step_derive_media(doc)
-            self.log(f"  derived media: {len(record.media)} recorded")
+        if doc.kind == "presentation":
+            self._record_container_inventory(doc)
         self._prepared.add(doc.dir)
 
     # -- refreshes ------------------------------------------------------------

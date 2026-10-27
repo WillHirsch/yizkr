@@ -77,7 +77,7 @@ def test_native_pdf_records_original_parts_and_actual_image_reading(tmp_path):
     )
 
 
-def test_contextual_representations_keep_distinct_legacy_readings(
+def test_contextual_representations_do_not_invent_distinct_source_owners(
     tmp_path, monkeypatch
 ):
     # Substitute decoder results, not parsing or reading: this does not claim
@@ -103,13 +103,14 @@ def test_contextual_representations_keep_distinct_legacy_readings(
     assert doc.state.status == AWAITING_CLAIMS, doc.state.error
     (part,) = embedded(saved(doc))
     assert {rep.byte_object.sha1 for rep in part.representations} == digests
-    assert {digest for _name, digest in reader.read} == digests
-    assert set(read_derived_media(doc.dir).media) == digests
-    assert all(
+    assert reader.read == []
+    assert read_derived_media(doc.dir) is None
+    assert not any(
         derived_transcription(doc.dir, digest).is_file() for digest in digests
     )
-    assert part.reading.state == "unsupported"
-    assert "contextual" in part.reading.reason
+    assert part.owner_binding is None
+    assert "unique prepared" in part.ownership_issue
+    assert part.reading.state == "unattempted"
     assert part.reading.product is None
 
 

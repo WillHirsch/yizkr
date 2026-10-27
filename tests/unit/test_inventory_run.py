@@ -115,7 +115,10 @@ def test_changed_exclusion_updates_inventory_without_an_image_call(tmp_path):
     part = letter_part(second)
     assert part.id == original_id
     assert part.eligibility.state == "excluded"
-    assert part.reading.state == "unattempted"
+    # The earlier successful reading remains an observation, not permission
+    # to use its owner or send the now-excluded image again.
+    assert part.reading.state == "read"
+    assert second.dir.joinpath(part.reading.product).is_file()
     assert reader.read == []
 
 

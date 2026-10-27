@@ -1197,7 +1197,12 @@ class TestTheGuard:
 
 def _key(run, identity=None, exclusions=None) -> str:
     identity = identity or scratchwrite.identity_map(run.context("write"))
-    return scratchwrite.write_key(identity, run.documents, exclusions)
+    return scratchwrite.write_key(
+        identity,
+        run.documents,
+        exclusions,
+        container_sources=run.driver._container_sources,
+    )
 
 
 class TestTheKey:
@@ -1284,16 +1289,16 @@ class TestTheKey:
         run, key = keyed
         # the same file, read as another kind of document
         monkeypatch.setattr(
-            orchestrate, "document_kind", lambda source: "presentation"
+            orchestrate, "document_kind", lambda source: "text"
         )
         assert _key(run, exclusions=ExclusionList()) != key
 
-    def test_another_record_of_derived_media_is_another_key(self, keyed):
+    def test_legacy_media_record_is_not_registration_authority(self, keyed):
         from yizkr.pipeline.presentation import DERIVED_MEDIA
 
         run, key = keyed
         (run.documents[0].dir / DERIVED_MEDIA).write_text('{"media": []}\n')
-        assert _key(run, exclusions=ExclusionList()) != key
+        assert _key(run, exclusions=ExclusionList()) == key
 
     @pytest.mark.parametrize(
         "module",

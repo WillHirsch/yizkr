@@ -77,6 +77,7 @@ from yizkr.pipeline.llm import (
 )
 from yizkr.pipeline.prompts import load_prompt
 from yizkr.pipeline.review import claim_id
+from yizkr.pipeline.source_context import bind_source_support, support_failure
 from yizkr.pipeline.stages import atomic_write_text
 from yizkr.pipeline.transcribe import Transcription
 
@@ -574,6 +575,7 @@ class ChunkedClaimExtractor:
         self._chunks_done = 0
         self._state_lock = threading.Lock()
         self.failed_chunks: list[str] = []
+        self.incomplete_reasons: list[str] = []
         self.failure_reasons: dict[str, str] = {}
         # chunks asked again because every claim of their answer lacked
         # the same required field (_ask_again)
@@ -1207,10 +1209,10 @@ class ChunkedClaimExtractor:
     def extract(
         self, transcription: Transcription, artifact: ArtifactRef
     ) -> ClaimBatch:
-        """The document's batch, every claim citing `artifact`, the
-        document's content key, by which the prompts name the document too,
-        and the page number printed on the page it cites, where the
-        transcription's record gives one (cite_artifact). The prompts
+        """Proposed claims with source identity and support assigned from
+        located reading context after model claims are merged. The prompts
+        name `artifact`; printed page labels come from the reading record
+        (cite_artifact). The prompts
         carry the transcription's text with each printed page number
         beside its page's marker, every line where it is in the text
         (Transcription.prompt_text). When its conversation has to be
@@ -1229,6 +1231,7 @@ class ChunkedClaimExtractor:
     ) -> ClaimBatch:
         text_lines = transcription.prompt_text().splitlines()
         self.failed_chunks = []
+        self.incomplete_reasons = []
         self.failure_reasons = {}
         self.retried_chunks = 0
         self.gaps = []
@@ -1371,6 +1374,7 @@ class ChunkedClaimExtractor:
                 transcription,
                 artifact,
             ),
+            transcription=transcription,
         )
         self._refuse_empty(batch, chunks=total)
         self.attention = self._attention(batch, chunks=total)
@@ -1552,6 +1556,7 @@ class ChunkedClaimExtractor:
         text: str | None = None,
         reading: Any = _UNREAD,
         stated: SourceReference | None = None,
+        transcription: Transcription | None = None,
     ) -> tuple[ClaimBatch, dict[str, str]]:
         """Merge chunk claims into one validated batch, each claim citing
         `artifact`, the page number printed on its page where
@@ -1606,6 +1611,11 @@ class ChunkedClaimExtractor:
         if reading is not _UNREAD:
             raw_claims, dropped = preparation.drop_markers(raw_claims)
         deduped = cite_artifact(raw_claims, artifact, printed_pages)
+        deduped, attribution_rejects = bind_source_support(
+            deduped, transcription
+        )
+        if reason := support_failure(attribution_rejects):
+            self.incomplete_reasons.append(reason)
         run = run_metadata(self.client.model_identifier).model_dump(
             mode="json"
         )
@@ -1633,7 +1643,9 @@ class ChunkedClaimExtractor:
             placed=placed,
             dropped=self._dropped_kinds,
         )
-        rejects = transform_rejects + settled_rejects + rejects
+        rejects = (
+            transform_rejects + attribution_rejects + settled_rejects + rejects
+        )
         self._rejects = rejects
         self._marked = {"marked": 0, "straddling": 0, "unlocated": 0}
         if reading is not _UNREAD:

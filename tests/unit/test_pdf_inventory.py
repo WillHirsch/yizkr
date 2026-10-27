@@ -411,9 +411,9 @@ def test_deep_inventory_image_does_not_shift_legacy_shallow_reading(tmp_path):
 
     path = tmp_path / "family-booklet-2011.pdf"
     path.write_bytes(data)
-    expected = hashlib.sha1(PERMITTED_PNG).hexdigest()
-    # Inventory looks deeper, while the compatibility reader retains its
-    # existing traversal limit and reads the same shallow image on both routes.
+    expected = [JPEG_SHA1, hashlib.sha1(PERMITTED_PNG).hexdigest()]
+    # Independent sources come from the full inventory; the shallow native
+    # text classifier no longer controls discovery of embedded source parts.
     for mode in ("legacy", "inventory"):
         directory = tmp_path / mode
         directory.mkdir()
@@ -428,9 +428,9 @@ def test_deep_inventory_image_does_not_shift_legacy_shallow_reading(tmp_path):
         )
         assert reading is not None
         assert [page.method for page in reading.pages] == ["text-layer"]
-        assert reading.pages[0].images == [(1, expected)]
-        assert set(reading.images) == {expected}
-        assert reading.images[expected].path.read_bytes() == PERMITTED_PNG
+        assert reading.pages[0].images == list(enumerate(expected, 1))
+        assert set(reading.images) == set(expected)
+        assert reading.images[expected[1]].path.read_bytes() == PERMITTED_PNG
 
 
 def test_repeated_source_keeps_each_occurrence_prepared_image(
@@ -462,10 +462,15 @@ def test_repeated_source_keeps_each_occurrence_prepared_image(
         path, tmp_path, excluded=lambda _: False, inventory=plan
     )
     assert reading is not None
-    assert reading.pages[0].images == list(enumerate(expected, start=1))
-    assert set(reading.images) == set(expected)
-    for sha1, image_data in zip(expected, prepared, strict=True):
-        assert reading.images[sha1].path.read_bytes() == image_data
+    assert reading.pages[0].images == []
+    assert plan.inventory.parts
+    assert any(
+        "unique" in issue.reason for issue in reading.sources.unresolved
+    )
+    assert reading.images == {}
+    current = next(p for p in plan.inventory.parts if p.id == part.id)
+    assert current.owner_binding is None
+    assert current.ownership_issue
 
 
 def test_tightened_policy_withdraws_prepared_whole_pdf_representation(

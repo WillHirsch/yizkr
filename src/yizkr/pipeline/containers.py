@@ -16,7 +16,7 @@ The readers:
 
 - a PDF's, `yizkr.pipeline.textlayer.read_pages`: a page from its text
   layer where it has a usable one, by vision otherwise, and the images
-  placed within its text-layer pages;
+  independently bound image sources on any page;
 - a deck's, `yizkr.pipeline.presentation.read_slides`: each slide's text
   and speaker notes from the PPTX XML (`SLIDE_XML`), with no model call,
   and the images the slide embeds.
@@ -35,8 +35,13 @@ from __future__ import annotations
 import struct
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
+from yizkr.claims import SourceSupport
 from yizkr.pipeline.container_inventory import ContainerInventory
+
+if TYPE_CHECKING:
+    from yizkr.pipeline.container_sources import ContainerSources
 
 # how a deck's slide is read: from the slide's XML, with no model call
 SLIDE_XML = "slide-xml"
@@ -51,14 +56,18 @@ VISION_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp"})
 
 @dataclass
 class PlacedImage:
-    """An image placed within a page and read on its own: its bytes, kept
-    in a file named for their SHA-1, and each place it has, as (page, its
-    place among that page's images read on their own, from 1)."""
+    """A bound source's current reading input and native paint occurrences.
+
+    `sha1` names its canonical owner; `path` may contain a newly prepared
+    representation with different bytes. Each place is (page, native image
+    ordinal), and support retains the original source part and placement IDs.
+    """
 
     sha1: str
     suffix: str
     path: Path
     places: list[tuple[int, int]] = field(default_factory=list)
+    source_supports: list[SourceSupport] = field(default_factory=list)
 
     @property
     def pages(self) -> list[int]:
@@ -93,6 +102,7 @@ class ContainerPages:
     notes: list[str] = field(default_factory=list)
     inventory: ContainerInventory | None = None
     inventory_bytes: dict[str, bytes] = field(default_factory=dict)
+    sources: ContainerSources | None = None
 
     @property
     def by_own_text(self) -> bool:

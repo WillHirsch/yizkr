@@ -28,17 +28,14 @@ import itertools
 import json
 import time
 import unicodedata
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from tests.unit.test_no_wiki_before_write import (
-    DECK,
-    SHOP_FRONT,
-    build_deck,
-)
-from tests.unit.test_no_wiki_before_write import PORTRAIT as STUDIO
+from tests.unit.test_no_wiki_before_write import DECK
+from tests.unit.test_no_wiki_before_write import build_deck as reference_deck
 from tests.unit.test_upload_warnings import FakeMediaWiki, FakeUploadClient
 from yizkr.core.corpus import ExclusionList
 from yizkr.core.wiki import WikiClient
@@ -52,7 +49,6 @@ from yizkr.pipeline.presentation import (
 from yizkr.pipeline.registrar import (
     ExcludedMedia,
     Registrar,
-    _cites,
     _cut_to_fit,
     _ensure_referenced,
     _fitted,
@@ -178,6 +174,15 @@ def _statements(entity, pid: str) -> list[dict]:
     return [claim.get_json() for claim in entity.claims.get(pid)]
 
 
+def _cites(claim, stated_in_pid: str, source_qid: str) -> bool:
+    return any(
+        isinstance(value := (snak.datavalue or {}).get("value"), dict)
+        and value.get("id") == source_qid
+        for reference in claim.references.references
+        for snak in reference.snaks.get(stated_in_pid) or ()
+    )
+
+
 class TestEnsureReferenced:
     def test_new_deck_appends_its_own_part_of_statement(self):
         entity = _entity()
@@ -265,6 +270,7 @@ class FakeWiki:
         "page_number": "P6",
         "media_file": "P57",
         "media_sha1": "P58",
+        "source_part_locator": "P59",
     }
     ITEMS = {
         "photograph": "Q2",
@@ -2924,6 +2930,52 @@ class TestRegisterDerivedMedia:
 # -- the write's registration of a document (Orchestrator._step_register) ----
 
 
+def _source_png(shade: int) -> bytes:
+    from yizkr.pipeline.textlayer import png
+
+    return png(160, 100, 1, bytes([shade]) * 16000)
+
+
+SHOP_FRONT = _source_png(40)
+STUDIO = _source_png(160)
+
+
+def build_deck(path):
+    """The fictional deck's intended photographs are actually painted.
+
+    The refusing-wiki fixture uses tiny resources to avoid image model work;
+    registration instead needs non-decorative source images with p:pic uses.
+    """
+    reference_deck(path, shop_front=SHOP_FRONT)
+    with zipfile.ZipFile(path) as archive:
+        members = [(info, archive.read(info)) for info in archive.infolist()]
+    with zipfile.ZipFile(path, "w") as archive:
+        for info, data in members:
+            if info.filename in {
+                "ppt/media/image2.png",
+                "ppt/media/image4.png",
+            }:
+                data = STUDIO
+            for number, images in ((1, 1), (2, 2), (3, 1)):
+                if info.filename != f"ppt/slides/slide{number}.xml":
+                    continue
+                pictures = "".join(
+                    "<p:pic><p:nvPicPr>"
+                    f'<p:cNvPr id="{index + 10}" name="photograph"/>'
+                    "<p:cNvPicPr/><p:nvPr/></p:nvPicPr>"
+                    '<p:blipFill><a:blip xmlns:r="http://schemas.'
+                    'openxmlformats.org/officeDocument/2006/relationships" '
+                    f'r:embed="rId{index + 10}"/></p:blipFill>'
+                    "<p:spPr/></p:pic>"
+                    for index in range(images)
+                )
+                data = data.replace(
+                    b"</p:spTree>", pictures.encode() + b"</p:spTree>"
+                )
+            archive.writestr(info, data)
+    return path
+
+
 def parts_of(wiki, whole: str) -> dict[str, dict[str, list[str]]]:
     """For each kind of item `part of` the whole ("fragment" or
     "medium"): page -> the items on it."""
@@ -3086,10 +3138,7 @@ class TestStepRegister:
         build_deck(orchestrator.folder / DECK)
         (doc,) = orchestrator.documents()
         orchestrator._step_register(doc)
-        assert (
-            "  derived media: 1 registered, 1 left out (never-ingest list)"
-            in (lines)
-        )
+        assert "  derived media: 1 registered" in lines
         hashes = {
             hashed
             for qid in wiki.entities

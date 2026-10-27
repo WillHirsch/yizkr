@@ -96,6 +96,12 @@ properties:
     datatype: string
     reference: true
 
+  source_part_locator:
+    label: source part locator
+    description: reference locator; compact container, source-part and placement identities resolved through the container inventory, with the reading digest when known
+    datatype: string
+    reference: true
+
   # --- names (typed and referenced; the item's aliases stay the flat,
   # unreferenced match index — see docs/MODELING.md "Names") ---
 

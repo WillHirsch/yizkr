@@ -113,6 +113,28 @@ class PdfInventory:
     _reasons: dict[int, list[str]] = field(default_factory=dict)
     _fatal: str | None = None
 
+    def replace_inventory(self, inventory: ContainerInventory) -> None:
+        """Adopt prepared bindings without leaving stale ephemeral indexes."""
+        if inventory.source != self.inventory.source:
+            raise ValueError("replacement inventory names another PDF")
+        parts = {part.id: part for part in inventory.parts}
+        self.page_parts = {
+            page: parts[part.id] for page, part in self.page_parts.items()
+        }
+        self.image_parts = {
+            key: parts[part.id] for key, part in self.image_parts.items()
+        }
+        self.image_representations = {
+            key: next(
+                rep
+                for rep in self.image_parts[key].representations
+                if rep.byte_object == previous.byte_object
+                and rep.method == previous.method
+            )
+            for key, previous in self.image_representations.items()
+        }
+        self.inventory = inventory
+
     def verify(self, source_bytes: bytes) -> None:
         from yizkr.pipeline.textlayer import PdfExclusionError
 
@@ -134,12 +156,17 @@ class PdfInventory:
                 excluded(item.byte_object.sha1)
                 for item in (part, *part.representations)
                 if item.byte_object is not None
+            ) or (
+                part.owner_binding is not None
+                and excluded(part.owner_binding.artifact.sha1)
             ):
                 part.eligibility = Eligibility(
                     state="excluded",
                     reason="original stream or prepared image is excluded",
                 )
                 part.file = None
+                if part.owner_binding is not None:
+                    part.owner_binding.file = None
                 for representation in part.representations:
                     representation.file = None
                     representation.eligibility = part.eligibility.model_copy()
@@ -169,6 +196,12 @@ class PdfInventory:
             for item in (part, *part.representations)
             if item.file is not None
         }
+        wanted.update(
+            part.owner_binding.artifact.sha1
+            for part in self.inventory.parts
+            if part.owner_binding is not None
+            and part.owner_binding.file is not None
+        )
         for digest in set(self.data) - wanted:
             del self.data[digest]
 
@@ -364,6 +397,7 @@ class _Builder:
             child=part.id,
             locator=locator,
             order=len(paints) + 1,
+            occurrence="paint",
             layout=layout,
             limitations=[
                 "Native graphics operators are uncomposed context; "
@@ -534,6 +568,7 @@ class _Builder:
                     child=part.id,
                     locator=locator,
                     order=index,
+                    occurrence="annotation",
                     layout=[{"pdf_rect": _metadata(annotation.get("/Rect"))}],
                 )
             )
@@ -615,7 +650,14 @@ class _Builder:
                 )
 
     def prepare(self, document: Any):
-        from yizkr.pipeline.textlayer import _MAX_FORM_DEPTH, image_bytes
+        from yizkr.pipeline.containers import is_decoration
+        from yizkr.pipeline.textlayer import (
+            _MAX_FORM_DEPTH,
+            BACKGROUND_COVER,
+            _area,
+            _clip,
+            image_bytes,
+        )
 
         for number in range(1, self.plan.page_count + 1):
             page = document[number - 1]
@@ -667,11 +709,29 @@ class _Builder:
                         )
                         continue
                     self.plan.image_parts[number, ordinal] = part
+                    bounds = obj.get_bounds()
+                    ancestor = obj.container
+                    while ancestor is not None:
+                        bounds = ancestor.get_matrix().on_rect(*bounds)
+                        ancestor = ancestor.container
+                    page_bounds = page.get_cropbox()
+                    clipped = _clip(bounds, page_bounds)
+                    role = (
+                        "auxiliary"
+                        if clipped is None or is_decoration(*obj.get_px_size())
+                        else "page-representation"
+                        if _area(clipped)
+                        >= BACKGROUND_COVER * _area(page_bounds)
+                        else "independent"
+                    )
+                    if part.source_role != "independent":
+                        part.source_role = role
                     placement.layout.append(
                         {
                             "pdfium_bounds": list(obj.get_bounds()),
                             "pdfium_matrix": list(obj.get_matrix().get()),
                             "coordinate_frame": "parent",
+                            "source_role": role,
                         }
                     )
                     try:
@@ -695,6 +755,8 @@ class _Builder:
                     self.plan.image_representations[number, ordinal] = (
                         representation
                     )
+                    if placement.id not in representation.placement_ids:
+                        representation.placement_ids.append(placement.id)
                     if part.eligibility.state == "excluded" or self.excluded(
                         representation.byte_object.sha1
                     ):

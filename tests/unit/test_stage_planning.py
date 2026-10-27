@@ -226,6 +226,8 @@ def fingerprint(package, **configuration):
         "pipeline/prompts/entity-manifest.md",
         "model/manifest.yaml",
         "claims.py",
+        "source_structure.py",
+        "pipeline/source_context.py",
         "pipeline/writer.py",
         "pipeline/places.py",
     ],
