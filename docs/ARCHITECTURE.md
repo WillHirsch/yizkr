@@ -76,6 +76,29 @@ The [ingestion overview and preparation detail](../src/yizkr/pipeline/README.md#
 
 The same guide expands [serial ingestion](../src/yizkr/pipeline/README.md#resolving-entities-across-artifacts) and corpus clustering. These views complement the unattended development path below. The current writer refuses a different identity map on an instance already written under another map; reviewed CSVs alone do not make it an incremental retained workflow. The contract permits explicit, recorded graph snapshots for reconciliation, with relevant write-precondition checks, but that path and durable assignment/review state are not implemented (#85, #107, #130, #723).
 
+## Container inventory
+
+PPTX preparation records version 1 `container-inventory.json` independently of the reading route, keeping original part bytes under `container-parts/`. The common schema preserves the original byte reference, structural source parts and placement occurrences. Slide bodies and speaker notes are distinct source parts; a photograph placed twice has two occurrences referencing the same embedded bytes. Structural locators come from the package and XML occurrence path before eligibility filtering, with physical slide position recorded separately.
+
+```mermaid
+flowchart LR
+    original["Original PPTX bytes"] --> parse["Inventory package structure<br/>deterministic"]
+    parse --> body["Slide-body parts"]
+    parse --> notes["Speaker-notes parts"]
+    parse --> placements["Embedded resources<br/>and placement occurrences"]
+    parse --> limits["Eligibility, read outcomes<br/>and explicit limitations"]
+    body --> inventory[("container-inventory.json")]
+    notes --> inventory
+    placements --> inventory
+    limits --> inventory
+```
+
+Inventory completeness, eligibility and reading success are separate facts. Native body and notes readings preserve XML text order; images have separate reading outcomes, including an explicit successful empty result. Unsupported or hidden content, missing targets and unreferenced media remain explicit, and external references are not fetched. A relationship alone does not establish a placement. Raw shape/group transforms and crops are preserved without claiming composed page geometry or visual reading order. Inventory does not authorize a model call or create a source-owner binding. Original embedded-byte references are distinct from any later rendered representation.
+
+The existing readers, `derived-media.json`, extraction citations and registration still use their earlier structures. They do not yet consume the new occurrence locators or preserve notes as distinct citation parts (#716). PDF inventory production is separate work (#715). The inventory schema is shared, but only the PPTX producer is implemented.
+
+Implementation: [inventory schema and persistence](../src/yizkr/pipeline/container_inventory.py) and [PPTX producer](../src/yizkr/pipeline/presentation.py).
+
 ## Shared text-stage operations
 
 [text_stages.py](../src/yizkr/pipeline/text_stages.py) provides ordinary Python operations used by standalone commands and the reviewed/scratch drivers. Requests carry explicit source inputs, configuration and diagnostic destinations. Clients are borrowed from the invocation, which owns their lifetime; operations receive no graph client or orchestrator. [gedcom_stages.py](../src/yizkr/pipeline/gedcom_stages.py) gives deterministic GEDCOM adaptation the same request/result boundary without a model client. CLI commands remain adapters.

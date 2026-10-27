@@ -148,6 +148,7 @@ from __future__ import annotations
 
 import contextlib
 import functools
+import hashlib
 import json
 import os
 import re
@@ -1618,21 +1619,26 @@ class Orchestrator:
         return self._presentation_cache[doc.sha1]
 
     def _derived_media_current(self, doc: DocumentRun) -> bool:
-        """Does the document's directory hold the record of its deck's
-        derived media, whole and with the file of every medium it names
-        (presentation.read_derived_media), made for the deck's bytes as
-        they are now? A record made for other bytes, as in a directory
-        two sources have shared, is made again, and so is a missing or
-        damaged one, and one that is not a deck's: registration matches
-        the never-ingest list's globs against a deck's media's names
-        alone, and a PDF's images by their SHA-1s (ADR-0008)."""
-        from yizkr.pipeline.presentation import read_derived_media
+        """Are both PPTX inventory and compatibility media record intact?
+
+        Both must name the current source bytes, and inventory eligibility
+        must reflect the current exclusions. A missing or incompatible
+        inventory is rebuilt from the original package; the legacy media
+        record cannot reconstruct structural source parts or occurrences.
+        """
+        from yizkr.pipeline.presentation import (
+            inventory_current,
+            read_derived_media,
+        )
 
         record = read_derived_media(doc.dir)
         return (
             record is not None
             and record.container == "presentation"
             and record.source_sha1 == doc.sha1
+            and inventory_current(
+                doc.dir, doc.sha1, excluded=self._excluded_image
+            )
         )
 
     def _derived_media(self, doc: DocumentRun):
@@ -1641,23 +1647,18 @@ class Orchestrator:
         otherwise one made again."""
         from yizkr.pipeline.presentation import read_derived_media
 
-        record = read_derived_media(doc.dir)
-        if (
-            record is None
-            or record.container != "presentation"
-            or record.source_sha1 != doc.sha1
-        ):
-            record = self._step_derive_media(doc)
-        return record
+        if not self._derived_media_current(doc):
+            return self._step_derive_media(doc)
+        return read_derived_media(doc.dir)
 
     def _step_derive_media(self, doc: DocumentRun):
-        """Record the images the deck embeds in the document's directory
-        (presentation.record_derived_media): each by the SHA-1 of its
-        bytes, with the deck's own SHA-1 and title and the slides it is
-        on, and its bytes kept beside the record. Nothing is read from the
-        wiki or written to it (ADR-0025 §2): the write registers the
-        images and uploads their bytes (_step_register). Returns the
-        record."""
+        """Publish the PPTX inventory and its legacy image projection.
+
+        Original parts and media stay beside their records. Existing
+        validated image readings can populate outcomes after reconstruction;
+        inventory does not require a model call or any graph access.
+        Returns the media record used by the current registration path.
+        """
         from yizkr.pipeline.presentation import record_derived_media
 
         content = self._presentation(doc)
@@ -1667,12 +1668,76 @@ class Orchestrator:
                 f"skipped (image media only in W1)",
                 file=sys.stderr,
             )
-        return record_derived_media(
+        record = record_derived_media(
             content,
             source_sha1=doc.sha1,
             title=doc.state.title,
             directory=doc.dir,
+            excluded=self._excluded_image,
         )
+        self._keep_inventory_readings(doc)
+        return record
+
+    def _keep_inventory_readings(self, doc: DocumentRun, reading=None) -> None:
+        """Record actual image outcomes beside the structural inventory.
+
+        Native text belongs to the producer. Image success requires a
+        validated reading of those bytes, including an explicitly empty
+        reading. Reconstructing missing inventory can adopt an existing
+        valid reading without making another model call.
+        """
+        from yizkr.pipeline.container_inventory import (
+            ReadingOutcome,
+            keep_inventory,
+            read_inventory,
+        )
+        from yizkr.pipeline.presentation import derived_transcription
+        from yizkr.pipeline.transcribe import Transcription
+
+        inventory = read_inventory(doc.dir)
+        if inventory is None or inventory.source.sha1 != doc.sha1:
+            raise ValueError("PPTX inventory is missing or invalid")
+        observed = (
+            {image.sha1: image for image in reading.images}
+            if reading is not None
+            else {}
+        )
+        for part in inventory.parts:
+            if (
+                part.kind != "embedded_resource"
+                or part.byte_object is None
+                or not (part.media_type or "").startswith("image/")
+                or part.eligibility.state != "allowed"
+                or part.reading.state == "unsupported"
+            ):
+                continue
+            sha1 = part.byte_object.sha1
+            image = observed.get(sha1)
+            if image is not None and image.failure is not None:
+                part.reading = ReadingOutcome(
+                    state="failed", reason=image.failure
+                )
+                continue
+            path = derived_transcription(doc.dir, sha1)
+            if not path.is_file() or path.is_symlink():
+                part.reading = ReadingOutcome(state="unattempted")
+                continue
+            failure = self._image_failure(doc, sha1)
+            if failure is not None:
+                part.reading = ReadingOutcome(state="failed", reason=failure)
+                continue
+            data = path.read_bytes()
+            transcription = Transcription.model_validate_json(data)
+            record = transcription.record()
+            empty = not any(page.text.strip() for page in record.pages)
+            part.reading = ReadingOutcome(
+                state="read",
+                method=transcription.engine,
+                empty=empty,
+                product=path.relative_to(doc.dir).as_posix(),
+                product_sha256=hashlib.sha256(data).hexdigest(),
+            )
+        keep_inventory(inventory, {}, doc.dir)
 
     def _step_batch(self, doc: DocumentRun) -> ClaimBatch:
         """Dispatch the batch producer declared by the document's plan."""
@@ -2156,6 +2221,8 @@ class Orchestrator:
                 _write_view(
                     path, image.transcription.model_dump_json(indent=2)
                 )
+        if doc.kind == "presentation":
+            self._keep_inventory_readings(doc, reading)
 
     def _transcribe_text_file(self, doc: DocumentRun):
         from yizkr.pipeline.text_stages import TextReadRequest, read_text

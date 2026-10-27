@@ -20,18 +20,19 @@ reading beside its bytes, so the image is an excerpt, a document of its
 own, as an image a PDF places is (yizkr.pipeline.transcribe.
 DeckTranscriber; ADR-0008).
 
-Before the write, a deck's derived media are only recorded, in its
-document's directory (`record_derived_media`): each distinct image by
-the SHA-1 of its bytes, with the deck it is part of and the slides it is
-on, and its bytes kept beside the record. Nothing is read from the wiki
-or written to it then (ADR-0025 §2).
+Before reading filters, the same package parse records native slide/notes
+parts, original media and embedded-object bytes, structural occurrences and
+known limitations in a format-neutral inventory. Source parts and occurrences
+retain their identity when eligibility or reading outcomes change. XML text
+order and raw transforms are preserved without inferring visual reading order
+or composed page geometry (yizkr.pipeline.pptx_inventory).
 
-The record is any container's: a PDF read page by page records the images
-placed within its pages in it too (`keep_derived_media`, called by
-yizkr.pipeline.orchestrate), each named for its places, "page 6, image
-1", with the pages it is on where a deck's image has its slides; and
-beside each image's bytes, a PDF's or a deck's, its own transcription
-(`derived_transcription`), which names the image by its SHA-1.
+`record_derived_media` persists this inventory and its original bytes, then
+projects the existing image-only `derived-media.json` for consumers still using
+that record. The compatibility projection deduplicates image bytes and retains
+relationship-only images; it does not establish visible placements. PDFs still
+produce their legacy records independently. Beside each independently read
+image's bytes, its transcription names the image by its SHA-1.
 
 The write registers a container's derived media from that record
 (`Registrar.register_derived_media` in yizkr.pipeline.registrar), after
@@ -47,9 +48,9 @@ document of its own, whose claims cite the image
 from __future__ import annotations
 
 import hashlib
+import io
 import os
 import re
-import xml.etree.ElementTree as ET
 import zipfile
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
@@ -58,6 +59,14 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from yizkr.claims import ArtifactRef
+from yizkr.pipeline.container_inventory import (
+    ContainerInventory,
+    Eligibility,
+    ReadingOutcome,
+    keep_inventory,
+    read_inventory,
+)
 from yizkr.pipeline.containers import (
     SLIDE_XML,
     VISION_SUFFIXES,
@@ -67,6 +76,7 @@ from yizkr.pipeline.containers import (
     image_size,
     is_decoration,
 )
+from yizkr.pipeline.pptx_inventory import PptxPackage, text_runs
 from yizkr.pipeline.stages import staging_path
 
 A_NS = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
@@ -121,131 +131,80 @@ class PresentationContent:
     skipped_media: dict[str, int] = field(
         default_factory=dict
     )  # suffix -> count
-
-
-def _relationships(archive: zipfile.ZipFile, part: str) -> dict[str, str]:
-    """rId -> resolved target path, for one part's .rels file."""
-    rels_path = str(
-        PurePosixPath(part).parent
-        / "_rels"
-        / (PurePosixPath(part).name + ".rels")
-    )
-    if rels_path not in archive.namelist():
-        return {}
-    root = ET.fromstring(archive.read(rels_path))
-    base = PurePosixPath(part).parent
-    targets = {}
-    for rel in root.iter(f"{REL_NS}Relationship"):
-        target = rel.get("Target", "")
-        if rel.get("TargetMode") == "External":
-            continue
-        resolved = (base / target).as_posix()
-        # normalize ../ components
-        parts: list[str] = []
-        for piece in resolved.split("/"):
-            if piece == "..":
-                if parts:
-                    parts.pop()
-            elif piece not in (".", ""):
-                parts.append(piece)
-        targets[rel.get("Id", "")] = "/".join(parts)
-    return targets
-
-
-def _text_runs(archive: zipfile.ZipFile, part: str) -> str:
-    """Every a:t run in document order; paragraphs joined by newlines."""
-    root = ET.fromstring(archive.read(part))
-    lines: list[str] = []
-    for paragraph in root.iter(f"{A_NS}p"):
-        line = "".join(t.text or "" for t in paragraph.iter(f"{A_NS}t"))
-        if line.strip():
-            lines.append(line.strip())
-    return "\n".join(lines)
-
-
-def _slide_media(
-    archive: zipfile.ZipFile, part: str, rels: dict[str, str]
-) -> list[str]:
-    """The archive paths of the media a slide uses, each once: those its
-    XML refers to (`r:embed`, `r:link` or `r:id` on any element) in
-    document order, which is the order the slide paints them in, then
-    those only its relationships name, in their order there."""
-    root = ET.fromstring(archive.read(part))
-    order: list[str] = []
-    for element in root.iter():
-        for attribute in ("embed", "link", "id"):
-            target = rels.get(element.get(f"{R_NS}{attribute}") or "")
-            if target and target.startswith("ppt/media/"):
-                order.append(target)
-    order += [t for t in rels.values() if t.startswith("ppt/media/")]
-    return list(dict.fromkeys(order))
+    inventory: ContainerInventory | None = None
+    inventory_bytes: dict[str, bytes] = field(default_factory=dict)
 
 
 def unpack_pptx(path: Path) -> PresentationContent:
-    """Deterministically unpack a .pptx into slides + embedded media."""
-    with zipfile.ZipFile(path) as archive:
-        names = set(archive.namelist())
-        if "ppt/presentation.xml" not in names:
+    """Parse original source parts once and project the legacy reader views.
+
+    The inventory distinguishes structural placements from relationship-only
+    references. Compatibility views include the latter and deduplicate
+    image bytes as readers expect; they cannot establish occurrences.
+    """
+    original = path.read_bytes()
+    with zipfile.ZipFile(io.BytesIO(original)) as archive:
+        package = PptxPackage(archive, ArtifactRef.from_bytes(original))
+        if "ppt/presentation.xml" not in package.names:
             raise ValueError(
                 f"{path.name} is not a PPTX (no ppt/presentation.xml)"
             )
-
-        # authoritative slide order: sldIdLst r:ids -> relationship targets
-        presentation_rels = _relationships(archive, "ppt/presentation.xml")
-        root = ET.fromstring(archive.read("ppt/presentation.xml"))
-        slide_parts = [
-            presentation_rels[sld.get(f"{R_NS}id")]
-            for sld in root.iter(f"{P_NS}sldId")
-            if sld.get(f"{R_NS}id") in presentation_rels
-        ]
-        if not slide_parts:  # tolerate decks with no sldIdLst (rare)
-            slide_parts = sorted(
-                name
-                for name in names
-                if re.fullmatch(r"ppt/slides/slide\d+\.xml", name)
-            )
-
         slides: list[Slide] = []
         media_slides: dict[str, list[int]] = {}
-        for position, part in enumerate(slide_parts, start=1):
-            rels = _relationships(archive, part)
+        for position, part in package.slide_parts():
+            package.add_slide(part, position)
+            if part not in package.names:
+                slides.append(Slide(position, ""))
+                continue
+            relations = [
+                r for r in package.relationships(part) if not r.external
+            ]
+            targets = {r.id: r.target for r in relations}
             notes = ""
-            for target in rels.values():
-                if "notesSlides/" in target and target in names:
-                    notes = _text_runs(archive, target)
+            for relation in relations:
+                target = relation.target
+                if "notesSlides/" in target and target in package.names:
+                    notes = text_runs(package.root(target))
                 if target.startswith("ppt/media/"):
                     media_slides.setdefault(target, [])
                     if position not in media_slides[target]:
                         media_slides[target].append(position)
+            ordered = []
+            for element in package.root(part).iter():
+                for attribute in ("embed", "link", "id"):
+                    target = targets.get(
+                        element.get(f"{R_NS}{attribute}") or ""
+                    )
+                    if target and target.startswith("ppt/media/"):
+                        ordered.append(target)
+            ordered.extend(
+                t for t in targets.values() if t.startswith("ppt/media/")
+            )
             slides.append(
                 Slide(
-                    number=position,
-                    text=_text_runs(archive, part),
-                    notes=notes,
-                    media=_slide_media(archive, part, rels),
+                    position,
+                    text_runs(package.root(part)),
+                    notes,
+                    list(dict.fromkeys(ordered)),
                 )
             )
-
         media: list[EmbeddedMedium] = []
         skipped: dict[str, int] = {}
         for target in sorted(media_slides):
-            if target not in names:
+            if target not in package.names:
                 continue
             name = PurePosixPath(target).name
             medium = EmbeddedMedium(
-                name=name,
-                data=archive.read(target),
-                slides=media_slides[target],
-                target=target,
+                name, package.bytes(target), media_slides[target], target
             )
             if medium.is_image:
                 media.append(medium)
             else:
                 suffix = PurePosixPath(name).suffix.lower() or "(none)"
                 skipped[suffix] = skipped.get(suffix, 0) + 1
-
+        package.finish()
     return PresentationContent(
-        slides=slides, media=media, skipped_media=skipped
+        slides, media, skipped, package.inventory, package.data
     )
 
 
@@ -261,11 +220,25 @@ def slide_text(slide: Slide) -> str:
     return "\n".join(lines)
 
 
+def _require_slide_bodies(content: PresentationContent) -> None:
+    """Missing mandatory slide bytes cannot become a successful blank read."""
+    if content.inventory is None:
+        return
+    for part in content.inventory.parts:
+        if part.kind == "slide_body" and part.reading.state != "read":
+            raise ValueError(
+                f"cannot read slide {part.locator.position}: "
+                f"{part.reading.reason or 'native slide content unavailable'} "
+                f"({part.locator.package_part})"
+            )
+
+
 def slide_transcript(content: PresentationContent) -> str:
     """The deck's text slide by slide, each slide behind its `[Slide N]`
     marker (`slide_text`): its transcription's text when it reads no
     image on its own, which marks each image it reads below the marker of
     the slide that embeds it (yizkr.pipeline.transcribe.DeckTranscriber)."""
+    _require_slide_bodies(content)
     blocks = []
     for slide in content.slides:
         body = slide_text(slide)
@@ -333,6 +306,7 @@ def slide_pages(
 ) -> ContainerPages:
     """`read_slides` of a deck already unpacked. Its media are known by
     their paths in the archive, as the slides' relationships name them."""
+    _require_slide_bodies(content)
     media: dict[str, tuple[str, bytes]] = {}
     names: dict[str, list[str]] = {}
     for medium in content.media:
@@ -340,6 +314,7 @@ def slide_pages(
         names.setdefault(sha1, []).append(medium.name)
         media[medium.target] = (sha1, medium.data)
     suffix = {sha1: record_suffix(found) for sha1, found in names.items()}
+    all_names = inventory_aliases(content.inventory)
     read = ContainerPages([])
     noted: set[str] = set()
     for slide in content.slides:
@@ -349,7 +324,7 @@ def slide_pages(
             if target not in media:
                 continue
             sha1, data = media[target]
-            if excluded(sha1, names[sha1]):
+            if excluded(sha1, all_names.get(sha1, names[sha1])):
                 continue
             reason = unread_reason(suffix[sha1], data)
             if reason is not None:
@@ -387,10 +362,17 @@ def read_on_their_own(
     `read_slides` chooses them: each the never-ingest list names neither
     by its SHA-1 nor by any of its names, and `unread_reason` gives no
     reason for."""
+    inventory = read_inventory(directory)
+    aliases = (
+        inventory_aliases(inventory)
+        if inventory is not None
+        and inventory.source.sha1 == record.source_sha1
+        else {}
+    )
     return {
         sha1
         for sha1, medium in record.media.items()
-        if not excluded(sha1, medium.names)
+        if not excluded(sha1, aliases.get(sha1, medium.names))
         and unread_reason(
             PurePosixPath(medium.file).suffix,
             (directory / medium.file).read_bytes(),
@@ -459,11 +441,14 @@ def record_derived_media(
     source_sha1: str,
     title: str,
     directory: Path,
+    excluded: Callable[[str, Sequence[str]], bool] = _never,
 ) -> DerivedMediaRecord:
     """Record the media a deck embeds, reading nothing from the wiki and
     writing nothing to it (ADR-0025 §2).
 
-    It records what `content.media` holds: `unpack_pptx` puts the images
+    When the parse supplies an inventory, persist its source parts, original
+    bytes and eligibility first. The legacy image record then records what
+    `content.media` holds: `unpack_pptx` puts the images
     there, and counts the other media in `content.skipped_media`. Each
     distinct medium is keyed by the SHA-1 of its bytes, with every name
     it has in the archive and every slide it is on. Its bytes are kept as
@@ -492,8 +477,85 @@ def record_derived_media(
             for sha1 in sorted(data)
         },
     )
+    if content.inventory is not None:
+        if content.inventory.source.sha1 != source_sha1:
+            raise ValueError(
+                "inventory source differs from the recorded source"
+            )
+        inventory = _inventory_eligibility(content.inventory, excluded)
+        for part in inventory.parts:
+            if part.kind != "embedded_resource" or part.byte_object is None:
+                continue
+            original = content.inventory_bytes[part.byte_object.sha1]
+            reason = unread_reason(PurePosixPath(part.file).suffix, original)
+            if reason is not None and part.reading.state == "unattempted":
+                part.reading = ReadingOutcome(
+                    state="unattempted"
+                    if reason == DECORATION
+                    else "unsupported",
+                    reason=reason,
+                )
+        keep_inventory(inventory, content.inventory_bytes, directory)
     keep_derived_media(record, data, directory)
     return record
+
+
+def inventory_aliases(
+    inventory: ContainerInventory | None,
+) -> dict[str, list[str]]:
+    """All original resource basenames for each byte object, including unused.
+
+    Exclusion matching uses every alias; compatibility filenames and labels
+    continue to use the legacy projection's referenced names.
+    """
+    names: dict[str, set[str]] = {}
+    for part in inventory.parts if inventory is not None else ():
+        if part.kind == "embedded_resource" and part.byte_object is not None:
+            names.setdefault(part.byte_object.sha1, set()).add(
+                PurePosixPath(part.locator.package_part).name
+            )
+    return {sha1: sorted(aliases) for sha1, aliases in names.items()}
+
+
+def _inventory_eligibility(
+    inventory: ContainerInventory,
+    excluded: Callable[[str, Sequence[str]], bool],
+) -> ContainerInventory:
+    """Apply byte/name exclusions without changing structural identity."""
+    result = inventory.model_copy(deep=True)
+    names = inventory_aliases(result)
+    blocked = {
+        sha1: excluded(sha1, sorted(aliases))
+        for sha1, aliases in names.items()
+    }
+    for part in result.parts:
+        if part.kind == "embedded_resource" and part.byte_object is not None:
+            denied = blocked[part.byte_object.sha1]
+            part.eligibility = Eligibility(
+                state="excluded" if denied else "allowed",
+                reason="configured exclusion" if denied else None,
+            )
+    return result
+
+
+def inventory_current(
+    directory: Path,
+    source_sha1: str,
+    excluded: Callable[[str, Sequence[str]], bool] = _never,
+) -> bool:
+    """A verified PPTX inventory for these source bytes and exclusions."""
+    inventory = read_inventory(directory)
+    if (
+        inventory is None
+        or inventory.container != "presentation"
+        or inventory.source.sha1 != source_sha1
+    ):
+        return False
+    current = _inventory_eligibility(inventory, excluded)
+    return all(
+        before.eligibility == after.eligibility
+        for before, after in zip(inventory.parts, current.parts, strict=True)
+    )
 
 
 def keep_derived_media(
