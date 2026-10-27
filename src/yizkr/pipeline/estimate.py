@@ -803,21 +803,26 @@ class Estimator(ScratchDriver):
     def _transcription(
         self, doc: DocumentRun, fresh: bool, _before: _Made
     ) -> _Made:
+        from yizkr.pipeline.textlayer import PdfExclusionError, is_pdf_input
+
         method = route_transcription(
             doc.source, None if fresh else doc.correction
         )
         if not fresh:
             recheck = (
                 functools.partial(self._transcription_failure, doc)
-                if method in CHECKED_ROUTES
+                if method in CHECKED_ROUTES or is_pdf_input(doc.source)
                 else None
             )
-            view = self._stands(
-                doc,
-                doc.transcription,
-                Transcription.model_validate_json,
-                recheck,
-            )
+            try:
+                view = self._stands(
+                    doc,
+                    doc.transcription,
+                    Transcription.model_validate_json,
+                    recheck,
+                )
+            except PdfExclusionError as exc:
+                return _Made(fails=_why(exc))
             if view is not None:
                 return _Made(reused=True, view=view, changed=False)
         if method in ("vision", PAGED):

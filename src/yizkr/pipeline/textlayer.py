@@ -9,9 +9,10 @@ page by page, and the transcription reads a PDF page by page whenever one
 of its pages reads from its text layer
 (yizkr.pipeline.transcribe.PdfPageTranscriber, one of the paged
 containers of yizkr.pipeline.containers). A PDF none of whose pages
-does is read whole by the vision engine, in one call that gives the
-engine the PDF itself: the call the LLM cache, and the transcription
-seed, keep its answer under (ADR-0032).
+does is read whole by the vision engine. With exclusion enforcement,
+that call receives a deterministic PDF made only from checked page
+bitmaps, without the original package's unused resources. Its response
+cache key identifies those actual outbound bytes (ADR-0032).
 
 **The text layer** of a page is the text its content draws visibly, in
 the order PDFium extracts it. Text drawn in an invisible render mode (3,
@@ -72,14 +73,17 @@ rule a deck's images are read by too), is taken for decoration: it could
 hold no more than a word of legible text, and it is not read. Each image
 is known by the SHA-1 of its bytes (ADR-0010), so one placed on several
 pages, or twice on one, is one image, read once. An image the
-never-ingest list names by its SHA-1 is neither read nor kept; one that a
-page read by vision draws, or a PDF read whole, reaches the engine with
-the page, a case ADR-0008 leaves unhandled since it does not arise. A
-page read by vision is read whole, whatever images it holds, as the
-compilation's own page (ADR-0008, the third question its compilation
-amendment leaves open): nothing is derived from it. Annotations a
-text-layer page shows that cover none of its text (a stamp in a margin, a
-check box, a highlight) are not read, and the page counts them.
+never-ingest list names by its SHA-1 is neither read nor kept. Before
+any model input is produced, every vision page is checked for excluded
+images, including nested and decorative images. A prohibited image or
+an uninspectable representation refuses vision for the document. Opaque
+annotation appearances, widget drawings, pattern resources, masked images
+and Type3 fonts are refused because a partial object walk cannot
+establish their eligibility. The safe vision page remains a reading of
+the compilation's own page; it creates no independently read excerpt.
+Annotations a text-layer page shows that cover none of its text (a stamp
+in a margin, a check box, a highlight) are not read, and the page counts
+them.
 
 **The bytes of an image** are the image as the PDF holds it where that is
 a whole JPEG file (a DCTDecode stream, after any lossless filters). Any
@@ -114,6 +118,7 @@ from __future__ import annotations
 
 import ctypes
 import hashlib
+import io
 import re
 import struct
 import threading
@@ -127,6 +132,9 @@ from typing import Any
 import pypdfium2 as pdfium
 import pypdfium2._library_scope as pdfium_library
 import pypdfium2.raw as pdfium_c
+from pypdf import PdfReader
+from pypdf.errors import PyPdfError
+from pypdf.generic import DictionaryObject
 
 from yizkr.pipeline.containers import (
     ContainerPage,
@@ -279,9 +287,8 @@ def png(width: int, height: int, channels: int, pixels: bytes) -> bytes:
     )
 
 
-def bitmap_png(bitmap: Any) -> bytes:
-    """A PDFium bitmap (grey, BGR, BGRx or BGRA) as PNG: grey stays grey,
-    and the rest become RGB, or RGBA where the bitmap has alpha."""
+def _bitmap_pixels(bitmap: Any) -> tuple[int, int, int, bytes]:
+    """A PDFium bitmap as tightly packed grey, RGB or RGBA pixels."""
     source = _BITMAP_BYTES.get(bitmap.format)
     if source is None:
         raise ValueError(
@@ -304,14 +311,321 @@ def bitmap_png(bitmap: Any) -> bytes:
         if alpha:
             out[3::channels] = row[3::source]
         pixels += out
-    return png(width, height, channels, bytes(pixels))
+    return width, height, channels, bytes(pixels)
+
+
+def bitmap_png(bitmap: Any) -> bytes:
+    """A PDFium bitmap as deterministic PNG, retaining its alpha channel."""
+    return png(*_bitmap_pixels(bitmap))
+
+
+class PdfExclusionError(ValueError):
+    """The requested PDF vision route cannot establish eligible content."""
+
+
+def is_pdf_input(path: Path) -> bool:
+    """Recognize PDF content even when its filename has an image suffix."""
+    if path.suffix.lower() == ".pdf":
+        return True
+    with path.open("rb") as handle:
+        return b"%PDF-" in handle.read(1024)
+
+
+_MAX_FORM_DEPTH = 64
+
+
+def _pdf_value(value: Any) -> Any:
+    return value.get_object() if hasattr(value, "get_object") else value
+
+
+def _pdf_dictionary(value: Any) -> DictionaryObject:
+    if value is None:
+        return DictionaryObject()
+    value = _pdf_value(value)
+    if not isinstance(value, DictionaryObject):
+        raise PdfExclusionError("PDF resource dictionary cannot be inspected")
+    return value
+
+
+def _check_resources(resources: Any, active: set[int], depth: int = 0):
+    """Refuse image-bearing constructs outside the page-object reader.
+
+    This inspects parsed resource dictionaries, including inherited page
+    resources and nested forms. It does not decode patterns or appearances,
+    and creates no inventory or alternate source identity.
+    """
+    resources = _pdf_dictionary(resources)
+    key = id(resources)
+    if key in active or depth >= _MAX_FORM_DEPTH:
+        raise PdfExclusionError("PDF resource nesting cannot be inspected")
+    active.add(key)
+    try:
+        if resources.get("/Pattern"):
+            raise PdfExclusionError(
+                "PDF pattern resources cannot be checked for image exclusions"
+            )
+        for value in _pdf_dictionary(resources.get("/Font")).values():
+            font = _pdf_dictionary(value)
+            if _pdf_value(font.get("/Subtype")) == "/Type3":
+                raise PdfExclusionError(
+                    "PDF Type3 font drawings cannot be checked for image "
+                    "exclusions"
+                )
+        for value in _pdf_dictionary(resources.get("/ExtGState")).values():
+            state = _pdf_dictionary(value)
+            if _pdf_value(state.get("/SMask", "/None")) != "/None":
+                raise PdfExclusionError(
+                    "PDF graphics-state mask cannot be checked for exclusions"
+                )
+        for value in _pdf_dictionary(resources.get("/XObject")).values():
+            obj = _pdf_dictionary(value)
+            kind = _pdf_value(obj.get("/Subtype"))
+            if kind == "/Image":
+                if any(
+                    name in obj for name in ("/Mask", "/SMask")
+                ) or _pdf_value(obj.get("/SMaskInData", 0)):
+                    raise PdfExclusionError(
+                        "PDF image mask cannot be checked for exclusions"
+                    )
+            elif kind == "/Form":
+                if "/Ref" in obj:
+                    raise PdfExclusionError(
+                        "PDF external form cannot be checked for exclusions"
+                    )
+                _check_resources(
+                    obj.get("/Resources", resources), active, depth + 1
+                )
+            else:
+                raise PdfExclusionError(
+                    "PDF XObject type cannot be checked for image exclusions"
+                )
+    finally:
+        active.remove(key)
+
+
+def _check_resource_pages(
+    data: bytes, count: int, pages: set[int] | None
+) -> None:
+    if pages == set():
+        return
+    try:
+        reader = PdfReader(io.BytesIO(data), strict=True)
+        try:
+            if reader.is_encrypted or len(reader.pages) != count:
+                raise PdfExclusionError(
+                    "PDF page structure cannot be inspected consistently"
+                )
+            form = _pdf_dictionary(reader.root_object.get("/AcroForm"))
+            if "/XFA" in form:
+                raise PdfExclusionError(
+                    "PDF dynamic forms cannot be checked for image exclusions"
+                )
+            for number, page in enumerate(reader.pages, start=1):
+                if pages is not None and number not in pages:
+                    continue
+                try:
+                    _check_resources(page.get("/Resources"), set())
+                    annotations = page.get("/Annots", [])
+                    if hasattr(annotations, "get_object"):
+                        annotations = annotations.get_object()
+                    for value in annotations:
+                        annotation = _pdf_dictionary(value)
+                        if (
+                            "/AP" in annotation
+                            or _pdf_value(annotation.get("/Subtype"))
+                            == "/Widget"
+                        ):
+                            raise PdfExclusionError(
+                                "PDF annotation appearance cannot be checked "
+                                "for image exclusions"
+                            )
+                except PdfExclusionError as error:
+                    raise PdfExclusionError(
+                        f"PDF page {number}: {error}"
+                    ) from error
+        finally:
+            reader.close()
+    except (
+        PyPdfError,
+        ValueError,
+        TypeError,
+        AttributeError,
+        RecursionError,
+    ) as error:
+        if isinstance(error, PdfExclusionError):
+            raise
+        raise PdfExclusionError(
+            "PDF resource structure cannot be inspected for exclusions"
+        ) from error
+
+
+def _guard_page(page: Any, number: int, excluded: Callable[[str], bool]):
+    """Check every ordinary image, before visibility/decoration filtering."""
+    prefix = f"PDF page {number}: "
+    for obj in page.get_objects(max_depth=_MAX_FORM_DEPTH):
+        if (
+            obj.type == pdfium_c.FPDF_PAGEOBJ_FORM
+            and obj.level >= _MAX_FORM_DEPTH - 1
+        ):
+            raise PdfExclusionError(prefix + "nested form inspection limit")
+        if obj.type == pdfium_c.FPDF_PAGEOBJ_IMAGE:
+            try:
+                data, _suffix = image_bytes(obj)
+                if not data:
+                    raise ValueError("image has no inspectable bytes")
+            except (pdfium.PdfiumError, ValueError) as error:
+                raise PdfExclusionError(
+                    prefix + "image bytes cannot be checked for exclusions"
+                ) from error
+            if excluded(hashlib.sha1(data).hexdigest()):
+                raise PdfExclusionError(
+                    prefix + "excluded embedded image; vision is refused"
+                )
+
+
+def _check_vision(
+    document: Any, excluded, pages: set[int] | None, source_bytes: bytes
+) -> None:
+    _check_resource_pages(source_bytes, len(document), pages)
+    for index in range(len(document)):
+        if pages is not None and index + 1 not in pages:
+            continue
+        page = document[index]
+        try:
+            _guard_page(page, index + 1, excluded)
+        finally:
+            page.close()
+
+
+def check_pdf_vision(
+    path: Path,
+    excluded: Callable[[str], bool],
+    *,
+    pages: set[int] | None = None,
+) -> int:
+    """Check all or selected physical pages; return the physical page count.
+
+    This admits rendered pages only. Sending the original PDF would also
+    send unpainted resources which this page inspection does not cover.
+    """
+    with _LOCK:
+        fresh_start()
+        try:
+            source_bytes = path.read_bytes()
+            document = pdfium.PdfDocument(source_bytes)
+            try:
+                document.init_forms()
+                count = len(document)
+                if count < 1:
+                    raise PdfExclusionError("PDF has no inspectable pages")
+                _check_vision(document, excluded, pages, source_bytes)
+                return count
+            finally:
+                document.close()
+        except (pdfium.PdfiumError, ValueError) as error:
+            if isinstance(error, PdfExclusionError):
+                raise
+            raise PdfExclusionError(
+                "PDF cannot be inspected for embedded-image exclusions"
+            ) from error
+
+
+def _raster_pdf(pages: list[tuple[int, int, bytes]]) -> bytes:
+    """A deterministic PDF of already compressed RGB page pixels."""
+    objects = [b"<< /Type /Catalog /Pages 2 0 R >>", b""]
+    children = []
+    for width, height, data in pages:
+        number = len(objects) + 1
+        children.append(f"{number} 0 R")
+        objects.append(
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] "
+            f"/Resources << /XObject << /Im0 {number + 1} 0 R >> >> "
+            f"/Contents {number + 2} 0 R >>".encode()
+        )
+        objects.append(
+            f"<< /Type /XObject /Subtype /Image /Width {width} "
+            f"/Height {height} /ColorSpace /DeviceRGB /BitsPerComponent 8 "
+            f"/Filter /FlateDecode /Length {len(data)} >>\nstream\n".encode()
+            + data
+            + b"\nendstream"
+        )
+        commands = f"q {width} 0 0 {height} 0 0 cm /Im0 Do Q\n".encode()
+        objects.append(
+            f"<< /Length {len(commands)} >>\nstream\n".encode()
+            + commands
+            + b"endstream"
+        )
+    objects[1] = (
+        f"<< /Type /Pages /Count {len(pages)} "
+        f"/Kids [{' '.join(children)}] >>".encode()
+    )
+    result = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for number, value in enumerate(objects, start=1):
+        offsets.append(len(result))
+        result.extend(f"{number} 0 obj\n".encode() + value + b"\nendobj\n")
+    xref = len(result)
+    result.extend(f"xref\n0 {len(offsets)}\n0000000000 65535 f \n".encode())
+    for offset in offsets[1:]:
+        result.extend(f"{offset:010} 00000 n \n".encode())
+    result.extend(
+        f"trailer\n<< /Size {len(offsets)} /Root 1 0 R >>\n"
+        f"startxref\n{xref}\n%%EOF\n".encode()
+    )
+    return bytes(result)
+
+
+def prepare_pdf_vision(
+    path: Path, directory: Path, excluded: Callable[[str], bool]
+) -> Path:
+    """Make a checked bitmap-only PDF, without original unused resources."""
+    with _LOCK:
+        fresh_start()
+        try:
+            source_bytes = path.read_bytes()
+            document = pdfium.PdfDocument(source_bytes)
+            try:
+                document.init_forms()
+                if len(document) < 1:
+                    raise PdfExclusionError("PDF has no inspectable pages")
+                _check_vision(document, excluded, None, source_bytes)
+                pages = []
+                for index in range(len(document)):
+                    page = document[index]
+                    try:
+                        width, height = page.get_size()
+                        bitmap = page.render(
+                            scale=RENDER_LONG_EDGE / max(width, height, 1),
+                            force_bitmap_format=pdfium_c.FPDFBitmap_BGR,
+                            draw_annots=True,
+                        )
+                        try:
+                            w, h, _channels, pixels = _bitmap_pixels(bitmap)
+                            pages.append(
+                                (w, h, zlib.compress(pixels, PNG_LEVEL))
+                            )
+                        finally:
+                            bitmap.close()
+                    finally:
+                        page.close()
+            finally:
+                document.close()
+        except (pdfium.PdfiumError, ValueError) as error:
+            if isinstance(error, PdfExclusionError):
+                raise
+            raise PdfExclusionError(
+                "PDF cannot be prepared for embedded-image exclusions"
+            ) from error
+    output = directory / path.with_suffix(".pdf").name
+    output.write_bytes(_raster_pdf(pages))
+    return output
 
 
 def read_pages(
     path: Path,
     directory: Path,
     *,
-    excluded: Callable[[str], bool] = lambda sha1: False,
+    excluded: Callable[[str], bool] | None = None,
 ) -> ContainerPages | None:
     """Read the PDF at `path` page by page (the module docstring says
     how): each page's method and text layer and, when any page reads from
@@ -320,19 +634,29 @@ def read_pages(
     read on its own (``<sha1><suffix>``). An image read on its own whose
     SHA-1 the never-ingest list names (`excluded`) is neither written nor
     listed. When no page reads from its text layer, nothing is written,
-    and the caller reads the PDF whole. None when PDFium cannot open or
-    read the file (one that is no PDF, or one locked by a password): the
-    caller reads it whole."""
+    and the caller can prepare a checked whole-document representation.
+    With an exclusion callback, all vision pages are checked before any
+    output; unsafe or unreadable content raises PdfExclusionError. Without
+    a callback, an unreadable PDF retains the legacy None result."""
     with _LOCK:
         fresh_start()
         try:
-            document = pdfium.PdfDocument(path)
-        except pdfium.PdfiumError:
+            source_bytes = path.read_bytes()
+            document = pdfium.PdfDocument(source_bytes)
+        except pdfium.PdfiumError as error:
+            if excluded is not None:
+                raise PdfExclusionError(
+                    "PDF cannot be inspected for embedded-image exclusions"
+                ) from error
             return None
         try:
             document.init_forms()
-            return _read(document, directory, excluded)
-        except pdfium.PdfiumError:
+            return _read(document, directory, excluded, source_bytes)
+        except pdfium.PdfiumError as error:
+            if excluded is not None:
+                raise PdfExclusionError(
+                    "PDF cannot be inspected for embedded-image exclusions"
+                ) from error
             return None
         finally:
             # its form environment with it
@@ -366,7 +690,10 @@ class _Layout:
 
 
 def _read(
-    document: Any, directory: Path, excluded: Callable[[str], bool]
+    document: Any,
+    directory: Path,
+    excluded: Callable[[str], bool] | None,
+    source_bytes: bytes,
 ) -> ContainerPages:
     """`read_pages` of an open document: every page's layout first, and
     only then, when a page reads from its text layer, the files."""
@@ -388,13 +715,27 @@ def _read(
             for layout in layouts
         ]
     )
+    if excluded is not None:
+        _check_vision(
+            document,
+            excluded,
+            {layout.number for layout in layouts if layout.method == VISION},
+            source_bytes,
+        )
     if not read.by_own_text:
         return read
     for layout, page in zip(layouts, read.pages, strict=True):
         if page.method == VISION:
             page.vision = _write_vision(document, layout, directory)
         elif page.method == TEXT_LAYER:
-            _write_images(document, layout, page, read, directory, excluded)
+            _write_images(
+                document,
+                layout,
+                page,
+                read,
+                directory,
+                excluded or (lambda sha1: False),
+            )
     return read
 
 

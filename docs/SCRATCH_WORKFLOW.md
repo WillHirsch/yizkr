@@ -79,7 +79,7 @@ Schemas: [Transcription](../src/yizkr/pipeline/transcribe.py), [ClaimBatch and e
 
 ## Transcription: text, pages and embedded images
 
-The route is selected by code. Text files and corrected text need no vision call. PDFs and slide decks are read page by page where possible; pages needing vision and eligible embedded images use the model. A PDF with no usable text layer is sent to vision as a whole document. Decks and other ZIP archives are never sent whole to vision. Exclusions are checked before processing; image bytes excluded by a deck-member name are also excluded wherever those same bytes occur in the corpus.
+The route is selected by code. Text files and corrected text need no vision call. PDFs and slide decks are read page by page where possible; pages needing vision and eligible embedded images use the model. PDF vision pages are checked against the configured exclusions before any page is sent. An excluded image or content that cannot be checked refuses the document. A PDF with no usable text layer uses one whole-document vision call containing a deterministic PDF rebuilt from checked page pixels; its transcription still names the original source. Decks and other ZIP archives are never sent whole to vision. Image bytes excluded by a deck-member name are also excluded wherever those same bytes occur in the corpus. [PDF model-input exclusions](LLM_CACHE.md#pdf-model-input-exclusions) describes the checks, representation and reuse limits.
 
 ```mermaid
 flowchart TD
@@ -87,7 +87,7 @@ flowchart TD
     route -->|text or correction| direct["Read text<br/>deterministic"]
     route -->|PDF or slide deck| pages["Read container<br/>text layer or slide XML"]
     route -->|image| vision["Read document or page<br/>vision LLM"]
-    pages -->|page needs vision or whole scanned PDF| vision
+    pages -->|eligible page or checked whole-document render| vision
     pages -->|assemble page records| transcript[("D/transcription.json")]
     vision -->|validate and assemble| transcript
     direct --> transcript

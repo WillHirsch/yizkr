@@ -16,6 +16,9 @@ dependencies = [
     # or render a page to other bytes, which would re-key every derived
     # image and every rendered page's call
     "pypdfium2==5.13.0",
+    # Resource dictionaries expose opaque image-bearing constructs that
+    # the rendering API cannot enumerate for exclusion admission.
+    "pypdf>=6.21.2,<7",
 ]
 
 [project.optional-dependencies]
