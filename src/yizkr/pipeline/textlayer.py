@@ -77,8 +77,8 @@ never-ingest list names by its SHA-1 is neither read nor kept. Before
 any model input is produced, every vision page is checked for excluded
 images, including nested and decorative images. A prohibited image or
 an uninspectable representation refuses vision for the document. Opaque
-annotation appearances, widget drawings, pattern paints, masked images
-and unsupported fonts are refused because a partial object walk cannot
+annotation appearances, widget drawings, pattern resources, masked images
+and Type3 fonts are refused because a partial object walk cannot
 establish their eligibility. The safe vision page remains a reading of
 the compilation's own page; it creates no independently read excerpt.
 Annotations a text-layer page shows that cover none of its text (a stamp
@@ -118,6 +118,7 @@ from __future__ import annotations
 
 import ctypes
 import hashlib
+import io
 import re
 import struct
 import threading
@@ -131,6 +132,9 @@ from typing import Any
 import pypdfium2 as pdfium
 import pypdfium2._library_scope as pdfium_library
 import pypdfium2.raw as pdfium_c
+from pypdf import PdfReader
+from pypdf.errors import PyPdfError
+from pypdf.generic import DictionaryObject
 
 from yizkr.pipeline.containers import (
     ContainerPage,
@@ -330,71 +334,146 @@ def is_pdf_input(path: Path) -> bool:
 _MAX_FORM_DEPTH = 64
 
 
-def _guard_page(page: Any, number: int, excluded: Callable[[str], bool]):
-    """Check every image a page can paint, before rendering or filtering.
+def _pdf_value(value: Any) -> Any:
+    return value.get_object() if hasattr(value, "get_object") else value
 
-    PDFium does not expose arbitrary appearance resources, pattern images
-    or soft-mask streams as ordinary page images. Such representations are
-    refused rather than treating a partial inspection as admission.
+
+def _pdf_dictionary(value: Any) -> DictionaryObject:
+    if value is None:
+        return DictionaryObject()
+    value = _pdf_value(value)
+    if not isinstance(value, DictionaryObject):
+        raise PdfExclusionError("PDF resource dictionary cannot be inspected")
+    return value
+
+
+def _check_resources(resources: Any, active: set[int], depth: int = 0):
+    """Refuse image-bearing constructs outside the page-object reader.
+
+    This inspects parsed resource dictionaries, including inherited page
+    resources and nested forms. It does not decode patterns or appearances,
+    and creates no inventory or alternate source identity.
     """
-    prefix = f"PDF page {number}: "
-    objects = list(page.get_objects(max_depth=_MAX_FORM_DEPTH))
-    for obj in objects:
-        if obj.type == pdfium_c.FPDF_PAGEOBJ_FORM:
-            if obj.level >= _MAX_FORM_DEPTH - 1:
-                raise PdfExclusionError(
-                    prefix + "nested form inspection limit"
-                )
-        elif obj.type not in {
-            pdfium_c.FPDF_PAGEOBJ_IMAGE,
-            pdfium_c.FPDF_PAGEOBJ_TEXT,
-            pdfium_c.FPDF_PAGEOBJ_PATH,
-            pdfium_c.FPDF_PAGEOBJ_SHADING,
-        }:
-            raise PdfExclusionError(prefix + "unsupported drawing object")
-        if pdfium_c.FPDFPageObj_HasTransparency(obj.raw):
+    resources = _pdf_dictionary(resources)
+    key = id(resources)
+    if key in active or depth >= _MAX_FORM_DEPTH:
+        raise PdfExclusionError("PDF resource nesting cannot be inspected")
+    active.add(key)
+    try:
+        if resources.get("/Pattern"):
             raise PdfExclusionError(
-                prefix + "transparent drawing or mask cannot be checked "
-                "for embedded-image exclusions"
+                "PDF pattern resources cannot be checked for image exclusions"
             )
-        if obj.type in {
-            pdfium_c.FPDF_PAGEOBJ_TEXT,
-            pdfium_c.FPDF_PAGEOBJ_PATH,
-        }:
-            for getter in (
-                pdfium_c.FPDFPageObj_GetFillColor,
-                pdfium_c.FPDFPageObj_GetStrokeColor,
-            ):
-                channels = [ctypes.c_uint() for _ in range(4)]
-                if not getter(obj.raw, *channels):
-                    raise PdfExclusionError(
-                        prefix + "pattern paint cannot be checked for "
-                        "embedded-image exclusions"
-                    )
-        if obj.type == pdfium_c.FPDF_PAGEOBJ_TEXT:
-            font = pdfium_c.FPDFTextObj_GetFont(obj.raw)
-            size = ctypes.c_ulong()
-            if (
-                not font
-                or not pdfium_c.FPDFFont_GetFontData(font, None, 0, size)
-                or not size.value
-            ):
+        for value in _pdf_dictionary(resources.get("/Font")).values():
+            font = _pdf_dictionary(value)
+            if _pdf_value(font.get("/Subtype")) == "/Type3":
                 raise PdfExclusionError(
-                    prefix + "font drawing cannot be checked for embedded "
-                    "images"
+                    "PDF Type3 font drawings cannot be checked for image "
+                    "exclusions"
                 )
+        for value in _pdf_dictionary(resources.get("/ExtGState")).values():
+            state = _pdf_dictionary(value)
+            if _pdf_value(state.get("/SMask", "/None")) != "/None":
+                raise PdfExclusionError(
+                    "PDF graphics-state mask cannot be checked for exclusions"
+                )
+        for value in _pdf_dictionary(resources.get("/XObject")).values():
+            obj = _pdf_dictionary(value)
+            kind = _pdf_value(obj.get("/Subtype"))
+            if kind == "/Image":
+                if any(
+                    name in obj for name in ("/Mask", "/SMask")
+                ) or _pdf_value(obj.get("/SMaskInData", 0)):
+                    raise PdfExclusionError(
+                        "PDF image mask cannot be checked for exclusions"
+                    )
+            elif kind == "/Form":
+                if "/Ref" in obj:
+                    raise PdfExclusionError(
+                        "PDF external form cannot be checked for exclusions"
+                    )
+                _check_resources(
+                    obj.get("/Resources", resources), active, depth + 1
+                )
+            else:
+                raise PdfExclusionError(
+                    "PDF XObject type cannot be checked for image exclusions"
+                )
+    finally:
+        active.remove(key)
+
+
+def _check_resource_pages(
+    data: bytes, count: int, pages: set[int] | None
+) -> None:
+    if pages == set():
+        return
+    try:
+        reader = PdfReader(io.BytesIO(data), strict=True)
+        try:
+            if reader.is_encrypted or len(reader.pages) != count:
+                raise PdfExclusionError(
+                    "PDF page structure cannot be inspected consistently"
+                )
+            form = _pdf_dictionary(reader.root_object.get("/AcroForm"))
+            if "/XFA" in form:
+                raise PdfExclusionError(
+                    "PDF dynamic forms cannot be checked for image exclusions"
+                )
+            for number, page in enumerate(reader.pages, start=1):
+                if pages is not None and number not in pages:
+                    continue
+                try:
+                    _check_resources(page.get("/Resources"), set())
+                    annotations = page.get("/Annots", [])
+                    if hasattr(annotations, "get_object"):
+                        annotations = annotations.get_object()
+                    for value in annotations:
+                        annotation = _pdf_dictionary(value)
+                        if (
+                            "/AP" in annotation
+                            or _pdf_value(annotation.get("/Subtype"))
+                            == "/Widget"
+                        ):
+                            raise PdfExclusionError(
+                                "PDF annotation appearance cannot be checked "
+                                "for image exclusions"
+                            )
+                except PdfExclusionError as error:
+                    raise PdfExclusionError(
+                        f"PDF page {number}: {error}"
+                    ) from error
+        finally:
+            reader.close()
+    except (
+        PyPdfError,
+        ValueError,
+        TypeError,
+        AttributeError,
+        RecursionError,
+    ) as error:
+        if isinstance(error, PdfExclusionError):
+            raise
+        raise PdfExclusionError(
+            "PDF resource structure cannot be inspected for exclusions"
+        ) from error
+
+
+def _guard_page(page: Any, number: int, excluded: Callable[[str], bool]):
+    """Check every ordinary image, before visibility/decoration filtering."""
+    prefix = f"PDF page {number}: "
+    for obj in page.get_objects(max_depth=_MAX_FORM_DEPTH):
+        if (
+            obj.type == pdfium_c.FPDF_PAGEOBJ_FORM
+            and obj.level >= _MAX_FORM_DEPTH - 1
+        ):
+            raise PdfExclusionError(prefix + "nested form inspection limit")
         if obj.type == pdfium_c.FPDF_PAGEOBJ_IMAGE:
             try:
-                if not _opaque_image(obj):
-                    raise PdfExclusionError(
-                        prefix + "image mask cannot be checked for exclusions"
-                    )
                 data, _suffix = image_bytes(obj)
                 if not data:
                     raise ValueError("image has no inspectable bytes")
             except (pdfium.PdfiumError, ValueError) as error:
-                if isinstance(error, PdfExclusionError):
-                    raise
                 raise PdfExclusionError(
                     prefix + "image bytes cannot be checked for exclusions"
                 ) from error
@@ -402,57 +481,12 @@ def _guard_page(page: Any, number: int, excluded: Callable[[str], bool]):
                 raise PdfExclusionError(
                     prefix + "excluded embedded image; vision is refused"
                 )
-    count = pdfium_c.FPDFPage_GetAnnotCount(page.raw)
-    if count < 0:
-        raise PdfExclusionError(prefix + "annotations cannot be inspected")
-    for index in range(count):
-        annot = pdfium_c.FPDFPage_GetAnnot(page.raw, index)
-        if not annot:
-            raise PdfExclusionError(prefix + "annotation cannot be inspected")
-        try:
-            if (
-                pdfium_c.FPDFAnnot_HasKey(annot, b"AP")
-                or pdfium_c.FPDFAnnot_GetSubtype(annot)
-                == pdfium_c.FPDF_ANNOT_WIDGET
-            ):
-                raise PdfExclusionError(
-                    prefix + "annotation appearance cannot be checked for "
-                    "embedded-image exclusions"
-                )
-        finally:
-            pdfium_c.FPDFPage_CloseAnnot(annot)
 
 
-def _opaque_image(obj: Any) -> bool:
-    """Reject effective masks, which HasTransparency does not expose.
-
-    Apply the native image to an upright rectangle so rotation/cropping
-    cannot manufacture transparent corners in this mask check.
-    """
-    original = obj.get_matrix()
-    width, height = obj.get_px_size()
-    try:
-        obj.set_matrix(pdfium.PdfMatrix().scale(width, height))
-        bitmap = obj.get_bitmap(render=True, scale_to_original=False)
-        try:
-            if bitmap.format != pdfium_c.FPDFBitmap_BGRA:
-                return True
-            pixels = bytes(bitmap.buffer)
-            return all(
-                alpha == 255
-                for row in range(bitmap.height)
-                for alpha in pixels[
-                    row * bitmap.stride + 3 : row * bitmap.stride
-                    + bitmap.width * 4 : 4
-                ]
-            )
-        finally:
-            bitmap.close()
-    finally:
-        obj.set_matrix(original)
-
-
-def _check_vision(document: Any, excluded, pages: set[int] | None) -> None:
+def _check_vision(
+    document: Any, excluded, pages: set[int] | None, source_bytes: bytes
+) -> None:
+    _check_resource_pages(source_bytes, len(document), pages)
     for index in range(len(document)):
         if pages is not None and index + 1 not in pages:
             continue
@@ -477,13 +511,14 @@ def check_pdf_vision(
     with _LOCK:
         fresh_start()
         try:
-            document = pdfium.PdfDocument(path)
+            source_bytes = path.read_bytes()
+            document = pdfium.PdfDocument(source_bytes)
             try:
                 document.init_forms()
                 count = len(document)
                 if count < 1:
                     raise PdfExclusionError("PDF has no inspectable pages")
-                _check_vision(document, excluded, pages)
+                _check_vision(document, excluded, pages, source_bytes)
                 return count
             finally:
                 document.close()
@@ -547,12 +582,13 @@ def prepare_pdf_vision(
     with _LOCK:
         fresh_start()
         try:
-            document = pdfium.PdfDocument(path)
+            source_bytes = path.read_bytes()
+            document = pdfium.PdfDocument(source_bytes)
             try:
                 document.init_forms()
                 if len(document) < 1:
                     raise PdfExclusionError("PDF has no inspectable pages")
-                _check_vision(document, excluded, None)
+                _check_vision(document, excluded, None, source_bytes)
                 pages = []
                 for index in range(len(document)):
                     page = document[index]
@@ -605,7 +641,8 @@ def read_pages(
     with _LOCK:
         fresh_start()
         try:
-            document = pdfium.PdfDocument(path)
+            source_bytes = path.read_bytes()
+            document = pdfium.PdfDocument(source_bytes)
         except pdfium.PdfiumError as error:
             if excluded is not None:
                 raise PdfExclusionError(
@@ -614,7 +651,7 @@ def read_pages(
             return None
         try:
             document.init_forms()
-            return _read(document, directory, excluded)
+            return _read(document, directory, excluded, source_bytes)
         except pdfium.PdfiumError as error:
             if excluded is not None:
                 raise PdfExclusionError(
@@ -653,7 +690,10 @@ class _Layout:
 
 
 def _read(
-    document: Any, directory: Path, excluded: Callable[[str], bool] | None
+    document: Any,
+    directory: Path,
+    excluded: Callable[[str], bool] | None,
+    source_bytes: bytes,
 ) -> ContainerPages:
     """`read_pages` of an open document: every page's layout first, and
     only then, when a page reads from its text layer, the files."""
@@ -680,6 +720,7 @@ def _read(
             document,
             excluded,
             {layout.number for layout in layouts if layout.method == VISION},
+            source_bytes,
         )
     if not read.by_own_text:
         return read
