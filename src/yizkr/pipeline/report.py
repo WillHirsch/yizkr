@@ -189,7 +189,12 @@ from yizkr.pipeline.rundir import (
     invocation_records,
 )
 from yizkr.pipeline.scratch import BARRIER, CORPUS_DIR, CORPUS_STAGES
-from yizkr.pipeline.stage_planning import DOCUMENT_STAGES, MODEL_ROLES, VIEWS
+from yizkr.pipeline.stage_planning import (
+    DOCUMENT_STAGES,
+    MODEL_ROLES,
+    STAGES,
+    VIEWS,
+)
 from yizkr.pipeline.stages import read_jsonl, staging_path
 from yizkr.pipeline.writer import REFUSAL_REASONS
 from yizkr.staticsite import RELEASE_CAUSES, UNSTATED_KIND
@@ -1132,7 +1137,14 @@ def _read_views(document: Document, directory: Path, state: dict) -> None:
                 **_pages(found.get("pages")),
             }
     stage = next(
-        (s for s in ("extraction", "gedcom") if document.completed(s)), None
+        (
+            name
+            for name in document.stages
+            if name in STAGES
+            and STAGES[name].artifact == "batch.json"
+            and document.completed(name)
+        ),
+        None,
     )
     batch = (
         _view(document, stage, directory / VIEWS[stage], dict)

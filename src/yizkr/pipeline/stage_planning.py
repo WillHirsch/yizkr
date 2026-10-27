@@ -78,6 +78,21 @@ DOCUMENT_STAGES = {
     )
     for kind in ("gedcom", *_READ_KINDS)
 }
+
+
+def stages_for(kind: str) -> tuple[StageDescriptor, ...]:
+    """The declared operations for one document kind, in execution order."""
+    return tuple(STAGES[name] for name in DOCUMENT_STAGES[kind])
+
+
+def batch_stage(kind: str) -> StageDescriptor:
+    """The document's one producer of the accepted proposal batch."""
+    (stage,) = (
+        stage for stage in stages_for(kind) if stage.artifact == "batch.json"
+    )
+    return stage
+
+
 MODEL_ROLES = tuple(dict.fromkeys(stage.role for stage in STAGES.values()))
 STAGE_ROLES = {stage.name: stage.role for stage in STAGES.values()}
 # A deterministic adapter may share a refresh role, but produces no model
@@ -243,8 +258,9 @@ PROCESSING_RESOURCES = {
     "gedcom": tuple(
         sorted(
             (
-                *_SHARED,
                 *_SCHEMA,
+                "pipeline/gedcom_stages.py",
+                "pipeline/stages.py",
                 "pipeline/gedcom.py",
                 "pipeline/names.py",
                 "pipeline/writer.py",

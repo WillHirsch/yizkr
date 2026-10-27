@@ -149,7 +149,12 @@ from yizkr.pipeline.scratch import (
     runs_in,
     runs_refusal,
 )
-from yizkr.pipeline.stage_planning import DOCUMENT_STAGES, PHASES, STAGE_ROLES
+from yizkr.pipeline.stage_planning import (
+    DOCUMENT_STAGES,
+    PHASES,
+    STAGE_ROLES,
+    stages_for,
+)
 from yizkr.pipeline.stages import content_hash
 from yizkr.pipeline.transcribe import ImageReading, Transcription
 from yizkr.pipeline.transcription_record import BLANK, NOT_A_DOCUMENT_PAGE
@@ -580,6 +585,8 @@ class Estimator(ScratchDriver):
         corpus with no document is no call, as it is to the driver."""
         if self.exclusions is None:
             raise ExclusionConfigError(MISSING_LIST)
+        found = self.documents()
+        self._plan_documents(found)
         problems = self._model_problems() + self._pacing_problems()
         problems += self._anomaly_problems()
         if problems:
@@ -589,10 +596,12 @@ class Estimator(ScratchDriver):
             run=self.state_dir,
             resumed=bool(self._recorded.get("run_id")),
             cache=Path(self.cache_dir),
-            holders=_holders(self.state_dir.parent, Path(self.cache_dir)),
+            holders=_holders(
+                self.state_dir.parent,
+                Path(self.cache_dir) if self._preflight_roles() else None,
+            ),
             preflight=self._engine_problems() + self._disk_problems(),
         )
-        found = self.documents()
         if not found:
             return estimate
         docs = [doc for doc in found if doc.unreadable is None]
@@ -743,27 +752,36 @@ class Estimator(ScratchDriver):
         """What each stage the invocation plans for the document comes to,
         in order, up to one that fails in the run."""
         planned = [
-            stage for stage in DOCUMENT_STAGES[doc.kind] if self._within(stage)
+            stage for stage in stages_for(doc.kind) if self._within(stage.name)
         ]
         fresh = self._fresh(doc)
         made: dict[str, _Made] = {}
-        if doc.kind == "gedcom":
-            # the adapter makes no call
-            for stage in planned:
-                made[stage] = _Made(
-                    reused=not fresh
-                    and self._stands(
-                        doc, doc.batch, ClaimBatch.model_validate_json
-                    )
-                    is not None
-                )
-            return made
         count = {
             "transcription": self._transcription,
             "extraction": self._extraction,
         }
         before = _Made()
-        for stage in planned:
+        for descriptor in planned:
+            stage = descriptor.name
+            if descriptor.process == "deterministic":
+                # Even a missing output needs observable generation inputs.
+                # Deterministic adapters neither open a model nor its cache.
+                self._require_processing_dependencies(doc, stage)
+                view = (
+                    self._stands(
+                        doc,
+                        doc.dir / descriptor.artifact,
+                        ClaimBatch.model_validate_json,
+                    )
+                    if not fresh
+                    else None
+                )
+                before = made[stage] = _Made(
+                    reused=view is not None,
+                    view=view,
+                    changed=view is None,
+                )
+                continue
             if doc.kind == "text":
                 # Fresh views and changed upstream products cannot be
                 # reused, but still need inspectable generation inputs
@@ -1249,14 +1267,15 @@ def _may_be_excerpt(image: ImageReading) -> bool:
     }
 
 
-def _holders(runs: Path, cache: Path) -> list[str]:
+def _holders(runs: Path, cache: Path | None) -> list[str]:
     """Who holds the runs directory and the LLM cache now, as their lock
-    files record it, read without taking either lock."""
+    files record it, read without taking either lock. A deterministic
+    document plan supplies no cache and never observes its state."""
     held = []
-    for what, where, holder in (
-        ("the runs directory", runs, runs_holder(runs)),
-        ("the LLM cache", cache, llm.cache_holder(cache)),
-    ):
+    observed = [("the runs directory", runs, runs_holder(runs))]
+    if cache is not None:
+        observed.append(("the LLM cache", cache, llm.cache_holder(cache)))
+    for what, where, holder in observed:
         if holder is not None:
             held.append(f"{what} {where} by {holder}")
     return held

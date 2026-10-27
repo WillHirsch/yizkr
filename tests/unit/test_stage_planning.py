@@ -16,13 +16,16 @@ from yizkr.pipeline.stage_planning import (
     STAGE_ROLES,
     STAGES,
     VIEWS,
+    batch_stage,
     plan_view,
     processing_dependencies,
+    stages_for,
 )
 
 
 def test_gedcom_keeps_its_deterministic_process_and_extract_refresh_role():
     assert DOCUMENT_STAGES["gedcom"] == ("gedcom",)
+    assert stages_for("gedcom") == (batch_stage("gedcom"),)
     assert STAGES["gedcom"].process == "deterministic"
     assert STAGE_ROLES["gedcom"] == "extract"
     assert PHASES["gedcom"] == PHASES["extraction"]
@@ -37,6 +40,67 @@ def test_gedcom_keeps_its_deterministic_process_and_extract_refresh_role():
         "transcription.json",
         "preparation.pointer.txt",
     )
+
+
+@pytest.mark.parametrize("kind", DOCUMENT_STAGES)
+def test_each_document_plan_declares_one_batch_producer(kind):
+    producer = batch_stage(kind)
+    assert producer in stages_for(kind)
+    assert producer.artifact == "batch.json"
+    assert producer.role == "extract"
+
+
+@pytest.mark.parametrize(
+    "resource",
+    [
+        "pipeline/gedcom.py",
+        "pipeline/gedcom_stages.py",
+        "pipeline/gedcom_placeholders.yaml",
+    ],
+)
+def test_gedcom_adapter_and_policy_changes_invalidate_its_processing(
+    package, resource
+):
+    def observed():
+        return processing_dependencies(
+            "gedcom",
+            package=package,
+            source_sha1="1" * 40,
+            configuration={},
+        )
+
+    before = observed()
+    path = package / resource
+    path.write_text(path.read_text() + "changed fictional adapter policy\n")
+    plan = plan_view(
+        exists=True,
+        recorded_inputs={},
+        current_inputs={},
+        recorded_processing=before,
+        processing=observed(),
+    )
+    assert plan.action == "recompute"
+    assert plan.changed_dependencies == (f"processing.resources.{resource}",)
+
+
+def test_text_operations_and_prompts_do_not_invalidate_gedcom(package):
+    def observed():
+        return processing_dependencies(
+            "gedcom",
+            package=package,
+            source_sha1="1" * 40,
+            configuration={},
+        )
+
+    before = observed()
+    for resource in (
+        "pipeline/text_stages.py",
+        "pipeline/prompts/extraction.md",
+        "pipeline/prompts/critique.md",
+    ):
+        path = package / resource
+        path.write_text(path.read_text() + "changed fictional model policy\n")
+    assert observed() == before
 
 
 def test_current_inputs_and_processing_reuse_without_mutating_metadata():

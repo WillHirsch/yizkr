@@ -1627,6 +1627,23 @@ class TestAggregateOnly:
 
 
 class TestStages:
+    def test_recorded_gedcom_plan_reads_batch_for_a_historical_kind(self, run):
+        before = build(run, now=NOW)
+        path = run / "run.json"
+        plan = json.loads(path.read_text())
+        for entry in plan["documents"]:
+            if entry["sha1"] == TREE:
+                entry["kind"] = "historical-structured-document"
+        path.write_text(json.dumps(plan))
+
+        after = build(run, now=NOW)
+        # Recorded operations, not today's classification, identify products.
+        assert (
+            document(after, TREE)["batch"] == document(before, TREE)["batch"]
+        )
+        assert stage_row(after, "gedcom") == stage_row(before, "gedcom")
+        assert document(after, TREE)["batch"]["stage"] == "gedcom"
+
     def test_each_stage_partitions_its_documents(self, made):
         rows = {row["name"]: row for row in made["aggregate"]["stages"]}
         assert list(rows) == ["transcription", "extraction", "critique",
