@@ -733,8 +733,13 @@ def pdf_reading_failure(
         return "PDF reading lacks complete physical-page provenance"
     if is_paged(transcription) and not paged:
         return "PDF reading has another container's provenance"
-    if any(excluded(sha1) for page in pages for sha1 in page.images):
-        return "PDF reading names an embedded image now excluded"
+    for page in pages:
+        for sha1 in page.images:
+            if excluded(sha1):
+                return (
+                    f"the never-ingest list names image {sha1[:12]}, which "
+                    "it marks"
+                )
     if (
         not is_paged(transcription)
         and transcription.engine.startswith("llm-vision:")
