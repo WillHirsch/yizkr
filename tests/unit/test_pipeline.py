@@ -838,14 +838,13 @@ class TestIngestExtract:
 
     @pytest.mark.parametrize(
         "listed",
-        [None, "", "# nothing listed yet\n", f"{'1' * 40}\n"],
-        ids=["no-list", "empty-list", "comments-only", "other-hash"],
+        [None, "", "# nothing listed yet\n"],
+        ids=["no-list", "empty-list", "comments-only"],
     )
     def test_without_media_it_runs_where_hashes_can_decide(
         self, tmp_path, monkeypatch, listed
     ):
-        """No list, or a list with no patterns in it: the key the
-        transcription names is all the list can be asked about."""
+        """Without content exclusions, a stored reading needs no media."""
         status, out, engine = self.run(tmp_path, monkeypatch, listed)
         assert status == 0
         assert out.exists() and len(engine.prompts) == 1

@@ -4,9 +4,9 @@ PDF places within its pages, the views, and the LLM cache's keys.
 A PDF with a page that reads from its text layer is read page by page:
 those pages without a model call, its other pages by vision, and each
 image placed within a text-layer page by vision on its own, as a witness
-of its own (#178, ADR-0008). A PDF with no such page is read whole, with
-the call it was always read with, so the cache, and the transcription
-seed, answer it as before. The orchestrator runs with its real client
+of its own (#178, ADR-0008). A PDF with no such page is read whole through
+a checked bitmap-only representation. Cache reuse follows those submitted
+bytes, while attribution remains to the original PDF. The orchestrator uses
 wiring (tests/unit/test_llmcache.py's CachedRun), and a scripted engine
 reads each file a vision call gives it. Every PDF is fictional
 (tests/fixtures/pdfs.py), its texts the universe's (docs/EXAMPLES.md).
@@ -343,14 +343,16 @@ class TestTheRoute:
 
     def test_a_scanned_pdf_is_read_whole(self, tmp_path):
         """A PDF none of whose pages reads from its text layer is read by
-        the one vision call it was always read with: the PDF itself. Its
-        view's pages are its record's, each read by that call."""
+        one vision call over a checked, rendered PDF. Its source identity
+        remains the original PDF; its pages are read by that call."""
         corpus = folder(tmp_path, birth_extract_1938=extract())
         reader = Reader({"birth-extract-1938.pdf": EXTRACT})
         doc = document(run(tmp_path, corpus, reader), "birth-extract-1938.pdf")
         assert reader.names() == ["birth-extract-1938.pdf"]
-        assert reader.read[0][1] == doc.sha1
+        assert reader.read[0][1] != doc.sha1
         stored = json.loads(doc.transcription.read_text())
+        assert stored["artifact"]["sha1"] == doc.sha1
+        assert stored["input_representation"] == "rendered-pdf-v1"
         assert stored["text"] == page_text(EXTRACT)
         assert stored["engine"] == "llm-vision:scripted/model-a"
         assert [
@@ -550,14 +552,14 @@ class TestTheRoute:
         assert reader.names() == ["page-2.png"]
         assert "Angerring" not in transcription.text
 
-    def test_a_pdf_pdfium_cannot_read_is_read_whole(self, tmp_path):
+    def test_an_uninspectable_pdf_is_refused_before_vision(self, tmp_path):
         corpus = folder(tmp_path, scan=b"%PDF-1.4 fictional")
         reader = Reader({"scan.pdf": EXTRACT})
         doc = document(run(tmp_path, corpus, reader), "scan.pdf")
-        assert reader.names() == ["scan.pdf"]
-        transcription = transcription_of(doc)
-        assert transcription.engine == "llm-vision:scripted/model-a"
-        assert transcription.text == page_text(EXTRACT)
+        assert doc.state.status == FAILED
+        assert reader.names() == []
+        assert not doc.transcription.exists()
+        assert "exclusions" in doc.state.error
 
 
 class TestImages:
@@ -2182,8 +2184,7 @@ class TestTheView:
 
 
 def read_whole(monkeypatch) -> None:
-    """Read every PDF whole, as the vision route did before PDFs were read
-    page by page: the baseline these tests compare against."""
+    """Force whole-document vision to exercise that supported route."""
     monkeypatch.setattr(
         PdfPageTranscriber, "transcribe", lambda self, path: None
     )
@@ -2201,9 +2202,8 @@ def calls_for(orchestrator: CachedRun, doc: DocumentRun, role: str) -> dict:
 
 
 class TestKeys:
-    """Only a PDF read page by page makes its transcription, and what
-    follows it, again: a scanned PDF's call, and every call after it, keeps
-    its key, so the LLM cache answers them (ADR-0032)."""
+    """Reuse follows the submitted content. Checked whole-PDF inputs
+    reuse compatible responses; original-byte adoptions remain inert."""
 
     CORPUS = {
         "birth_extract_1938": extract,
@@ -2269,11 +2269,18 @@ class TestKeys:
         }
         assert reader.names() == [f"{LETTER_SHA1}.png"]
 
-    def test_an_adoption_for_a_scan_is_served(self, tmp_path, monkeypatch):
-        """The transcription seed adopts archived readings under the key
-        of the call that reads a PDF whole. A scan is still read by that
-        call, so its adoption is served; a born-digital PDF no longer
-        makes it, and its adoption is left unasked."""
+    @pytest.mark.parametrize("checked", [False, True])
+    def test_only_adoptions_for_checked_pdf_inputs_are_served(
+        self, tmp_path, checked
+    ):
+        """An adoption is usable only for the actual submitted bytes.
+
+        The scan uses a checked bitmap-only PDF. An archive reading keyed
+        by its original bytes cannot answer that call; a matching checked
+        input can. The typed PDF makes no whole-document vision call.
+        """
+        from yizkr.pipeline.textlayer import prepare_pdf_vision
+
         corpus = self.corpus(tmp_path)
         cache = tmp_path / "cache"
         seeder = CachedRun(
@@ -2289,8 +2296,13 @@ class TestKeys:
             ("birth-extract-1938.pdf", EXTRACT),
             ("family-history-2008.pdf", HISTORY),
         ):
+            media = corpus / name
+            if checked:
+                prepared = tmp_path / (name + "-prepared")
+                prepared.mkdir()
+                media = prepare_pdf_vision(media, prepared, lambda sha1: False)
             key = keys[name] = client.complete_key(
-                TRANSCRIPTION_PROMPT, [corpus / name]
+                TRANSCRIPTION_PROMPT, [media]
             )
             assert client.seed(
                 key,
@@ -2298,15 +2310,18 @@ class TestKeys:
                 {"model_identifier": "archived/model-z", "backfilled": True},
             )
         seeder._close_engines()
-        reader = Reader({LETTER_SHA1: EXCERPT})
+        reader = Reader(
+            {LETTER_SHA1: EXCERPT, "birth-extract-1938.pdf": EXTRACT}
+        )
         after = run(tmp_path, corpus, reader, cache_dir=cache, state="after")
         scan = document(after, "birth-extract-1938.pdf")
         assert calls_for(after, scan, "transcribe") == {
-            "cache-hit: adopted": 1
+            "cache-hit: adopted" if checked else "cache-miss: absent": 1
         }
         stored = json.loads(scan.transcription.read_text())
         assert stored["text"] == page_text(EXTRACT)
-        assert stored["engine"] == "llm-vision:archived/model-z"
+        expected_model = "archived/model-z" if checked else "scripted/model-a"
+        assert stored["engine"] == f"llm-vision:{expected_model}"
         typed_pages = document(after, "family-history-2008.pdf")
         assert calls_for(after, typed_pages, "transcribe") == {}
         assert transcription_of(typed_pages).engine == TEXT_LAYER
@@ -2315,4 +2330,8 @@ class TestKeys:
             for event in this_run(after, "cache-hit", "cache-miss")
         }
         assert keys["family-history-2008.pdf"] not in asked
-        assert reader.names() == [f"{LETTER_SHA1}.png"]
+        assert (keys["birth-extract-1938.pdf"] in asked) is checked
+        expected_calls = [f"{LETTER_SHA1}.png"]
+        if not checked:
+            expected_calls.append("birth-extract-1938.pdf")
+        assert sorted(reader.names()) == sorted(expected_calls)

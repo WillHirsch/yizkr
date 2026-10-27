@@ -56,6 +56,7 @@ from pathlib import Path
 
 from yizkr.claims import ClaimBatch
 from yizkr.core.config import Config
+from yizkr.core.corpus import ExclusionList
 from yizkr.core.privacy import DEFAULT_CUTOFF_YEARS
 from yizkr.core.wiki import WikiClient
 from yizkr.pipeline.orchestrate import MODEL_ROLES
@@ -104,8 +105,8 @@ def _add_placed(parser) -> None:
 
 def _refuse_if_excluded(
     args, path: Path | None = None, *, sha1: str | None = None
-) -> None:
-    """Honour the never-ingest list in a single-file step.
+) -> ExclusionList | None:
+    """Honour the list and return its expanded policy for embedded inputs.
 
     The single steps are debugging tools and run without a list; when one
     is configured, a file on it is refused before anything reads it. A
@@ -155,6 +156,7 @@ def _refuse_if_excluded(
             "bytes a glob names only inside a deck is not refused",
             file=sys.stderr,
         )
+    return exclusions
 
 
 # -- top-level commands -------------------------------------------------
@@ -463,7 +465,24 @@ def _close_owned_client(client) -> None:
 def cmd_transcribe(args) -> int:
     if args.engine == "llm":
         _refuse_archive_for_vision(args.file)
-    _refuse_if_excluded(args, args.file)
+    exclusions = _refuse_if_excluded(args, args.file)
+    excluded = (
+        (lambda sha1: exclusions.match(sha1=sha1) is not None)
+        if exclusions is not None
+        else None
+    )
+    if excluded is not None:
+        from yizkr.pipeline.textlayer import (
+            PdfExclusionError,
+            check_pdf_vision,
+            is_pdf_input,
+        )
+
+        if is_pdf_input(args.file):
+            try:
+                check_pdf_vision(args.file, excluded)
+            except PdfExclusionError as exc:
+                sys.exit(str(exc))
     if args.engine == "textfile":
         if not args.text_file:
             sys.exit("--engine textfile requires --text-file")
@@ -495,6 +514,7 @@ def cmd_transcribe(args) -> int:
                 client,
                 language=args.language,
                 fallback_language=args.fallback_language,
+                excluded=excluded,
             )
             transcription = transcriber.transcribe(args.file)
         finally:
@@ -585,7 +605,9 @@ def cmd_extract(args) -> int:
     # the list's patterns match is refused before the file is read, so a
     # listed file is refused as listed even when it cannot be read.
     try:
-        _refuse_if_excluded(args, args.media, sha1=transcription.artifact.sha1)
+        exclusions = _refuse_if_excluded(
+            args, args.media, sha1=transcription.artifact.sha1
+        )
         media = (
             None if args.media is None else ArtifactRef.from_path(args.media)
         )
@@ -603,6 +625,26 @@ def cmd_extract(args) -> int:
             f"{args.media.name} is not the media {args.transcription.name} "
             f"transcribes (its SHA-1 differs); refusing"
         )
+    if exclusions is not None and args.engine == "llm":
+        from yizkr.pipeline.textlayer import PdfExclusionError, is_pdf_input
+        from yizkr.pipeline.transcribe import pdf_reading_failure
+
+        if args.media is None and (exclusions.sha1s or exclusions.embedded):
+            sys.exit(
+                "give --media to check embedded-image exclusions before "
+                "sending a stored transcription to a model; refusing"
+            )
+        if args.media is not None and is_pdf_input(args.media):
+            try:
+                reason = pdf_reading_failure(
+                    args.media,
+                    transcription,
+                    lambda sha1: exclusions.match(sha1=sha1) is not None,
+                )
+            except PdfExclusionError as exc:
+                sys.exit(str(exc))
+            if reason is not None:
+                sys.exit(f"{reason}; transcribe the media again; refusing")
     if args.out.is_dir():
         sys.exit(f"--out {args.out} is a folder, not a batch file; refusing")
     if args.engine == "file" and not args.claims_file:
@@ -1730,7 +1772,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="the transcribed media file, which must be the one the "
         "transcription names: the never-ingest list is checked against "
         "its name as well as its SHA-1. Required when the list names files "
-        "by pattern, since a transcription keeps no file name",
+        "by pattern, and for model extraction when it names content "
+        "hashes, so embedded PDF images can be checked too",
     )
     p.add_argument("--engine", choices=["llm", "file"], default="file")
     p.add_argument(

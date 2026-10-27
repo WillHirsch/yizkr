@@ -1810,7 +1810,7 @@ class TestCheckedRoutes:
 
     @pytest.mark.parametrize("route", ROUTES)
     def test_the_estimate_rechecks_where_the_driver_does(
-        self, monkeypatch, route
+        self, tmp_path, monkeypatch, route
     ):
         rechecked: dict[str, bool] = {}
 
@@ -1826,9 +1826,11 @@ class TestCheckedRoutes:
             estimate, "route_transcription", lambda source, correction: route
         )
         monkeypatch.setattr(Orchestrator, "_reused_view", looked("driver"))
+        source = tmp_path / "a-letter.txt"
+        source.write_text(LETTER)
         doc = SimpleNamespace(
             sha1="a" * 40,
-            source=Path("a-letter.txt"),
+            source=source,
             correction=None,
             transcription=Path("transcription.json"),
             batch=Path("batch.json"),

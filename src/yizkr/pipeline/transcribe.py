@@ -305,7 +305,9 @@ class Transcription(BaseModel):
     absent otherwise. `flag` names the signature the transcription check
     flagged its wording by, when it did (yizkr.pipeline.
     transcription_check), and is absent otherwise; like the provenance, it
-    is no part of its content hash."""
+    is no part of its content hash. `input_representation` identifies a
+    checked PDF rendering rather than an original-file model upload;
+    it is provenance, not a change of source identity."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -316,6 +318,7 @@ class Transcription(BaseModel):
     document_class: str | None = None
     pages: list[TranscribedPage] | None = None
     flag: str | None = None
+    input_representation: Literal["rendered-pdf-v1"] | None = None
     # what a page-by-page reading made beside the transcription, for its
     # caller to keep (PagedReading); never part of the view
     _reading: Any = PrivateAttr(default=None)
@@ -341,7 +344,12 @@ class Transcription(BaseModel):
         """The transcription as written: one with no pages, class or flag
         holds no key for it."""
         data = handler(self)
-        for name in ("pages", "document_class", "flag"):
+        for name in (
+            "pages",
+            "document_class",
+            "flag",
+            "input_representation",
+        ):
             if getattr(self, name) is None:
                 data.pop(name, None)
         return data
@@ -567,8 +575,10 @@ class LlmVisionTranscriber(_CheckedTranscriber):
         client: LlmClient,
         language: str = "en",
         fallback_language: str = "en",
+        excluded: Callable[[str], bool] | None = None,
     ) -> None:
         self.client = client
+        self.excluded = excluded
         self.language = language
         self.fallback_language = fallback_language
         # the resolution behind the last transcribe(), for callers to log
@@ -591,7 +601,17 @@ class LlmVisionTranscriber(_CheckedTranscriber):
         self._response = None
         refuse_archive(media_path)
         artifact = ArtifactRef.from_path(media_path)
-        text = self.client.complete(TRANSCRIPTION_PROMPT, [media_path])
+        from yizkr.pipeline.textlayer import is_pdf_input, prepare_pdf_vision
+
+        prepared = self.excluded is not None and is_pdf_input(media_path)
+        if prepared:
+            with tempfile.TemporaryDirectory(prefix="yizkr-pdf-vision-") as d:
+                outbound = prepare_pdf_vision(
+                    media_path, Path(d), self.excluded
+                )
+                text = self.client.complete(TRANSCRIPTION_PROMPT, [outbound])
+        else:
+            text = self.client.complete(TRANSCRIPTION_PROMPT, [media_path])
         self._response = text
         check, record = check_answer(
             text, cut_off=at_output_limit(self.client, text)
@@ -602,12 +622,15 @@ class LlmVisionTranscriber(_CheckedTranscriber):
             record.pages, self.language, fallback=self.fallback_language
         )
         made_by = getattr(text, "made_by", None)
-        return Transcription.from_record(
+        result = Transcription.from_record(
             record,
             artifact=artifact,
             language=self.last_resolution.code,
             engine=f"llm-vision:{made_by or self.client.model_identifier}",
         )
+        if prepared:
+            result.input_representation = "rendered-pdf-v1"
+        return result
 
     def transcribe(self, media_path: Path) -> Transcription:
         """The checked transcription (`_CheckedTranscriber.transcribe`),
@@ -675,6 +698,50 @@ def is_paged(transcription: Transcription) -> bool:
     return transcription.engine.startswith(f"{PDF_PAGES}:") or (
         transcription.engine == DECK_ENGINE
     )
+
+
+def pdf_reading_failure(
+    path: Path,
+    transcription: Transcription,
+    excluded: Callable[[str], bool],
+) -> str | None:
+    """Check current PDF exclusions before reusing or consuming a reading.
+
+    A legacy whole-PDF response may have used resources absent from the
+    visible pages, so only a reading of the checked representation is reusable.
+    The caller can regenerate a stale reading; an unsafe vision route raises.
+    """
+    from yizkr.pipeline.textlayer import check_pdf_vision, is_pdf_input
+
+    if not is_pdf_input(path):
+        return None
+    pages = transcription.pages or ()
+    paged = transcription.engine.startswith(f"{PDF_PAGES}:")
+    selected = (
+        {page.page for page in pages if page.provenance.method == "vision"}
+        if paged and pages
+        else None
+    )
+    count = check_pdf_vision(path, excluded, pages=selected)
+    if paged and (
+        [page.page for page in pages] != list(range(1, count + 1))
+        or any(
+            page.provenance.method not in {"vision", "text-layer", "none"}
+            for page in pages
+        )
+    ):
+        return "PDF reading lacks complete physical-page provenance"
+    if is_paged(transcription) and not paged:
+        return "PDF reading has another container's provenance"
+    if any(excluded(sha1) for page in pages for sha1 in page.images):
+        return "PDF reading names an embedded image now excluded"
+    if (
+        not is_paged(transcription)
+        and transcription.engine.startswith("llm-vision:")
+        and transcription.input_representation != "rendered-pdf-v1"
+    ):
+        return "PDF reading needs the checked rendered representation"
+    return None
 
 
 @dataclass
@@ -921,8 +988,9 @@ class PdfPageTranscriber(PagedTranscriber):
     its text layer where it has a usable one, by the vision engine where
     it does not; and each image placed within a text-layer page read on
     its own. It gives None for a PDF none of whose pages reads from its
-    text layer, or that PDFium cannot read: the caller reads that PDF
-    whole, in one vision call that gives the engine the PDF itself."""
+    text layer; the caller reads a checked bitmap-only PDF in one vision
+    call. Exclusion enforcement refuses unreadable or unsafe pages before
+    any model input is produced; it never falls back around that refusal."""
 
     def _read(self, media_path: Path, directory: Path) -> Any:
         from yizkr.pipeline import textlayer

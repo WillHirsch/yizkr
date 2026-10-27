@@ -268,7 +268,12 @@ BATCH_VOLATILE = (
 # content hash. A page's place in the text, the images it names and its
 # record's fields (its printed page number, status, languages and notes)
 # are content, as its text and its document class are (ADR-0037)
-TRANSCRIPTION_VOLATILE = ("engine", "pages.provenance", "flag")
+TRANSCRIPTION_VOLATILE = (
+    "engine",
+    "pages.provenance",
+    "flag",
+    "input_representation",
+)
 # the event that says a stage's view was current and stands
 REUSED = "reused"
 
@@ -1803,7 +1808,11 @@ class Orchestrator:
         memo = (doc.sha1, doc.transcription.name)
         if memo in self._views:
             return self._views[memo]
-        checked = self._route(doc) in CHECKED_ROUTES
+        from yizkr.pipeline.textlayer import is_pdf_input
+
+        checked = self._route(doc) in CHECKED_ROUTES or is_pdf_input(
+            doc.source
+        )
         transcription = self._reused_view(
             doc,
             doc.transcription,
@@ -1861,7 +1870,7 @@ class Orchestrator:
         since a check changed since it was made may flag it otherwise; the
         flag is no part of its content. It reads files only, and writes
         none."""
-        from yizkr.pipeline.textlayer import VISION
+        from yizkr.pipeline.textlayer import VISION, is_pdf_input
         from yizkr.pipeline.transcribe import check_vision_page, is_paged
         from yizkr.pipeline.transcription_check import (
             TranscriptionCheckFailed,
@@ -1870,6 +1879,18 @@ class Orchestrator:
             media_page_count,
         )
 
+        if is_pdf_input(doc.source):
+            from yizkr.pipeline.transcribe import pdf_reading_failure
+
+            failure = pdf_reading_failure(
+                doc.source, transcription, self._excluded_image
+            )
+            if failure is not None:
+                return failure
+            if self._route(doc) not in CHECKED_ROUTES:
+                # A curator's correction remains exempt from model-answer
+                # quality checks; it still needs source admission above.
+                return None
         if not is_paged(transcription):
             check = check_transcription(
                 transcription.text,
@@ -2129,14 +2150,18 @@ class Orchestrator:
         """(transcription, language resolution) by the vision engine,
         reading the document whole: an image, or a PDF none of whose
         pages has a usable text layer."""
+        from yizkr.pipeline.textlayer import check_pdf_vision, is_pdf_input
         from yizkr.pipeline.transcribe import LlmVisionTranscriber
 
+        if is_pdf_input(doc.source):
+            check_pdf_vision(doc.source, self._excluded_image)
         # the transcriber checks what the engine or the cache answers, and
         # rejects an answer that fails the check (ADR-0032)
         transcriber = LlmVisionTranscriber(
             self._llm("transcribe", doc),
             language=self.language,
             fallback_language=self.fallback_language,
+            excluded=self._excluded_image,
         )
         transcription = transcriber.transcribe(doc.source)
         return transcription, transcriber.last_resolution
@@ -2239,7 +2264,10 @@ class Orchestrator:
 
     def _transcribe_correction(self, doc: DocumentRun):
         from yizkr.pipeline.text_stages import TextReadRequest, read_text
+        from yizkr.pipeline.textlayer import check_pdf_vision, is_pdf_input
 
+        if is_pdf_input(doc.source):
+            check_pdf_vision(doc.source, self._excluded_image)
         result = read_text(
             TextReadRequest(
                 source=doc.source,
