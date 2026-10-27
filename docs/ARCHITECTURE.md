@@ -78,26 +78,45 @@ The same guide expands [serial ingestion](../src/yizkr/pipeline/README.md#resolv
 
 ## Container inventory
 
-PPTX preparation records version 1 `container-inventory.json` independently of the reading route, keeping original part bytes under `container-parts/`. The common schema preserves the original byte reference, structural source parts and placement occurrences. Slide bodies and speaker notes are distinct source parts; a photograph placed twice has two occurrences referencing the same embedded bytes. Structural locators come from the package and XML occurrence path before eligibility filtering, with physical slide position recorded separately.
+Run preparation persists a versioned `container-inventory.json` for PDFs and PPTX files before choosing or reusing a reading. The common record separates original source parts, placement occurrences, eligibility, preparation limitations and reading outcomes. Repeated placement of the same bytes produces separate occurrence records. Structural locators come from the original package or PDF content operations before eligibility, decoration or reading-route filters.
 
 ```mermaid
 flowchart LR
-    original["Original PPTX bytes"] --> parse["Inventory package structure<br/>deterministic"]
-    parse --> body["Slide-body parts"]
-    parse --> notes["Speaker-notes parts"]
+    original["Original PDF or PPTX bytes"] --> parse["Inventory structure<br/>deterministic"]
+    parse --> body["Page or slide bodies"]
+    parse --> notes["Annotations or speaker notes"]
     parse --> placements["Embedded resources<br/>and placement occurrences"]
-    parse --> limits["Eligibility, read outcomes<br/>and explicit limitations"]
+    parse --> limits["Eligibility, outcomes<br/>and explicit limitations"]
     body --> inventory[("container-inventory.json")]
     notes --> inventory
     placements --> inventory
     limits --> inventory
 ```
 
-Inventory completeness, eligibility and reading success are separate facts. Native body and notes readings preserve XML text order; images have separate reading outcomes, including an explicit successful empty result. Unsupported or hidden content, missing targets and unreferenced media remain explicit, and external references are not fetched. A relationship alone does not establish a placement. Raw shape/group transforms and crops are preserved without claiming composed page geometry or visual reading order. Inventory does not authorize a model call or create a source-owner binding. Original embedded-byte references are distinct from any later rendered representation.
+PPTX slide bodies and speaker notes are distinct source parts. Their original package bytes and ordered XML content remain separate from model commentary also called notes. PDF parts retain physical page positions, native object references or content-operation paths, original stream bytes and dictionary context, and available geometry. Raw transforms, crops, content operators and bounds do not establish composed clipping, visibility or visual reading order. An image covering a full page remains in the structural inventory even when the reader treats the page as one vision input. Inventorying it does not decide whether it represents the page or an independently authored witness, and creates no retained source owner or identity binding.
 
-The existing readers, `derived-media.json`, extraction citations and registration still use their earlier structures. They do not yet consume the new occurrence locators or preserve notes as distinct citation parts (#716). PDF inventory production is separate work (#715). The inventory schema is shared, but only the PPTX producer is implemented.
+Available original bytes are kept under `container-parts/` unless the part is identified as excluded; keeping bytes does not establish permission to read them. PDF image streams use `<sha1>.pdf-stream`; their dictionary context and original-PDF identity are needed to interpret them. A decoded image, prepared page image or rebuilt whole PDF is a separate representation under `representations/`, with its own byte reference, transformation method and eligibility. Its digest never replaces the original source part. Excluded PDF content retains its metadata without publishing its bytes as an eligible representation.
 
-Implementation: [inventory schema and persistence](../src/yizkr/pipeline/container_inventory.py) and [PPTX producer](../src/yizkr/pipeline/presentation.py).
+### PDF preparation and admission
+
+```mermaid
+flowchart LR
+    pdf["Original PDF bytes"] --> structure["Parse source structure<br/>deterministic"]
+    structure --> original[("Original streams<br/>and dictionary context")]
+    structure --> inventory[("Parts and placements<br/>container-inventory.json")]
+    original --> inventory
+    inventory --> plan["Check current eligibility<br/>and preparation limits"]
+    plan --> native["Native text and<br/>eligible independent images"]
+    plan --> render["Checked page or<br/>whole-document render"]
+    native --> read["Existing reading operations"]
+    render --> read
+```
+
+The PDF admission and rendering paths consume the prepared inventory and exclusion plan for those source bytes. Unresolved structure makes the inventory incomplete. Failed image preparation can leave a fully inventoried part unreadable; its eligibility and unsupported outcome remain explicit and cannot authorize a model call through fallback. Whole-document vision still receives only checked page pixels in a rebuilt PDF. [The model-input boundary](LLM_CACHE.md#pdf-model-input-exclusions) describes supported representations and refusal. Missing, invalid or incompatible persisted inventory is reconstructed from the original source, independently of existing reading and review products.
+
+Inventory completeness, eligibility and successful reading remain separate facts. A page-wide vision result is not an independent successful reading of every image it contains. If one PDF image part has multiple context-dependent prepared images, its single reading-outcome summary remains explicitly unsupported; the representations and any legacy image readings remain available without claiming one result covers them all. The legacy `derived-media.json`, excerpt discovery, extraction citations and registration still use their existing products pending #716. They can flatten notes, collapse occurrences and derive image identity from re-encoded bytes; PDF excerpt selection still depends on the reading route. The structural inventory exposes those parts but does not migrate their ownership, citations or existing graph statements.
+
+Implementation: [inventory schema and persistence](../src/yizkr/pipeline/container_inventory.py), [PPTX producer](../src/yizkr/pipeline/pptx_inventory.py), [PDF producer](../src/yizkr/pipeline/pdf_inventory.py) and [PDF reading/admission](../src/yizkr/pipeline/textlayer.py).
 
 ## Shared text-stage operations
 

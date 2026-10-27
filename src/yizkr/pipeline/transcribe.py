@@ -114,7 +114,7 @@ import tempfile
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Annotated, Any, Literal, Protocol
+from typing import TYPE_CHECKING, Annotated, Any, Literal, Protocol
 
 from pydantic import (
     BaseModel,
@@ -163,6 +163,9 @@ from yizkr.pipeline.transcription_record import (
     prompt_text,
     record_text,
 )
+
+if TYPE_CHECKING:
+    from yizkr.pipeline.pdf_inventory import PdfInventory
 
 
 def _transcription_prompt(classes: Sequence[str]) -> str:
@@ -576,9 +579,11 @@ class LlmVisionTranscriber(_CheckedTranscriber):
         language: str = "en",
         fallback_language: str = "en",
         excluded: Callable[[str], bool] | None = None,
+        pdf_inventory: PdfInventory | None = None,
     ) -> None:
         self.client = client
         self.excluded = excluded
+        self.pdf_inventory = pdf_inventory
         self.language = language
         self.fallback_language = fallback_language
         # the resolution behind the last transcribe(), for callers to log
@@ -607,7 +612,10 @@ class LlmVisionTranscriber(_CheckedTranscriber):
         if prepared:
             with tempfile.TemporaryDirectory(prefix="yizkr-pdf-vision-") as d:
                 outbound = prepare_pdf_vision(
-                    media_path, Path(d), self.excluded
+                    media_path,
+                    Path(d),
+                    self.excluded,
+                    inventory=self.pdf_inventory,
                 )
                 text = self.client.complete(TRANSCRIPTION_PROMPT, [outbound])
         else:
@@ -704,6 +712,8 @@ def pdf_reading_failure(
     path: Path,
     transcription: Transcription,
     excluded: Callable[[str], bool],
+    *,
+    inventory: PdfInventory | None = None,
 ) -> str | None:
     """Check current PDF exclusions before reusing or consuming a reading.
 
@@ -722,7 +732,9 @@ def pdf_reading_failure(
         if paged and pages
         else None
     )
-    count = check_pdf_vision(path, excluded, pages=selected)
+    count = check_pdf_vision(
+        path, excluded, pages=selected, inventory=inventory
+    )
     if paged and (
         [page.page for page in pages] != list(range(1, count + 1))
         or any(
@@ -997,11 +1009,26 @@ class PdfPageTranscriber(PagedTranscriber):
     call. Exclusion enforcement refuses unreadable or unsafe pages before
     any model input is produced; it never falls back around that refusal."""
 
+    def __init__(
+        self,
+        client: Callable[[], LlmClient],
+        language: str = "en",
+        fallback_language: str = "en",
+        excluded: Callable[..., bool] | None = None,
+        *,
+        inventory: PdfInventory | None = None,
+    ) -> None:
+        super().__init__(client, language, fallback_language, excluded)
+        self.inventory = inventory
+
     def _read(self, media_path: Path, directory: Path) -> Any:
         from yizkr.pipeline import textlayer
 
         read = textlayer.read_pages(
-            media_path, directory, excluded=self.excluded
+            media_path,
+            directory,
+            excluded=self.excluded,
+            inventory=self.inventory,
         )
         if read is None or not read.by_own_text:
             return None

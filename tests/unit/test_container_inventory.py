@@ -17,6 +17,7 @@ from yizkr.pipeline.container_inventory import (
     Placement,
     ReadingOutcome,
     SourcePart,
+    SourceRepresentation,
     StructuralLocator,
     keep_inventory,
     read_inventory,
@@ -136,6 +137,72 @@ def test_eligibility_and_reading_do_not_change_source_or_placement_identity(
     another = ArtifactRef.from_bytes(b"another fictional source revision")
     assert structural_id(another, part.locator) != identity
     assert record.placements[0].id != record.placements[1].id
+
+
+def test_representation_keeps_original_lineage_and_verifies_published_bytes(
+    tmp_path, inventory
+):
+    record, data = inventory
+    source = record.parts[-1]
+    original = source.byte_object
+    payload = b"fictional converted pixels for album-photo-1906"
+    converted = ArtifactRef.from_bytes(payload)
+    source.representations.append(
+        SourceRepresentation(
+            byte_object=converted,
+            file=f"representations/{converted.sha1}.png",
+            media_type="image/png",
+            method="fictional-decoder",
+            eligibility=Eligibility(state="allowed"),
+        )
+    )
+    keep_inventory(record, data | {converted.sha1: payload}, tmp_path)
+    restored = read_inventory(tmp_path).parts[-1]
+    assert restored.id == source.id
+    assert restored.byte_object == original != converted
+    representation = restored.representations[0]
+    assert (tmp_path / representation.file).read_bytes() == payload
+    assert record.placements[0].child == restored.id
+
+    (tmp_path / representation.file).write_bytes(b"damaged pixels")
+    assert read_inventory(tmp_path) is None
+    with pytest.raises(ValueError, match="missing or damaged"):
+        keep_inventory(record, {}, tmp_path)
+
+
+def test_excluded_representation_can_record_identity_without_retaining_bytes(
+    tmp_path, inventory
+):
+    record, data = inventory
+    excluded = ArtifactRef.from_bytes(b"fictional excluded representation")
+    record.parts[-1].representations.append(
+        SourceRepresentation(
+            byte_object=excluded,
+            media_type="image/png",
+            method="fictional-decoder",
+            eligibility=Eligibility(state="excluded", reason="listed"),
+        )
+    )
+    keep_inventory(record, data, tmp_path)
+    restored = read_inventory(tmp_path).parts[-1].representations[0]
+    assert restored.byte_object == excluded
+    assert restored.file is None
+    assert restored.eligibility.state == "excluded"
+
+
+def test_representation_cannot_overwrite_different_original_bytes(inventory):
+    record, _data = inventory
+    part = record.parts[-1]
+    part.representations.append(
+        SourceRepresentation(
+            byte_object=ArtifactRef.from_bytes(b"fictional new pixels"),
+            file=part.file,
+            media_type="image/png",
+            method="fictional-decoder",
+        )
+    )
+    with pytest.raises(ValidationError, match="different bytes"):
+        ContainerInventory.model_validate(record.model_dump())
 
 
 def test_empty_read_and_unattempted_are_distinct():
