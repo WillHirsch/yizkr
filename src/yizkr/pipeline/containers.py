@@ -36,6 +36,8 @@ import struct
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from yizkr.pipeline.container_inventory import ContainerInventory
+
 # how a deck's slide is read: from the slide's XML, with no model call
 SLIDE_XML = "slide-xml"
 
@@ -89,6 +91,8 @@ class ContainerPages:
     pages: list[ContainerPage]
     images: dict[str, PlacedImage] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
+    inventory: ContainerInventory | None = None
+    inventory_bytes: dict[str, bytes] = field(default_factory=dict)
 
     @property
     def by_own_text(self) -> bool:

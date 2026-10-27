@@ -1623,6 +1623,131 @@ class Orchestrator:
             self._presentation_cache[doc.sha1] = unpack_pptx(doc.source)
         return self._presentation_cache[doc.sha1]
 
+    def _pdf_inventory(self, doc: DocumentRun):
+        """Prepare source parts and admission once per PDF in this invocation.
+
+        This operation is read-only so execution and estimation share the
+        same plan. A persisted inventory does not authorize current input;
+        its exclusions and preparation are observed again from source bytes.
+        """
+        from yizkr.pipeline.pdf_inventory import inventory_pdf
+
+        if not hasattr(self, "_pdf_inventory_cache"):
+            self._pdf_inventory_cache = {}
+        if doc.sha1 not in self._pdf_inventory_cache:
+            data = doc.source.read_bytes()
+            if hashlib.sha1(data).hexdigest() != doc.sha1:
+                raise ValueError("PDF source changed during preparation")
+            self._pdf_inventory_cache[doc.sha1] = inventory_pdf(
+                data, self._excluded_image
+            )
+        return self._pdf_inventory_cache[doc.sha1]
+
+    def _record_pdf_inventory(self, doc: DocumentRun) -> None:
+        """Publish PDF source parts before choosing or reusing a reading.
+
+        Missing metadata and damaged representations are rebuilt without
+        invalidating an unchanged transcription, proposal or review.
+        """
+        from yizkr.pipeline.container_inventory import (
+            keep_inventory,
+            read_inventory,
+        )
+        from yizkr.pipeline.textlayer import PdfExclusionError, is_pdf_input
+
+        if is_pdf_input(doc.source):
+            prepared = self._pdf_inventory(doc)
+            previous = read_inventory(doc.dir)
+            if (
+                previous is not None
+                and previous.source == prepared.inventory.source
+            ):
+                parts = {part.id: part for part in prepared.inventory.parts}
+                for old in previous.parts:
+                    part = parts.get(old.id)
+                    if part is None or part.kind not in {
+                        "container_source",
+                        "page_body",
+                    }:
+                        continue
+                    try:
+                        prepared.guard(
+                            {part.locator.position}
+                            if part.kind == "page_body"
+                            else None
+                        )
+                    except PdfExclusionError:
+                        continue
+                    for representation in old.representations:
+                        if (
+                            representation.file is not None
+                            and representation.method
+                            in {
+                                "rendered-pdf-v1",
+                                "pdfium-page-render",
+                                "pdf-page-image",
+                            }
+                            and representation.eligibility.state == "allowed"
+                            and not any(
+                                current.method == representation.method
+                                for current in part.representations
+                            )
+                        ):
+                            part.representations.append(representation)
+                            prepared.data[representation.byte_object.sha1] = (
+                                doc.dir / representation.file
+                            ).read_bytes()
+            keep_inventory(prepared.inventory, prepared.data, doc.dir)
+
+    def _restore_pdf_representations(self, doc: DocumentRun, transcription):
+        """Recreate missing prepared bytes without making another model call.
+
+        The caller has validated the saved reading. These are current source
+        representations, not proof of an unrecorded historical model payload.
+        """
+        from tempfile import TemporaryDirectory
+
+        from yizkr.pipeline.textlayer import prepare_pdf_vision, read_pages
+
+        prepared = self._pdf_inventory(doc)
+        if transcription.input_representation == "rendered-pdf-v1":
+            if any(
+                rep.method == "rendered-pdf-v1"
+                for part in prepared.inventory.parts
+                for rep in part.representations
+            ):
+                return
+            with TemporaryDirectory(
+                prefix="yizkr-pdf-inventory-"
+            ) as directory:
+                prepare_pdf_vision(
+                    doc.source,
+                    Path(directory),
+                    self._excluded_image,
+                    inventory=prepared,
+                )
+        else:
+            needed = {
+                page.page
+                for page in transcription.pages or ()
+                if page.provenance.method == "vision"
+            }
+            if not any(
+                not prepared.page_parts[number].representations
+                for number in needed
+            ):
+                return
+            with TemporaryDirectory(
+                prefix="yizkr-pdf-inventory-"
+            ) as directory:
+                read_pages(
+                    doc.source,
+                    Path(directory),
+                    excluded=self._excluded_image,
+                    inventory=prepared,
+                )
+        self._record_pdf_inventory(doc)
+
     def _derived_media_current(self, doc: DocumentRun) -> bool:
         """Are both PPTX inventory and compatibility media record intact?
 
@@ -1683,7 +1808,9 @@ class Orchestrator:
         self._keep_inventory_readings(doc)
         return record
 
-    def _keep_inventory_readings(self, doc: DocumentRun, reading=None) -> None:
+    def _keep_inventory_readings(
+        self, doc: DocumentRun, reading=None, transcription=None
+    ) -> None:
         """Record actual image outcomes beside the structural inventory.
 
         Native text belongs to the producer. Image success requires a
@@ -1699,24 +1826,44 @@ class Orchestrator:
         from yizkr.pipeline.presentation import derived_transcription
         from yizkr.pipeline.transcribe import Transcription
 
+        if transcription is not None:
+            self._restore_pdf_representations(doc, transcription)
         inventory = read_inventory(doc.dir)
         if inventory is None or inventory.source.sha1 != doc.sha1:
-            raise ValueError("PPTX inventory is missing or invalid")
+            raise ValueError("container inventory is missing or invalid")
         observed = (
             {image.sha1: image for image in reading.images}
             if reading is not None
             else {}
         )
         for part in inventory.parts:
+            representations = [
+                representation
+                for representation in part.representations
+                if representation.eligibility.state == "allowed"
+                and representation.file is not None
+                and representation.media_type.startswith("image/")
+            ]
+            medium = representations[0] if representations else part
             if (
                 part.kind != "embedded_resource"
-                or part.byte_object is None
-                or not (part.media_type or "").startswith("image/")
+                or medium.byte_object is None
+                or not (medium.media_type or "").startswith("image/")
                 or part.eligibility.state != "allowed"
                 or part.reading.state == "unsupported"
             ):
                 continue
-            sha1 = part.byte_object.sha1
+            if len({item.byte_object.sha1 for item in representations}) > 1:
+                part.reading = ReadingOutcome(
+                    state="unsupported",
+                    reason=(
+                        "source part has distinct contextual image "
+                        "representations; reading outcomes remain in "
+                        "the legacy per-image products"
+                    ),
+                )
+                continue
+            sha1 = medium.byte_object.sha1
             image = observed.get(sha1)
             if image is not None and image.failure is not None:
                 part.reading = ReadingOutcome(
@@ -1725,23 +1872,56 @@ class Orchestrator:
                 continue
             path = derived_transcription(doc.dir, sha1)
             if not path.is_file() or path.is_symlink():
-                part.reading = ReadingOutcome(state="unattempted")
+                if part.reading.state != "failed":
+                    part.reading = ReadingOutcome(state="unattempted")
                 continue
             failure = self._image_failure(doc, sha1)
             if failure is not None:
                 part.reading = ReadingOutcome(state="failed", reason=failure)
                 continue
             data = path.read_bytes()
-            transcription = Transcription.model_validate_json(data)
-            record = transcription.record()
+            image_transcription = Transcription.model_validate_json(data)
+            record = image_transcription.record()
             empty = not any(page.text.strip() for page in record.pages)
             part.reading = ReadingOutcome(
                 state="read",
-                method=transcription.engine,
+                method=image_transcription.engine,
                 empty=empty,
                 product=path.relative_to(doc.dir).as_posix(),
                 product_sha256=hashlib.sha256(data).hexdigest(),
             )
+        if inventory.container == "pdf" and transcription is not None:
+            pages = {page.page: page for page in transcription.pages or ()}
+            data = doc.transcription.read_bytes()
+            digest = hashlib.sha256(data).hexdigest()
+            for part in inventory.parts:
+                if (
+                    part.kind == "container_source"
+                    and transcription.input_representation == "rendered-pdf-v1"
+                ):
+                    part.reading = ReadingOutcome(
+                        state="read",
+                        method=transcription.engine,
+                        empty=not any(
+                            page.text.strip()
+                            for page in transcription.record().pages
+                        ),
+                        product=doc.transcription.name,
+                        product_sha256=digest,
+                    )
+                if part.kind != "page_body":
+                    continue
+                page = pages.get(part.locator.position)
+                if page is not None:
+                    part.reading = ReadingOutcome(
+                        state="read",
+                        method=page.provenance.engine,
+                        empty=not transcription.text[
+                            page.start : page.end
+                        ].strip(),
+                        product=doc.transcription.name,
+                        product_sha256=digest,
+                    )
         keep_inventory(inventory, {}, doc.dir)
 
     def _step_batch(self, doc: DocumentRun) -> ClaimBatch:
@@ -1810,6 +1990,8 @@ class Orchestrator:
             return self._views[memo]
         from yizkr.pipeline.textlayer import is_pdf_input
 
+        if doc.transcription.is_file():
+            self._record_pdf_inventory(doc)
         checked = self._route(doc) in CHECKED_ROUTES or is_pdf_input(
             doc.source
         )
@@ -1836,6 +2018,8 @@ class Orchestrator:
             from yizkr.pipeline import anomalies
 
             anomalies.stored(self.rundir, doc, "transcription", transcription)
+        if is_pdf_input(doc.source):
+            self._keep_inventory_readings(doc, transcription=transcription)
         self._views[memo] = transcription
         return transcription
 
@@ -1883,7 +2067,10 @@ class Orchestrator:
             from yizkr.pipeline.transcribe import pdf_reading_failure
 
             failure = pdf_reading_failure(
-                doc.source, transcription, self._excluded_image
+                doc.source,
+                transcription,
+                self._excluded_image,
+                inventory=self._pdf_inventory(doc),
             )
             if failure is not None:
                 return failure
@@ -2029,15 +2216,22 @@ class Orchestrator:
         container read page by page made beside its transcription, its
         images and their transcriptions, is kept first (`_keep_reading`),
         and what of it needs attention is the stage's attention."""
+        from yizkr.pipeline.textlayer import is_pdf_input
         from yizkr.pipeline.transcribe import is_paged
 
         method = self._route(doc)
+
+        def transcribe():
+            self._record_pdf_inventory(doc)
+            return self._transcribe(doc, method)
+
         transcription, resolution = self._run_stage(
             doc,
             "transcription",
-            lambda: self._transcribe(doc, method),
+            transcribe,
             attention=_reading_attention,
         )
+        self._record_pdf_inventory(doc)
         reading = transcription.reading
         if reading is not None:
             try:
@@ -2058,6 +2252,8 @@ class Orchestrator:
         changed = _write_view(
             doc.transcription, transcription.model_dump_json(indent=2)
         )
+        if is_pdf_input(doc.source):
+            self._keep_inventory_readings(doc, transcription=transcription)
         if is_paged(transcription) and changed:
             self.log(f"  {doc.source.name}: {_read_by_page(transcription)}")
         if self.language == "auto" and changed:
@@ -2140,6 +2336,11 @@ class Orchestrator:
             language=self.language,
             fallback_language=self.fallback_language,
             excluded=self._excluded_image,
+            **(
+                {"inventory": self._pdf_inventory(doc)}
+                if reader is PdfPageTranscriber
+                else {}
+            ),
         )
         transcription = paged.transcribe(doc.source)
         if transcription is not None:
@@ -2153,8 +2354,12 @@ class Orchestrator:
         from yizkr.pipeline.textlayer import check_pdf_vision, is_pdf_input
         from yizkr.pipeline.transcribe import LlmVisionTranscriber
 
+        inventory = None
         if is_pdf_input(doc.source):
-            check_pdf_vision(doc.source, self._excluded_image)
+            inventory = self._pdf_inventory(doc)
+            check_pdf_vision(
+                doc.source, self._excluded_image, inventory=inventory
+            )
         # the transcriber checks what the engine or the cache answers, and
         # rejects an answer that fails the check (ADR-0032)
         transcriber = LlmVisionTranscriber(
@@ -2162,6 +2367,7 @@ class Orchestrator:
             language=self.language,
             fallback_language=self.fallback_language,
             excluded=self._excluded_image,
+            pdf_inventory=inventory,
         )
         transcription = transcriber.transcribe(doc.source)
         return transcription, transcriber.last_resolution
@@ -2246,8 +2452,7 @@ class Orchestrator:
                 _write_view(
                     path, image.transcription.model_dump_json(indent=2)
                 )
-        if doc.kind == "presentation":
-            self._keep_inventory_readings(doc, reading)
+        self._keep_inventory_readings(doc, reading)
 
     def _transcribe_text_file(self, doc: DocumentRun):
         from yizkr.pipeline.text_stages import TextReadRequest, read_text
@@ -2267,7 +2472,11 @@ class Orchestrator:
         from yizkr.pipeline.textlayer import check_pdf_vision, is_pdf_input
 
         if is_pdf_input(doc.source):
-            check_pdf_vision(doc.source, self._excluded_image)
+            check_pdf_vision(
+                doc.source,
+                self._excluded_image,
+                inventory=self._pdf_inventory(doc),
+            )
         result = read_text(
             TextReadRequest(
                 source=doc.source,

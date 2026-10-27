@@ -12,7 +12,7 @@ import hashlib
 import json
 import os
 import stat
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal
 
@@ -118,6 +118,26 @@ class ReadingOutcome(_Record):
         return self
 
 
+class SourceRepresentation(_Record):
+    """Bytes prepared from the containing source part for a named process.
+
+    The representation's digest does not replace that part's original-byte
+    identity. An excluded or unavailable representation may name its digest
+    without publishing a file.
+    """
+
+    byte_object: ArtifactRef
+    file: str | None = None
+    media_type: str
+    method: Identifier
+    eligibility: Eligibility = Field(default_factory=Eligibility)
+
+    @field_validator("file")
+    @classmethod
+    def representation_path(cls, value: str | None) -> str | None:
+        return _relative_file(value) if value is not None else None
+
+
 class SourcePart(_Record):
     id: Identifier
     kind: Identifier
@@ -131,6 +151,7 @@ class SourcePart(_Record):
     layout: list[dict[str, JsonValue]] = Field(default_factory=list)
     eligibility: Eligibility = Field(default_factory=Eligibility)
     reading: ReadingOutcome = Field(default_factory=ReadingOutcome)
+    representations: list[SourceRepresentation] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
 
     @field_validator("file")
@@ -143,6 +164,13 @@ class SourcePart(_Record):
         if self.file is not None and self.byte_object is None:
             raise ValueError("an original-byte file needs a byte identity")
         return self
+
+
+def _byte_files(parts: list[SourcePart]) -> Iterator[tuple[str, ArtifactRef]]:
+    for part in parts:
+        for product in (part, *part.representations):
+            if product.file is not None:
+                yield product.file, product.byte_object
 
 
 class Placement(_Record):
@@ -187,12 +215,11 @@ class ContainerInventory(_Record):
             if placement.parent == placement.child:
                 raise ValueError("a part cannot be placed inside itself")
         bindings: dict[str, str] = {}
-        for part in self.parts:
-            if part.file is not None:
-                digest = part.byte_object.sha1
-                previous = bindings.setdefault(part.file, digest)
-                if previous != digest:
-                    raise ValueError("one file cannot name different bytes")
+        for file, byte_object in _byte_files(self.parts):
+            digest = byte_object.sha1
+            previous = bindings.setdefault(file, digest)
+            if previous != digest:
+                raise ValueError("one file cannot name different bytes")
         return self
 
 
@@ -243,33 +270,29 @@ def keep_inventory(
     data: Mapping[str, bytes | Path],
     directory: Path,
 ) -> None:
-    """Verify original bytes, publish them, then atomically publish the record.
+    """Verify named bytes, publish them, then atomically publish the record.
 
-    ``data`` is keyed by original-byte SHA-1. Missing entries reuse verified
+    ``data`` is keyed by byte-object SHA-1. Missing entries reuse verified
     files already present, so an outcome update can supply an empty mapping.
     Identical files are untouched; a linked final filename is replaced rather
     than written through. Publication is per-file atomic, with metadata last.
     """
     inventory = ContainerInventory.model_validate(inventory.model_dump())
     payloads: dict[str, bytes] = {}
-    for part in inventory.parts:
-        if part.file is None:
-            continue
-        _path(directory, part.file)
-        digest = part.byte_object.sha1
+    for file, byte_object in _byte_files(inventory.parts):
+        _path(directory, file)
+        digest = byte_object.sha1
         supplied = data.get(digest)
         payload = (
             supplied.read_bytes()
             if isinstance(supplied, Path)
             else supplied
             if supplied is not None
-            else _read_regular(directory, part.file)
+            else _read_regular(directory, file)
         )
         if payload is None or hashlib.sha1(payload).hexdigest() != digest:
-            raise ValueError(
-                f"original bytes are missing or damaged: {part.file}"
-            )
-        payloads[part.file] = payload
+            raise ValueError(f"inventory bytes are missing or damaged: {file}")
+        payloads[file] = payload
     _path(directory, CONTAINER_INVENTORY)
     for relative, payload in payloads.items():
         _keep(directory, relative, payload)
@@ -281,7 +304,7 @@ def keep_inventory(
 
 
 def read_inventory(directory: Path) -> ContainerInventory | None:
-    """Load a supported inventory with intact references and original bytes."""
+    """Load a supported inventory with intact references and named bytes."""
     saved = _read_regular(directory, CONTAINER_INVENTORY)
     if saved is None:
         return None
@@ -292,13 +315,11 @@ def read_inventory(directory: Path) -> ContainerInventory | None:
         inventory = ContainerInventory.model_validate(contents)
     except (ValueError, RecursionError):
         return None
-    for part in inventory.parts:
-        if part.file is None:
-            continue
-        payload = _read_regular(directory, part.file)
+    for file, byte_object in _byte_files(inventory.parts):
+        payload = _read_regular(directory, file)
         if (
             payload is None
-            or hashlib.sha1(payload).hexdigest() != part.byte_object.sha1
+            or hashlib.sha1(payload).hexdigest() != byte_object.sha1
         ):
             return None
     return inventory
