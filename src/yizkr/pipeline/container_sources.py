@@ -203,6 +203,13 @@ def _original_input(part: SourcePart, item: PartInput) -> bool:
     )
 
 
+def _image_part(part: SourcePart) -> bool:
+    """A PDF image stream, or package media of an image type."""
+    return part.locator.kind == "image" or (part.media_type or "").startswith(
+        "image/"
+    )
+
+
 def _deny(part: SourcePart) -> None:
     part.eligibility = Eligibility(
         state="excluded", reason="configured source exclusion"
@@ -912,9 +919,12 @@ def materialize_images(
         ordinal = len(page.images) + 1
         image.places.append((page.number, ordinal))
         page.images.append((ordinal, owner))
+    # Other media (a film, a sound) keep their unsupported outcome in the
+    # inventory; they are not images left unread.
     for part in sources.inventory.parts:
         if (
             part.kind == "embedded_resource"
+            and _image_part(part)
             and part.id not in noted_parts
             and part.eligibility.state != "excluded"
             and part.reading.state in {"unsupported", "failed"}

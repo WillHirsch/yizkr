@@ -69,6 +69,8 @@ from yizkr.claims import ClaimBatch, EntityRecord, ItemValue, TimeValue
 from yizkr.cli import build_parser
 from yizkr.model.schema import load_manifest
 from yizkr.pipeline import chunking, clustering, llm, scratch
+from yizkr.pipeline.container_inventory import read_inventory
+from yizkr.pipeline.container_sources import project_sources
 from yizkr.pipeline.critique import entries, sheet_notes
 from yizkr.pipeline.extract import run_metadata, salvage_valid_claims
 from yizkr.pipeline.gedcom import parse_gedcom
@@ -667,9 +669,15 @@ class TestTheRun:
                 assert coverage["fallback"] == {}, name
                 assert coverage["records"]["recordless"] == 0, name
                 assert coverage["records"]["set_aside"] == {}, name
-        # the deck's photograph is recorded, not registered
+        # the deck's photograph is bound in its inventory as a source of
+        # its own, not registered
         deck = runs.views(run)[fc.DECK]
-        assert (deck.dir / "derived-media.json").is_file()
+        (placed,) = answers.PLACED
+        inventory = read_inventory(deck.dir)
+        assert inventory is not None
+        assert set(project_sources(inventory, deck.dir).sources) == {
+            placed.sha1()
+        }
 
     def test_the_engine_answers_only_what_each_document_needs(self, runs):
         run = runs.run("first")

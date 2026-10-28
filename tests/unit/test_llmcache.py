@@ -2773,7 +2773,11 @@ class RefusingPlain(Refusing):
 def reset_answers(kind, prompt, opening):
     """pipeline_answers, with the manifest refused for the note about
     Gustav, whose extraction takes the line-range tier: one unit, the
-    whole note."""
+    whole note. A claim read from a paged reading (the deck's) cites a
+    page and a line of it, so its source part can be located."""
+    # test_pdf_pages imports this module
+    from tests.unit.test_pdf_pages import located_pipeline_answers
+
     if "manifest of EVERY distinct entity" in prompt and "1: Gustav" in prompt:
         return "no manifest here"
     if prompt.startswith("You segment a document"):
@@ -2788,7 +2792,7 @@ def reset_answers(kind, prompt, opening):
             "extract": True,
         }
         return json.dumps({"units": [unit]})
-    return pipeline_answers(kind, prompt, opening)
+    return located_pipeline_answers(kind, prompt, opening)
 
 
 # the views a document's stages make

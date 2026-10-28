@@ -1451,13 +1451,10 @@ def test_an_excerpts_write_raises_its_pdfs_flags_on_the_excerpt(tmp_path):
     images it places: a flag of any of these new items is an alert on the
     excerpt. Its `medium` is the new item's own: the excerpt's for its
     own derived medium, the PDF's for the PDF (docs/ANOMALIES.md)."""
+    from tests.unit.test_container_citations import common_record
+    from yizkr.claims import ArtifactRef
+    from yizkr.pipeline.container_sources import project_sources
     from yizkr.pipeline.orchestrate import ExcerptRun
-    from yizkr.pipeline.presentation import (
-        EmbeddedMedium,
-        PresentationContent,
-        Slide,
-        record_derived_media,
-    )
 
     pdf_bytes = b"%PDF synthetic family history of 2008"
     wiki = FakeWiki()
@@ -1465,17 +1462,14 @@ def test_an_excerpts_write_raises_its_pdfs_flags_on_the_excerpt(tmp_path):
         tmp_path, wiki, [("family-history-2008.pdf", pdf_bytes)]
     )
     (pdf,) = orchestrator.documents()
-    record = record_derived_media(
-        PresentationContent(
-            slides=[Slide(number=1, text="")],
-            media=[EmbeddedMedium(name="image1.png", data=IMAGE, slides=[1])],
-        ),
-        source_sha1=pdf.sha1,
-        title=pdf.state.title,
-        directory=pdf.dir,
+    # the image the PDF places once on its first page, its owner bound in
+    # the container's inventory
+    sources = project_sources(
+        common_record(pdf.dir, ArtifactRef(sha1=pdf.sha1), repeats=1),
+        pdf.dir,
     )
-    orchestrator._placed_images = lambda doc: record
-    (medium,) = record.media.values()
+    orchestrator._container_sources = lambda doc: sources
+    (medium,) = sources.sources.values()
     excerpt = ExcerptRun(sha1(IMAGE), pdf, medium, tmp_path / "state")
     # the PDF's file and the image's label, each on an item with no hash
     old_pdf = unhashed(

@@ -43,7 +43,6 @@ from yizkr.pipeline.rundir import (
     CONTROL,
     DONE,
     INTERRUPTED,
-    NEEDS_ATTENTION,
     PENDING,
     RunDir,
     RunSettingsConflict,
@@ -526,13 +525,8 @@ class TestOrder:
             s["ged"],
             s["deck"],
         ]
-        assert statuses(driver.state_dir) == {DONE, NEEDS_ATTENTION}
-        assert (
-            run_state(RunDir(driver.state_dir))[
-                s["deck"], "transcription"
-            ].status
-            == NEEDS_ATTENTION
-        )
+        # the deck's film is no image left unread: nothing needs attention
+        assert statuses(driver.state_dir) == {DONE}
 
     def test_nothing_before_the_barrier_asks_the_wiki_and_faces_never_run(
         self, tmp_path, fakes, request, monkeypatch

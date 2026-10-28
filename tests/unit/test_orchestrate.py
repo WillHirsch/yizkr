@@ -3390,17 +3390,18 @@ class TestWriteTimeRegistration:
     def test_a_new_deck_directory_records_its_bytes_before_its_media(
         self, tmp_path, monkeypatch
     ):
-        """A deck's derived media are recorded in its directory before any
-        view: its state comes first, so a run killed as it records them
-        leaves a directory the next run takes up, not one it sets aside."""
+        """A deck's container inventory, which records its media, is kept
+        in its directory before any view: its state comes first, so a run
+        killed as it records them leaves a directory the next run takes up,
+        not one it sets aside."""
         from tests.unit.test_presentation import build_deck
 
         class Recorded(Exception):
             """The kill, just after the media were recorded."""
 
         class KilledAfterTheMedia(ScriptedOrchestrator):
-            def _step_derive_media(self, doc):
-                super()._step_derive_media(doc)
+            def _record_container_inventory(self, doc):
+                super()._record_container_inventory(doc)
                 raise Recorded
 
         folder = tmp_path / "docs"
@@ -3412,7 +3413,8 @@ class TestWriteTimeRegistration:
             killed = KilledAfterTheMedia(folder, tmp_path / "state", log=quiet)
             killed.run()
         (doc,) = killed.documents()
-        assert (doc.dir / "derived-media.json").exists()
+        assert (doc.dir / "container-inventory.json").exists()
+        assert not doc.transcription.exists()
         assert json.loads(doc.state_path.read_text())["content_sha1"] == (
             doc.sha1
         )

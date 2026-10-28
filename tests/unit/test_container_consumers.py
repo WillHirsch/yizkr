@@ -35,6 +35,7 @@ from tests.unit.test_pdf_pages import (
 )
 from yizkr.claims import ArtifactRef, PlacementSupport, SourceSupport
 from yizkr.core.corpus import ExclusionList
+from yizkr.pipeline import transcribe
 from yizkr.pipeline.container_inventory import (
     CONTAINER_INVENTORY,
     keep_inventory,
@@ -67,6 +68,13 @@ from yizkr.pipeline.source_context import (
 from yizkr.pipeline.text_stages import ExtractionRequest, extract
 from yizkr.pipeline.textlayer import png
 from yizkr.source_structure import StructuralLocator
+
+
+@pytest.fixture(autouse=True)
+def renderer(monkeypatch):
+    """No poppler tool runs: a scripted reader reads every PDF here, as
+    in test_pdf_pages.py, whose `renderer` fixture this mirrors."""
+    monkeypatch.setattr(transcribe, "require_pdf_renderer", lambda *a: None)
 
 
 def container_corpus(tmp_path, kind):

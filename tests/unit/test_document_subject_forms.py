@@ -913,10 +913,10 @@ class TestUnplaced:
         assert unplaced_hint(5) == (
             "5 claim(s) about an artifact other than their source cite a "
             "source whose placed media were not given, so each is refused: "
-            "give them with --placed <derived-media.json>, the record of the "
-            "media a container places that the pipeline keeps in the "
-            "container's document directory (or that directory), or "
-            "--placed <source sha1>=<artifact sha1>[,<artifact sha1>...]"
+            "give them with --placed <container-inventory.json> (or its "
+            "document directory), an explicit --placed <derived-media.json> "
+            "compatibility record, or --placed <source sha1>=<artifact "
+            "sha1>[,<artifact sha1>...]"
         )
 
 
@@ -1410,7 +1410,7 @@ class TestTheCriticWiring:
         assert list(critique.sheet_notes([finding], claims, claims)) == [0]
 
     def notes(self, tmp_path, transcription: str | None) -> dict[int, str]:
-        from types import SimpleNamespace
+        from types import MethodType, SimpleNamespace
 
         from yizkr.pipeline.orchestrate import Orchestrator
 
@@ -1423,8 +1423,13 @@ class TestTheCriticWiring:
             batch=tmp_path / "batch.json",
             transcription=tmp_path / "transcription.json",
         )
+        # the view of a document no container inventory locates stands as
+        # it is read
         runner = SimpleNamespace(
-            _transcription_view=Orchestrator._transcription_view
+            _locate_transcription=lambda doc, transcription: transcription
+        )
+        runner._transcription_view = MethodType(
+            Orchestrator._transcription_view, runner
         )
         return Orchestrator._critique_notes(runner, doc, self.claims())
 

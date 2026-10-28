@@ -20,10 +20,18 @@ from tests.unit.test_pdf_pages import (
     run,
     typed,
 )
+from yizkr.pipeline import transcribe
 from yizkr.pipeline.container_inventory import CONTAINER_INVENTORY
 from yizkr.pipeline.presentation import derived_transcription
 from yizkr.pipeline.scratchwrite import _registration
 from yizkr.pipeline.textlayer import png
+
+
+@pytest.fixture(autouse=True)
+def renderer(monkeypatch):
+    """No poppler tool runs: a scripted reader reads every PDF here, as
+    in test_pdf_pages.py, whose `renderer` fixture this mirrors."""
+    monkeypatch.setattr(transcribe, "require_pdf_renderer", lambda *a: None)
 
 
 @pytest.mark.parametrize("kind", ["pdf", "pptx"])

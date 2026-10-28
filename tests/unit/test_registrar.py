@@ -36,6 +36,7 @@ import pytest
 
 from tests.unit.test_no_wiki_before_write import DECK
 from tests.unit.test_no_wiki_before_write import build_deck as reference_deck
+from tests.unit.test_presentation import DECK_TIME
 from tests.unit.test_upload_warnings import FakeMediaWiki, FakeUploadClient
 from yizkr.core.corpus import ExclusionList
 from yizkr.core.wiki import WikiClient
@@ -2972,7 +2973,9 @@ def build_deck(path):
                 data = data.replace(
                     b"</p:spTree>", pictures.encode() + b"</p:spTree>"
                 )
-            archive.writestr(info, data)
+            archive.writestr(
+                zipfile.ZipInfo(info.filename, date_time=DECK_TIME), data
+            )
     return path
 
 
