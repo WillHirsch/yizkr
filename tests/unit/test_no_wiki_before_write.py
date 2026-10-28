@@ -181,8 +181,10 @@ DECK = "Hutmacherei zum Blauen Hut.pptx"
 def tiny_png(caption: str) -> bytes:
     """A 1x1 PNG carrying `caption` in a text chunk, so that each caption
     gives other bytes: decoration, which a deck's transcription does not
-    read on its own (yizkr.pipeline.containers), though the deck's
-    record keeps it and the write registers it."""
+    read on its own (yizkr.pipeline.containers). The deck's container
+    inventory keeps its bytes as a part, but a slide relationship alone
+    places it nowhere, so it is no source for a reading, an excerpt or
+    the write's registration."""
 
     def chunk(kind: bytes, data: bytes) -> bytes:
         body = kind + data

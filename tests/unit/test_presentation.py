@@ -13,6 +13,7 @@ from yizkr.pipeline.container_inventory import (
     read_inventory,
 )
 from yizkr.pipeline.presentation import slide_transcript, unpack_pptx
+from yizkr.pipeline.rundir import DONE, run_state
 
 CT = "[Content_Types].xml"
 # every member of a built deck carries this one timestamp, so the same
@@ -183,7 +184,7 @@ class TestTranscript:
 
 class TestOrchestratorBranch:
     def test_pptx_routes_through_adapter(self, tmp_path):
-        from tests.unit.test_orchestrate import ScriptedOrchestrator, quiet
+        from tests.unit.test_orchestrate import ScriptedOrchestrator
 
         folder = tmp_path / "docs"
         folder.mkdir()
@@ -206,9 +207,24 @@ class TestOrchestratorBranch:
 
                 return make_batch()
 
-        orchestrator = ScriptedDeck(folder, tmp_path / "state", log=quiet)
+        lines: list[str] = []
+        orchestrator = ScriptedDeck(
+            folder,
+            tmp_path / "state",
+            log=lambda line, **kwargs: lines.append(line),
+        )
         orchestrator.run()
         (doc,) = orchestrator.documents()
+        # the film is no image: the log counts it, and the deck's
+        # transcription needs no attention for it
+        assert (
+            "  Family Deck.pptx: 1 embedded .mp4 media not read (images only)"
+            in lines
+        )
+        assert (
+            run_state(orchestrator.rundir)[(doc.sha1, "transcription")].status
+            == DONE
+        )
         # the deck waits at a gate, and is registered only by its write
         # (#103)
         assert "register:Family Deck.pptx" not in orchestrator.calls

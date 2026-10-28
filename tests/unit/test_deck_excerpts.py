@@ -421,6 +421,35 @@ class TestReadSlides:
         }
         assert list((tmp_path / "out").iterdir()) == []
 
+    def test_an_unpainted_image_is_noted_but_a_film_is_not(self, tmp_path):
+        """A TIFF the slide only relates to is noted once as an image not
+        read on its own; a film beside it keeps its unsupported outcome in
+        the inventory, unnoted, so it asks no attention."""
+        film = b"\x00\x00\x00\x18ftypmp42 synthetic film"
+        path = deck(
+            tmp_path / "talk.pptx",
+            [(("Wastl and Hilde",), ["scan.tif", "clip1.mp4"], "")],
+            {
+                "scan.tif": b"II*\x00 the album page as a tiff",
+                "clip1.mp4": film,
+            },
+            painted={1: []},
+        )
+        (tmp_path / "out").mkdir()
+        read = read_slides(path, tmp_path / "out")
+        assert read.images == {}
+        (note,) = read.notes
+        assert note.endswith("media format has no independent reader")
+        assert reason_label(note) == "image not read on its own"
+        (unread,) = [
+            part
+            for part in read.inventory.parts
+            if part.kind == "embedded_resource"
+            and part.byte_object is not None
+            and part.byte_object.sha1 == sha1(film)
+        ]
+        assert unread.reading.state == "unsupported"
+
     def test_a_folder_of_the_archive_tells_two_images_apart(self, tmp_path):
         """Two images of one basename in two folders of the archive are two
         images, each marked on the slide that embeds it."""

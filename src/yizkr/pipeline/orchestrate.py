@@ -3267,6 +3267,15 @@ class Orchestrator:
 
         if doc.kind == "presentation":
             self._record_container_inventory(doc)
+            # media other than images keep their unsupported outcome in the
+            # inventory and need no attention; the run log counts them
+            skipped = self._presentation(doc).skipped_media
+            for suffix, count in sorted(skipped.items()):
+                self.log(
+                    f"  {doc.source.name}: {count} embedded {suffix} media "
+                    "not read (images only)",
+                    file=sys.stderr,
+                )
 
         # the views before the gates are brought up to date once in each
         # run
