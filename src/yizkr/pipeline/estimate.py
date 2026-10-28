@@ -59,8 +59,8 @@ and the waits for the subscription, which are no calls. Nor is a slice
 the anomaly checks pause as the run unfolds (docs/ANOMALIES.md): it
 makes fewer calls than counted.
 
-**Excerpts.** An image a PDF places within a text-layer page, or a deck
-embeds on a slide, read on its own, becomes a document of its own, an
+**Excerpts.** An independent image a PDF places on any of its pages, or
+a deck paints on a slide, read on its own, becomes a document of its own, an
 excerpt (ADR-0008), found only as its container is transcribed, so no
 plan names it beforehand. The container's transcription stage, taken
 through the pipeline's own code, reads it page by page as the run does

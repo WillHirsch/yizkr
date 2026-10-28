@@ -7,12 +7,12 @@ Engines implement `Transcriber`. Provided:
 * `PagedTranscriber` — a paged container read page by page by its
   format's reader (yizkr.pipeline.containers): each page from the text
   the file holds where it holds a usable one, deterministically and
-  without a model call, and by the vision engine otherwise; and each image
-  placed on such a page read by the vision engine on its own, as a witness
-  of its own (ADR-0008). `PdfPageTranscriber` reads a PDF so
-  (yizkr.pipeline.textlayer), when it has native text or independently
-  readable image sources, and otherwise leaves it to be read whole by
-  `LlmVisionTranscriber`;
+  without a model call, and by the vision engine otherwise; and each
+  independent image source it places, on any page, read by the vision
+  engine on its own, as a witness of its own (ADR-0008).
+  `PdfPageTranscriber` reads a PDF so (yizkr.pipeline.textlayer), when
+  it has native text or independently readable image sources, and
+  otherwise leaves it to be read whole by `LlmVisionTranscriber`;
   `DeckTranscriber` reads a deck so, each slide from its XML
   (yizkr.pipeline.presentation.read_slides).
 * `TextFileTranscriber` — reads an existing transcription from a text
@@ -879,21 +879,22 @@ class PagedTranscriber:
     """A paged container (yizkr.pipeline.containers) read page by page by
     its format's reader (`_read`): each page from the text the file holds
     where it holds a usable one, by the vision engine where it does not,
-    and not at all where it holds nothing to read; and each image placed
-    within a page whose own text is read, read by the vision engine on its
-    own, as a witness of its own (ADR-0008).
+    and not at all where it holds nothing to read; and each independent
+    image source placed within any of its pages, read by the vision engine
+    on its own, as a witness of its own (ADR-0008).
 
     `transcribe` gives the container's transcription, with the page
     markers and the provenance the module docstring describes, and the
     images' readings as its `reading`, for the caller to keep and then
     close. It gives None when the reader gives nothing to read page by
-    page (a PDF none of whose pages reads from its text layer). `client`
-    gives the vision engine's client, and is called only once a page or
-    an image is to be read by vision, so a container read wholly from its
-    own text, with no image read on its own, starts no engine. `excluded`
-    says whether the never-ingest list names an image by the SHA-1 of its
-    bytes, or, for a deck's, by any of its names in the archive (given as
-    a second argument): such an image is never read, kept or marked.
+    page (a PDF none of whose pages reads from its text layer and that
+    reads no image on its own). `client` gives the vision engine's
+    client, and is called only once a page or an image is to be read by
+    vision, so a container read wholly from its own text, with no image
+    read on its own, starts no engine. `excluded` says whether the
+    never-ingest list names an image by the SHA-1 of its bytes, or, for a
+    deck's, by any of its names in the archive (given as a second
+    argument): such an image is never read, kept or marked.
 
     The reading of each vision page is checked, as any vision
     transcription is, and one that fails raises: the container's

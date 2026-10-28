@@ -79,7 +79,7 @@ Schemas: [Transcription](../src/yizkr/pipeline/transcribe.py), [ClaimBatch and e
 
 ## Transcription: text, pages and embedded images
 
-The route is selected by code. Text files and corrected text need no vision call. PDFs and slide decks are read page by page where possible; pages needing vision and eligible embedded images use the model. PDF vision pages are checked against the configured exclusions before any page is sent. An excluded image or content that cannot be checked refuses the document. A PDF with no usable text layer uses one whole-document vision call containing a deterministic PDF rebuilt from checked page pixels; its transcription still names the original source. Decks and other ZIP archives are never sent whole to vision. Image bytes excluded by a deck-member name are also excluded wherever those same bytes occur in the corpus. [PDF model-input exclusions](LLM_CACHE.md#pdf-model-input-exclusions) describes the checks, representation and reuse limits.
+The route is selected by code. Text files and corrected text need no vision call. PDFs and slide decks are read page by page where possible; pages needing vision and eligible embedded images use the model. PDF vision pages are checked against the configured exclusions before any page is sent. An excluded image or content that cannot be checked refuses the document. A PDF with no usable text layer and no independent image source uses one whole-document vision call containing a deterministic PDF rebuilt from checked page pixels; its transcription still names the original source. Decks and other ZIP archives are never sent whole to vision. Image bytes excluded by a deck-member name are also excluded wherever those same bytes occur in the corpus. [PDF model-input exclusions](LLM_CACHE.md#pdf-model-input-exclusions) describes the checks, representation and reuse limits.
 
 ```mermaid
 flowchart TD
@@ -107,9 +107,10 @@ The vision response is a `TranscriptionRecord`: document class and pages with ph
 For a paged container, the additional products are:
 
 - `D/container-inventory.json`: canonical source bindings and every structural occurrence, used by shared consumers.
-- `D/derived-media.json`: a supported compatibility image record; it is not the placement or discovery authority.
 - Canonical image bytes at the binding's recorded path, which may retain `D/derived-media/<sha1><suffix>` from an existing run.
 - `D/derived-media/<sha1>.transcription.json`: an independently read image's checked transcription, when available.
+
+The pipeline does not write `D/derived-media.json`. One kept from an existing run is read only as a compatibility image record; it is not the placement or discovery authority.
 
 An independently read image can become an excerpt document when it has a transcribed or illegible document page. Images that are wholly blank or not document pages, excluded images and images already represented by corpus files do not become excerpts. Repeated placements share the bound media owner while retaining every occurrence. The container keeps its own text; the image's claims cite its bound owner and source-part support. Excerpt extraction and critique then produce their own `batch.json` and `critique.json`. Ambiguous body/notes or compiler/inner-source support makes extraction incomplete; any supported claims remain diagnostic and are not accepted for writing.
 

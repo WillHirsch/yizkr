@@ -19,11 +19,12 @@ registration writes:
   ``media file -> File:...`` and ``media SHA-1 -> <hex digest>``;
 * optional page-fragment items: ``instance of -> artifact fragment``,
   ``part of -> <artifact>`` with a ``page number`` qualifier;
-* for a compound artifact (ADR-0008), the media it embeds, from the
-  record the stages before the write keep of them
-  (yizkr.pipeline.presentation): each an artifact item of its own, with
-  its media file and SHA-1, ``part of`` the container once per slide of a
-  deck, or page of a PDF, it is on.
+* for a compound artifact (ADR-0008), the sources it places that its
+  common container projection binds to owners
+  (yizkr.pipeline.container_sources): each an artifact item of its own,
+  with its media file and SHA-1, ``part of`` the container once per slide
+  of a deck, or page of a PDF, that paints it, that statement's reference
+  carrying the source-part locators.
 
 **Owner lookup uses canonical media SHA-1.** An artifact is found by its
 recorded media bytes; a title never finds an item. Common container
@@ -1370,9 +1371,10 @@ class Registrar:
         self, record: DerivedMediaRecord | _RegistrationMedia, directory: Path
     ) -> dict[str, str]:
         """Ensure each medium a container embeds has its artifact item and
-        its file on the wiki, from the record of them kept in `directory`
-        (presentation.record_derived_media, or the record a PDF read page
-        by page keeps of the images placed within its pages); returns
+        its file on the wiki, from `record`: the bound sources of the
+        container projection (register_container_sources), or an explicit
+        older derived-media record (register_derived_media), each medium's
+        bytes read from the file `record` names under `directory`; returns
         {media SHA-1 -> QID}.
 
         The container is the item whose `media SHA-1` is the record's
@@ -1440,8 +1442,9 @@ class Registrar:
             if self._excluded(globbed, key):
                 continue
             path = directory / medium.file
-            # the record names the file for the medium's SHA-1 and the
-            # suffix of its first name
+            # the file is named for the medium's SHA-1 and a suffix: its
+            # archive name's for a deck's medium, the encoding it was
+            # extracted in for a PDF's image
             suffix = PurePosixPath(medium.file).suffix.lower()
             if path.is_symlink() or file_sha1(path) != key:
                 raise RuntimeError(

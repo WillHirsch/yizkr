@@ -36,7 +36,8 @@ names it as a value (its kin, the events it takes part in with its role,
 its places), each value named by its label and kind, an artifact a
 claim is about named plainly: its own document as "this document", an
 image the document places by its place, as the critic names it
-(critique.artifact_places: "page 6, image 1"), from the document's
+(critique.artifact_places: "page/slide 6, placement <id>", or "page 6,
+image 1" in a reading without source context), from the document's
 transcription view where the stage has one; with clustering's own
 evidence for the pair (how names, dates and kin compare, and what
 keeps the pair apart). A date is rendered at its own precision, as the
@@ -277,8 +278,10 @@ class _Document:
         """An entity a claim names: a local id by its label and kind, a
         vocabulary item by its key, an item already in the graph as one,
         never by its QID; an artifact as THIS_DOCUMENT when it is the
-        document's own, by its place ("page 6, image 1") when it is an
-        image the document places, else by the SHA-1 of its media."""
+        document's own, by its place ("page/slide 6, placement <id>", or
+        "page 6, image 1" in a reading without source context) when it
+        is an image the document places, else by the SHA-1 of its
+        media."""
         if isinstance(ref, ArtifactRef):
             if ref.sha1 == self.sha1:
                 return THIS_DOCUMENT

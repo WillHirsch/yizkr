@@ -1915,8 +1915,8 @@ def export_nonprivileged(
     and so are the judgement notes, every caption statement, whole
     (``LEFT_OUT_PROPERTIES``), every reference that another item gives a
     document-subject statement about an artifact registered by its bytes
-    (a source's claim about an image it places, by a record of derived
-    media or a curator's `--placed`), or that the item an artifact is
+    (a source's claim about an image it places, by its container
+    inventory or a curator's `--placed`), or that the item an artifact is
     `part of` gives one about it, with its excerpt, and such a statement
     whole when no reference stated in an item is left to it
     (``placed_subject_rule``), and every statement whose value or a

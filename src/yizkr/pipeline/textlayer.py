@@ -544,13 +544,15 @@ def read_pages(
     inventory: PdfInventory | None = None,
 ) -> ContainerPages | None:
     """Read the PDF at `path` page by page (the module docstring says
-    how): each page's method and text layer and, when any page reads from
-    its text layer, the files the vision engine is to read, written into
-    `directory`: each vision page's (``page-<n><suffix>``) and each image
-    read on its own (``<sha1><suffix>``). An image read on its own whose
-    SHA-1 the never-ingest list names (`excluded`) is neither written nor
-    listed. When no page reads from its text layer, nothing is written,
-    and the caller can prepare a checked whole-document representation.
+    how): each page's method and text layer, and the files the vision
+    engine is to read, written into `directory`: each image read on its
+    own (``<sha1><suffix>``) and, when any page reads from its text layer
+    or an image is read on its own, each vision page's
+    (``page-<n><suffix>``). An image read on its own whose SHA-1 the
+    never-ingest list names (`excluded`) is neither written nor listed.
+    When no page reads from its text layer and no image is read on its
+    own, no page file is written, and the caller can prepare a checked
+    whole-document representation.
     With an exclusion callback, all vision pages are checked before any
     output; unsafe or unreadable content raises PdfExclusionError. Without
     a callback, an unreadable PDF retains the legacy None result."""
@@ -612,10 +614,9 @@ def fresh_start() -> None:
 @dataclass
 class _Layout:
     """What one page holds, as `_layout` reads it: its method and text
-    layer, the images read on their own (their indexes among the page's
-    objects, in paint order), the index of the page's one image when it
-    draws nothing else and covers the page, and the annotations it shows
-    that its text layer leaves unread."""
+    layer, the index of the page's one image when it draws nothing else
+    and covers the page, and the annotations it shows that its text layer
+    leaves unread."""
 
     number: int
     method: str
@@ -631,7 +632,9 @@ def _read(
     plan: PdfInventory,
 ) -> ContainerPages:
     """`read_pages` of an open document: every page's layout first, and
-    only then, when a page reads from its text layer, the files."""
+    only then the files: each image read on its own and, when a page
+    reads from its text layer or an image is read on its own, the vision
+    pages."""
     layouts = []
     for index in range(len(document)):
         page = document[index]

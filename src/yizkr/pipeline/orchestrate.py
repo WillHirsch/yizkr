@@ -44,12 +44,16 @@ page by page by its format's reader (yizkr.pipeline.containers), each
 page from the text the file holds where it holds a usable one (a PDF's
 text layer, yizkr.pipeline.textlayer; a deck's slide XML,
 yizkr.pipeline.presentation), without a model call, any other page by
-the vision engine, and each image placed on a page whose own text is
-read by the vision engine on its own, as a witness of its own
-(ADR-0008). The images' bytes and their transcriptions are kept in the
-document's directory, recorded in `derived-media.json`, beside the
-container's own transcription. A PDF none of whose pages has a usable
-text layer is read whole by the vision engine. The PDF renderer the
+the vision engine, and each independent image source it places
+(yizkr.pipeline.container_sources), on any page, read by the vision
+engine on its own, as a witness of its own (ADR-0008). The images'
+bytes and their transcriptions are kept in the document's directory,
+recorded in its container inventory (`container-inventory.json`),
+beside the container's own transcription: original parts under
+`container-parts/`, prepared images under `representations/`, and each
+reading at `derived-media/<sha1>.transcription.json`. A PDF none of
+whose pages has a usable text layer, and none of whose images is read on
+its own, is read whole by the vision engine. The PDF renderer the
 vision engine and the transcription check need is checked once, before
 any document.
 
@@ -65,18 +69,19 @@ transcription finds it.
 
 One step uses the wiki: the write, which registers the document first
 (yizkr.pipeline.registrar): its artifact item, a deck's slides as page
-fragments, and a deck's derived media or a PDF's images, each found or
-made by the SHA-1 of its bytes, just before the claims that cite them
-are written; an excerpt's write registers each container that places it,
-with
-its images. It finds or mints the item of every entity of the batch
-through the identity map of the run's documents (yizkr.pipeline.writer,
-step 2), which it keeps in the run directory's corpus folder as a
-scratch run's clustering stage does (`_identity_map`). Everything else,
+fragments, and the image sources of a deck or a PDF that its container
+inventory binds (each part of the container on each slide or page that
+paints it), each found or made by the SHA-1 of its bytes, just before
+the claims that cite them are written; an excerpt's write registers each
+container that places it, with its images. It finds or mints the item
+of every entity of the batch through the identity map of the run's
+documents (yizkr.pipeline.writer, step 2), which it keeps in the run
+directory's corpus folder as a scratch run's clustering stage does
+(`_identity_map`). Everything else,
 the resolve step among it, which matches nothing by its label, reads
 nothing from the wiki and writes nothing to it (ADR-0025 §2): the stages
-before the gates; a deck's derived media and a PDF's images, which are
-recorded in its directory (`derived-media.json`) for the write to
+before the gates; a deck's and a PDF's image sources, which are
+recorded in its directory (`container-inventory.json`) for the write to
 register; and the reconcile step, which has no roster to match a
 document's entities against, so it proposes nothing and the first gate
 has nothing to review.
@@ -226,7 +231,7 @@ PAUSED = "paused"
 # the kind of a PDF, a paged container of its own (ADR-0008)
 PDF = "pdf"
 # the kind of an image a paged container places on one of its pages and
-# reads on its own (a PDF's text-layer page, a deck's slide), taken as a
+# reads on its own (on any page of a PDF, on a deck's slide), taken as a
 # document of its own (ExcerptRun), and the directory of the state
 # directory that holds such documents' directories, each named for its
 # image's SHA-1
@@ -303,10 +308,11 @@ def route_transcription(source: Path, correction: Path | None = None) -> str:
     file is its own transcription; a paged container, a deck or a PDF,
     takes the paged route (PAGED), read page by page by its format's
     reader (yizkr.pipeline.containers), each page by its own method,
-    chosen as deterministically, and each image placed on a page whose
-    own text is read, read on its own; and anything else, an image, is
-    read whole by the vision engine. The paged route reads a PDF none of
-    whose pages has a usable text layer whole by the vision engine too."""
+    chosen as deterministically, and each independent image source it
+    places, on any page, read on its own; and anything else, an image,
+    is read whole by the vision engine. The paged route reads a PDF none
+    of whose pages has a usable text layer, and none of whose images is
+    read on its own, whole by the vision engine too."""
     if correction is not None and correction.is_file():
         return "correction"
     suffix = source.suffix.lower()
@@ -801,7 +807,7 @@ class DocumentRun:
 
 class ExcerptRun(DocumentRun):
     """An image a paged container places on one of its pages and reads on
-    its own (a PDF's text-layer page, a deck's slide), taken as a document
+    its own (on any page of a PDF, on a deck's slide), taken as a document
     of its own: a witness apart from the container, whose claims cite the
     image alone (ADR-0008).
 
@@ -813,8 +819,9 @@ class ExcerptRun(DocumentRun):
     derived_transcription); the first one's copy of the bytes is its
     source. Its transcription is the reading the container's
     transcription made of it (Orchestrator._transcribe_excerpt), so no
-    model is asked again. Its title names its first place, by the first
-    name the container's record gives it: "<the PDF's title> — page 6,
+    model is asked again. Its title names one of its places, the first in
+    sorted order of the names the container's source projection gives it
+    (container_sources.BoundSource.names): "<the PDF's title> — page 6,
     image 1", or "<the deck's title> — image2.png"."""
 
     def __init__(
@@ -1494,10 +1501,11 @@ class Orchestrator:
     def _step_register(self, doc: DocumentRun) -> str:
         """Register the document as its write begins (ADR-0025 §2): its
         artifact item, found or made by the SHA-1 of the source's bytes
-        (ADR-0010), and for a deck its slides as page fragments and the
-        images it embeds, and for a PDF read page by page the images placed
-        within its pages, from the record of them in its directory, each
-        by the SHA-1 of its own bytes (ADR-0008). A source that no longer
+        (ADR-0010), and for a deck its slides as page fragments, and for a
+        deck or a PDF the image sources its common container inventory
+        binds (yizkr.pipeline.container_sources), each by the SHA-1 of its
+        own bytes and part of the container on each slide or page that
+        paints it (ADR-0008). A source that no longer
         has the bytes the run read, or that is on the never-ingest list,
         is refused before anything is registered or uploaded, and an
         embedded image the list names is left out
@@ -2395,8 +2403,8 @@ class Orchestrator:
         container read page by page by its format's reader
         (transcribe.PagedTranscriber), a deck slide by slide
         (transcribe.DeckTranscriber) and a PDF page by page when any of its
-        pages has a usable text layer (transcribe.PdfPageTranscriber); a
-        PDF none of whose pages has one is read whole
+        pages has a usable text layer or it reads an image on its own
+        (transcribe.PdfPageTranscriber); a PDF with neither is read whole
         (`_transcribe_vision`). Nothing is written: what the page-by-page
         reading made beside the transcription rides on it
         (`Transcription.reading`) for `_step_transcribe` to keep."""
@@ -2430,7 +2438,8 @@ class Orchestrator:
     def _transcribe_vision(self, doc: DocumentRun):
         """(transcription, language resolution) by the vision engine,
         reading the document whole: an image, or a PDF none of whose
-        pages has a usable text layer."""
+        pages has a usable text layer and none of whose images is read on
+        its own."""
         from yizkr.pipeline.textlayer import check_pdf_vision, is_pdf_input
         from yizkr.pipeline.transcribe import LlmVisionTranscriber
 
@@ -3365,9 +3374,9 @@ class Orchestrator:
             approved = self._approved(doc, resolved)
             self._mapped(doc, approved, instance=True)
             # registration is part of the write: the document's artifact,
-            # and a deck's fragments and derived media, are found or made
-            # by the SHA-1 of their bytes just before the claims that cite
-            # them are written (ADR-0025 §2)
+            # and a deck's fragments and a deck's or a PDF's bound image
+            # sources, are found or made by the SHA-1 of their bytes just
+            # before the claims that cite them are written (ADR-0025 §2)
             doc.state.artifact_qid = self._step_register(doc)
             self.log(f"  registered as {doc.state.artifact_qid}")
             summary = self._step_write(doc, resolved, approved)

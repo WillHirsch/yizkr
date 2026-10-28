@@ -6,7 +6,7 @@ take one path: a reader per format gives the container's pages in order
 (`ContainerPages`), each with the method that reads it, its text where
 the file holds it, the file the vision engine is to read where it does
 not, and the images placed on it that are read on their own; and the
-images themselves, each once by the SHA-1 of its bytes (`PlacedImage`).
+images themselves, each once by its canonical owner's SHA-1 (`PlacedImage`).
 The transcription (yizkr.pipeline.transcribe.PagedTranscriber) makes the
 container's own transcription from them, page by page behind its page
 markers, and reads each image by the vision engine on its own, as a
@@ -15,19 +15,25 @@ witness of its own: an excerpt (yizkr.pipeline.orchestrate.ExcerptRun).
 The readers:
 
 - a PDF's, `yizkr.pipeline.textlayer.read_pages`: a page from its text
-  layer where it has a usable one, by vision otherwise, and the images
+  layer where it has a usable one, by vision otherwise, and its
   independently bound image sources on any page;
 - a deck's, `yizkr.pipeline.presentation.read_slides`: each slide's text
   and speaker notes from the PPTX XML (`SLIDE_XML`), with no model call,
-  and the images the slide embeds.
+  and the images a slide shape paints.
 
-**Which images are read on their own** is the same rule for both: an
-image under `MIN_IMAGE_SIDE` pixels on a side, or under
-`MIN_IMAGE_PIXELS` pixels in all, is decoration, and is not read; nor is
-one the never-ingest list names by its SHA-1. A deck's image is read in
-the form the deck holds it, so one in a format the vision engine does not
-read (`VISION_SUFFIXES`), or whose size its header does not give
-(`image_size`), is not read, and the reader notes it.
+**Which images are read on their own**: the bound sources a page paints,
+which are the independent ones unless a verified earlier reading already
+bound another. A deck's image is one when a slide shape paints it; one no
+shape paints (a slide background, or one only a relationship refers to)
+is auxiliary. A PDF's image placed on its page is one unless it covers
+most of the page (textlayer's `BACKGROUND_COVER`), when it is the page's
+representation; one placed off the page is auxiliary. The rest of the
+rule is the same for both: an image under `MIN_IMAGE_SIDE` pixels on a
+side, or under `MIN_IMAGE_PIXELS` pixels in all, is decoration, and is
+not read; nor is one the never-ingest list names by its SHA-1. A deck's
+image is read in the form the deck holds it, so one in a format the
+vision engine does not read (`VISION_SUFFIXES`), or whose size its header
+does not give (`image_size`), is not read, and the reader notes it.
 """
 
 from __future__ import annotations
@@ -59,8 +65,9 @@ class PlacedImage:
     """A bound source's current reading input and native paint occurrences.
 
     `sha1` names its canonical owner; `path` may contain a newly prepared
-    representation with different bytes. Each place is (page, native image
-    ordinal), and support retains the original source part and placement IDs.
+    representation with different bytes. Each place is (page, its place
+    among that page's images read on their own, from 1), and support
+    retains the original source part and placement IDs.
     """
 
     sha1: str
@@ -107,8 +114,9 @@ class ContainerPages:
     @property
     def by_own_text(self) -> bool:
         """Does any page read from the text the file holds: a PDF's text
-        layer, a deck's slide XML? A PDF none of whose pages does is read
-        whole by the vision engine."""
+        layer, a deck's slide XML? A PDF none of whose pages does, and
+        that reads no image on its own, is read whole by the vision
+        engine."""
         return any(
             page.method not in ("vision", "none") for page in self.pages
         )

@@ -13,13 +13,14 @@ follows it as it follows any run.
 **Stages.** Each document takes the per-document stages its kind plans
 (orchestrate.DOCUMENT_STAGES): transcription, which the transcription
 check guards, extraction and the critique; or the GEDCOM adapter for a
-.ged file. An image a PDF places within a text-layer page, or a deck
-embeds on a slide, read on its own, is a document of its own, an excerpt
-(orchestrate.ExcerptRun), which takes the same stages once its
+.ged file. An independent image source a PDF places on any page, or a
+deck paints on a slide, read on its own, is a document of its own, an
+excerpt (orchestrate.ExcerptRun), which takes the same stages once its
 container's transcription has found it, and joins the run plan then.
 Nothing before the barrier reads or writes the wiki: no artifact is
-registered before the register stage, and a deck's derived media are
-recorded in its directory (ADR-0025 §2). There is no
+registered before the register stage, and a deck's or a PDF's image
+sources are recorded in its directory (`container-inventory.json`;
+ADR-0025 §2). There is no
 human stop. When every document's per-document stages have ended, done
 or failed, the run is at the **barrier**, and the driver runs the corpus
 stages registered with it (CORPUS_STAGES), in order, over the documents

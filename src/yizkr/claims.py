@@ -75,7 +75,7 @@ artifact subject to the artifact item as it resolves the source.
 CLI:
     python3 claims.py --json-schema  # print JSON Schema (for LLM prompts)
     python3 claims.py --validate batch.json  # parse + manifest-check a file
-    python3 claims.py --validate batch.json --placed derived-media.json
+    python3 claims.py --validate batch.json --placed container-inventory.json
         # ... with the artifacts a container places, for its claims
         # about them
 """
@@ -2469,8 +2469,9 @@ def main() -> int:
         metavar="RECORD|SOURCE=SHA1,...",
         help="the artifacts a source places, which its captions and "
         "document-subject claims may take as their subject (ADR-0039 §2.1, "
-        "§10.1): a container's derived-media "
-        "record, or a source's SHA-1 and theirs; repeatable",
+        "§10.1): container-inventory.json or its document directory, an "
+        "explicit derived-media.json compatibility record, or a source's "
+        "SHA-1 and theirs; repeatable",
     )
     args = parser.parse_args()
 
