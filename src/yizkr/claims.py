@@ -466,13 +466,15 @@ class PlacementSupport(StrictModel):
 
 
 class SourceSupport(StrictModel):
-    """Located support supplied by the reader, never inferred by the model.
+    """Structural citation supplied by the reader, never inferred by the model.
 
     The container and native part identify the original evidence separately
     from the claim's existing artifact owner. Repeated placements locate one
     source; they do not create independent witnesses. ``reading_sha256`` hashes
     canonical semantic reading content, excluding source context and process
     provenance. The inventory separately records the exact saved-file digest.
+    This identifies the cited source part; it does not certify the model's
+    quotation, page selection or interpretation, which remain for critique.
     """
 
     container: ArtifactRef

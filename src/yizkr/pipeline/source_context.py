@@ -89,6 +89,12 @@ def artifact_places(transcription: Transcription) -> dict[str, str]:
 
 
 def _candidates(source: dict, transcription: Transcription):
+    """Locate the cited source part without certifying the model's quote.
+
+    A physical page or a single-part reading may establish attribution even
+    when its quote is inaccurate. Quotes can disambiguate several parts;
+    the critic diagnoses quote quality against the unchanged citation.
+    """
     context = transcription.source_context
     candidates = [span for span in context.readings if span.end > span.start]
     page_number = source.get("page_number")
@@ -117,13 +123,28 @@ def _candidates(source: dict, transcription: Transcription):
     excerpt = source.get("transcription_excerpt")
     quote = excerpt.get("text") if isinstance(excerpt, dict) else None
     if isinstance(quote, str) and quote.strip():
-        candidates = [
+        matching = [
             span
             for span in candidates
             if Transcript(transcription.text[span.start : span.end]).spans(
                 quote
             )
         ]
+        if matching:
+            candidates = matching
+        elif (
+            len(
+                {
+                    (
+                        span.owner.sha1 if span.owner else None,
+                        span.support.part_id,
+                    )
+                    for span in candidates
+                }
+            )
+            != 1
+        ):
+            return [], "supporting text cannot be attributed to a source part"
     if not candidates:
         return [], "supporting text cannot be attributed to a source part"
     if any(span.end > len(transcription.text) for span in candidates):

@@ -65,7 +65,12 @@ from yizkr.pipeline.source_context import (
     SourceContext,
     bind_source_support,
 )
-from yizkr.pipeline.text_stages import ExtractionRequest, extract
+from yizkr.pipeline.text_stages import (
+    CritiqueRequest,
+    ExtractionRequest,
+    critique,
+    extract,
+)
 from yizkr.pipeline.textlayer import png
 from yizkr.source_structure import StructuralLocator
 
@@ -334,6 +339,131 @@ def quoted_claim(text):
     claim["source"]["page_number"] = "2"
     claim["source"]["transcription_excerpt"]["text"] = text
     return claim
+
+
+def located_pages(*, single=False):
+    reading = paged(
+        DECK_REF,
+        ([] if single else [(1, [], NOTES)])
+        + [(2, [LETTER_REF.sha1], CAPTION)],
+    )
+    context = located_slide().source_context
+    context.readings = []
+    for page in reading.pages:
+        locator = StructuralLocator(
+            kind="slide_body",
+            position=page.page,
+            package_part=f"ppt/slides/slide{page.page}.xml",
+        )
+        context.readings.append(
+            LocatedReading(
+                start=page.start,
+                end=page.end,
+                owner=DECK_REF,
+                support=SourceSupport(
+                    container=DECK_REF,
+                    part_id=structural_id(DECK_REF, locator),
+                    locator=locator,
+                ),
+            )
+        )
+    return reading.model_copy(update={"source_context": context})
+
+
+@pytest.mark.parametrize("strategy", ["single", "chunked"])
+@pytest.mark.parametrize(
+    "quote, diagnostic",
+    [
+        ("Our Family from Germany", "not in the transcription"),
+        (NOTES, "not on page 2"),
+    ],
+)
+def test_attributed_claim_with_bad_quote_reaches_critique(
+    tmp_path, strategy, quote, diagnostic
+):
+    reading = located_pages()
+    answers = [ndjson([quoted_claim(CAPTION), quoted_claim(quote)])]
+    if strategy == "chunked":
+        answers.insert(
+            0,
+            json.dumps(
+                {
+                    "entities": [
+                        {
+                            "id": "e1",
+                            "label": "Wastl",
+                            "kind": "human",
+                            "mention_lines": [5],
+                        }
+                    ]
+                }
+            ),
+        )
+    result = extract(
+        ExtractionRequest(
+            reading,
+            DECK_REF,
+            strategy=strategy,
+            read_preparation=False,
+            state_dir=tmp_path / "extraction",
+        ),
+        ScriptedLlm(answers),
+    )
+    batch = result.require_complete()
+    assert len(batch.claims) == 2
+    bad_quote = batch.claims[1].source
+    assert bad_quote.artifact == DECK_REF
+    assert bad_quote.support == reading.source_context.readings[1].support
+    assert bad_quote.page_number == "2"
+    assert bad_quote.transcription_excerpt.text == quote
+
+    critic = ScriptedLlm(['{"done": true}'])
+    review = critique(CritiqueRequest(batch, reading), critic)
+    assert review.status == "complete"
+    assert diagnostic in critic.calls[0][1]
+
+
+@pytest.mark.parametrize("quoted", [False, True])
+def test_absent_page_uses_quote_or_an_unambiguous_whole_reading(quoted):
+    reading = located_pages(single=not quoted)
+    claim = quoted_claim(CAPTION if quoted else "Our Family from Germany")
+    claim["source"].pop("page_number")
+    accepted, rejected = bind_source_support([claim], reading)
+    assert rejected == []
+    assert accepted[0]["source"]["support"]["locator"]["position"] == 2
+    assert "page_number" not in accepted[0]["source"]
+
+
+def test_bad_quote_without_page_cannot_choose_between_source_parts():
+    claim = quoted_claim("Our Family from Germany")
+    claim["source"].pop("page_number")
+    accepted, rejected = bind_source_support([claim], located_pages())
+    assert accepted == []
+    assert rejected[0]["reasons"] == ["source_support"]
+
+
+@pytest.mark.parametrize("problem", [None, "stale-reading", "unsupported"])
+def test_bad_quote_requires_every_observation_of_its_part_to_be_valid(problem):
+    reading = located_pages(single=True)
+    repeated = reading.source_context.readings[0].model_copy(deep=True)
+    reading.source_context.readings.append(repeated)
+    if problem == "stale-reading":
+        repeated.support.reading_sha256 = "0" * 64
+    if problem == "unsupported":
+        repeated.state = "unsupported"
+        repeated.reason = "composite reading cannot separate source owners"
+    accepted, rejected = bind_source_support(
+        [quoted_claim("Our Family from Germany")], reading
+    )
+    if problem:
+        assert accepted == []
+        assert rejected[0]["reasons"] == ["source_support"]
+    else:
+        assert rejected == []
+        assert len(accepted) == 1
+        assert accepted[0]["source"]["support"] == repeated.support.model_dump(
+            mode="json"
+        )
 
 
 def test_extraction_and_critique_share_original_placement_occurrences():
