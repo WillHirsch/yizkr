@@ -101,8 +101,9 @@ class TestTheRecord:
             [],
         )
 
-    def test_a_record_alone_in_a_fenced_block_parses(self):
-        answer = "```json\n" + record_answer(CAPTION) + "\n```"
+    @pytest.mark.parametrize("fence", ["", "json", "text"])
+    def test_a_record_alone_in_a_fenced_block_parses(self, fence):
+        answer = f"```{fence}\n" + record_answer(CAPTION) + "\n```"
         assert parse_record(answer).pages[0].text == CAPTION
 
     @pytest.mark.parametrize(
@@ -130,15 +131,16 @@ class TestTheRecord:
             "[" * 100000 + "]" * 100000,
             # prose after the fenced record: only a block alone is read
             "```json\n" + record_answer(CAPTION) + "\n```\nHope this helps!",
+            "```text\n" + record_answer(CAPTION) + "\n```\nHope this helps!",
+            # a text fence still needs one complete, schema-valid record
+            "```text\n" + CAPTION + "\n```",
+            "```text\n" + record_answer(CAPTION)[:-3] + "\n```",
+            "```text\n{}\n```",
         ],
     )
     def test_an_answer_that_is_not_one_record_object_is_refused(self, answer):
         with pytest.raises(RecordError):
             parse_record(answer)
-
-    def test_a_record_in_an_untagged_fence_parses(self):
-        answer = "```\n" + record_answer(CAPTION) + "\n```"
-        assert parse_record(answer).pages[0].text == CAPTION
 
     def test_harmless_near_misses_are_normalised(self):
         """A page number printed as a JSON number, null text, notes or

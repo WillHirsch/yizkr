@@ -215,8 +215,10 @@ class TranscriptionRecord(BaseModel):
         return [page.status for page in self.pages]
 
 
-# a record the engine set in a fenced code block, alone in its answer
-_FENCED = re.compile(r"\A```(?:json)?[^\S\n]*\n(?P<body>.*)\n```\Z", re.DOTALL)
+# A record alone in a code block; the prompt's example uses a text fence.
+_FENCED = re.compile(
+    r"\A```(?:json|text)?[^\S\n]*\n(?P<body>.*)\n```\Z", re.DOTALL
+)
 
 
 def parse_record(answer: str) -> TranscriptionRecord:
