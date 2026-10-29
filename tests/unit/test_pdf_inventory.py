@@ -10,11 +10,13 @@ from pypdf import PdfWriter
 from pypdf.generic import NameObject
 
 from tests.fixtures import pdfs
+from tests.fixtures.records import record_answer
 from tests.unit.test_pdf_exclusions import (
     BROKEN,
     JPEG_SHA1,
     PERMITTED,
     PERMITTED_PNG,
+    TITLE,
     scan,
     typed,
 )
@@ -26,8 +28,15 @@ from tests.unit.test_pdf_opaque_resources import (
 )
 from yizkr.claims import ArtifactRef
 from yizkr.pipeline.container_inventory import keep_inventory, read_inventory
+from yizkr.pipeline.container_sources import (
+    prepare_sources,
+    project_sources,
+    source_context,
+)
 from yizkr.pipeline.pdf_inventory import inventory_pdf
 from yizkr.pipeline.textlayer import PdfExclusionError, png, read_pages
+from yizkr.pipeline.transcribe import Transcription
+from yizkr.pipeline.transcription_record import parse_record
 
 
 def original_parts(plan, data):
@@ -59,6 +68,124 @@ def repeated_page(*, form=False):
     name = b"/Fm1" if form else b"/Im1"
     page.ops.append(b"q 128 0 0 96 300 400 cm " + name + b" Do Q")
     return page
+
+
+def margin_scan(*, clipped=False):
+    page = pdfs.Page(width=400, height=600)
+    if clipped:
+        page.ops.append(b"0 G 0.5 w /RelativeColorimetric ri")
+    return page.image(
+        pdfs.jpeg(),
+        40,
+        60,
+        320,
+        480,
+        clip=(50, 70, 300, 450) if clipped else None,
+    )
+
+
+@pytest.mark.parametrize("clipped", [False, True])
+def test_blank_margins_do_not_turn_a_page_scan_into_an_inner_source(
+    tmp_path, clipped
+):
+    plan = inventory_pdf(
+        pdfs.pdf([margin_scan(clipped=clipped)]), lambda _: False
+    )
+    plan.guard()
+    (image,) = original_parts(plan, pdfs.JPEG)
+    assert image.source_role == "page-representation"
+    prepared = prepare_sources(plan.inventory, plan.data, tmp_path)
+    sources = project_sources(prepared, tmp_path)
+    assert sources.sources == {}
+    assert all(
+        part.owner_binding is None
+        for part in prepared.parts
+        if part.kind == "embedded_resource"
+    )
+    reading = Transcription.from_record(
+        parse_record(record_answer(TITLE)),
+        artifact=plan.inventory.source,
+        language="en",
+        engine="fictional-reader",
+    )
+    (span,) = source_context(reading, sources).readings
+    assert span.state == "attributed"
+    assert span.owner == plan.inventory.source
+    assert span.support.locator.kind == "page"
+
+
+@pytest.mark.parametrize(
+    "extra", ["text", "path", "shading", "annotation", "unknown", "repeat"]
+)
+def test_other_page_content_prevents_the_margin_scan_proof(extra):
+    page = margin_scan(clipped=True)
+    if extra == "text":
+        page.text([TITLE], x=40, y=570)
+    elif extra == "path":
+        page.rectangle(10, 10, 20, 20)
+    elif extra == "shading":
+        page.shade(10, 10, 20, 20)
+    elif extra == "annotation":
+        page.annotate("/Subtype /Text /Rect [10 10 30 30]")
+    elif extra == "unknown":
+        page.ops.append(b"q 1 2 FictionalPaint Q")
+    else:
+        page.ops.append(b"q 80 0 0 60 200 20 cm /Im1 Do Q")
+    plan = inventory_pdf(pdfs.pdf([page]), lambda _: False)
+    (image,) = original_parts(plan, pdfs.JPEG)
+    assert image.source_role == "independent"
+
+
+@pytest.mark.parametrize("clipped", [False, True])
+def test_a_margin_scan_still_refuses_an_excluded_image(clipped):
+    plan = inventory_pdf(
+        pdfs.pdf([margin_scan(clipped=clipped)]),
+        lambda sha1: sha1 == JPEG_SHA1,
+    )
+    (image,) = original_parts(plan, pdfs.JPEG)
+    assert image.source_role == "page-representation"
+    assert image.eligibility.state == "excluded"
+    with pytest.raises(PdfExclusionError, match="excluded embedded image"):
+        plan.guard()
+
+
+def test_new_page_role_preserves_a_verified_existing_image_owner(tmp_path):
+    plan = inventory_pdf(pdfs.pdf([margin_scan()]), lambda _: False)
+    old = plan.inventory.model_copy(deep=True)
+    (part,) = [p for p in old.parts if p.kind == "embedded_resource"]
+    part.source_role = "independent"  # the previous area-only classification
+    previous = prepare_sources(old, plan.data, tmp_path)
+    keep_inventory(previous, plan.data, tmp_path)
+    (before,) = [p for p in previous.parts if p.kind == "embedded_resource"]
+    assert before.owner_binding is not None
+
+    current = prepare_sources(
+        plan.inventory, plan.data, tmp_path, previous=previous
+    )
+    (after,) = [p for p in current.parts if p.kind == "embedded_resource"]
+    assert after.source_role == "page-representation"
+    assert after.owner_binding == before.owner_binding
+    assert after.ownership_issue is None
+
+
+@pytest.mark.parametrize("mixed_first", [False, True])
+def test_a_shared_image_keeps_its_independent_occurrence(mixed_first):
+    pages = [margin_scan(), typed().image(pdfs.jpeg(), 72, 400, 128, 96)]
+    if mixed_first:
+        pages.reverse()
+    writer = PdfWriter(io.BytesIO(pdfs.pdf(pages)))
+    first = writer.pages[0]["/Resources"]["/XObject"].raw_get("/Im1")
+    writer.pages[1]["/Resources"]["/XObject"][NameObject("/Im1")] = first
+    output = io.BytesIO()
+    writer.write(output)
+    plan = inventory_pdf(output.getvalue(), lambda _: False)
+    (image,) = original_parts(plan, pdfs.JPEG)
+    assert image.source_role == "independent"
+    assert len(occurrences(plan, pdfs.JPEG)) == 2
+    assert {
+        occurrence.layout[-1]["source_role"]
+        for occurrence in occurrences(plan, pdfs.JPEG)
+    } == {"page-representation", "independent"}
 
 
 def deeply_nested_image_before_shallow_image():

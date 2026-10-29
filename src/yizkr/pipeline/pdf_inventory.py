@@ -55,6 +55,14 @@ _INLINE_NAMES = {
     "/D": "/Decode",
     "/IM": "/ImageMask",
 }
+# Graphics state, color and path construction/clipping do not paint another
+# source. Text, path painting, shading and unknown operators are deliberately
+# absent: PDFium's one-image object list alone cannot prove they were absent.
+_IMAGE_ONLY_OPERATORS = frozenset(
+    b"q Q cm w J j M d ri i gs "
+    b"CS cs SC SCN sc scn G g RG rg K k "
+    b"m l c v y h re W W* n Do".split()
+) | {b"INLINE IMAGE"}
 
 
 def _value(value: Any) -> Any:
@@ -285,6 +293,7 @@ class _Builder:
         self.resources: dict[str, SourcePart] = {}
         self.originals: dict[str, bytes] = {}
         self.paints: dict[int, list[tuple[SourcePart, Placement]]] = {}
+        self.non_image_content: set[int] = set()
 
     def part(
         self, kind: str, locator: StructuralLocator, **kwargs
@@ -443,6 +452,11 @@ class _Builder:
                 stream.operations, start=1
             ):
                 location = f"{path}/op[{index}]"
+                # A conservative image-only proof, not a second graphics
+                # interpreter. Unknown operators must not disappear merely
+                # because PDFium did not expose them as page objects.
+                if operator not in _IMAGE_ONLY_OPERATORS:
+                    self.non_image_content.add(number)
                 if operator == b"q":
                     stack.append(list(state))
                 elif operator == b"Q":
@@ -689,6 +703,21 @@ class _Builder:
                             reason="native and PDFium image paints disagree",
                         )
                     continue
+                # One top-level image with no other content represents the
+                # page even when blank margins keep it below the area rule.
+                # Forms and any other painting or unknown native operators
+                # decline this additional proof; rendering has its own rules.
+                image_only_page = (
+                    len(objects) == len(images) == len(paints) == 1
+                    and images[0].container is None
+                    and number not in self.non_image_content
+                    and number not in self.plan._reasons
+                    and not any(
+                        p.parent == self.plan.page_parts[number].id
+                        and p.occurrence == "annotation"
+                        for p in self.plan.inventory.placements
+                    )
+                )
                 for ordinal, (obj, (part, placement)) in enumerate(
                     zip(images, paints, strict=True), start=1
                 ):
@@ -720,7 +749,8 @@ class _Builder:
                         "auxiliary"
                         if clipped is None or is_decoration(*obj.get_px_size())
                         else "page-representation"
-                        if _area(clipped)
+                        if image_only_page
+                        or _area(clipped)
                         >= BACKGROUND_COVER * _area(page_bounds)
                         else "independent"
                     )

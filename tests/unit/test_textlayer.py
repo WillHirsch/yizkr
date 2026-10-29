@@ -329,14 +329,15 @@ class TestPages:
         assert result.pages[0].text.endswith("\ufffd")
 
     def test_a_page_with_no_text_layer_is_read_by_vision(self, tmp_path):
-        """The page needs vision; its inset image is also discovered as
-        an independent source before that reading route is chosen."""
+        """A sole inset image represents the page, which still needs vision;
+        blank margins do not create a second independent witness."""
         photo = pdfs.Page().image(pdfs.gray(200, 150), 100, 300, 400, 300)
         result = read(tmp_path, typed(TITLE), photo)
         assert methods(result) == [TEXT_LAYER, VISION]
-        assert len(result.pages[1].images) == 1
-        assert result.pages[1].images[0][1] in result.sources.sources
-        assert len(result.images) == 1
+        assert result.pages[1].images == []
+        assert result.sources.sources == {}
+        assert result.images == {}
+        assert result.pages[1].vision.suffix == PNG_SUFFIX
 
     def test_a_page_that_draws_only_paths_is_read_by_vision(self, tmp_path):
         """Text drawn as outlines is paths, and no text layer: the page is
