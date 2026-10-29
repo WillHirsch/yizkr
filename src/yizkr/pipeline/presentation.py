@@ -281,7 +281,7 @@ def read_slides(
 ) -> ContainerPages:
     """Read the deck at `path` slide by slide, as a paged container
     (yizkr.pipeline.containers): each slide a page read from its XML
-    (`SLIDE_XML`), its text `slide_text`, with the images a slide shape
+    (`SLIDE_XML`), its text `slide_text`, with the images a slide
     paints that are read on their own, in the order it paints them, each
     written into `directory` once, as ``<sha1><suffix>``. Each image is
     known by its bound owner's SHA-1 and takes the suffix of its current
@@ -303,7 +303,7 @@ def slide_pages(
 ) -> ContainerPages:
     """`read_slides` of a deck already unpacked. Its images come from the
     projection of its source inventory (yizkr.pipeline.container_sources):
-    the bound owners a slide shape paints."""
+    the bound owners a slide paints."""
     from yizkr.pipeline.container_sources import (
         materialize_images,
         prepare_sources,

@@ -19,14 +19,15 @@ The readers:
   independently bound image sources on any page;
 - a deck's, `yizkr.pipeline.presentation.read_slides`: each slide's text
   and speaker notes from the PPTX XML (`SLIDE_XML`), with no model call,
-  and the images a slide shape paints.
+  and the images its shapes or direct picture background paint.
 
 **Which images are read on their own**: the bound sources a page paints,
 which are the independent ones unless a verified earlier reading already
-bound another. A deck's image is one when a slide shape paints it; one no
-shape paints (a slide background, or one only a relationship refers to)
-is auxiliary. A PDF's image placed on its page is one unless it covers
-most of the page (textlayer's `BACKGROUND_COVER`), when it is the page's
+bound another. A deck's image is one when a shape or direct slide picture
+background paints it; one only a relationship refers to is auxiliary.
+Inherited master/layout backgrounds are not expanded. A PDF's image placed
+on its page is one unless it covers most of the page or is its verified
+sole image content with blank margins (pdf_inventory), when it is the page's
 representation; one placed off the page is auxiliary. The rest of the
 rule is the same for both: an image under `MIN_IMAGE_SIDE` pixels on a
 side, or under `MIN_IMAGE_PIXELS` pixels in all, is decoration, and is

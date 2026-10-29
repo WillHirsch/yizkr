@@ -152,11 +152,14 @@ def deck(
     media: dict[str, bytes],
     *,
     painted: dict[int, list[str]] | None = None,
+    backgrounds: dict[int, str] | None = None,
 ) -> Path:
     """A deck of `slides`, each (its paragraphs, the names of the media
     its relationships name, in that order, its speaker notes or ""), the
     media's bytes by name. A slide's XML refers to its pictures in the
-    order `painted` gives for it, else in its relationships' order."""
+    order `painted` gives for it, else in its relationships' order.
+    `backgrounds` names direct slide picture fills using those relationships.
+    """
 
     def put(archive, name, data):
         archive.writestr(zipfile.ZipInfo(name, date_time=DECK_TIME), data)
@@ -184,6 +187,15 @@ def deck(
         )
         for n, (paragraphs, names, notes) in enumerate(slides, start=1):
             rid = {name: f"rId{10 + i}" for i, name in enumerate(names)}
+            background = (
+                "<p:bg><p:bgPr><a:blipFill><a:blip "
+                f'r:embed="{rid[backgrounds[n]]}"/>'
+                '<a:srcRect l="1250" t="2500"/>'
+                "<a:stretch><a:fillRect/></a:stretch>"
+                "</a:blipFill></p:bgPr></p:bg>"
+                if backgrounds and n in backgrounds
+                else ""
+            )
             pictures = "".join(
                 f'<p:pic><p:blipFill><a:blip r:embed="{rid[name]}"/>'
                 "</p:blipFill></p:pic>"
@@ -198,7 +210,8 @@ def deck(
                 archive,
                 f"ppt/slides/slide{n}.xml",
                 f'<p:sld xmlns:p="{_P}" xmlns:a="{_A}" xmlns:r="{_R}">'
-                f"<p:cSld><p:spTree>{body}{pictures}</p:spTree></p:cSld>"
+                f"<p:cSld>{background}<p:spTree>{body}{pictures}</p:spTree>"
+                "</p:cSld>"
                 "</p:sld>",
             )
             links = [
@@ -332,6 +345,113 @@ class TestImageSize:
     )
     def test_decoration_is_the_pdf_s_rule(self, size, decoration):
         assert is_decoration(*size) is decoration
+
+
+class TestDirectPictureBackgrounds:
+    @pytest.mark.parametrize("background", [False, True])
+    def test_the_picture_is_read_and_extracted_in_either_placement(
+        self, tmp_path, background
+    ):
+        corpus = tmp_path / "corpus"
+        corpus.mkdir()
+        deck(
+            corpus / "library-talk-2018.pptx",
+            [((CAPTION,), ["letter.png"], "")],
+            {"letter.png": LETTER_PNG},
+            painted={1: []} if background else None,
+            backgrounds={1: "letter.png"} if background else None,
+        )
+        reader = Reader({LETTER_SHA1: EXCERPT})
+        driver = run(tmp_path, corpus, reader)
+        container = document(driver, "library-talk-2018.pptx")
+        excerpt = excerpt_of(driver, LETTER_SHA1)
+        assert reader.read == [(f"{LETTER_SHA1}.png", LETTER_SHA1)]
+        sources = saved_sources(container.dir)
+        assert set(sources.sources) == {LETTER_SHA1}
+        (placement,) = sources.sources[LETTER_SHA1].placements
+        assert placement.occurrence == "paint"
+        assert placement.locator.position == 1
+        assert placement.locator.package_part == "ppt/slides/slide1.xml"
+        assert ("/p:bg[1]/" in placement.locator.path) is background
+        if background:
+            (layout,) = placement.layout
+            assert layout["element"] == "p:bg"
+            (fill,) = layout["transforms"]
+            assert fill["element"] == "a:blipFill"
+            assert {
+                child["element"]: child["attributes"]
+                for child in fill["children"]
+            }["a:srcRect"] == {"l": "1250", "t": "2500"}
+        batch = ClaimBatch.model_validate_json(excerpt.batch.read_text())
+        assert batch.claims
+        assert {claim.source.artifact.sha1 for claim in batch.claims} == {
+            LETTER_SHA1
+        }
+        assert all(
+            claim.source.support.placements[0].id == placement.id
+            for claim in batch.claims
+        )
+        again = run(tmp_path, corpus, RefusingReader({}))
+        assert excerpt_of(again, LETTER_SHA1).dir == excerpt.dir
+        retained = saved_sources(document(again, "library-talk-2018.pptx").dir)
+        assert (
+            retained.sources[LETTER_SHA1].owner
+            == sources.sources[LETTER_SHA1].owner
+        )
+
+    def test_background_and_shape_repeats_share_one_reading_and_excerpt(
+        self, tmp_path
+    ):
+        corpus = tmp_path / "corpus"
+        corpus.mkdir()
+        deck(
+            corpus / "library-talk-2018.pptx",
+            [((CAPTION,), ["letter.png"], "")] * 2,
+            {"letter.png": LETTER_PNG},
+            painted={1: [], 2: ["letter.png"]},
+            backgrounds={1: "letter.png", 2: "letter.png"},
+        )
+        reader = Reader({LETTER_SHA1: EXCERPT})
+        driver = run(tmp_path, corpus, reader)
+        container = document(driver, "library-talk-2018.pptx")
+        assert reader.read == [(f"{LETTER_SHA1}.png", LETTER_SHA1)]
+        assert set(driver._excerpts) == {LETTER_SHA1}
+        sources = saved_sources(container.dir)
+        assert set(sources.sources) == {LETTER_SHA1}
+        placed = sources.sources[LETTER_SHA1].placements
+        assert [p.locator.position for p in placed] == [1, 2, 2]
+        assert all(p.occurrence == "paint" for p in placed)
+        assert len({p.id for p in placed}) == 3
+        assert sum("/p:bg[1]/" in p.locator.path for p in placed) == 2
+
+    @pytest.mark.parametrize("reason", ["sha1", "name", "decoration"])
+    def test_backgrounds_obey_common_exclusion_and_decoration_rules(
+        self, tmp_path, reason
+    ):
+        corpus = tmp_path / "corpus"
+        corpus.mkdir()
+        deck(
+            corpus / "library-talk-2018.pptx",
+            [((CAPTION,), ["letter.png"], "")],
+            {"letter.png": RULE if reason == "decoration" else LETTER_PNG},
+            painted={1: []},
+            backgrounds={1: "letter.png"},
+        )
+        exclusions = ExclusionList.parse(
+            LETTER_SHA1
+            if reason == "sha1"
+            else "letter.png"
+            if reason == "name"
+            else ""
+        )
+        reader = Reader({})
+        driver = run(tmp_path, corpus, reader, exclusions=exclusions)
+        container = document(driver, "library-talk-2018.pptx")
+        assert reader.read == []
+        assert driver._excerpts == {}
+        sources = saved_sources(container.dir)
+        assert sources.sources == {}
+        assert sources.inventory.placements[0].occurrence == "paint"
 
 
 class TestReadSlides:

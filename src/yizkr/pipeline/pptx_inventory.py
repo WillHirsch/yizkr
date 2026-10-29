@@ -49,6 +49,13 @@ _RESOURCE_PREFIXES = ("ppt/media/", "ppt/embeddings/", "ppt/charts/")
 _SHAPES = {
     P_NS + name for name in ("sp", "pic", "grpSp", "graphicFrame", "cxnSp")
 }
+_BACKGROUND_PARENTS = (
+    P_NS + "sld",
+    P_NS + "cSld",
+    P_NS + "bg",
+    P_NS + "bgPr",
+    A_NS + "blipFill",
+)
 
 
 def _name(tag: str) -> str:
@@ -79,7 +86,7 @@ def _raw(element: ET.Element) -> dict:
 
 
 def _layout(element: ET.Element, path: str) -> dict:
-    """Uncomposed native transforms/crop plus the shape that owns them."""
+    """Uncomposed native transforms/fill plus their shape or background."""
     own = []
     for child in element:
         if child.tag in {P_NS + "spPr", P_NS + "grpSpPr", P_NS + "blipFill"}:
@@ -90,6 +97,10 @@ def _layout(element: ET.Element, path: str) -> dict:
             )
         elif child.tag in {P_NS + "xfrm", A_NS + "xfrm"}:
             own.append(_raw(child))
+        elif element.tag == P_NS + "bg" and child.tag == P_NS + "bgPr":
+            own.extend(
+                _raw(fill) for fill in child if fill.tag == A_NS + "blipFill"
+            )
     native = next((e for e in element.iter(P_NS + "cNvPr")), None)
     result = {
         "path": path,
@@ -353,11 +364,17 @@ class PptxPackage:
                     path=f"{path}/@r:{attribute}",
                     relationship_id=rid,
                 )
-                shapes = [
+                paint_owners = [
                     (shape, location)
                     for shape, location in (*ancestors, (element, path))
                     if shape.tag in _SHAPES
                 ]
+                if (
+                    parent.kind == "slide_body"
+                    and tuple(node.tag for node, _ in ancestors)
+                    == _BACKGROUND_PARENTS
+                ):
+                    paint_owners.append(ancestors[-3])  # direct p:bg
                 order += 1
                 placement = Placement(
                     id=structural_id(self.source, locator),
@@ -366,16 +383,17 @@ class PptxPackage:
                     locator=locator,
                     order=order,
                     occurrence="paint"
-                    if shapes
+                    if paint_owners
                     and element.tag == A_NS + "blip"
                     and attribute in {"embed", "link"}
                     else "reference",
                     layout=[
-                        _layout(shape, location) for shape, location in shapes
+                        _layout(owner, location)
+                        for owner, location in paint_owners
                     ],
                 )
                 if (
-                    not shapes
+                    not paint_owners
                     or element.tag != A_NS + "blip"
                     or attribute not in {"embed", "link"}
                 ):

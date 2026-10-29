@@ -405,6 +405,45 @@ def test_a_structural_reference_without_a_shape_discloses_unknown_visibility(
     )
 
 
+@pytest.mark.parametrize("location", ["notes", "extension"])
+def test_a_background_outside_the_direct_slide_fill_is_not_promoted(
+    tmp_path, location
+):
+    def background(members):
+        fill = (
+            '<p:bg><p:bgPr><a:blipFill><a:blip r:embed="unused"/>'
+            "</a:blipFill></p:bgPr></p:bg>"
+        )
+        if location == "notes":
+            key = "ppt/notesSlides/notesSlide9.xml"
+            members[key] = (
+                members[key]
+                .replace(f'xmlns:a="{A}"', f'xmlns:a="{A}" xmlns:r="{R}"')
+                .replace("<p:cSld>", "<p:cSld>" + fill)
+            )
+            members["ppt/notesSlides/_rels/notesSlide9.xml.rels"] = (
+                relationships(
+                    ("unused", "image", "../media/relationship.png", False)
+                )
+            )
+        else:
+            key = "ppt/slides/slide9.xml"
+            members[key] = members[key].replace(
+                "</p:sld>", "<p:extLst>" + fill + "</p:extLst></p:sld>"
+            )
+
+    source = tmp_path / "library-talk-2018.pptx"
+    source_deck(source, background)
+    inventory = unpack_pptx(source).inventory
+    (occurrence,) = [
+        p for p in inventory.placements if "/p:bg[1]/" in p.locator.path
+    ]
+    assert occurrence.occurrence == "reference"
+    assert any(
+        "visible placement unknown" in note for note in occurrence.limitations
+    )
+
+
 def test_chart_bytes_are_retained_and_inherited_layout_is_an_explicit_limit(
     tmp_path,
 ):
