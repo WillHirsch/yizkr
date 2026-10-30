@@ -1521,6 +1521,8 @@ class ScratchDriver(Orchestrator):
             self.log(f"  {doc.source.name}: {exc}")
             return _HELD
         except Exception as exc:
+            if stage == "transcription":
+                self._interpretation_readings.pop(doc.sha1, None)
             self._fail(doc, _why(exc))
             return _FAILED_HERE
         except BaseException:
@@ -1530,9 +1532,15 @@ class ScratchDriver(Orchestrator):
             raise
         unsaved = self._save(doc)
         if unsaved is not None:
+            if stage == "transcription":
+                self._interpretation_readings.pop(doc.sha1, None)
             self._fail(doc, unsaved, save=False)
             return _FAILED_HERE
         self._record_refreshes()
+        if stage == "transcription":
+            self._interpretation_readings[doc.sha1] = self._views.get(
+                (doc.sha1, doc.transcription.name)
+            )
         return _ENDED_HERE
 
     # -- the corpus ---------------------------------------------------------
@@ -1681,10 +1689,25 @@ class ScratchDriver(Orchestrator):
             waiting: set[str] = set()
             aborted: set[str] = set()
             behind: set[int] = set()
+            pending_readings = {
+                parent.sha1
+                for parent, phase in pending
+                if phase == "transcription"
+            }
             for doc, stage in pending:
                 if id(doc) in behind:
                     continue
                 behind.add(id(doc))
+                if stage == "extraction" and any(
+                    parent.sha1 in pending_readings
+                    for parent in self._interpretation_parents.get(
+                        doc.sha1, ()
+                    )
+                ):
+                    # Let the ordinary parent pairs handle their own control,
+                    # arrival and failure events. Never nest provider dispatch
+                    # inside the dependent extraction (including its canary).
+                    continue
                 stop = stop_of(control, stage=stage, kind=doc.kind)
                 if stop is None:
                     chosen = (doc, stage)

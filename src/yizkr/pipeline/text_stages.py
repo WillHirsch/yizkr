@@ -22,6 +22,7 @@ from yizkr.pipeline.chunking import (
 )
 from yizkr.pipeline.critique import Finding, Invalid
 from yizkr.pipeline.extract import ExtractionFailed
+from yizkr.pipeline.interpretation_context import InterpretationContext
 from yizkr.pipeline.language import LanguageResolution, resolve_language
 from yizkr.pipeline.llm import LlmClient
 from yizkr.pipeline.stages import (
@@ -170,6 +171,7 @@ class ExtractionRequest:
     concurrency: int = 1
     read_preparation: bool = True
     pointer: str | None = None
+    context: InterpretationContext | None = None
 
     @property
     def resolved_strategy(self) -> str:
@@ -211,6 +213,13 @@ def _model(client: LlmClient) -> dict[str, Any]:
         for key in ("model_identifier", "config_hash")
         if isinstance(value := getattr(client, key, None), str)
     }
+
+
+def _context_attention(context: InterpretationContext | None) -> list[str]:
+    if context is None or not context.gaps:
+        return []
+    reasons = "; ".join(dict.fromkeys(gap.reason for gap in context.gaps))
+    return [f"interpretation context is incomplete: {reasons}"]
 
 
 def empty_container_reading(transcription: Transcription) -> bool:
@@ -314,7 +323,7 @@ def _extract_empty_container(
         status="complete",
         batch=batch,
         diagnostic_batch=None,
-        attention=[],
+        attention=_context_attention(request.context),
         failed_chunks=[],
         failure_reasons={},
         gaps=[],
@@ -334,9 +343,13 @@ def extract(
     Failure, resumable pause and interruption propagate with their original
     types. An incomplete result keeps usable claims only as diagnostics.
     The caller owns client cleanup, accepted outputs and review decisions.
+    Optional interpretation context is a separate, declared input: it never
+    changes the primary reading or supplies a claim's supporting quotation.
     """
     if request.transcription.artifact != request.artifact:
         raise ValueError("the transcription names a different source artifact")
+    if request.context is not None:
+        request.context.validate_target(request.transcription)
     strategy = request.resolved_strategy
     empty_container = (
         strategy in {"single", "chunked"}
@@ -362,6 +375,10 @@ def extract(
         ),
         "configuration": {"strategy": strategy},
     }
+    if request.context is not None:
+        dependencies["interpretation_context_sha256"] = content_hash(
+            request.context.model_dump(mode="json")
+        )
     if empty_container:
         if log is not None:
             log(
@@ -384,7 +401,9 @@ def extract(
                 f"cannot read the claims file {request.claims_file}: "
                 f"{exc.strerror or exc}"
             ) from exc
-        extractor = ClaimFileExtractor(request.claims_file)
+        extractor = ClaimFileExtractor(
+            request.claims_file, context=request.context
+        )
     elif strategy in ("chunked", "single"):
         if client is None:
             raise ValueError("model extraction requires a borrowed client")
@@ -413,6 +432,7 @@ def extract(
                 log=log,
                 read_preparation=request.read_preparation,
                 pointer=request.pointer,
+                context=request.context,
             )
         else:
             from yizkr.pipeline.extract import LlmClaimExtractor
@@ -421,6 +441,7 @@ def extract(
                 client,
                 raw_dump=request.raw_dump,
                 rejects_dump=request.rejects_dump,
+                context=request.context,
             )
     else:
         raise ValueError(f"unknown extraction strategy {strategy!r}")
@@ -436,7 +457,10 @@ def extract(
             "re-run to retry them"
         )
     complete = not reasons
-    attention = list(getattr(extractor, "attention", ()))
+    attention = [
+        *getattr(extractor, "attention", ()),
+        *_context_attention(request.context),
+    ]
     if complete and not batch.claims and not attention:
         attention.append("no claims extracted: the supplied batch is empty")
     attention.extend(reason for reason in reasons if reason not in attention)
@@ -485,6 +509,7 @@ def extract(
 class CritiqueRequest:
     batch: ClaimBatch
     transcription: Transcription
+    context: InterpretationContext | None = None
 
 
 @dataclass(frozen=True)
@@ -501,7 +526,7 @@ def critique(request: CritiqueRequest, client: LlmClient) -> CritiqueResult:
     """Return advisory findings, preserving an unfinished critic's status."""
     from yizkr.pipeline.critique import run_critique
 
-    attention: list[str] = []
+    attention = _context_attention(request.context)
     incomplete: list[str] = []
     findings = run_critique(
         client,
@@ -509,6 +534,7 @@ def critique(request: CritiqueRequest, client: LlmClient) -> CritiqueResult:
         request.transcription,
         attention=attention,
         incomplete_reasons=incomplete,
+        context=request.context,
     )
     attention.extend(
         reason for reason in incomplete if reason not in attention
@@ -526,5 +552,14 @@ def critique(request: CritiqueRequest, client: LlmClient) -> CritiqueResult:
                 request.transcription.model_dump(mode="json")
             ),
             "model": _model(client),
+            **(
+                {
+                    "interpretation_context_sha256": content_hash(
+                        request.context.model_dump(mode="json")
+                    )
+                }
+                if request.context is not None
+                else {}
+            ),
         },
     )

@@ -52,6 +52,7 @@ from yizkr.claims import (
     vital_problems,
 )
 from yizkr.model.schema import load_acceptance, load_manifest
+from yizkr.pipeline.interpretation_context import InterpretationContext
 from yizkr.pipeline.llm import (
     CUT_OFF_AT_LIMIT,
     ClassifierRefused,
@@ -786,7 +787,9 @@ class LlmClaimExtractor:
         client: LlmClient,
         raw_dump: Path | None = None,
         rejects_dump: Path | None = None,
+        context: InterpretationContext | None = None,
     ) -> None:
+        self.context = context
         self.client = client
         self.raw_dump = raw_dump
         self.rejects_dump = rejects_dump
@@ -802,6 +805,8 @@ class LlmClaimExtractor:
         The prompt carries the transcription's text with each printed page
         number beside its page's marker (Transcription.prompt_text)."""
         self.incomplete_reasons = []
+        if self.context is not None:
+            self.context.validate_target(transcription)
         property_keys, item_keys = vocabulary_prompt_lines()
         prompt = EXTRACTION_PROMPT.format(
             schema=claim_schema_prompt_text(),
@@ -813,6 +818,8 @@ class LlmClaimExtractor:
             text=transcription.prompt_text(),
             document_block=document_block(transcription, artifact),
         )
+        if self.context is not None and self.context.has_context:
+            prompt += self.context.prompt_block()
         printed_pages = transcription.printed_pages()
         placed = placed_by(transcription, artifact)
         try:
@@ -879,6 +886,9 @@ class LlmClaimExtractor:
         attributed, attribution_rejects = bind_source_support(
             cite_artifact(payload.get("claims", []), artifact, printed_pages),
             transcription,
+            require_primary_quote=(
+                self.context is not None and self.context.has_context
+            ),
         )
         if reason := support_failure(attribution_rejects):
             self.incomplete_reasons.append(reason)
@@ -894,7 +904,11 @@ class LlmClaimExtractor:
                 self.rejects_dump.write_text(json.dumps(rejects, indent=2))
             else:
                 self.rejects_dump.unlink(missing_ok=True)  # no stale rejects
-        if not batch.claims:
+        if not batch.claims and not (
+            self.context is not None
+            and self.context.has_context
+            and attribution_rejects
+        ):
             reject_answer(response, "extraction: no valid claim")
             if not rejects:
                 raise ExtractionFailed("the answer holds no claims")
@@ -937,14 +951,21 @@ class ClaimFileExtractor:
     """
 
     def __init__(
-        self, claims_file: Path, model_identifier: str = "manual"
+        self,
+        claims_file: Path,
+        model_identifier: str = "manual",
+        *,
+        context: InterpretationContext | None = None,
     ) -> None:
+        self.context = context
         self.claims_file = claims_file
         self.model_identifier = model_identifier
 
     def extract(
         self, transcription: Transcription, artifact: ArtifactRef
     ) -> ClaimBatch:
+        if self.context is not None:
+            self.context.validate_target(transcription)
         try:
             payload = json.loads(self.claims_file.read_text())
         except OSError as exc:
@@ -973,10 +994,15 @@ class ClaimFileExtractor:
             raise ExtractionFailed(
                 f"claims file failed schema validation: {exc}"
             ) from exc
-        if getattr(transcription, "source_context", None) is not None:
+        if getattr(transcription, "source_context", None) is not None or (
+            self.context is not None and self.context.has_context
+        ):
             attributed, rejected = bind_source_support(
                 [claim.model_dump(mode="json") for claim in batch.claims],
                 transcription,
+                require_primary_quote=(
+                    self.context is not None and self.context.has_context
+                ),
             )
             if rejected:
                 raise ExtractionFailed(support_failure(rejected))

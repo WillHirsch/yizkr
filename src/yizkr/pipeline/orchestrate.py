@@ -419,6 +419,7 @@ class Derivations:
         return {
             path.name: content.get(path.name) or sha256_file(path)
             for path in self.made_from[output]
+            if path.name != "interpretation-context.json" or path.exists()
         }
 
     def _binding(self, reviewed: Path) -> dict[str, str | None]:
@@ -689,6 +690,7 @@ class DocumentRun:
         # open-schema harness (ADR-0013)
         self.gaps = self.dir / "gaps.csv"
         self.critique = self.dir / VIEWS["critique"]
+        self.interpretation_context = self.dir / "interpretation-context.json"
         # each view the stages before the gates make -> (the refresh role
         # that makes it, the stage that makes it)
         descriptors = stage_planning.stages_for(self.kind)
@@ -963,6 +965,13 @@ class Orchestrator:
         # image SHA-1 -> the excerpt found for it in this run
         # (_excerpts_of): one document however many containers place it
         self._excerpts: dict[str, ExcerptRun] = {}
+        # Frozen from every admitted current container before reading begins.
+        # Discovery of excerpt readings must not choose their context scope.
+        self._interpretation_parents: dict[str, tuple[DocumentRun, ...]] = {}
+        self._interpretation_contexts: dict[str, Any] = {}
+        self._interpretation_readings: dict[str, Any] = {}
+        self._interpretation_pending: set[str] = set()
+        self._interpretation_failed: set[str] = set()
         # the run's documents, their SHA-1s, and the identity map their
         # writes resolve their entities through, made once an invocation
         # (_identity_map)
@@ -1221,6 +1230,108 @@ class Orchestrator:
             else:
                 inventories.append(prepared[0])
         check_owner_aliases(inventories, original_sources=originals)
+        self._index_interpretation_parents(docs)
+
+    def _index_interpretation_parents(
+        self, docs: Sequence[DocumentRun]
+    ) -> None:
+        from yizkr.pipeline.container_sources import image_page_source
+
+        parents: dict[str, dict[str, DocumentRun]] = {}
+        seen = set()
+        for doc in docs:
+            if doc.unreadable is not None or doc.sha1 in seen:
+                continue
+            seen.add(doc.sha1)
+            try:
+                projection = self._container_sources(doc)
+            except Exception:
+                # A preparation failure supplies no verified correspondence.
+                continue
+            if projection is None:
+                continue
+            for body in projection.inventory.parts:
+                if body.kind != "page_body":
+                    continue
+                located = image_page_source(projection, body)
+                if located is not None:
+                    source, _part, _placement = located
+                    parents.setdefault(source.owner.sha1, {})[doc.sha1] = doc
+        self._interpretation_parents = {
+            owner: tuple(values[key] for key in sorted(values))
+            for owner, values in parents.items()
+        }
+        self._interpretation_contexts = {}
+        self._interpretation_readings = {}
+
+    def _interpretation_context(self, doc: DocumentRun, transcription):
+        """Build interpretation inputs from completed readings only."""
+        parents = self._interpretation_parents.get(doc.sha1, ())
+        if not parents:
+            return None
+        from yizkr.pipeline.interpretation_context import (
+            ContainerReadings,
+            ContextGap,
+            build_interpretation_context,
+        )
+
+        containers, unavailable = [], []
+        for parent in parents:
+            try:
+                sources = self._container_sources(parent)
+            except Exception:
+                sources = None
+            if sources is None:
+                unavailable.append(
+                    ContextGap(
+                        container=ArtifactRef(sha1=parent.sha1),
+                        reason="container preparation unavailable",
+                    )
+                )
+                continue
+            reading = self._interpretation_readings.get(parent.sha1)
+            images = (
+                self._interpretation_images(parent, sources)
+                if reading is not None
+                else {}
+            )
+            containers.append(ContainerReadings(sources, reading, images))
+        context = build_interpretation_context(transcription, containers)
+        return context.model_copy(
+            update={"gaps": (*context.gaps, *unavailable)}
+        )
+
+    def _interpretation_images(self, parent: DocumentRun, sources):
+        from yizkr.pipeline.transcribe import Transcription
+
+        images = {}
+        for owner, source in sources.sources.items():
+            if (
+                source.readable
+                and source.reading_path is not None
+                and self._image_failure(parent, owner) is None
+            ):
+                # Unreadable products remain explicit gaps in the builder.
+                with contextlib.suppress(OSError, ValueError):
+                    images[owner] = Transcription.model_validate_json(
+                        (parent.dir / source.reading_path).read_bytes()
+                    )
+        return images
+
+    def _prepare_interpretation_context(self, doc: DocumentRun, transcription):
+        """Publish the separate current input before any downstream reuse."""
+        context = self._interpretation_context(doc, transcription)
+        self._interpretation_contexts[doc.sha1] = context
+        path = doc.interpretation_context
+        if context is None:
+            if path.exists():
+                path.unlink()
+                doc.derivations.forget(path)
+        else:
+            data = context.model_dump(mode="json")
+            _write_view(path, json.dumps(data, indent=2, sort_keys=True))
+            doc.derivations.set_content(path.name, content_hash(data))
+        return context
 
     def _gather_embedded(self) -> None:
         """Give the never-ingest list the SHA-1s of the images its globs
@@ -1388,6 +1499,17 @@ class Orchestrator:
         role, stage = doc.views[view]
         recorded = doc.derivations._load()
         inputs = doc.derivations._inputs(view)
+        if (
+            stage in {"extraction", "critique"}
+            and doc.sha1 in self._interpretation_contexts
+        ):
+            context = self._interpretation_contexts[doc.sha1]
+            if context is None:
+                inputs.pop(doc.interpretation_context.name, None)
+            else:
+                inputs[doc.interpretation_context.name] = content_hash(
+                    context.model_dump(mode="json")
+                )
         try:
             processing = self._require_processing_dependencies(doc, stage)
         except ProcessingUnavailable as exc:
@@ -2579,6 +2701,7 @@ class Orchestrator:
                     concurrency=self.chunk_concurrency,
                     read_preparation=True,
                     pointer=pointer,
+                    context=self._interpretation_contexts.get(doc.sha1),
                 ),
                 None
                 if pointer is None
@@ -2684,6 +2807,7 @@ class Orchestrator:
     def _critique(self, doc: DocumentRun, batch: ClaimBatch) -> None:
         """The batch's critique view (ADR-0013), reused when it stands
         (`_reused_view`) and made otherwise, then recorded."""
+        self._prepare_interpretation_context(doc, self._transcription(doc))
         if (
             self._reused_view(
                 doc, doc.critique, _findings, recheck=_unreadable_critique
@@ -2737,7 +2861,9 @@ class Orchestrator:
         def critique():
             result = text_stages.critique(
                 text_stages.CritiqueRequest(
-                    batch=batch, transcription=transcription
+                    batch=batch,
+                    transcription=transcription,
+                    context=self._interpretation_contexts.get(doc.sha1),
                 ),
                 self._llm("critique", doc),
             )
@@ -3110,9 +3236,16 @@ class Orchestrator:
         downstream views and review basis. The caller schedules critique
         separately, after a complete batch is available.
         """
+        if any(
+            parent.sha1 in self._interpretation_pending
+            for parent in self._interpretation_parents.get(doc.sha1, ())
+        ):
+            raise DispatchStopped(
+                "interpretation context transcription is held"
+            )
         producer = stage_planning.batch_stage(doc.kind)
         if "transcription.json" in producer.input_artifacts:
-            self._transcription(doc)
+            self._prepare_interpretation_context(doc, self._transcription(doc))
         batch = self._reused_view(
             doc, doc.batch, ClaimBatch.model_validate_json
         )
@@ -3125,7 +3258,7 @@ class Orchestrator:
 
             anomalies.stored(self.rundir, doc, doc.views[doc.batch][1], batch)
         if changed:
-            # a new batch invalidates everything derived from the old one
+            # A new batch invalidates everything derived from the old one.
             # — stale machine outputs must never gate or write
             stale = (doc.equivalences, doc.resolved, doc.review,
                      doc.approved, doc.write_result,
@@ -3170,6 +3303,11 @@ class Orchestrator:
         document's manifest before it can order them. The document's state
         is saved on the way out, however it went; a state that must be
         saved and cannot be fails the document, and only it."""
+        if doc.sha1 in self._interpretation_pending:
+            doc.state.status = PAUSED
+            return PAUSED
+        if doc.sha1 in self._interpretation_failed:
+            return FAILED
         try:
             status = self._advance(doc, stop_after_extract=stop_after_extract)
         except DispatchStopped as exc:
@@ -3248,9 +3386,8 @@ class Orchestrator:
             f"{kept.name}; re-ingesting"
         )
 
-    def _advance(
-        self, doc: DocumentRun, *, stop_after_extract: bool = False
-    ) -> str:
+    def _prepare_document(self, doc: DocumentRun) -> None:
+        """Prepare a source directory before reading or advancing its views."""
         doc.state.error = None
         content_sha1 = doc.sha1
 
@@ -3285,6 +3422,53 @@ class Orchestrator:
         # when another source takes its old name or its stem
         doc.state.file = str(doc.source)
 
+        if not doc.state_path.exists():
+            doc.save()
+
+    def _prepare_context_containers(self) -> None:
+        """Read required containers once before ordinary ingestion workers."""
+        parents = {
+            parent.sha1: parent
+            for group in self._interpretation_parents.values()
+            for parent in group
+        }
+        self._interpretation_pending = set(parents)
+        self._interpretation_failed = set()
+        for owner in sorted(parents):
+            parent = parents[owner]
+            stop = self.rundir.control().stopped(
+                stage="transcription", kind=parent.kind
+            )
+            if stop:
+                self.rundir.emit(
+                    "held",
+                    subject=owner,
+                    kind=parent.kind,
+                    stage="transcription",
+                    reason=stop,
+                )
+                continue
+            try:
+                self._prepare_document(parent)
+                reading = self._transcription(parent)
+                parent.state.status = "transcribed"
+                error = self._save(parent)
+                if error is not None:
+                    raise OSError(error)
+            except DispatchStopped:
+                continue
+            except Exception as exc:
+                self._fail(parent, _why(exc))
+                self._interpretation_failed.add(owner)
+            else:
+                self._interpretation_readings[owner] = reading
+            self._interpretation_pending.discard(owner)
+
+    def _advance(
+        self, doc: DocumentRun, *, stop_after_extract: bool = False
+    ) -> str:
+        self._prepare_document(doc)
+        content_sha1 = doc.sha1
         # content-identity dedup (ADR-0010): claim this file's bytes; if an
         # earlier document in this run — or one already ingested to
         # completion in a PRIOR run (see run()'s pre-seed) — already claimed
@@ -3590,6 +3774,7 @@ class Orchestrator:
         try:
             for doc in unread:
                 self._fail(doc, doc.unreadable)
+            self._prepare_context_containers()
             if self.serial:
                 docs = self._serial_sequence(docs, corpus)
                 found.extend(doc for doc in docs if doc not in found)

@@ -34,7 +34,7 @@ Non-GEDCOM documents run transcription, extraction and critique in that order. G
 | Places | LLM selection among existing places, deterministic link validation and instance I/O | Completed write, registration and identity records; written batches' source-stated container chains; transcription views; live place roster and containment | `R/corpus/places/record.json` and `responses.json`; source-attributed containment statements; updated write-phase and instance-contents records |
 | Site | Deterministic rendering from live instance queries | Expected run from the reset record and revision from write/places records; instance vocabulary and WDQS results | `R/corpus/site/site/` containing the private site; `R/corpus/site/record.json` with disagreement and privacy counts |
 
-The barrier waits until every document has completed its required stages or failed. Corpus stages receive only completed documents: `needs attention` qualifies, while a failed document does not. A pause or abort that leaves unfinished stages holds the barrier. The driver first runs one canary of each kind end to end, then schedules the remaining documents stage by stage; the data dependencies below do not imply that every document runs end to end before the next starts.
+The barrier waits until every document has completed its required stages or failed. Corpus stages receive only completed documents: `needs attention` qualifies, while a failed document does not. A pause or abort that leaves unfinished stages holds the barrier. The driver prioritizes one canary of each kind, then schedules the remaining documents stage by stage. Image extraction, including a canary, waits for its matching container transcriptions so that interpretation context does not depend on discovery order. The data dependencies below do not imply that every document runs end to end before the next starts.
 
 Implementation: [document stages and paths](../src/yizkr/pipeline/orchestrate.py), [scratch scheduling](../src/yizkr/pipeline/scratch.py) and [corpus write stages](../src/yizkr/pipeline/scratchwrite.py).
 
@@ -104,6 +104,8 @@ PPTX picture backgrounds follow slide/layout/master/theme inheritance and explic
 
 A PDF page whose only visible content is one readable original image uses `image-source`: the image is read and extracted once under its owner, and the container page keeps its image marker. Blank margins and invisible OCR do not change ownership. Native operators and PDFium objects must agree; visible text, painted paths, annotations, forms and unknown operations prevent this shortcut. A verified marker-only container produces an empty batch and coverage deterministically, without an extraction model call. Mixed page readings whose source contributions cannot be separated remain explicitly unsupported.
 
+Separate image extraction retains interpretation context from verified contiguous container pages. This context is a separate process input; the image's text, line numbers and owner remain its own. Matching container readings must finish before image extraction uses their context, including when the same image also exists as a standalone corpus file. Repeated placements are discovered before scheduling, so whichever container finishes first does not choose the available context. Unavailable or excluded material creates an explicit gap.
+
 Eligibility follows current exclusions independently of preparation and reading success. Unattempted, unsupported, failed and successfully empty readings remain distinct. Incomplete structure or undetermined eligibility cannot authorize model input. Missing canonical bytes or ambiguous ownership block the affected source; a newly encoded representation retains the established owner through recorded lineage. Whole-document PDF vision sends only checked page pixels.
 
 Recovering missing inventory alone preserves unchanged products and reviews. First adoption of a legacy excerpt reading that lacks source-part attribution currently treats the added structured support as a changed review basis: extraction is regenerated and dependent review is conservatively requeued even when the owner and text remain unchanged. Previous review decisions remain recoverable in the set-aside CSV; automatic approval carry-forward for this first adoption is not implemented.
@@ -121,6 +123,26 @@ The pipeline does not write `D/derived-media.json`. One kept from an existing ru
 An independently read image can become an excerpt document when it has a transcribed or illegible document page. Images that are wholly blank or not document pages, excluded images and images already represented by corpus files do not become excerpts. Repeated placements share the bound media owner while retaining every occurrence. The container keeps its own text; the image's claims cite its bound owner and source-part support. Excerpt extraction and critique then produce their own `batch.json` and `critique.json`. Ambiguous body/notes or compiler/inner-source support makes extraction incomplete; any supported claims remain diagnostic and are not accepted for writing.
 
 Implementation: [routing and excerpt adoption](../src/yizkr/pipeline/orchestrate.py), [transcribers](../src/yizkr/pipeline/transcribe.py), [transcription record](../src/yizkr/pipeline/transcription_record.py) and [container readers](../src/yizkr/pipeline/containers.py).
+
+### Interpretation context for scanned pages
+
+`D/interpretation-context.json` records verified surrounding readings for an image used as a whole container page. Its groups retain container order, target occurrences, context owners, source-part support, reading digests and explicit gaps. Native page text and independently read page images can supply context. The builder stops at unavailable or unsupported boundaries; it does not infer missing text or invent a placement for an unplaced image.
+
+```mermaid
+flowchart TD
+    inventory[("Verified parts and placements")] --> assemble["Assemble contiguous page context<br/>deterministic"]
+    readings[("Checked container and image readings")] --> assemble
+    assemble --> context[("D/interpretation-context.json")]
+    target[("D/transcription.json<br/>target image only")] --> extract["Discover entities and extract<br/>LLM"]
+    context --> extract
+    extract --> guard["Locate quotations in target text<br/>deterministic admission"]
+    guard --> batch[("D/batch.json")]
+    batch --> critic["Critique target evidence and interpretation<br/>LLM"]
+    target --> critic
+    context --> critic
+```
+
+Context can resolve a continuing reference. When neighboring text is supplied, every proposed claim must quote the target image's own text; a quotation found only in a neighboring reading cannot justify attribution to the target. The same context reaches entity discovery, chunk extraction and critique. Context additions, removals or changes invalidate extraction and critique even when the target reading is unchanged. Unchanged proposals and review basis preserve existing approvals after recomputation. Context preserves available evidence for interpretation; model extraction and identity proposals still require review.
 
 ## Extraction: entity discovery, chunks and validated claims
 
@@ -142,7 +164,7 @@ flowchart TD
     validate --> side[("D/extraction/<br/>coverage and diagnostic side outputs")]
 ```
 
-Chunk replies carry claim objects and a completion sentinel. Code maps references to the entity manifest, assigns source/page provenance, settles names, deduplicates claims and validates schema and vocabulary. Place-container evidence is checked against the transcription; unusable entries are removed and audited. Claim excerpts are also located in the transcription, with missing quotations recorded for inspection. These citation audits are distinct from schema rejection: a missing claim quotation alone does not remove the claim.
+Chunk replies carry claim objects and a completion sentinel. Code maps references to the entity manifest, assigns source/page provenance, settles names, deduplicates claims and validates schema and vocabulary. Place-container evidence is checked against the transcription; unusable entries are removed and audited. Claim excerpts are also located in the transcription, with missing quotations recorded for inspection. Without interpretation context, a missing quotation alone remains a critique concern when ownership is unambiguous. Context-enabled extraction requires a quotation in the target reading: otherwise attribution is incomplete, since contextual text must not supply evidence for another owner.
 
 Rejected objects are recorded separately from accepted claims. Raw model responses belong to the shared LLM cache, when enabled, rather than separate chunk files under `D/extraction/`. The entity manifest and line-range segmentation each have two attempts keyed separately. Chunk answers cut short or lacking their completion sentinel are rejected and retried; a stale cached answer consumes no engine retry. If every claim in a chunk lacks the same required field, one extra attempt names that field. A complete, parseable second answer replaces the first and is validated in the merge; if the second call fails, is cut off or is refused, the first stands. Classifier refusals are not retried or routed through an alternative context path.
 
@@ -175,9 +197,9 @@ Implementation: [preparation reading and marking](../src/yizkr/pipeline/preparat
 
 ## Critique: advice about the batch and its citations
 
-The critic receives the batch's entities and claims, vocabulary and the whole numbered transcription. Claim excerpts and the evidence for place containers are located beside their source lines. It checks whether those passages support the claims, including their dates, as well as entity kinds, property choices and identity interpretations.
+The critic receives the batch's entities and claims, vocabulary and the whole numbered transcription, plus the same separate interpretation context used by extraction when present. Claim excerpts and the evidence for place containers are located beside their target source lines. It checks whether those passages support the claims, including their dates, as well as entity kinds, property choices and identity interpretations. Neighboring text may explain a continuing reference but cannot replace target-source evidence.
 
-A valid finding names an entity, optionally a claim, alias or place container, an axis, category, issue and suggestion. Code checks those references against the batch and vocabulary. An invalid finding is retained with its validation reasons. Both are stored in `D/critique.json`; neither rewrites, approves or removes anything in `D/batch.json`. The critique view depends on both the batch and the transcription, so changed citation context invalidates it too.
+A valid finding names an entity, optionally a claim, alias or place container, an axis, category, issue and suggestion. Code checks those references against the batch and vocabulary. An invalid finding is retained with its validation reasons. Both are stored in `D/critique.json`; neither rewrites, approves or removes anything in `D/batch.json`. The critique view depends on the batch, transcription and optional interpretation context, so a changed input invalidates its reuse.
 
 Scratch writing consumes the original batch regardless of the critic's concerns. A stage failure can prevent the document completing its required stages, but findings or `needs attention` alone do not. An empty critique can mean no concerns or an unfinished answer: the shared operation reports completeness explicitly, and `D/state.json` records it under `detail.stage_results.critique`, alongside stage attention for unfinished output. Findings from an incomplete answer remain advisory and create no approval. A batch with no entities and no claims needs no critique model call.
 

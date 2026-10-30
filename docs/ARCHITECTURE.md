@@ -141,6 +141,8 @@ PPTX picture backgrounds resolve through the slide, layout, master and applicabl
 
 A PDF page proven to contain only one readable original image uses the `image-source` route: the image is read once and its excerpt owns the claims. Empty container text does not produce a duplicate parent extraction. Invisible OCR may accompany the image; visible text, shapes, annotations or unknown drawing operations prevent that proof.
 
+Verified surrounding page readings remain available as a separate interpretation-context product. Matching container transcriptions precede the image's extraction, and the context records actual placements, source owners, reading revisions and unavailable boundaries. Extraction and critique receive the same context; their reuse depends on it. Claims must quote the target image's text, preserving its ownership when a subject or sentence continues across pages. See the [context data-product diagram](SCRATCH_WORKFLOW.md#interpretation-context-for-scanned-pages).
+
 Equivalent metadata reconstruction preserves readings, proposals and human review. A real change of attribution requires review of the affected results. These media bindings are compatible with existing byte-addressed artifacts; they do not implement retained identity migration, general owner-equivalence decisions or retroactive graph correction.
 
 Implementation: [inventory schema and persistence](../src/yizkr/pipeline/container_inventory.py), [shared source projection](../src/yizkr/pipeline/container_sources.py), [located extraction context](../src/yizkr/pipeline/source_context.py), [PPTX producer](../src/yizkr/pipeline/pptx_inventory.py), [PDF producer](../src/yizkr/pipeline/pdf_inventory.py) and [PDF reading/admission](../src/yizkr/pipeline/textlayer.py).

@@ -64,6 +64,7 @@ from yizkr.pipeline.extract import (
     scan_json_objects,
     vocabulary_prompt_lines,
 )
+from yizkr.pipeline.interpretation_context import InterpretationContext
 from yizkr.pipeline.llm import (
     CUT_OFF_AT_LIMIT,
     ClassifierRefused,
@@ -557,7 +558,9 @@ class ChunkedClaimExtractor:
         log: Callable[[str], None] | None = None,
         read_preparation: bool = False,
         pointer: str | None = None,
+        context: InterpretationContext | None = None,
     ) -> None:
+        self.context = context
         self.client = client
         self.read_preparation = read_preparation
         self.pointer = pointer
@@ -715,6 +718,8 @@ class ChunkedClaimExtractor:
             language=transcription.language,
             numbered_text=number_lines(transcription.prompt_text()),
         )
+        if self.context is not None and self.context.has_context:
+            prompt += self.context.prompt_block()
         if self.read_preparation:
             prompt += preparation.manifest_block(self.pointer)
         return self._first_turn(
@@ -875,6 +880,8 @@ class ChunkedClaimExtractor:
             language=transcription.language,
             numbered_text=number_lines(transcription.prompt_text()),
         )
+        if self.context is not None and self.context.has_context:
+            prompt += self.context.prompt_block()
         segmentation, handle, reasons, answered = self._first_turn(
             prompt,
             lambda response: self._parse_segmentation(response, line_count),
@@ -989,7 +996,7 @@ class ChunkedClaimExtractor:
         inline_document: bool,
     ) -> str:
         property_keys, item_keys = vocabulary_prompt_lines()
-        return CHUNK_PROMPT.format(
+        prompt = CHUNK_PROMPT.format(
             artifact_sha1=artifact.sha1,
             language=transcription.language,
             property_keys=property_keys,
@@ -1001,6 +1008,9 @@ class ChunkedClaimExtractor:
                 transcription, artifact, inline_document
             ),
         )
+        if self.context is not None and self.context.has_context:
+            prompt += self.context.prompt_block()
+        return prompt
 
     def _chunk_prompt(
         self,
@@ -1219,6 +1229,8 @@ class ChunkedClaimExtractor:
         opened again and answers differently (ConversationChanged), the
         pass is void and the extraction starts over from the new answer,
         at most twice."""
+        if self.context is not None:
+            self.context.validate_target(transcription)
         for _pass in range(2):
             try:
                 return self._extract(transcription, artifact)
@@ -1376,7 +1388,12 @@ class ChunkedClaimExtractor:
             ),
             transcription=transcription,
         )
-        self._refuse_empty(batch, chunks=total)
+        if not (
+            self.context is not None
+            and self.context.has_context
+            and self.incomplete_reasons
+        ):
+            self._refuse_empty(batch, chunks=total)
         self.attention = self._attention(batch, chunks=total)
         if self.read_preparation:
             self.attention += preparation.attention(
@@ -1566,8 +1583,10 @@ class ChunkedClaimExtractor:
         as side outputs: the coverage counts the rejects by reason
         (rejected_by_reason), and, when `text`, the transcription, is
         given, the claims whose excerpt it does not hold (excerpt_audit),
-        each kept in the side output `quotes.json`. Such a claim stays
-        in the batch: the miss is counted, never a reject.
+        each kept in the side output `quotes.json`. Without interpretation
+        context these misses remain for critique. With other sources supplied
+        as context, an excerpt outside the primary reading is an attribution
+        reject, so a neighbour's evidence cannot acquire the primary owner.
 
         `reading`, the document's statement about its preparation as the
         manifest read it (preparation.parse; None when unread), marks
@@ -1612,7 +1631,11 @@ class ChunkedClaimExtractor:
             raw_claims, dropped = preparation.drop_markers(raw_claims)
         deduped = cite_artifact(raw_claims, artifact, printed_pages)
         deduped, attribution_rejects = bind_source_support(
-            deduped, transcription
+            deduped,
+            transcription,
+            require_primary_quote=(
+                self.context is not None and self.context.has_context
+            ),
         )
         if reason := support_failure(attribution_rejects):
             self.incomplete_reasons.append(reason)

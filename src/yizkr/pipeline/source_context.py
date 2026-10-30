@@ -174,12 +174,17 @@ def _candidates(source: dict, transcription: Transcription):
 
 
 def bind_source_support(
-    claims: list, transcription: Transcription | None
+    claims: list,
+    transcription: Transcription | None,
+    *,
+    require_primary_quote: bool = False,
 ) -> tuple[list, list[dict]]:
     """Discard supplied provenance and bind only unambiguous located support.
 
     A transcription without source context retains the standalone compatibility
     path. It cannot acquire trusted support from model-provided fields.
+    Interpretation supplied from other sources requires a located primary
+    quote: contextual text cannot become evidence under the primary owner.
     """
     accepted, rejects = [], []
     for raw in claims:
@@ -192,10 +197,45 @@ def bind_source_support(
             continue
         claim = {**raw, "source": dict(raw["source"])}
         claim["source"].pop("support", None)
+        if require_primary_quote:
+            excerpt = claim["source"].get("transcription_excerpt")
+            quote = excerpt.get("text") if isinstance(excerpt, dict) else None
+            if (
+                transcription is None
+                or not isinstance(quote, str)
+                or not quote.strip()
+                or not Transcript(transcription.text).spans(quote)
+            ):
+                rejects.append(
+                    {
+                        "claim": claim,
+                        "problems": [
+                            "interpretation context cannot supply claim "
+                            "evidence: the excerpt must occur in the "
+                            "primary reading"
+                        ],
+                        "reasons": [SOURCE_SUPPORT],
+                    }
+                )
+                continue
         if (
             transcription is None
             or getattr(transcription, "source_context", None) is None
         ):
+            if require_primary_quote and claim["source"].get("artifact") != (
+                transcription.artifact.model_dump(mode="json")
+            ):
+                rejects.append(
+                    {
+                        "claim": claim,
+                        "problems": [
+                            "interpretation context cannot change the "
+                            "primary source owner"
+                        ],
+                        "reasons": [SOURCE_SUPPORT],
+                    }
+                )
+                continue
             accepted.append(claim)
             continue
         candidates, reason = _candidates(claim["source"], transcription)
@@ -213,6 +253,18 @@ def bind_source_support(
         span = min(
             candidates, key=lambda item: (item.support.part_id, item.start)
         )
+        if require_primary_quote and span.owner != transcription.artifact:
+            rejects.append(
+                {
+                    "claim": claim,
+                    "problems": [
+                        "interpretation context cannot change the "
+                        "primary source owner"
+                    ],
+                    "reasons": [SOURCE_SUPPORT],
+                }
+            )
+            continue
         claim["source"]["artifact"] = span.owner.model_dump(mode="json")
         claim["source"]["support"] = span.support.model_dump(mode="json")
         accepted.append(claim)
