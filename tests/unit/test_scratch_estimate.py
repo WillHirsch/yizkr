@@ -383,6 +383,75 @@ def tree(*roots: Path) -> dict:
 
 
 class TestCounts:
+    @pytest.mark.parametrize("operation", ["estimate", "run"])
+    @pytest.mark.parametrize("nonempty", [False, True])
+    def test_image_only_container_extraction_needs_no_model_client(
+        self, tmp_path, monkeypatch, operation, nonempty
+    ):
+        from tests.fixtures import pdfs
+        from yizkr.claims import ArtifactRef
+        from yizkr.pipeline.textlayer import read_pages
+        from yizkr.pipeline.transcribe import PdfPageTranscriber
+
+        class ModelNeeded(BaseException):
+            pass
+
+        requested = []
+
+        def model_needed(role, *args, **kwargs):
+            requested.append(role)
+            raise ModelNeeded
+
+        def no_client(*args, **kwargs):
+            pytest.fail("this check must not construct a model client")
+
+        monkeypatch.setattr(llm, "make_client", no_client)
+        corpus = tmp_path / "corpus"
+        corpus.mkdir()
+        source = corpus / "library-talk-image.pdf"
+        page = pdfs.Page().image(pdfs.jpeg(), 72, 400, 128, 96)
+        if nonempty:
+            page.text(pdfs.lines(u.SOURCES[0].text))
+        source.write_bytes(pdfs.pdf([page]))
+        prepared = tmp_path / "prepared"
+        prepared.mkdir()
+        pages = read_pages(source, prepared, excluded=lambda _: False)
+        assert pages.pages[0].method == (
+            "text-layer" if nonempty else "image-source"
+        )
+        transcription = PdfPageTranscriber(no_client)._transcription(
+            ArtifactRef.from_path(source), pages
+        )
+        assert transcription.source_context is not None
+        processor = Quiet(corpus, tmp_path / "run")
+        (doc,) = processor.documents()
+        monkeypatch.setattr(processor, "_engine_for", model_needed)
+        monkeypatch.setattr(processor, "_llm", model_needed)
+
+        def perform():
+            if operation == "run":
+                return processor._step_extract(doc, transcription)
+            made = processor._extraction(
+                doc, True, estimate._Made(view=transcription)
+            )
+            assert made.fails is made.estimated is None
+            assert made.tally.known == made.tally.hits == 0
+            assert not made.tally.asked
+            return made.view
+
+        if nonempty:
+            with pytest.raises(ModelNeeded):
+                perform()
+            assert requested == ["extract"]
+        else:
+            batch = perform()
+            assert batch.claims == batch.entities == []
+            assert batch.extraction_run.model_identifier == (
+                "deterministic:empty-container"
+            )
+            assert requested == []
+        assert processor._clients == {}
+
     def test_fresh_deterministic_stage_requires_observable_dependencies(
         self, tmp_path, monkeypatch
     ):

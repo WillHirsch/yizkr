@@ -45,9 +45,9 @@ from tests.unit.test_pdf_pages import (
     reading_location,
     renderer,  # noqa: F401
     run,
-    scanned,
     transcription_of,
     typed,
+    vision_page,
 )
 from tests.unit.test_pipeline import PROPERTIES, RUN, FakeWiki
 from tests.unit.test_registrar import FakeWiki as RegistrarWiki
@@ -767,13 +767,19 @@ class TestTheWriter:
 
 
 # the booklet as a PDF: its title page and the note on its translations
-# typed, page 5 a register scan with printed number 3, and page 6
+# typed, page 5 rendered native text with printed number 3, and page 6
 # typed, with the image of the letter's top above its own text
 def booklet_pdf() -> bytes:
     six = pdfs.Page().image(LETTER_IMAGE, 72, 520, 300, 200)
     six.text(pdfs.lines(CAPTION, TRANSLATION, COMMENT), y=500)
     return pdfs.pdf(
-        [typed(TITLE), typed(SOFTWARE), pdfs.Page(), pdfs.Page(), scanned()]
+        [
+            typed(TITLE),
+            typed(SOFTWARE),
+            pdfs.Page(),
+            pdfs.Page(),
+            vision_page(),
+        ]
         + [six]
     )
 

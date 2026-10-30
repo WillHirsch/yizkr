@@ -240,16 +240,14 @@ def stand_in(text: str, title: str) -> bytes:
     return _png(PAGE_WIDTH, height, rows, title)
 
 
-# the size of the stand-in photograph: large enough to be read on its own
-# (yizkr.pipeline.containers, MIN_IMAGE_SIDE and MIN_IMAGE_PIXELS)
+# Dimensions of the stand-in photograph, independent of reading eligibility.
 PHOTOGRAPH_SIZE = (128, 96)
 
 
 def photograph(title: str, people: int = 2) -> bytes:
     """A grayscale PNG that stands in for a photograph of `people`
     figures: a light ground with a dark block for each, and no writing.
-    It is PHOTOGRAPH_SIZE, large enough to be read on its own, and the
-    recorded engine reads it by its bytes."""
+    It is PHOTOGRAPH_SIZE; the recorded engine reads it by its bytes."""
     width, height = PHOTOGRAPH_SIZE
     slot = width // people
     rows = []

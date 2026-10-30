@@ -443,21 +443,12 @@ def prepare_sources(
             and part.file is not None
         ):
             part.eligibility = Eligibility(state="allowed")
-            # Relationship-only or unused resources have no invented visible
-            # occurrence and do not acquire owners through this projection.
-            if any(p.occurrence == "paint" for p in placed[part.id]):
-                part.source_role = "independent"
-            else:
-                part.source_role = "auxiliary"
-            if part.source_role == "independent":
-                from yizkr.pipeline.containers import image_size, is_decoration
-
-                payload = _payload(
-                    directory, part.file, part.byte_object, data
-                )
-                size = image_size(payload) if payload is not None else None
-                if size is not None and is_decoration(*size):
-                    part.source_role = "auxiliary"
+            # Original image identity does not depend on its size or whether
+            # the package paints it. Placements separately establish where
+            # it is visible; an unused resource acquires no invented page.
+            part.source_role = (
+                "independent" if _image_part(part) else "auxiliary"
+            )
         if part.owner_binding is not None or part.ownership_issue is not None:
             continue
         inputs = _inputs(part, placed[part.id])
@@ -657,7 +648,9 @@ def project_sources(
                 or [
                     f"page {p.locator.position}, image {p.order}"
                     for p in placements
+                    if p.occurrence == "paint"
                 ]
+                or [f"image source {binding.artifact.sha1[:12]}"]
             )
         )
         result.inputs.extend(inputs)
@@ -690,12 +683,56 @@ def project_sources(
         if item is not None:
             payload = _payload(directory, item.file, item.representation, data)
             source.readable = (
-                any(p.occurrence == "paint" for p in source.placements)
-                and payload is not None
+                payload is not None
                 and unread_reason(PurePosixPath(item.file).suffix, payload)
                 is None
             )
     return result
+
+
+def image_page_source(
+    sources: ContainerSources, body: SourcePart
+) -> tuple[BoundSource, SourcePart, Placement] | None:
+    """The verified original image that supplies a page's entire content.
+
+    The producer's strict content proof is routing metadata, not a size-based
+    identity decision. Confirm the current binding and actual occurrence
+    before using it to omit a second reading of the container page.
+    """
+    proofs = [
+        value
+        for value in body.layout
+        if "image_only_source_part" in value
+        and "image_only_placement" in value
+    ]
+    if len(proofs) != 1:
+        return None
+    proof = proofs[0]
+    part = next(
+        (
+            p
+            for p in sources.inventory.parts
+            if p.id == proof["image_only_source_part"]
+        ),
+        None,
+    )
+    if part is None or part.owner_binding is None:
+        return None
+    source = sources.sources.get(part.owner_binding.artifact.sha1)
+    if source is None or not source.readable or part.id not in source.part_ids:
+        return None
+    placement = next(
+        (
+            p
+            for p in source.placements
+            if p.id == proof["image_only_placement"]
+            and p.parent == body.id
+            and p.child == part.id
+            and p.occurrence == "paint"
+        ),
+        None,
+    )
+    return (source, part, placement) if placement is not None else None
 
 
 def image_source_context(
@@ -870,15 +907,13 @@ def materialize_images(
 ) -> None:
     """Choose independent inputs once, retaining every native occurrence."""
     from yizkr.pipeline.containers import PlacedImage
-    from yizkr.pipeline.presentation import DECORATION, unread_reason
+    from yizkr.pipeline.presentation import unread_reason
 
     pages = {page.number: page for page in reading.pages}
     prepared = {}
     owner_parts = {}
     noted_parts: set[str] = set()
     for source in sources.sources.values():
-        if not any(p.occurrence == "paint" for p in source.placements):
-            continue
         owner = source.owner.sha1
         item = source.current_input
         if item is None:
@@ -895,11 +930,10 @@ def materialize_images(
         suffix = PurePosixPath(item.file).suffix.lower()
         reason = unread_reason(suffix, payload)
         if reason is not None:
-            if reason != DECORATION:
-                reading.notes.append(
-                    f"image not read on its own: {owner[:12]}: {reason}"
-                )
-                noted_parts.update(source.part_ids)
+            reading.notes.append(
+                f"image not read on its own: {owner[:12]}: {reason}"
+            )
+            noted_parts.update(source.part_ids)
             continue
         path = directory / f"{owner}{suffix}"
         path.write_bytes(payload)
@@ -919,6 +953,10 @@ def materialize_images(
         ordinal = len(page.images) + 1
         image.places.append((page.number, ordinal))
         page.images.append((ordinal, owner))
+    # Read an original resource even when it has no visible occurrence.
+    # Such sources get no page marker or fabricated placement.
+    for owner, image in prepared.items():
+        reading.images.setdefault(owner, image)
     # Other media (a film, a sound) keep their unsupported outcome in the
     # inventory; they are not images left unread.
     for part in sources.inventory.parts:

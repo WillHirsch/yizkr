@@ -22,6 +22,7 @@ from tests.unit.test_pdf_pages import (
     renderer,  # noqa: F401
     run,
     transcription_of,
+    vision_page,
 )
 from yizkr.core.corpus import EXCLUDE_FILE_VAR, ExclusionList
 from yizkr.pipeline import llm, transcribe
@@ -124,9 +125,9 @@ def test_standalone_extraction_refuses_legacy_pdf_before_client(
     assert not output.exists()
 
 
-def test_run_rechecks_saved_whole_pdf_against_current_exclusions(tmp_path):
+def test_run_rechecks_saved_pdf_image_against_current_exclusions(tmp_path):
     corpus = folder(tmp_path, birth_extract_1938=pdfs.pdf([scan(pdfs.jpeg())]))
-    reader = Reader({"birth-extract-1938.pdf": EXTRACT})
+    reader = Reader({JPEG_SHA1: EXTRACT})
     first = run(tmp_path, corpus, reader)
     doc = document(first, "birth-extract-1938.pdf")
     old_reading = doc.transcription.read_bytes()
@@ -148,7 +149,7 @@ def test_run_rechecks_saved_whole_pdf_against_current_exclusions(tmp_path):
 
 
 def test_legacy_whole_pdf_is_reread_once_preserving_unchanged_batch(tmp_path):
-    corpus = folder(tmp_path, birth_extract_1938=pdfs.pdf([scan()]))
+    corpus = folder(tmp_path, birth_extract_1938=pdfs.pdf([vision_page()]))
     reader = Reader({"birth-extract-1938.pdf": EXTRACT})
     first = run(tmp_path, corpus, reader)
     doc = document(first, "birth-extract-1938.pdf")
@@ -169,7 +170,7 @@ def test_legacy_whole_pdf_is_reread_once_preserving_unchanged_batch(tmp_path):
 
 def test_estimate_reports_saved_pdf_exclusion_without_model_client(tmp_path):
     corpus = folder(tmp_path, birth_extract_1938=pdfs.pdf([scan(pdfs.jpeg())]))
-    first = run(tmp_path, corpus, Reader({"birth-extract-1938.pdf": EXTRACT}))
+    first = run(tmp_path, corpus, Reader({JPEG_SHA1: EXTRACT}))
     doc = document(first, "birth-extract-1938.pdf")
     before = doc.transcription.read_bytes()
     estimator = Estimator(
@@ -190,7 +191,7 @@ def test_saved_pdf_correction_is_checked_before_reuse(tmp_path, suffix):
     corpus.mkdir()
     path = corpus / f"birth-extract-1938.{suffix}"
     path.write_bytes(pdfs.pdf([scan(pdfs.jpeg())]))
-    reader = Reader({"birth-extract-1938.pdf": EXTRACT})
+    reader = Reader({JPEG_SHA1: EXTRACT})
     first = run(tmp_path, corpus, reader)
     doc = document(first, path.name)
     doc.correction.write_text(EXTRACT)

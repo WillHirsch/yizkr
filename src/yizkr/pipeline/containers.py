@@ -19,22 +19,15 @@ The readers:
   independently bound image sources on any page;
 - a deck's, `yizkr.pipeline.presentation.read_slides`: each slide's text
   and speaker notes from the PPTX XML (`SLIDE_XML`), with no model call,
-  and the images its shapes or direct picture background paint.
+  and its independently bound original image sources.
 
-**Which images are read on their own**: the bound sources a page paints,
-which are the independent ones unless a verified earlier reading already
-bound another. A deck's image is one when a shape or direct slide picture
-background paints it; one only a relationship refers to is auxiliary.
-Inherited master/layout backgrounds are not expanded. A PDF's image placed
-on its page is one unless it covers most of the page or is its verified
-sole image content with blank margins (pdf_inventory), when it is the page's
-representation; one placed off the page is auxiliary. The rest of the
-rule is the same for both: an image under `MIN_IMAGE_SIDE` pixels on a
-side, or under `MIN_IMAGE_PIXELS` pixels in all, is decoration, and is
-not read; nor is one the never-ingest list names by its SHA-1. A deck's
-image is read in the form the deck holds it, so one in a format the
-vision engine does not read (`VISION_SUFFIXES`), or whose size its header
-does not give (`image_size`), is not read, and the reader notes it.
+Original embedded images are independent sources regardless of size, page
+coverage or placement. Repeated uses share a reading while retaining each
+native occurrence. Unplaced resources acquire no invented page marker.
+Readers honour exclusions and require a verified readable representation;
+unsupported formats or unavailable inputs remain explicit. A verified
+image-only PDF page needs no duplicate container reading, while its original
+image still has its own source identity and reading.
 """
 
 from __future__ import annotations
@@ -53,9 +46,9 @@ if TYPE_CHECKING:
 # how a deck's slide is read: from the slide's XML, with no model call
 SLIDE_XML = "slide-xml"
 
-# below either, an image is decoration and is not read
-MIN_IMAGE_SIDE = 24
-MIN_IMAGE_PIXELS = 10_000
+# A page whose sole original image is read as its own source, with no
+# separate container-authored text or second extraction of those claims.
+IMAGE_SOURCE = "image-source"
 
 # the image formats the vision engine reads, by file suffix
 VISION_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp"})
@@ -121,14 +114,6 @@ class ContainerPages:
         return any(
             page.method not in ("vision", "none") for page in self.pages
         )
-
-
-def is_decoration(width: int, height: int) -> bool:
-    """Is an image of this size too small to hold legible text
-    (MIN_IMAGE_SIDE, MIN_IMAGE_PIXELS)?"""
-    return min(width, height) < MIN_IMAGE_SIDE or (
-        width * height < MIN_IMAGE_PIXELS
-    )
 
 
 def image_size(data: bytes) -> tuple[int, int] | None:

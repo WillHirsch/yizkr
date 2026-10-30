@@ -873,6 +873,21 @@ class Estimator(ScratchDriver):
             view = self._stands(doc, doc.batch, ClaimBatch.model_validate_json)
             if view is not None:
                 return _Made(reused=True, view=view, changed=False)
+        from yizkr.pipeline import text_stages
+
+        if (
+            before.view is not None
+            and doc.pointed() is None
+            and text_stages.empty_container_reading(before.view)
+        ):
+            batch = text_stages.extract(
+                text_stages.ExtractionRequest(
+                    transcription=before.view,
+                    artifact=ArtifactRef(sha1=doc.sha1),
+                    strategy="chunked",
+                )
+            ).require_complete()
+            return _Made(view=batch, changed=self._batch_changed(doc, batch))
         self._engine_for("extract")
         if before.view is None:
             return _Made(estimated=WHOLE)

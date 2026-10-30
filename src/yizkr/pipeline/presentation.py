@@ -31,8 +31,8 @@ Readers and registration use `container_sources` to project that inventory's
 verified owner bindings, current reading inputs and native paint occurrences.
 Canonical owner bytes are separate from a newly prepared reading input.
 Speaker notes and slide-body text have separate source-part support even when
-they cite the same container. Relationship-only media remains structural
-evidence without gaining a visible placement or a fresh independent owner.
+they cite the same container. Original images without a visible placement
+are independent sources too; their support does not invent a slide position.
 
 `record_derived_media` and its reader remain compatibility adapters for an
 explicit old record; the current pipeline publishes `container-inventory.json`.
@@ -68,7 +68,6 @@ from yizkr.pipeline.containers import (
     ContainerPage,
     ContainerPages,
     image_size,
-    is_decoration,
 )
 from yizkr.pipeline.pptx_inventory import PptxPackage, text_runs
 from yizkr.pipeline.stages import staging_path
@@ -79,9 +78,6 @@ P_NS = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
 REL_NS = "{http://schemas.openxmlformats.org/package/2006/relationships}"
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".tif", ".tiff", ".webp"}
-# why an image is not read on its own when it is too small to hold
-# legible text (unread_reason)
-DECORATION = "decoration"
 # the leading phrase of the note a container's reading makes of an image
 # it does not read on its own (container_sources.materialize_images); a
 # short identifier of its owner or source part follows its first colon,
@@ -252,8 +248,7 @@ def record_suffix(names: Iterable[str]) -> str:
 
 def unread_reason(suffix: str, data: bytes) -> str | None:
     """Why a container's image is not read on its own, or None when it is
-    (yizkr.pipeline.containers): `DECORATION` for an image too small to
-    hold legible text; otherwise a note, for an image in a format the
+    (yizkr.pipeline.containers): a note for an image in a format the
     vision engine does not read, or whose size its header does not give.
     `suffix` is that of the file the image is read from."""
     if suffix.lower() not in VISION_SUFFIXES:
@@ -264,8 +259,8 @@ def unread_reason(suffix: str, data: bytes) -> str | None:
     size = image_size(data)
     if size is None:
         return "an image whose size its header does not give"
-    if is_decoration(*size):
-        return DECORATION
+    if min(size) <= 0:
+        return "an image whose header gives nonpositive dimensions"
     return None
 
 
@@ -286,11 +281,12 @@ def read_slides(
     written into `directory` once, as ``<sha1><suffix>``. Each image is
     known by its bound owner's SHA-1 and takes the suffix of its current
     reading input's file in the deck's inventory
-    (container_sources.materialize_images); an image only a relationship
-    names is not read. An image the never-ingest list names by its SHA-1
+    (container_sources.materialize_images). Images without paint occurrences
+    are also read, without inventing a slide placement. An image the
+    never-ingest list names by its SHA-1
     or by any of its names in the archive (`excluded`, given both), or
     that `unread_reason` gives a reason for, is not read; the reader
-    notes each of the latter but decoration, once, behind the phrase
+    notes each unsupported input once, behind the phrase
     `UNREAD_IMAGE`."""
     return slide_pages(unpack_pptx(path), directory, excluded=excluded)
 
@@ -303,7 +299,7 @@ def slide_pages(
 ) -> ContainerPages:
     """`read_slides` of a deck already unpacked. Its images come from the
     projection of its source inventory (yizkr.pipeline.container_sources):
-    the bound owners a slide paints."""
+    all eligible original images, with separate actual paint occurrences."""
     from yizkr.pipeline.container_sources import (
         materialize_images,
         prepare_sources,
@@ -361,9 +357,8 @@ def read_on_their_own(
     """The SHA-1s of the images of an older deck record kept in
     `directory` (`read_derived_media`) that pass this compatibility
     filter: each the never-ingest list names neither by its SHA-1 nor by
-    any of its names, and `unread_reason` gives no reason for. It does not
-    apply the paint rule by which `read_slides` chooses images, so it may
-    include an image only a relationship names."""
+    any of its names, and `unread_reason` gives no reason for. As with
+    current inventory projection, a paint occurrence is not required."""
     inventory = read_inventory(directory)
     aliases = (
         inventory_aliases(inventory)
@@ -496,9 +491,7 @@ def record_derived_media(
             reason = unread_reason(PurePosixPath(part.file).suffix, original)
             if reason is not None and part.reading.state == "unattempted":
                 part.reading = ReadingOutcome(
-                    state="unattempted"
-                    if reason == DECORATION
-                    else "unsupported",
+                    state="unsupported",
                     reason=reason,
                 )
         keep_inventory(inventory, content.inventory_bytes, directory)

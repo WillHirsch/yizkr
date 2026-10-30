@@ -180,11 +180,8 @@ DECK = "Hutmacherei zum Blauen Hut.pptx"
 # also a document of its own in the corpus
 def tiny_png(caption: str) -> bytes:
     """A 1x1 PNG carrying `caption` in a text chunk, so that each caption
-    gives other bytes: decoration, which a deck's transcription does not
-    read on its own (yizkr.pipeline.containers). The deck's container
-    inventory keeps its bytes as a part, but a slide relationship alone
-    places it nowhere, so it is no source for a reading, an excerpt or
-    the write's registration."""
+    gives other bytes. It is an independent original image even at this
+    size; a slide relationship alone still places it nowhere."""
 
     def chunk(kind: bytes, data: bytes) -> bytes:
         body = kind + data
@@ -321,6 +318,7 @@ PEOPLE = {
     "postcard-1938.txt": ("Klara Löbig", 1917),
     "studio-photo-1890s.png": ("Eugen Löbig", 1836),
     DECK: ("Eugen Löbig", 1836),
+    f"{sha1(PORTRAIT)}.png": ("Eugen Löbig", 1836),
 }
 
 
@@ -340,6 +338,8 @@ class ScriptedEngine:
 
     def complete(self, prompt: str, image_paths=()) -> str:
         if image_paths:
+            if sha1(Path(image_paths[0]).read_bytes()) == sha1(SHOP_FRONT):
+                return record_answer("")
             return record_answer(
                 SOURCES["studio-photo-1890s"].text,
                 document_class="photograph",
@@ -806,11 +806,21 @@ def test_a_decks_media_are_inventoried_by_sha1(tmp_path, refusals):
             assert sha1((deck.dir / part.file).read_bytes()) == (
                 part.byte_object.sha1
             )
-    # only the slides' relationships name the media, which places none of
-    # them on a slide: none is a source of its own, for its reading, an
-    # excerpt or the write's registration
+    # Each original image is read independently, but the relationships
+    # establish no visible placement. The two portrait aliases share one
+    # owner; the film does not become an image source.
     assert inventory.placements == []
-    assert project_sources(inventory, deck.dir).sources == {}
+    sources = project_sources(inventory, deck.dir).sources
+    assert set(sources) == {sha1(SHOP_FRONT), sha1(PORTRAIT)}
+    assert all(
+        source.readable and not source.placements
+        for source in sources.values()
+    )
+    assert all(
+        part.reading.state == "read"
+        for part in inventory.parts
+        if part.kind == "embedded_resource" and part.media_type == "image/png"
+    )
 
 
 def test_a_deck_changed_between_two_runs_is_unpacked_again(tmp_path, refusals):
@@ -879,7 +889,20 @@ class TestTheRecordIsCurrentWhileItIsWhole:
         names is a regular file holding its bytes."""
         again = read_inventory(deck.dir)
         assert again is not None
-        assert again.model_dump() == recorded.model_dump()
+        expected = recorded.model_dump()
+        for index, part in enumerate(again.parts):
+            original = recorded.parts[index].owner_binding
+            if original is not None and part.owner_binding is not None:
+                # When inventory metadata is lost, surviving located readings
+                # prove the same owner. Only its recovery basis differs.
+                assert part.owner_binding.basis in {
+                    original.basis,
+                    "verified-legacy-reading",
+                }
+                expected["parts"][index]["owner_binding"]["basis"] = (
+                    part.owner_binding.basis
+                )
+        assert again.model_dump() == expected
         for part in again.parts:
             if part.file is not None:
                 path = deck.dir / part.file

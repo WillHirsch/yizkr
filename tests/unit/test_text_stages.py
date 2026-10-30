@@ -267,6 +267,235 @@ def test_empty_claim_free_answer_is_complete_with_a_reason(tmp_path):
     assert result.failed_chunks == []
 
 
+def empty_container_reading(method="image-source"):
+    from yizkr.claims import SourceSupport, StructuralLocator
+    from yizkr.pipeline.source_context import LocatedReading, SourceContext
+    from yizkr.pipeline.transcribe import (
+        DECK_ENGINE,
+        PDF_PAGES,
+        PageProvenance,
+        TranscribedPage,
+        Transcription,
+        reading_digest,
+    )
+
+    artifact = ArtifactRef.from_bytes(b"fictional Library Talk container")
+    image = ArtifactRef.from_bytes(b"fictional Library Talk image")
+    slide = method == "slide-xml"
+    unit, separator = ("Slide", "\n") if slide else ("Page", "\n\n")
+    text, pages = "", []
+    for number in (1, 2):
+        text += (separator if text else "") + (
+            f"[{unit} {number}]\n[{unit} {number}, image 1: sha1:{image.sha1}]"
+        )
+        pages.append(
+            TranscribedPage(
+                page=number,
+                start=len(text),
+                end=len(text),
+                images=[image.sha1],
+                status="blank",
+                provenance=PageProvenance(method=method, engine="fixture"),
+            )
+        )
+    transcription = Transcription(
+        artifact=artifact,
+        text=text,
+        engine=DECK_ENGINE if slide else f"{PDF_PAGES}:fixture",
+        pages=pages,
+    )
+    transcription.source_context = SourceContext(
+        container=artifact,
+        readings=[
+            LocatedReading(
+                start=page.start,
+                end=page.end,
+                owner=artifact,
+                support=SourceSupport(
+                    container=artifact,
+                    part_id=sha256_text(f"fictional page {page.page}"),
+                    locator=StructuralLocator(
+                        kind="slide_body" if slide else "page",
+                        position=page.page,
+                    ),
+                    reading_sha256=reading_digest(transcription),
+                ),
+            )
+            for page in pages
+        ],
+    )
+    return transcription
+
+
+@pytest.mark.parametrize("strategy", ["single", "chunked", "auto"])
+@pytest.mark.parametrize(
+    "method", ["image-source", "slide-xml", "none", "text-layer"]
+)
+def test_empty_container_is_deterministic_and_clears_obsolete_diagnostics(
+    tmp_path, strategy, method
+):
+    from yizkr.pipeline.chunking import SIDE_OUTPUTS
+
+    transcription = empty_container_reading(method)
+    raw, rejects, diagnostic = (
+        tmp_path / name
+        for name in ("raw.txt", "rejects.json", "incomplete.json")
+    )
+    output = tmp_path / "extraction"
+    output.mkdir()
+    for path in [
+        raw,
+        rejects,
+        diagnostic,
+        *(output / name for name in SIDE_OUTPUTS),
+    ]:
+        path.write_text("obsolete fictional diagnostic")
+    client = ScriptedClient(
+        AssertionError("empty container must not ask a model")
+    )
+    result = extract(
+        ExtractionRequest(
+            transcription,
+            transcription.artifact,
+            strategy=strategy,
+            state_dir=output,
+            raw_dump=raw,
+            rejects_dump=rejects,
+            diagnostic_dump=diagnostic,
+        ),
+        client,
+    )
+    batch = result.require_complete()
+    assert batch.claims == batch.entities == []
+    assert (
+        batch.extraction_run.model_identifier
+        == "deterministic:empty-container"
+    )
+    assert batch.extraction_run.pipeline_version
+    assert batch.extraction_run.started_at.tzinfo is not None
+    assert result.attention == result.failed_chunks == result.gaps == []
+    assert result.diagnostic_batch is None
+    assert result.dependencies["process"] == "deterministic:empty-container"
+    assert result.dependencies["source_sha1"] == transcription.artifact.sha1
+    assert "model" not in result.dependencies
+    assert client.prompts == []
+    assert not client.closed
+    assert not any(path.exists() for path in (raw, rejects, diagnostic))
+    assert list(output.iterdir()) == [output / "coverage.json"]
+    coverage = json.loads((output / "coverage.json").read_text())
+    assert coverage["strategy"] == "empty-container"
+    assert (
+        coverage["entities_total"]
+        == coverage["chunks"]
+        == coverage["claims"]
+        == 0
+    )
+    assert result.artifacts == (output / "coverage.json",)
+
+
+def test_real_single_image_pdf_has_no_container_extraction_call(tmp_path):
+    from tests.fixtures import pdfs
+    from yizkr.pipeline.textlayer import read_pages
+    from yizkr.pipeline.transcribe import PdfPageTranscriber
+
+    source = tmp_path / "library-talk-image.pdf"
+    source.write_bytes(
+        pdfs.pdf([pdfs.Page().image(pdfs.jpeg(), 72, 400, 128, 96)])
+    )
+    output = tmp_path / "prepared"
+    output.mkdir()
+    pages = read_pages(source, output)
+    assert pages.pages[0].method == "image-source"
+    client = ScriptedClient(
+        AssertionError("no container model call is needed")
+    )
+    reader = PdfPageTranscriber(lambda: client)
+    transcription = reader._transcription(ArtifactRef.from_path(source), pages)
+    result = extract(
+        ExtractionRequest(transcription, transcription.artifact), client
+    )
+    assert result.require_complete().claims == []
+    assert result.attention == client.prompts == []
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "body",
+        "unsupported",
+        "vision",
+        "outside-text",
+        "stale",
+        "missing",
+        "other-owner",
+    ],
+)
+def test_nonempty_or_unverified_container_still_uses_normal_extraction(change):
+    from yizkr.pipeline.transcribe import reading_digest
+
+    class ModelReached(BaseException):
+        pass
+
+    transcription = empty_container_reading()
+    if change in {"body", "unsupported"}:
+        transcription.text += "\nLibrary Talk 2018"
+        page = transcription.pages[-1]
+        page.end = len(transcription.text)
+        page.status = "transcribed"
+        span = transcription.source_context.readings[-1]
+        span.end = page.end
+        if change == "unsupported":
+            span.state, span.owner, span.reason = (
+                "unsupported",
+                None,
+                "composite",
+            )
+        for located in transcription.source_context.readings:
+            located.support.reading_sha256 = reading_digest(transcription)
+    elif change == "vision":
+        transcription.pages[0].provenance.method = "vision"
+    elif change == "outside-text":
+        transcription.text += "\nLibrary Talk 2018"
+        for located in transcription.source_context.readings:
+            located.support.reading_sha256 = reading_digest(transcription)
+    elif change == "stale":
+        transcription.source_context.readings[0].support.reading_sha256 = (
+            "0" * 64
+        )
+    elif change == "missing":
+        transcription.source_context.readings.clear()
+    else:
+        transcription.source_context.container = ArtifactRef.from_bytes(
+            b"other source"
+        )
+    client = ScriptedClient(ModelReached())
+    with pytest.raises(ModelReached):
+        extract(
+            ExtractionRequest(
+                transcription, transcription.artifact, strategy="single"
+            ),
+            client,
+        )
+    assert len(client.prompts) == 1
+
+
+def test_empty_container_does_not_replace_explicit_claim_file(tmp_path):
+    transcription = empty_container_reading()
+    claims = tmp_path / "claims.json"
+    claims.write_text('{"claims":[]}')
+    result = extract(
+        ExtractionRequest(
+            transcription,
+            transcription.artifact,
+            strategy="file",
+            claims_file=claims,
+        )
+    )
+    assert "process" not in result.dependencies
+    assert result.dependencies["claims_file_sha256"] == sha256_file(claims)
+    assert result.attention
+
+
 def test_prepared_claims_need_no_client_and_record_the_supplied_file(tmp_path):
     transcription = source_transcription()
     path = tmp_path / "claims.json"

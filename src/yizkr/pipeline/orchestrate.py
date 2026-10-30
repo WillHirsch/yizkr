@@ -2211,6 +2211,25 @@ class Orchestrator:
         projection = self._container_sources(doc)
         if projection is None:
             return None if not images else "reading has no container inventory"
+        if doc.kind == "presentation" and any(
+            body.text is None
+            or body.reading.state in {"failed", "unsupported"}
+            for body in projection.bodies
+        ):
+            return "current slide content or background is unresolved"
+        from yizkr.pipeline.container_sources import image_page_source
+        from yizkr.pipeline.containers import IMAGE_SOURCE
+
+        image_pages = {
+            body.locator.position
+            for body in projection.bodies
+            if image_page_source(projection, body) is not None
+        }
+        for page in transcription.pages or ():
+            if (page.page in image_pages) != (
+                page.provenance.method == IMAGE_SOURCE
+            ):
+                return "the reading's image-source page routes have changed"
         for sha1 in images:
             source = projection.sources.get(sha1)
             if source is None or self._excluded_image(sha1, source.names):
@@ -2223,17 +2242,28 @@ class Orchestrator:
             for sha1, source in projection.sources.items()
             if source.readable
         }
-        if set(images) != expected:
+        placed = {
+            sha1
+            for sha1 in expected
+            if any(
+                p.occurrence == "paint"
+                for p in projection.sources[sha1].placements
+            )
+        }
+        if set(images) != placed:
             return (
                 "the reading's images differ from the independent sources "
                 "in the current inventory"
             )
-        for sha1 in images:
+        for sha1 in expected:
             if not derived_transcription(doc.dir, sha1).exists():
                 return (
                     f"image {sha1[:12]} has no transcription of its own, so "
                     "it is read again"
                 )
+            failure = self._image_failure(doc, sha1)
+            if failure is not None:
+                return failure
         return None
 
     def _image_failure(
@@ -2538,6 +2568,7 @@ class Orchestrator:
         results: list[text_stages.ExtractionResult] = []
 
         def extract() -> ClaimBatch:
+            pointer = doc.pointed()
             result = text_stages.extract(
                 text_stages.ExtractionRequest(
                     transcription=transcription,
@@ -2547,9 +2578,12 @@ class Orchestrator:
                     diagnostic_dump=doc.extraction / "incomplete.json",
                     concurrency=self.chunk_concurrency,
                     read_preparation=True,
-                    pointer=doc.pointed(),
+                    pointer=pointer,
                 ),
-                self._llm("extract", doc),
+                None
+                if pointer is None
+                and text_stages.empty_container_reading(transcription)
+                else self._llm("extract", doc),
                 log=self.log,
             )
             results.append(result)

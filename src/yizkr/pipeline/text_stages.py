@@ -213,6 +213,116 @@ def _model(client: LlmClient) -> dict[str, Any]:
     }
 
 
+def empty_container_reading(transcription: Transcription) -> bool:
+    """Prove that a current container reading holds only generated markers.
+
+    Images have their own reading/extraction. Empty, attributed container
+    spans do not warrant asking a model to invent a separate interpretation.
+    Unknown, unsupported or nonempty material never takes this shortcut.
+    """
+    from yizkr.pipeline.containers import IMAGE_SOURCE, SLIDE_XML
+    from yizkr.pipeline.transcribe import DECK_ENGINE, is_paged, reading_digest
+
+    context = transcription.source_context
+    pages = transcription.pages
+    if (
+        not is_paged(transcription)
+        or not pages
+        or context is None
+        or context.container != transcription.artifact
+        or context.limitations
+        or len(context.readings) != len(pages)
+    ):
+        return False
+    slide = transcription.engine == DECK_ENGINE
+    unit, separator = ("Slide", "\n") if slide else ("Page", "\n\n")
+    digest = reading_digest(transcription)
+    expected = ""
+    for page, span in zip(pages, context.readings, strict=True):
+        marks = [f"[{unit} {page.page}]"] + [
+            f"[{unit} {page.page}, image {number}: sha1:{sha1}]"
+            for number, sha1 in enumerate(page.images, start=1)
+        ]
+        expected += (separator if expected else "") + "\n".join(marks)
+        if (
+            page.provenance.method
+            not in (
+                {SLIDE_XML} if slide else {"text-layer", "none", IMAGE_SOURCE}
+            )
+            or page.provenance.annotations
+            or page.status != "blank"
+            or page.start != page.end
+            or page.end != len(expected)
+            or span.start != page.start
+            or span.end != page.end
+            or span.state != "attributed"
+            or span.owner != transcription.artifact
+            or span.reason is not None
+            or span.support.container != transcription.artifact
+            or span.support.locator.kind != ("slide_body" if slide else "page")
+            or span.support.locator.position != page.page
+            or span.support.reading_sha256 != digest
+        ):
+            return False
+    return transcription.text == expected
+
+
+def _extract_empty_container(
+    request: ExtractionRequest, dependencies: dict[str, Any]
+) -> ExtractionResult:
+    """Publish deterministic diagnostics without manufacturing model output."""
+    from yizkr.pipeline.extract import run_metadata
+
+    dependencies["process"] = "deterministic:empty-container"
+    batch = ClaimBatch(
+        extraction_run=run_metadata("deterministic:empty-container"),
+        claims=[],
+        entities=[],
+    )
+    artifacts = []
+    if request.state_dir is not None:
+        coverage = {
+            "strategy": "empty-container",
+            "reason": "no container-authored text",
+            "entities_total": 0,
+            "entities_not_extracted": [],
+            "entities_without_claims": [],
+            "distinct_subject_ids": [],
+            "chunks": 0,
+            "claims": 0,
+            "failed_chunks": [],
+            "rejected_claims": 0,
+            "rejected_by_reason": {},
+            "unread_objects": 0,
+            "fallback": {},
+        }
+        for name in SIDE_OUTPUTS:
+            path = request.state_dir / name
+            if name == "coverage.json":
+                atomic_write_text(path, json.dumps(coverage, indent=2))
+                artifacts.append(path)
+            else:
+                path.unlink(missing_ok=True)
+    for path in (
+        request.raw_dump,
+        request.rejects_dump,
+        request.diagnostic_dump,
+    ):
+        if path is not None:
+            path.unlink(missing_ok=True)
+    return ExtractionResult(
+        status="complete",
+        batch=batch,
+        diagnostic_batch=None,
+        attention=[],
+        failed_chunks=[],
+        failure_reasons={},
+        gaps=[],
+        artifacts=tuple(artifacts),
+        dependencies=dependencies,
+    )
+
+
 def extract(
     request: ExtractionRequest,
     client: LlmClient | None = None,
@@ -228,11 +338,18 @@ def extract(
     if request.transcription.artifact != request.artifact:
         raise ValueError("the transcription names a different source artifact")
     strategy = request.resolved_strategy
+    empty_container = (
+        strategy in {"single", "chunked"}
+        and request.pointer is None
+        and empty_container_reading(request.transcription)
+    )
     outputs = [request.diagnostic_dump]
     workspaces = []
-    if strategy == "single":
+    if strategy == "single" or empty_container:
         outputs.extend((request.raw_dump, request.rejects_dump))
-    elif strategy == "chunked" and request.state_dir is not None:
+    if (
+        strategy == "chunked" or empty_container
+    ) and request.state_dir is not None:
         outputs.extend(request.state_dir / name for name in SIDE_OUTPUTS)
         workspaces.append(request.state_dir)
     validate_paths(
@@ -245,6 +362,13 @@ def extract(
         ),
         "configuration": {"strategy": strategy},
     }
+    if empty_container:
+        if log is not None:
+            log(
+                "  no container-authored text: "
+                "empty batch prepared without a model call"
+            )
+        return _extract_empty_container(request, dependencies)
     configuration = dependencies["configuration"]
     if strategy == "file":
         from yizkr.pipeline.extract import ClaimFileExtractor

@@ -153,8 +153,10 @@ def test_new_exclusion_blocks_inventory_excerpt_despite_saved_reading(
     assert driver._excerpts_of(container, ()) == []
 
 
-def test_legacy_unplaced_owner_does_not_requeue_container_reading(tmp_path):
-    """Retaining an old owner does not invent a paint or another read."""
+def test_legacy_unplaced_owner_reuses_reading_without_inventing_a_placement(
+    tmp_path,
+):
+    """An unplaced original keeps its reading and owner on subsequent runs."""
     from yizkr.pipeline.presentation import record_derived_media
 
     corpus = tmp_path / "corpus"
@@ -165,9 +167,10 @@ def test_legacy_unplaced_owner_does_not_requeue_container_reading(tmp_path):
         {"letter.png": png(300, 120, 1, LETTER_IMAGE.data)},
         painted={1: []},
     )
-    first = run(tmp_path, corpus, Reader({}))
+    first = run(tmp_path, corpus, Reader({LETTER_SHA1: EXCERPT}))
     container = document(first, source.name)
     original = container.transcription.read_bytes()
+    excerpt = excerpt_of(first, LETTER_SHA1)
     record_derived_media(
         unpack_pptx(source),
         source_sha1=container.sha1,
@@ -179,8 +182,9 @@ def test_legacy_unplaced_owner_does_not_requeue_container_reading(tmp_path):
         current = document(again, source.name)
         sources = again._container_sources(current)
         assert LETTER_SHA1 in sources.sources
-        assert not sources.sources[LETTER_SHA1].readable
-        assert again._excerpts == {}
+        assert sources.sources[LETTER_SHA1].readable
+        assert sources.sources[LETTER_SHA1].placements == []
+        assert excerpt_of(again, LETTER_SHA1).dir == excerpt.dir
         assert current.transcription.read_bytes() == original
 
 
@@ -761,9 +765,7 @@ def test_ambiguous_legacy_owner_mapping_stays_unresolved(tmp_path):
 
 
 @pytest.mark.parametrize("kind", ["pdf", "pptx"])
-def test_both_formats_keep_repeats_and_refuse_excluded_or_unplaced_sources(
-    tmp_path, kind
-):
+def test_both_formats_keep_repeats_and_refuse_excluded_sources(tmp_path, kind):
     other = pdfs.gray(300, 120, shade=9)
     other_png = png(300, 120, 1, other.data)
     excluded_sha1 = ArtifactRef.from_bytes(other_png).sha1
@@ -803,7 +805,34 @@ def test_both_formats_keep_repeats_and_refuse_excluded_or_unplaced_sources(
     )
     projected = project_sources(prepared, tmp_path, data=data)
     assert [placement.id for placement in prepared.placements] == before
-    assert set(projected.sources) == {LETTER_SHA1}
+    unused = ArtifactRef.from_bytes(pdfs.JPEG).sha1
+    if kind == "pptx":
+        assert set(projected.sources) == {LETTER_SHA1, unused}
+        assert projected.sources[unused].readable
+        assert projected.sources[unused].placements == []
+    else:
+        # An unpainted PDF resource retains its original stream identity;
+        # no PDFium occurrence supplied a verified reading representation.
+        assert set(projected.sources) == {LETTER_SHA1}
+        (unprepared,) = [
+            part
+            for part in prepared.parts
+            if part.byte_object == ArtifactRef(sha1=unused)
+        ]
+        assert unprepared.source_role == "independent"
+        assert unprepared.owner_binding is None
+        assert not any(p.child == unprepared.id for p in prepared.placements)
+        assert unprepared.eligibility.state == "undetermined"
+        assert (
+            unprepared.eligibility.reason
+            == "image representation has not been prepared"
+        )
+        assert unprepared.reading.state == "unattempted"
+        assert unprepared.representations == []
+        assert any(
+            "no reading representation was prepared" in note
+            for note in unprepared.limitations
+        )
     source = projected.sources[LETTER_SHA1]
     assert len(source.placements) == 2
     assert len({placement.id for placement in source.placements}) == 2

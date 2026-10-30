@@ -261,7 +261,9 @@ Sha1 = Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")]
 # (yizkr.pipeline.containers): a PDF's page from its text layer, a deck's
 # slide from its XML, or by vision; "none" reads a page with nothing to
 # read
-PageMethod = Literal["text-layer", "slide-xml", "vision", "none"]
+PageMethod = Literal[
+    "text-layer", "slide-xml", "vision", "none", "image-source"
+]
 
 
 class PageProvenance(BaseModel):
@@ -781,7 +783,11 @@ def pdf_reading_failure(
     pages = transcription.pages or ()
     paged = transcription.engine.startswith(f"{PDF_PAGES}:")
     selected = (
-        {page.page for page in pages if page.provenance.method == "vision"}
+        {
+            page.page
+            for page in pages
+            if page.provenance.method in {"vision", "image-source"}
+        }
         if paged and pages
         else None
     )
@@ -791,7 +797,8 @@ def pdf_reading_failure(
     if paged and (
         [page.page for page in pages] != list(range(1, count + 1))
         or any(
-            page.provenance.method not in {"vision", "text-layer", "none"}
+            page.provenance.method
+            not in {"vision", "text-layer", "none", "image-source"}
             for page in pages
         )
     ):
@@ -838,7 +845,7 @@ class ImageReading:
         order the container places it: "page 6, image 1" (ADR-0008)."""
         return [
             f"{self.unit} {page}, image {place}" for page, place in self.places
-        ]
+        ] or [f"image source {self.sha1[:12]}"]
 
     @property
     def pages(self) -> list[int]:

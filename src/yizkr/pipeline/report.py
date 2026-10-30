@@ -300,7 +300,9 @@ ROUTES = frozenset(
 DECK = "pptx-adapter"
 # how a page of a container read page by page is read
 # (yizkr.pipeline.containers)
-PAGE_METHODS = frozenset({"text-layer", "slide-xml", "vision", "none"})
+PAGE_METHODS = frozenset(
+    {"text-layer", "slide-xml", "vision", "none", "image-source"}
+)
 RESOLUTIONS = frozenset({"record", "detected", "fallback", "override"})
 HIT_REASONS = frozenset({KEY_MATCH, "adopted"})
 MISS_REASONS = frozenset({"absent", "rejected", "refresh"})

@@ -107,8 +107,9 @@ class Corpus:
         (self.folder / name).write_bytes(b"\x89PNG synthetic " + key.encode())
         self.texts[name] = SOURCES[key].text
 
-    def deck(self, name: str, firm: str) -> None:
-        path = build_deck(self.folder / name, firm=firm)
+    def deck(self, name: str, firm: str, *, media: bool = False) -> None:
+        """Native slide text by default; media-reading cases opt in."""
+        path = build_deck(self.folder / name, firm=firm, media=media)
         self.texts[name] = slide_transcript(unpack_pptx(path))
 
     def gedcom(self, name: str, note: str = "") -> None:
@@ -525,7 +526,6 @@ class TestOrder:
             s["ged"],
             s["deck"],
         ]
-        # the deck's film is no image left unread: nothing needs attention
         assert statuses(driver.state_dir) == {DONE}
 
     def test_nothing_before_the_barrier_asks_the_wiki_and_faces_never_run(

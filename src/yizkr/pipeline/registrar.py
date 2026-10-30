@@ -171,6 +171,7 @@ class _RegistrationMedium:
     slides: list[int]
     file: str
     locators: dict[int, tuple[str, ...]] = field(default_factory=dict)
+    unplaced_locators: tuple[str, ...] = ()
 
 
 @dataclass
@@ -574,16 +575,17 @@ def _part_of_claim(
     page_number: str,
     stated_in: str,
     whole: str,
-    page: int,
+    page: int | None,
     *,
     locator_property: str | None = None,
     locators: Iterable[str] = (),
 ):
-    """``part of -> whole`` on page `page`, stated in the whole."""
+    """``part of -> whole``, located on a page only when known."""
     from wikibaseintegrator.datatypes import String
 
     claim = _item_claim(part_of, whole, stated_in, whole)
-    claim.qualifiers.add(String(prop_nr=page_number, value=str(page)))
+    if page is not None:
+        claim.qualifiers.add(String(prop_nr=page_number, value=str(page)))
     for locator in locators:
         if locator_property is None or len(locator) > TEXT_LIMIT:
             raise ValueError(
@@ -1313,6 +1315,7 @@ class Registrar:
             if key != bound.owner.sha1:
                 raise ValueError("bound source key differs from its owner")
             located: dict[int, set[str]] = {}
+            placed_parts: set[str] = set()
             for placement in bound.placements:
                 if placement.occurrence != "paint":
                     continue
@@ -1333,9 +1336,22 @@ class Registrar:
                 located.setdefault(page, set()).update(
                     source_support_locators(support)
                 )
+                placed_parts.add(part.id)
+            unplaced = {
+                locator
+                for part_id in bound.part_ids
+                if part_id not in placed_parts
+                for locator in source_support_locators(
+                    SourceSupport(
+                        container=inventory.source,
+                        part_id=part_id,
+                        locator=parts[part_id].locator,
+                    )
+                )
+            }
             if any(
                 len(locator) > TEXT_LIMIT
-                for values in located.values()
+                for values in [*located.values(), unplaced]
                 for locator in values
             ):
                 raise ValueError("source-part locator cannot be truncated")
@@ -1347,6 +1363,7 @@ class Registrar:
                     page: tuple(sorted(values))
                     for page, values in located.items()
                 },
+                unplaced_locators=tuple(sorted(unplaced)),
             )
         record = _RegistrationMedia(
             source_sha1=inventory.source.sha1,
@@ -1398,9 +1415,11 @@ class Registrar:
 
         Each container asserts its media additively: one ``part of ->
         container`` per slide or page the medium is on, qualified with its
-        number, plus `instance of`, `media file` and `media SHA-1`, each
-        referenced ``stated in -> the container``. A statement another
-        container (or the artifact itself) made already gains this
+        number, and unqualified composition for original parts with no
+        located paint. The latter records original-part provenance without
+        inventing a page or placement. `instance of`, `media file` and
+        `media SHA-1` are also referenced ``stated in -> the container``.
+        A statement another container (or the artifact itself) made gains this
         container's reference instead of a duplicate. A medium the
         never-ingest list names is left out: neither registered nor
         uploaded. A deck's medium is asked of by its SHA-1 and by each of
@@ -1422,7 +1441,9 @@ class Registrar:
             )
         properties, items = self.client.vocabulary()
         located = any(
-            getattr(medium, "locators", {}) for medium in record.media.values()
+            getattr(medium, "locators", {})
+            or getattr(medium, "unplaced_locators", ())
+            for medium in record.media.values()
         )
         if located and "source_part_locator" not in properties:
             raise ValueError(
@@ -1502,6 +1523,12 @@ class Registrar:
                             else "media embedded in the presentation (slide "
                         ),
                         at=", ",
+                    )
+                    if medium.slides
+                    else (
+                        "image embedded in the PDF"
+                        if record.container == "pdf"
+                        else "media embedded in the presentation"
                     ),
                 )
             for name in labels:
@@ -1535,6 +1562,18 @@ class Registrar:
                     for slide in medium.slides
                 ),
             ]
+            if unplaced := getattr(medium, "unplaced_locators", ()):
+                statements.append(
+                    _part_of_claim(
+                        properties["part_of"],
+                        properties["page_number"],
+                        stated_in,
+                        container,
+                        None,
+                        locator_property=properties.get("source_part_locator"),
+                        locators=unplaced,
+                    )
+                )
             for claim in statements:
                 outcome = _ensure_referenced(item, claim, stated_in, container)
                 changed = changed or outcome != "present"

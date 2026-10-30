@@ -52,6 +52,10 @@ opacity of 0.
 
 **How each page is read** (its method, which the transcription records):
 
+- ``image-source``: the inventory proves that the page shows only one
+  original image and its source has a usable reading input. The image is
+  read independently, once; the parent keeps a page marker without a
+  second transcription or extraction of that image;
 - ``none``: the page draws nothing and shows no annotation (a link shows
   nothing), so there is nothing to read and no call is made;
 - ``vision``, for a page that shows text in an annotation: a free-text
@@ -68,17 +72,16 @@ opacity of 0.
 **Independent image sources** are selected from the common inventory before
 page route selection (ADR-0008): an original that a
 compilation embeds beside its translation is its writer's assertion, not
-the compiler's. An image under `MIN_IMAGE_SIDE` pixels on a side, or
-under `MIN_IMAGE_PIXELS` pixels in all (yizkr.pipeline.containers, the
-rule a deck's images are read by too), is taken for decoration: it could
-hold no more than a word of legible text, and it is not read. Each image
-has a verified canonical media binding (ADR-0010), so repeated placements
+the compiler's. Every original embedded image is source material,
+irrespective of its dimensions, position or page coverage. Each prepared
+image has a verified canonical media binding (ADR-0010), so repeated placements
 of that source are read once. Equal newly decoded pixels alone do not
-establish a shared witness. Full-page scans remain page representations
-without automatically acquiring independent owners. An image the
+establish a shared witness. A page showing only one image represents that
+image's source; a generated page rendering never creates another owner.
+An image the
 never-ingest list names by its SHA-1 is neither read nor kept. Before
 any model input is produced, every vision page is checked for excluded
-images, including nested and decorative images. A prohibited image or
+images, including nested and small images. A prohibited image or
 an uninspectable representation refuses vision for the document. Opaque
 annotation appearances, widget drawings, pattern resources, masked images
 and Type3 fonts are refused because a partial object walk cannot
@@ -141,9 +144,9 @@ import pypdfium2.raw as pdfium_c
 from pypdf.generic import DictionaryObject
 
 from yizkr.pipeline.containers import (
+    IMAGE_SOURCE,
     ContainerPage,
     ContainerPages,
-    is_decoration,
 )
 
 if TYPE_CHECKING:
@@ -660,6 +663,7 @@ def _read(
             {layout.number for layout in layouts if layout.method == VISION}
         )
     from yizkr.pipeline.container_sources import (
+        image_page_source,
         materialize_images,
         project_sources,
     )
@@ -671,6 +675,20 @@ def _read(
         excluded=lambda sha1, _names: bool(excluded and excluded(sha1)),
     )
     materialize_images(read.sources, plan.data, directory, read)
+    for page in read.pages:
+        if page.method != VISION:
+            continue
+        image_source = image_page_source(
+            read.sources, plan.page_parts[page.number]
+        )
+        if (
+            image_source is not None
+            and image_source[0].owner.sha1 in read.images
+        ):
+            # The image excerpt is the sole reading/extraction. A page marker
+            # retains its place without manufacturing another witness from
+            # a rendered copy of the same source.
+            page.method = IMAGE_SOURCE
     if not read.by_own_text and not read.images:
         return read
     for layout, page in zip(layouts, read.pages, strict=True):
@@ -887,12 +905,6 @@ def _draws(obj: Any, on_page: bool, drawing: set[int]) -> bool:
     if kind == pdfium_c.FPDF_PAGEOBJ_TEXT:
         return _address(obj.raw) in drawing
     return kind in (pdfium_c.FPDF_PAGEOBJ_PATH, pdfium_c.FPDF_PAGEOBJ_SHADING)
-
-
-def _decoration(obj: Any) -> bool:
-    """Is an image too small to hold legible text (MIN_IMAGE_SIDE,
-    MIN_IMAGE_PIXELS)?"""
-    return is_decoration(*obj.get_px_size())
 
 
 def _upright(obj: Any) -> bool:

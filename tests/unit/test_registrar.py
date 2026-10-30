@@ -2425,6 +2425,189 @@ class TestFragments:
 # -- derived media, from their record (ADR-0008; #50, #128) -------------------
 
 
+def unplaced_source(
+    tmp_path, container_kind, *, placed_copy=False, prepared=False
+):
+    """A verified original part without a visible occurrence."""
+    from yizkr.claims import ArtifactRef, StructuralLocator
+    from yizkr.pipeline.container_inventory import (
+        ContainerInventory,
+        Eligibility,
+        MediaOwnerBinding,
+        Placement,
+        SourcePart,
+        keep_inventory,
+        structural_id,
+    )
+    from yizkr.pipeline.container_sources import project_sources
+
+    source = scan(
+        tmp_path,
+        b"fictional Library Talk container",
+        "library-talk.pdf" if container_kind == "pdf" else "library-talk.pptx",
+    )
+    container = ArtifactRef.from_path(source)
+    owner = ArtifactRef.from_bytes(IMAGE)
+    locator = StructuralLocator(
+        kind="image" if container_kind == "pdf" else "embedded_resource",
+        path="/objects/9" if container_kind == "pdf" else None,
+        package_part="ppt/media/shop.png" if container_kind != "pdf" else None,
+    )
+    part = SourcePart(
+        id=structural_id(container, locator),
+        kind="embedded_resource",
+        locator=locator,
+        byte_object=ArtifactRef.from_bytes(b"fictional encoded source")
+        if prepared
+        else owner,
+        source_role="independent",
+        eligibility=Eligibility(state="allowed"),
+        owner_binding=MediaOwnerBinding(
+            artifact=owner,
+            file=f"container-parts/{owner.sha1}.png",
+            media_type="image/png",
+            basis="prepared-part" if prepared else "original-media",
+        ),
+    )
+    parts, placements = [part], []
+    if placed_copy:
+        body_locator = StructuralLocator(kind="page_body", position=2)
+        body = SourcePart(
+            id=structural_id(container, body_locator),
+            kind="page_body",
+            locator=body_locator,
+        )
+        copy_locator = StructuralLocator(kind="image", path="/objects/10")
+        painted = part.model_copy(
+            update={
+                "id": structural_id(container, copy_locator),
+                "locator": copy_locator,
+            },
+            deep=True,
+        )
+        paint_locator = StructuralLocator(
+            kind="paint", position=2, path="/pages/2/content/op[1]"
+        )
+        parts.extend([body, painted])
+        placements.append(
+            Placement(
+                id=structural_id(container, paint_locator),
+                parent=body.id,
+                child=painted.id,
+                locator=paint_locator,
+                order=1,
+                occurrence="paint",
+            )
+        )
+    inventory = ContainerInventory(
+        source=container,
+        container=container_kind,
+        parts=parts,
+        placements=placements,
+    )
+    directory = tmp_path / "unplaced-state"
+    keep_inventory(inventory, {owner.sha1: IMAGE}, directory)
+    return source, project_sources(inventory, directory), directory
+
+
+class TestRegisterUnplacedSources:
+    @pytest.mark.parametrize(
+        "container_kind, prepared",
+        [("pdf", False), ("presentation", False), ("pdf", True)],
+    )
+    def test_original_part_has_composition_without_invented_page(
+        self, tmp_path, container_kind, prepared
+    ):
+        source, sources, directory = unplaced_source(
+            tmp_path, container_kind, prepared=prepared
+        )
+        wiki = FakeWiki()
+        registration = Registrar(wiki)
+        container = registration.register_artifact(
+            source, "artifact", "Library Talk 2018"
+        ).artifact_qid
+        owners = registration.register_container_sources(
+            sources, directory, title="Library Talk 2018"
+        )
+        image = wiki.entities[owners[sha1(IMAGE)]]
+        (composition,) = image["claims"][P["part_of"]]
+        assert value(composition) == container
+        assert not composition.get("qualifiers")
+        assert cited(composition) == [container]
+        assert json.loads(
+            composition["references"][0]["snaks"][P["source_part_locator"]][0][
+                "datavalue"
+            ]["value"]
+        ) == {
+            "container": sources.inventory.source.sha1,
+            "part": sources.inventory.parts[0].id,
+            "kind": sources.inventory.parts[0].locator.kind,
+        }
+        assert "(" not in image["descriptions"]["en"]["value"]
+        before, writes = copy.deepcopy(wiki.entities), wiki.writes
+        assert (
+            Registrar(wiki).register_container_sources(
+                sources, directory, title="Library Talk 2018"
+            )
+            == owners
+        )
+        assert wiki.entities == before
+        assert wiki.writes == writes
+
+    def test_unplaced_original_and_painted_copy_keep_both_locations(
+        self, tmp_path
+    ):
+        source, sources, directory = unplaced_source(
+            tmp_path, "pdf", placed_copy=True
+        )
+        wiki = FakeWiki()
+        registration = Registrar(wiki)
+        registration.register_artifact(source, "artifact", "Library Talk 2018")
+        owners = registration.register_container_sources(
+            sources, directory, title="Library Talk 2018"
+        )
+        assert len(owners) == 1
+        image = wiki.entities[owners[sha1(IMAGE)]]
+        composition = image["claims"][P["part_of"]]
+        assert len(composition) == 2
+        assert sum(bool(claim.get("qualifiers")) for claim in composition) == 1
+        records = [
+            json.loads(snak["datavalue"]["value"])
+            for claim in composition
+            for reference in claim["references"]
+            for snak in reference["snaks"][P["source_part_locator"]]
+        ]
+        assert {record["part"] for record in records} == {
+            part.id
+            for part in sources.inventory.parts
+            if part.kind == "embedded_resource"
+        }
+        assert {record.get("placement_position") for record in records} == {
+            None,
+            2,
+        }
+
+    def test_unplaced_prepared_owner_needs_original_part_binding(
+        self, tmp_path
+    ):
+        source, sources, directory = unplaced_source(
+            tmp_path, "pdf", prepared=True
+        )
+        wiki = FakeWiki()
+        registration = Registrar(wiki)
+        registration.register_artifact(source, "artifact", "Library Talk 2018")
+        bound = sources.sources[sha1(IMAGE)]
+        registration.register_artifact(
+            directory / bound.file, "photograph", "Library Talk image"
+        )
+        before = copy.deepcopy(wiki.entities)
+        with pytest.raises(ValueError, match="original source-part binding"):
+            Registrar(wiki).register_container_sources(
+                sources, directory, title="Library Talk 2018"
+            )
+        assert wiki.entities == before
+
+
 def deck_file(tmp_path, name: str) -> Path:
     """A deck's bytes: only their SHA-1 matters to registration."""
     return scan(tmp_path, f"PK synthetic deck {name}".encode(), f"{name}.pptx")

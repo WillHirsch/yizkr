@@ -8,6 +8,7 @@ import zipfile
 
 import pytest
 
+from tests.fixtures import pdfs
 from yizkr.pipeline.container_inventory import (
     CONTAINER_INVENTORY,
     read_inventory,
@@ -123,7 +124,7 @@ def build_deck(path, reorder=False):
             "ppt/notesSlides/notesSlide1.xml",
             slide_xml(["Scanned from the family album"]),
         )
-        put(archive, "ppt/media/image1.jpeg", b"\xff\xd8fakejpeg")
+        put(archive, "ppt/media/image1.jpeg", pdfs.JPEG)
         put(archive, "ppt/media/clip1.mp4", b"fakemp4")
     return path
 
@@ -185,6 +186,7 @@ class TestTranscript:
 class TestOrchestratorBranch:
     def test_pptx_routes_through_adapter(self, tmp_path):
         from tests.unit.test_orchestrate import ScriptedOrchestrator
+        from tests.unit.test_pdf_pages import Reader
 
         folder = tmp_path / "docs"
         folder.mkdir()
@@ -192,7 +194,15 @@ class TestOrchestratorBranch:
 
         from yizkr.pipeline.orchestrate import Orchestrator
 
+        image_sha1 = hashlib.sha1(pdfs.JPEG).hexdigest()
+        reader = Reader({image_sha1: ""})
+
         class ScriptedDeck(ScriptedOrchestrator):
+            def _llm(self, role, doc):
+                return (
+                    reader if role == "transcribe" else super()._llm(role, doc)
+                )
+
             def _step_batch(self, doc):
                 # use the REAL branch: deterministic pptx transcription,
                 # then the (scripted) extract below
@@ -238,9 +248,7 @@ class TestOrchestratorBranch:
             for part in inventory.parts
             if part.kind == "embedded_resource"
         } == {
-            "ppt/media/image1.jpeg": hashlib.sha1(
-                b"\xff\xd8fakejpeg"
-            ).hexdigest(),
+            "ppt/media/image1.jpeg": image_sha1,
             "ppt/media/clip1.mp4": hashlib.sha1(b"fakemp4").hexdigest(),
         }
         # a re-run finds the inventory whole, and leaves it as it stands
@@ -248,3 +256,4 @@ class TestOrchestratorBranch:
         kept = (record.stat().st_ino, record.read_bytes())
         orchestrator.run()
         assert (record.stat().st_ino, record.read_bytes()) == kept
+        assert reader.read == [(f"{image_sha1}.jpeg", image_sha1)]

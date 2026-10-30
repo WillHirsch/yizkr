@@ -49,13 +49,9 @@ _RESOURCE_PREFIXES = ("ppt/media/", "ppt/embeddings/", "ppt/charts/")
 _SHAPES = {
     P_NS + name for name in ("sp", "pic", "grpSp", "graphicFrame", "cxnSp")
 }
-_BACKGROUND_PARENTS = (
-    P_NS + "sld",
-    P_NS + "cSld",
-    P_NS + "bg",
-    P_NS + "bgPr",
-    A_NS + "blipFill",
-)
+_NON_IMAGE_FILLS = {
+    A_NS + name for name in ("noFill", "solidFill", "gradFill", "pattFill")
+}
 
 
 def _name(tag: str) -> str:
@@ -93,7 +89,8 @@ def _layout(element: ET.Element, path: str) -> dict:
             own.extend(
                 _raw(found)
                 for found in child
-                if found.tag in {A_NS + "xfrm", A_NS + "srcRect"}
+                if found.tag
+                in {A_NS + "xfrm", A_NS + "srcRect", A_NS + "blipFill"}
             )
         elif child.tag in {P_NS + "xfrm", A_NS + "xfrm"}:
             own.append(_raw(child))
@@ -314,6 +311,7 @@ class PptxPackage:
         parent = self.add_native_part(target, position, "slide_body")
         if target not in self.names:
             return parent
+        self._background(parent)
         self._occurrences(parent)
         notes_seen = set()
         for relation in self.relationships(target):
@@ -330,11 +328,236 @@ class PptxPackage:
                     self._occurrences(notes)
         return parent
 
+    def _related(self, part: str, kind: str) -> str | None:
+        """Resolve a declared inheritance edge, never guess another master."""
+        found = [
+            r for r in self.relationships(part) if r.kind.endswith("/" + kind)
+        ]
+        if not found:
+            return None
+        if len(found) != 1:
+            raise ValueError(f"ambiguous {kind} relationships in {part}")
+        relation = found[0]
+        if relation.external or relation.target not in self.names:
+            raise ValueError(
+                f"unavailable {kind} target {relation.target} in {part}"
+            )
+        return relation.target
+
+    def _background_chain(self, slide: str):
+        """Nearest styles first, without inspecting overridden ancestors."""
+        yield slide
+        layout = self._related(slide, "slideLayout")
+        if layout is None:
+            return
+        if self.root(layout).tag != P_NS + "sldLayout":
+            raise ValueError(f"unsupported slideLayout part {layout}")
+        yield layout
+        master = self._related(layout, "slideMaster")
+        if master is not None:
+            if self.root(master).tag != P_NS + "sldMaster":
+                raise ValueError(f"unsupported slideMaster part {master}")
+            yield master
+
+    def _theme_fill(self, slide: str, index: int):
+        if index in {0, 1000}:
+            return None
+        if index < 0:
+            raise ValueError(f"unsupported background style index {index}")
+        for part in self._background_chain(slide):
+            for kind in ("themeOverride", "theme"):
+                theme = self._related(part, kind)
+                if theme is None:
+                    continue
+                root = self.root(theme)
+                if root.tag != A_NS + kind:
+                    raise ValueError(f"unsupported {kind} part {theme}")
+                scheme = (
+                    root.find(A_NS + "fmtScheme")
+                    if kind == "themeOverride"
+                    else root.find(
+                        A_NS + "themeElements/" + A_NS + "fmtScheme"
+                    )
+                )
+                if scheme is None:
+                    if kind == "themeOverride":
+                        # A colour/font-only override changes no fill.
+                        continue
+                    raise ValueError(f"theme has no format scheme: {theme}")
+                tag = "fillStyleLst" if index < 1000 else "bgFillStyleLst"
+                offset = index - 1 if index < 1000 else index - 1001
+                styles = scheme.find(A_NS + tag)
+                if styles is None or offset >= len(styles):
+                    raise ValueError(
+                        f"background style {index} unavailable in {theme}"
+                    )
+                fill = styles[offset]
+                path = next(
+                    path for element, path, _ in _walk(root) if element is fill
+                )
+                return theme, fill, path
+        raise ValueError("background style has no resolvable theme")
+
+    def _background(self, parent: SourcePart) -> None:
+        """Place only the effective background; retain its native origin."""
+        slide = parent.locator.package_part
+        chain = []
+        try:
+            for origin in self._background_chain(slide):
+                chain.append(origin)
+                root = self.root(origin)
+                backgrounds = root.findall(P_NS + "cSld/" + P_NS + "bg")
+                if not backgrounds:
+                    continue
+                if len(backgrounds) != 1:
+                    raise ValueError(f"ambiguous backgrounds in {origin}")
+                background = backgrounds[0]
+                path = next(
+                    path
+                    for element, path, _ in _walk(root)
+                    if element is background
+                )
+                definitions = [
+                    child
+                    for child in background
+                    if child.tag in {P_NS + "bgPr", P_NS + "bgRef"}
+                ]
+                if len(definitions) != 1:
+                    raise ValueError(
+                        "ambiguous or unsupported background at "
+                        f"{origin}:{path}"
+                    )
+                definition = definitions[0]
+                properties = (
+                    definition if definition.tag == P_NS + "bgPr" else None
+                )
+                reference = (
+                    definition if definition.tag == P_NS + "bgRef" else None
+                )
+                layout = _layout(background, path)
+                if origin != slide:
+                    layout.update(
+                        origin_part=origin,
+                        slide_part=slide,
+                        inheritance=list(chain),
+                    )
+                if reference is not None:
+                    resolved = self._theme_fill(
+                        slide, int(reference.get("idx", ""))
+                    )
+                    if resolved is None:
+                        return
+                    fill_origin, fill, fill_path = resolved
+                    layout.update(
+                        origin_part=origin,
+                        slide_part=slide,
+                        inheritance=list(chain),
+                        background_reference=_raw(reference),
+                        fill_origin=fill_origin,
+                        resolved_fill=_raw(fill),
+                    )
+                else:
+                    fills = [
+                        child
+                        for child in properties
+                        if child.tag in _NON_IMAGE_FILLS
+                        or child.tag in {A_NS + "blipFill", A_NS + "grpFill"}
+                    ]
+                    if len(fills) != 1:
+                        raise ValueError(
+                            "ambiguous or unsupported background fill in "
+                            f"{origin}"
+                        )
+                    fill = fills[0]
+                    fill_origin = origin
+                    fill_path = next(
+                        path
+                        for element, path, _ in _walk(root)
+                        if element is fill
+                    )
+                if fill.tag in _NON_IMAGE_FILLS:
+                    return  # An explicit non-picture fill overrides ancestors.
+                if fill.tag != A_NS + "blipFill":
+                    raise ValueError(
+                        f"unsupported background fill {_name(fill.tag)} "
+                        f"in {fill_origin}"
+                    )
+                blips = list(fill.findall(A_NS + "blip"))
+                if len(blips) != 1:
+                    raise ValueError(
+                        "background picture has no unique image in "
+                        f"{fill_origin}"
+                    )
+                blip = blips[0]
+                attribute = "embed" if blip.get(R_NS + "embed") else "link"
+                rid = blip.get(R_NS + attribute)
+                relations = [
+                    r for r in self.relationships(fill_origin) if r.id == rid
+                ]
+                if len(relations) != 1:
+                    raise ValueError(
+                        f"unresolved background image relationship {rid} "
+                        f"in {fill_origin}"
+                    )
+                relation = relations[0]
+                if relation.external or relation.target not in self.names:
+                    raise ValueError(
+                        f"unavailable background image {relation.target} "
+                        f"in {fill_origin}"
+                    )
+                if not relation.kind.endswith("/image"):
+                    raise ValueError(
+                        f"unsupported background image relationship {rid} "
+                        f"in {fill_origin}"
+                    )
+                child = self.resource(relation.target)
+                locator = StructuralLocator(
+                    kind="placement",
+                    package_part=fill_origin,
+                    position=parent.locator.position,
+                    path=f"{fill_path}/a:blip[1]/@r:{attribute}",
+                    relationship_id=rid,
+                )
+                self.inventory.placements.append(
+                    Placement(
+                        id=structural_id(self.source, locator),
+                        parent=parent.id,
+                        child=child.id,
+                        locator=locator,
+                        order=1,
+                        occurrence="paint",
+                        layout=[layout],
+                        limitations=(
+                            [
+                                "parent contains hidden content; "
+                                "visibility is not inferred"
+                            ]
+                            if any(
+                                "hidden" in note for note in parent.limitations
+                            )
+                            else []
+                        ),
+                    )
+                )
+                return
+        except (ValueError, ET.ParseError) as error:
+            reason = f"effective slide background unavailable: {error}"
+            parent.reading = ReadingOutcome(
+                state="failed", method="slide-xml", reason=reason
+            )
+            parent.limitations.append(reason)
+            self.inventory.complete = False
+
     def _occurrences(self, parent: SourcePart) -> None:
         target = parent.locator.package_part
         relations = {r.id: r for r in self.relationships(target)}
         seen = set()
-        order = 0
+        order = sum(p.parent == parent.id for p in self.inventory.placements)
+        recorded_paths = {
+            p.locator.path
+            for p in self.inventory.placements
+            if p.parent == parent.id and p.locator.package_part == target
+        }
         for element, path, ancestors in _walk(self.root(target)):
             for attribute in ("embed", "link", "id"):
                 rid = element.get(R_NS + attribute)
@@ -348,6 +571,10 @@ class PptxPackage:
                     self.inventory.complete = False
                     continue
                 seen.add(rid)
+                if f"{path}/@r:{attribute}" in recorded_paths:
+                    # Only this effective occurrence is already recorded;
+                    # effects/extensions retain their structural references.
+                    continue
                 if relation.external:
                     parent.limitations.append(
                         f"external relationship {rid} at {path}; "
@@ -369,12 +596,6 @@ class PptxPackage:
                     for shape, location in (*ancestors, (element, path))
                     if shape.tag in _SHAPES
                 ]
-                if (
-                    parent.kind == "slide_body"
-                    and tuple(node.tag for node, _ in ancestors)
-                    == _BACKGROUND_PARENTS
-                ):
-                    paint_owners.append(ancestors[-3])  # direct p:bg
                 order += 1
                 placement = Placement(
                     id=structural_id(self.source, locator),

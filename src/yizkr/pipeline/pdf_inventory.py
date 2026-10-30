@@ -56,13 +56,19 @@ _INLINE_NAMES = {
     "/IM": "/ImageMask",
 }
 # Graphics state, color and path construction/clipping do not paint another
-# source. Text, path painting, shading and unknown operators are deliberately
-# absent: PDFium's one-image object list alone cannot prove they were absent.
+# source. Text operators are checked separately for a valid invisible OCR
+# object. Path painting, shading and unknown operators are deliberately
+# absent: PDFium's object list alone cannot prove they were absent.
 _IMAGE_ONLY_OPERATORS = frozenset(
     b"q Q cm w J j M d ri i gs "
     b"CS cs SC SCN sc scn G g RG rg K k "
-    b"m l c v y h re W W* n Do".split()
+    b"m l c v y h re W W* n Do "
+    b"BT ET Tc Tw Tz TL Tf Tr Ts Td TD Tm T* Tj TJ ' \"".split()
 ) | {b"INLINE IMAGE"}
+_SHOW_TEXT_OPERATORS = frozenset((b"Tj", b"TJ", b"'", b'"'))
+_TEXT_OBJECT_OPERATORS = frozenset(
+    b"Tc Tw Tz TL Tf Tr Ts Td TD Tm T* Tj TJ ' \"".split()
+)
 
 
 def _value(value: Any) -> Any:
@@ -357,6 +363,7 @@ class _Builder:
             ),
             byte_object=reference,
             media_type="application/vnd.pdf.image-stream",
+            source_role="independent",
             layout=[{"pdf_dictionary": dictionary}],
             eligibility=Eligibility(
                 state="excluded"
@@ -447,6 +454,9 @@ class _Builder:
         active.add(id(obj))
         state: list[dict] = []
         stack: list[list[dict]] = []
+        text_mode = 0
+        text_modes: list[int] = []
+        in_text = False
         try:
             for index, (operands, operator) in enumerate(
                 stream.operations, start=1
@@ -457,10 +467,33 @@ class _Builder:
                 # because PDFium did not expose them as page objects.
                 if operator not in _IMAGE_ONLY_OPERATORS:
                     self.non_image_content.add(number)
+                if operator in _TEXT_OBJECT_OPERATORS and not in_text:
+                    self.non_image_content.add(number)
+                if operator == b"BT":
+                    if in_text:
+                        self.non_image_content.add(number)
+                    in_text = True
+                elif operator == b"ET":
+                    if not in_text:
+                        self.non_image_content.add(number)
+                    in_text = False
+                elif operator == b"Tr":
+                    if len(operands) != 1 or operands[0] not in range(8):
+                        self.non_image_content.add(number)
+                        text_mode = -1
+                    else:
+                        text_mode = int(operands[0])
+                elif operator in _SHOW_TEXT_OPERATORS:
+                    if not in_text or text_mode != 3:
+                        self.non_image_content.add(number)
                 if operator == b"q":
                     stack.append(list(state))
+                    text_modes.append(text_mode)
                 elif operator == b"Q":
                     state = stack.pop() if stack else []
+                    if not text_modes:
+                        self.non_image_content.add(number)
+                    text_mode = text_modes.pop() if text_modes else 0
                 elif operator in (
                     b"cm",
                     b"W",
@@ -530,6 +563,8 @@ class _Builder:
                                 },
                             ),
                         )
+            if in_text or text_modes:
+                self.non_image_content.add(number)
         finally:
             active.remove(id(obj))
 
@@ -664,11 +699,8 @@ class _Builder:
                 )
 
     def prepare(self, document: Any):
-        from yizkr.pipeline.containers import is_decoration
         from yizkr.pipeline.textlayer import (
             _MAX_FORM_DEPTH,
-            BACKGROUND_COVER,
-            _area,
             _clip,
             image_bytes,
         )
@@ -703,13 +735,24 @@ class _Builder:
                             reason="native and PDFium image paints disagree",
                         )
                     continue
-                # One top-level image with no other content represents the
-                # page even when blank margins keep it below the area rule.
-                # Forms and any other painting or unknown native operators
-                # decline this additional proof; rendering has its own rules.
+                # A page showing only one original image is a view of that
+                # image's source, whatever its size or page coverage. Other
+                # painting, annotations and unknown native content prevent
+                # that attribution; rendering still has its own rules.
                 image_only_page = (
-                    len(objects) == len(images) == len(paints) == 1
+                    len(images) == len(paints) == 1
+                    and all(
+                        obj.type == pdfium_c.FPDF_PAGEOBJ_IMAGE
+                        or (
+                            obj.type == pdfium_c.FPDF_PAGEOBJ_TEXT
+                            and pdfium_c.FPDFTextObj_GetTextRenderMode(obj.raw)
+                            == 3
+                        )
+                        for obj in objects
+                    )
                     and images[0].container is None
+                    and _clip(images[0].get_bounds(), page.get_cropbox())
+                    is not None
                     and number not in self.non_image_content
                     and number not in self.plan._reasons
                     and not any(
@@ -738,30 +781,19 @@ class _Builder:
                         )
                         continue
                     self.plan.image_parts[number, ordinal] = part
-                    bounds = obj.get_bounds()
-                    ancestor = obj.container
-                    while ancestor is not None:
-                        bounds = ancestor.get_matrix().on_rect(*bounds)
-                        ancestor = ancestor.container
-                    page_bounds = page.get_cropbox()
-                    clipped = _clip(bounds, page_bounds)
-                    role = (
-                        "auxiliary"
-                        if clipped is None or is_decoration(*obj.get_px_size())
-                        else "page-representation"
-                        if image_only_page
-                        or _area(clipped)
-                        >= BACKGROUND_COVER * _area(page_bounds)
-                        else "independent"
-                    )
-                    if part.source_role != "independent":
-                        part.source_role = role
+                    if image_only_page:
+                        self.plan.page_parts[number].layout.append(
+                            {
+                                "image_only_source_part": part.id,
+                                "image_only_placement": placement.id,
+                            }
+                        )
                     placement.layout.append(
                         {
                             "pdfium_bounds": list(obj.get_bounds()),
                             "pdfium_matrix": list(obj.get_matrix().get()),
                             "coordinate_frame": "parent",
-                            "source_role": role,
+                            "source_role": "independent",
                         }
                     )
                     try:

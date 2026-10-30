@@ -1,12 +1,12 @@
 """PDFs read page by page (#176): the transcription route, the images a
 PDF places within its pages, the views, and the LLM cache's keys.
 
-A PDF with a page that reads from its text layer is read page by page:
-those pages without a model call, its other pages by vision, and each
-image placed within a text-layer page by vision on its own, as a witness
-of its own (#178, ADR-0008). A PDF with no such page is read whole through
-a checked bitmap-only representation. Cache reuse follows those submitted
-bytes, while attribution remains to the original PDF. The orchestrator uses
+A PDF with usable native text or readable image sources is read page by
+page. Each original image is read once under its own owner; a page showing
+only that image keeps a marker without duplicating its reading or claims.
+Other vision pages are rendered. A PDF with no usable text or readable
+image source is read through a checked bitmap-only representation. Cache
+reuse follows the submitted bytes. The orchestrator uses
 wiring (tests/unit/test_llmcache.py's CachedRun), and a scripted engine
 reads each file a vision call gives it. Every PDF is fictional
 (tests/fixtures/pdfs.py), its texts the universe's (docs/EXAMPLES.md).
@@ -131,16 +131,17 @@ def typed(*paragraphs: str, **options) -> pdfs.Page:
     return pdfs.Page().text(pdfs.lines(*paragraphs), **options)
 
 
-def scanned() -> pdfs.Page:
-    """A scanned page: one JPEG covering it, with an OCR layer drawn
-    invisibly over it."""
-    page = pdfs.Page().image(pdfs.jpeg(), 0, 0, pdfs.WIDTH, pdfs.HEIGHT)
-    return page.text(pdfs.lines(EXTRACT), mode=pdfs.INVISIBLE)
+def vision_page() -> pdfs.Page:
+    """Native text whose font has no usable Unicode map needs rendering.
+
+    It holds no original embedded image, so its reading belongs to the PDF.
+    """
+    return pdfs.Page().text(pdfs.lines(EXTRACT), font=pdfs.GARBLED)
 
 
 def history(second: pdfs.Page | None = None) -> bytes:
     """The two typed pages of the 2008 family history; a copy may have its
-    second page as `second` instead (scanned, say)."""
+    second page as `second` instead (rendered, say)."""
     return pdfs.pdf([typed(FIRST), second or typed(SECOND)])
 
 
@@ -157,8 +158,8 @@ def booklet(image: pdfs.Image = LETTER_IMAGE) -> bytes:
 
 
 def extract() -> bytes:
-    """The birth register extract, a scan with an OCR layer."""
-    return pdfs.pdf([scanned()])
+    """The birth register extract with an unreadable native text layer."""
+    return pdfs.pdf([vision_page()])
 
 
 def reading_location(prompt: str, page: str | None = None):
@@ -370,7 +371,7 @@ class TestTheRoute:
         """What the engine reads of a page is the page's text, without the
         blank lines it may begin or end with, so the page's markers and
         the next page's stand where they always do."""
-        corpus = folder(tmp_path, family_history=history(scanned()))
+        corpus = folder(tmp_path, family_history=history(vision_page()))
         reader = Reader({"page-2": f"\n\n{EXTRACT.strip()}\n\n"})
         doc = document(run(tmp_path, corpus, reader), "family-history.pdf")
         transcription = transcription_of(doc)
@@ -391,7 +392,7 @@ class TestTheRoute:
             for page in transcription.pages
         ] == [("text-layer", 1), ("text-layer", 0)]
 
-    def test_a_scanned_pdf_is_read_whole(self, tmp_path):
+    def test_a_pdf_without_usable_text_or_images_is_read_whole(self, tmp_path):
         """A PDF none of whose pages reads from its text layer is read by
         one vision call over a checked, rendered PDF. Its source identity
         remains the original PDF; its pages are read by that call."""
@@ -411,15 +412,60 @@ class TestTheRoute:
         ] == [(1, "transcribed", "vision")]
         assert not (doc.dir / DERIVED_MEDIA).exists()
 
+    def test_repeated_scans_read_and_extract_only_the_original_image(
+        self, tmp_path
+    ):
+        image_sha1 = hashlib.sha1(pdfs.JPEG).hexdigest()
+        pages = [
+            pdfs.Page()
+            .image(pdfs.jpeg(), 40, 60, 500, 700)
+            .text(pdfs.lines(EXTRACT), mode=pdfs.INVISIBLE)
+            for _ in range(2)
+        ]
+        corpus = folder(tmp_path, birth_extract_1938=pdfs.pdf(pages))
+        reader = Reader({image_sha1: EXTRACT})
+        first = run(tmp_path, corpus, reader)
+        doc = document(first, "birth-extract-1938.pdf")
+        assert doc.state.status == AWAITING_CLAIMS, doc.state.error
+        assert reader.names() == [f"{image_sha1}.jpg"]
+        transcription = transcription_of(doc)
+        assert page_methods(transcription) == [
+            (1, "image-source"),
+            (2, "image-source"),
+        ]
+        assert all(
+            not transcription.page_text(page) for page in transcription.pages
+        )
+        assert (
+            ClaimBatch.model_validate_json(doc.batch.read_text()).claims == []
+        )
+        excerpt = excerpt_of(first, image_sha1)
+        batch = ClaimBatch.model_validate_json(excerpt.batch.read_text())
+        assert batch.claims
+        assert {claim.source.artifact.sha1 for claim in batch.claims} == {
+            image_sha1
+        }
+        assert all(
+            claim.source.support is not None
+            and claim.source.support.locator.kind == "image"
+            and claim.source.support.placements
+            and all(
+                placement.locator.position in {1, 2}
+                for placement in claim.source.support.placements
+            )
+            for claim in batch.claims
+        )
+        assert saved_sources(doc.dir).sources[image_sha1].slides == [1, 2]
+        before = excerpt.batch.read_bytes()
+        again = run(tmp_path, corpus, RefusingReader({}))
+        assert excerpt_of(again, image_sha1).batch.read_bytes() == before
+
     def test_a_mixed_pdf_reads_each_page_by_its_method(self, tmp_path):
-        """The typed page from its text layer; the scanned one by vision,
-        from the scan's JPEG as the PDF holds it."""
-        corpus = folder(tmp_path, family_history=history(scanned()))
+        """Usable native text needs no call; unusable text is rendered."""
+        corpus = folder(tmp_path, family_history=history(vision_page()))
         reader = Reader({"page-2": SECOND})
         doc = document(run(tmp_path, corpus, reader), "family-history.pdf")
-        assert reader.read == [
-            ("page-2.jpg", hashlib.sha1(pdfs.JPEG).hexdigest())
-        ]
+        assert reader.names() == ["page-2.png"]
         transcription = transcription_of(doc)
         assert page_methods(transcription) == [
             (1, "text-layer"),
@@ -431,14 +477,14 @@ class TestTheRoute:
         assert transcription.page_text(transcription.pages[1]) == SECOND
         first = "\n".join(pdfs.lines(FIRST))
         assert transcription.text == f"[Page 1]\n{first}\n\n[Page 2]\n{SECOND}"
-        # the scan's OCR layer is no part of it
+        # unusable native text is replaced by the rendered reading
         assert "Standesamt" not in transcription.text
 
     def test_each_page_carries_the_record_s_fields(self, tmp_path):
         """A page read by vision takes the fields of its reading's record
         (#389); a page read from its text layer is transcribed, with no
         printed number, languages or notes, since no engine read it."""
-        corpus = folder(tmp_path, family_history=history(scanned()))
+        corpus = folder(tmp_path, family_history=history(vision_page()))
         reading = json.dumps(
             {
                 "document_class": "unclassified",
@@ -455,7 +501,7 @@ class TestTheRoute:
         reader = Reader({"page-2": reading})
         doc = document(run(tmp_path, corpus, reader), "family-history.pdf")
         transcription = transcription_of(doc)
-        typed_page, scanned_page = transcription.pages
+        typed_page, rendered_page = transcription.pages
         assert (
             typed_page.status,
             typed_page.printed_page,
@@ -463,10 +509,10 @@ class TestTheRoute:
             typed_page.notes,
         ) == ("transcribed", None, [], "")
         assert (
-            scanned_page.status,
-            scanned_page.printed_page,
-            scanned_page.languages,
-            scanned_page.notes,
+            rendered_page.status,
+            rendered_page.printed_page,
+            rendered_page.languages,
+            rendered_page.notes,
         ) == ("transcribed", "2", ["en"], "a coffee ring in the margin")
         assert transcription.printed_pages() == {2: "2"}
         # no call saw the PDF whole, so it has no class
@@ -487,7 +533,7 @@ class TestTheRoute:
     def test_a_flagged_vision_page_flags_the_pdf(self, tmp_path):
         """The flag of a vision page's reading, here from its notes, is
         the transcription's."""
-        corpus = folder(tmp_path, family_history=history(scanned()))
+        corpus = folder(tmp_path, family_history=history(vision_page()))
         reading = json.dumps(
             {
                 "document_class": "unclassified",
@@ -540,7 +586,7 @@ class TestTheRoute:
     def test_a_page_read_by_vision_that_fails_the_check_fails_it(
         self, tmp_path
     ):
-        corpus = folder(tmp_path, family_history=history(scanned()))
+        corpus = folder(tmp_path, family_history=history(vision_page()))
         reader = Reader({"page-2": Raw(REFUSAL)})
         orchestrator = run(tmp_path, corpus, reader)
         doc = document(orchestrator, "family-history.pdf")
@@ -1803,7 +1849,7 @@ class TestReuse:
     the vision engine read it, and never where its text layer did."""
 
     def test_a_stricter_check_reads_a_page_again(self, tmp_path, monkeypatch):
-        corpus = folder(tmp_path, family_history=history(scanned()))
+        corpus = folder(tmp_path, family_history=history(vision_page()))
         reader = Reader({"page-2": [SECOND, "Klara left Flörburg first."]})
         run(tmp_path, corpus, reader)
         stricter_check(monkeypatch, "followed her in 1939")
@@ -1812,7 +1858,7 @@ class TestReuse:
         (aside,) = set_asides(again)
         assert aside["stage"] == "transcription"
         assert aside["reason"].endswith("(page 2)")
-        assert reader.names() == ["page-2.jpg", "page-2.jpg"]
+        assert reader.names() == ["page-2.png", "page-2.png"]
         transcription = transcription_of(doc)
         assert transcription.page_text(transcription.pages[1]) == (
             "Klara left Flörburg first."
@@ -1829,7 +1875,7 @@ class TestReuse:
         a document page needs no text when it is made, and is checked on
         reuse as it was then: three runs read it once, and set nothing
         aside."""
-        corpus = folder(tmp_path, family_history=history(scanned()))
+        corpus = folder(tmp_path, family_history=history(vision_page()))
         reading = json.dumps(
             {
                 "document_class": "unclassified",
@@ -1840,7 +1886,7 @@ class TestReuse:
         for _run in range(3):
             again = run(tmp_path, corpus, reader)
             assert set_asides(again) == []
-        assert reader.names() == ["page-2.jpg"]
+        assert reader.names() == ["page-2.png"]
         doc = document(again, "family-history.pdf")
         assert transcription_of(doc).pages[1].status == status
         assert not (doc.dir / "transcription.superseded-1.json").exists()
@@ -1849,13 +1895,13 @@ class TestReuse:
         """A vision page whose record's text reads as an announcement is
         a source's sentence when made and on every reuse: three runs read
         it once and set nothing aside."""
-        corpus = folder(tmp_path, family_history=history(scanned()))
+        corpus = folder(tmp_path, family_history=history(vision_page()))
         line = "I will bring the documents to Stupfield."
         reader = Reader({"page-2": record_answer(line)})
         for _run in range(3):
             again = run(tmp_path, corpus, reader)
             assert set_asides(again) == []
-        assert reader.names() == ["page-2.jpg"]
+        assert reader.names() == ["page-2.png"]
         doc = document(again, "family-history.pdf")
         assert again._transcription(doc).flag == "narration-only"
 
@@ -1870,7 +1916,7 @@ class TestReuse:
 
         if whole:
             read_whole(monkeypatch)
-        corpus = folder(tmp_path, family_history=history(scanned()))
+        corpus = folder(tmp_path, family_history=history(vision_page()))
         whole_record = json.dumps(
             {
                 "document_class": "unclassified",
@@ -1910,7 +1956,8 @@ class TestReuse:
         """Two vision pages flagged by two signatures: the first page's
         flag is the PDF's, when made and on reuse."""
         corpus = folder(
-            tmp_path, scans=pdfs.pdf([typed(FIRST), scanned(), scanned()])
+            tmp_path,
+            scans=pdfs.pdf([typed(FIRST), vision_page(), vision_page()]),
         )
         reader = Reader(
             {
@@ -1957,7 +2004,7 @@ class TestReuse:
         again, and the transcription-flag alert follows it."""
         if whole:
             read_whole(monkeypatch)
-        corpus = folder(tmp_path, family_history=history(scanned()))
+        corpus = folder(tmp_path, family_history=history(vision_page()))
         reader = Reader(
             {
                 "page-2": SECOND,

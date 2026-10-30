@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import struct
 import zipfile
+import zlib
 from datetime import UTC, datetime
 from xml.sax.saxutils import escape
 
@@ -71,7 +72,26 @@ def picture(rid, number):
     )
 
 
-def deck(path):
+def small_image():
+    """A valid 1x1 grey PNG, independent of any visible placement."""
+
+    def chunk(kind, data):
+        body = kind + data
+        return (
+            struct.pack(">I", len(data))
+            + body
+            + struct.pack(">I", zlib.crc32(body))
+        )
+
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 0, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(b"\x00\x00"))
+        + chunk(b"IEND", b"")
+    )
+
+
+def deck(path, *, unplaced=False):
     members = {
         "[Content_Types].xml": (
             '<Types xmlns="http://schemas.openxmlformats.org/'
@@ -79,6 +99,7 @@ def deck(path):
             '<Default Extension="rels" ContentType="application/vnd.'
             'openxmlformats-package.relationships+xml"/>'
             '<Default Extension="jpg" ContentType="image/jpeg"/>'
+            '<Default Extension="png" ContentType="image/png"/>'
             '<Override PartName="/ppt/presentation.xml" ContentType="'
             "application/vnd.openxmlformats-officedocument.presentationml."
             'presentation.main+xml"/>'
@@ -120,6 +141,8 @@ def deck(path):
         ),
         "ppt/media/album.jpg": IMAGE,
     }
+    if unplaced:
+        members["ppt/media/unused.png"] = small_image()
     with zipfile.ZipFile(path, "w") as archive:
         for name, payload in members.items():
             archive.writestr(
@@ -365,4 +388,46 @@ def test_common_sources_preserve_owners_placements_and_citations(
             sources, directory, title="Library Talk image PDF"
         )
     assert client.fetch_claims([existing.artifact_qid]) == before
+    assert set(client.list_entity_ids()) == entities
+
+    # Original package images remain sources even when small and unplaced.
+    # Registration records containment, without inventing a slide occurrence.
+    source = deck(tmp_path / "library-talk-unplaced.pptx", unplaced=True)
+    content = unpack_pptx(source)
+    directory = tmp_path / "unplaced-state"
+    container, sources, owners = register(
+        client,
+        source,
+        content.inventory,
+        content.inventory_bytes,
+        directory,
+        TITLE,
+    )
+    tiny = ArtifactRef.from_bytes(small_image())
+    assert owners[OWNER.sha1] == image_qid
+    tiny_qid = owners[tiny.sha1]
+    bound = sources.sources[tiny.sha1]
+    assert bound.placements == []
+    (composition,) = statements(client, tiny_qid, "part_of")
+    assert (
+        composition["mainsnak"]["datavalue"]["value"]["id"]
+        == container.artifact_qid
+    )
+    assert not composition.get("qualifiers")
+    assert locators(client, [composition]) == [
+        {
+            "container": sources.inventory.source.sha1,
+            "part": bound.part_ids[0],
+            "kind": "embedded_resource",
+        }
+    ]
+    before = client.fetch_claims(list(owners.values()))
+    entities = set(client.list_entity_ids())
+    assert (
+        Registrar(client).register_container_sources(
+            sources, directory, title=TITLE
+        )
+        == owners
+    )
+    assert client.fetch_claims(list(owners.values())) == before
     assert set(client.list_entity_ids()) == entities
