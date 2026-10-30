@@ -54,7 +54,7 @@ def driver_for(tmp_path, folder, monkeypatch):
             extraction_run=ExtractionRunMetadata(
                 model_identifier="fictional",
                 pipeline_version="fictional",
-                started_at=datetime.now(UTC),
+                started_at=datetime(2025, 1, 1, tzinfo=UTC),
             )
         )
         return text_stages.ExtractionResult(
