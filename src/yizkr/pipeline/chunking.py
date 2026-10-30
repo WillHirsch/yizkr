@@ -1633,12 +1633,15 @@ class ChunkedClaimExtractor:
         deduped, attribution_rejects = bind_source_support(
             deduped,
             transcription,
-            require_primary_quote=(
+            allow_literal_quote=(
                 self.context is not None and self.context.has_context
             ),
         )
-        if reason := support_failure(attribution_rejects):
-            self.incomplete_reasons.append(reason)
+        primary_transcription = (
+            transcription
+            if self.context is not None and self.context.has_context
+            else None
+        )
         run = run_metadata(self.client.model_identifier).model_dump(
             mode="json"
         )
@@ -1646,7 +1649,12 @@ class ChunkedClaimExtractor:
         settled_rejects: list[dict] = []
         self._appellations = {"labels": 0, "label_names": 0, "parts": 0}
         if entities is not None:
-            settled = _settle_names(deduped, entities, run)
+            settled = _settle_names(
+                deduped,
+                entities,
+                run,
+                primary_transcription=primary_transcription,
+            )
             deduped, entities_payload = settled.claims, settled.entities
             settled_rejects = settled.rejects
             self._appellations = {
@@ -1665,11 +1673,14 @@ class ChunkedClaimExtractor:
             entities=entities_payload,
             placed=placed,
             dropped=self._dropped_kinds,
+            primary_transcription=primary_transcription,
         )
         rejects = (
             transform_rejects + attribution_rejects + settled_rejects + rejects
         )
         self._rejects = rejects
+        if reason := support_failure(rejects):
+            self.incomplete_reasons.append(reason)
         self._marked = {"marked": 0, "straddling": 0, "unlocated": 0}
         if reading is not _UNREAD:
             claims, self._marked = preparation.mark(
@@ -1999,7 +2010,11 @@ def _subject_id(claim: dict) -> str | None:
 
 
 def _settle_names(
-    claims: list[dict], entities: list[EntityRecord], run: dict
+    claims: list[dict],
+    entities: list[EntityRecord],
+    run: dict,
+    *,
+    primary_transcription: Transcription | None = None,
 ) -> _Settled:
     """Each entity's label set and its alias bag cleaned (ADR-0022 §4,
     ADR-0035 §8; names.normalize_entity_dict), once the chunks' claims
@@ -2026,7 +2041,12 @@ def _settle_names(
     for index, claim in enumerate(claims):
         if claim.get("property") not in ("referred_to_as", "name"):
             continue
-        checked, rejected = salvage_valid_claims([claim], run, entities=given)
+        checked, rejected = salvage_valid_claims(
+            [claim],
+            run,
+            entities=given,
+            primary_transcription=primary_transcription,
+        )
         if checked.claims:
             valid.append(claim)
         else:

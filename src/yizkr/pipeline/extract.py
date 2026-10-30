@@ -66,6 +66,7 @@ from yizkr.pipeline.source_context import (
     bind_source_support,
     placed_owners,
     placement_lines,
+    primary_evidence_reject,
     support_failure,
 )
 from yizkr.pipeline.transcribe import DECK_ENGINE, Transcription
@@ -534,6 +535,7 @@ def salvage_valid_claims(
     entities: list[dict] | None = None,
     placed: Mapping[str, Collection[str]] | None = None,
     dropped: Mapping[str, str] | None = None,
+    primary_transcription: Transcription | None = None,
 ) -> tuple[ClaimBatch, list[dict]]:
     """Partition raw claim dicts into a valid ClaimBatch and rejects.
 
@@ -567,6 +569,11 @@ def salvage_valid_claims(
     Each reject carries its reason codes (`reasons`, claims.REJECT_REASONS),
     for a report to count without quoting it: `schema` for a claim that
     does not parse, else the manifest problems' codes (reject_reasons).
+
+    With interpretation context, `primary_transcription` requires primary
+    evidence only for otherwise valid proposals. A malformed placeholder is
+    an ordinary reject, not an unresolved attribution. Check the original
+    quotation before mechanical excerpt clipping changes its text.
     """
     vocabulary = load_vocabulary()
     acceptance = load_acceptance()
@@ -589,6 +596,7 @@ def salvage_valid_claims(
     rejects: list[dict] = []
     dropped = dropped or {}
     for claim in claims:
+        original = claim
         if isinstance(claim, dict):
             claim = _normalize_claim_shape(claim)
         named = sorted(
@@ -639,11 +647,11 @@ def salvage_valid_claims(
                 }
             )
         else:
-            valid.append((claim, batch.claims[0]))
+            valid.append((claim, batch.claims[0], original))
     passed = ClaimBatch.model_validate(
         {
             "extraction_run": extraction_run,
-            "claims": [parsed for _, parsed in valid],
+            "claims": [parsed for _, parsed, _ in valid],
             "entities": entities,
         }
     )
@@ -656,15 +664,24 @@ def salvage_valid_claims(
         }
         for index, problems in refused.items()
     ]
+    accepted = []
+    for index, (claim, _, original) in enumerate(valid):
+        if index in refused:
+            continue
+        rejection = (
+            primary_evidence_reject(original, primary_transcription)
+            if primary_transcription is not None
+            else None
+        )
+        if rejection is not None:
+            rejects.append(rejection)
+        else:
+            accepted.append(claim)
     return (
         ClaimBatch.model_validate(
             {
                 "extraction_run": extraction_run,
-                "claims": [
-                    claim
-                    for index, (claim, _) in enumerate(valid)
-                    if index not in refused
-                ],
+                "claims": accepted,
                 "entities": entities,
             }
         ),
@@ -886,18 +903,23 @@ class LlmClaimExtractor:
         attributed, attribution_rejects = bind_source_support(
             cite_artifact(payload.get("claims", []), artifact, printed_pages),
             transcription,
-            require_primary_quote=(
+            allow_literal_quote=(
                 self.context is not None and self.context.has_context
             ),
         )
-        if reason := support_failure(attribution_rejects):
-            self.incomplete_reasons.append(reason)
         batch, rejects = salvage_valid_claims(
             attributed,
             run_metadata(self.client.model_identifier).model_dump(mode="json"),
             placed=placed,
+            primary_transcription=(
+                transcription
+                if self.context is not None and self.context.has_context
+                else None
+            ),
         )
         rejects = attribution_rejects + rejects
+        if reason := support_failure(rejects):
+            self.incomplete_reasons.append(reason)
         if self.rejects_dump is not None:
             if rejects:
                 self.rejects_dump.parent.mkdir(parents=True, exist_ok=True)
@@ -907,7 +929,7 @@ class LlmClaimExtractor:
         if not batch.claims and not (
             self.context is not None
             and self.context.has_context
-            and attribution_rejects
+            and support_failure(rejects)
         ):
             reject_answer(response, "extraction: no valid claim")
             if not rejects:
@@ -1000,7 +1022,7 @@ class ClaimFileExtractor:
             attributed, rejected = bind_source_support(
                 [claim.model_dump(mode="json") for claim in batch.claims],
                 transcription,
-                require_primary_quote=(
+                allow_literal_quote=(
                     self.context is not None and self.context.has_context
                 ),
             )
@@ -1017,4 +1039,17 @@ class ClaimFileExtractor:
                 "claims file failed manifest validation:\n  "
                 + "\n  ".join(problems)
             )
+        if self.context is not None and self.context.has_context:
+            rejected = [
+                rejection
+                for claim in batch.claims
+                if (
+                    rejection := primary_evidence_reject(
+                        claim.model_dump(mode="json"), transcription
+                    )
+                )
+                is not None
+            ]
+            if rejected:
+                raise ExtractionFailed(support_failure(rejected))
         return batch

@@ -7,6 +7,7 @@ binding and diagnostics. They do not claim to measure live-model accuracy.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -18,6 +19,8 @@ from yizkr.claims import (
     PlacementSupport,
     SourceSupport,
 )
+from yizkr.core.verbatim import Transcript
+from yizkr.pipeline.chunking import excerpt_audit
 from yizkr.pipeline.container_sources import image_source_context
 from yizkr.pipeline.extract import ExtractionFailed
 from yizkr.pipeline.interpretation_context import (
@@ -42,11 +45,11 @@ NEIGHBOUR = "Gustave Lobig, whose father was Sebastian Löbig,"
 FOREIGN = "Sebastian Löbig was born in 1862."
 
 
-def situated_reading():
+def situated_reading(text=PRIMARY):
     container = ArtifactRef.from_bytes(b"fictional family-booklet-2011")
     previous = ArtifactRef.from_bytes(b"fictional first original scan")
     owner = ArtifactRef.from_bytes(b"fictional continuation original scan")
-    reading = paged(owner, [(1, [], PRIMARY)], engine="vision:fictional")
+    reading = paged(owner, [(1, [], text)], engine="vision:fictional")
 
     def support(position, label):
         return SourceSupport(
@@ -189,15 +192,16 @@ def test_continuation_uses_same_context_for_extract_and_critique(
 
 
 @pytest.mark.parametrize("strategy", ["single", "chunked"])
-@pytest.mark.parametrize("quote", [FOREIGN, "words in neither reading", ""])
+@pytest.mark.parametrize("quote", [FOREIGN, "words in neither reading", None])
 @pytest.mark.parametrize("keep_primary", [False, True])
 def test_context_cannot_launder_a_foreign_or_unlocated_claim(
     tmp_path, strategy, quote, keep_primary
 ):
     reading, context = situated_reading()
-    claims = ([claim(reading)] if keep_primary else []) + [
-        claim(reading, quote)
-    ]
+    unsupported = claim(reading, quote or PRIMARY)
+    if quote is None:
+        unsupported["source"].pop("transcription_excerpt")
+    claims = ([claim(reading)] if keep_primary else []) + [unsupported]
     replies = [answer(*claims)]
     if strategy == "chunked":
         replies.insert(0, manifest())
@@ -246,6 +250,177 @@ def test_file_adapter_refuses_context_only_evidence(tmp_path):
     path.write_text(json.dumps(broken))
     with pytest.raises(ExtractionFailed, match="primary reading"):
         extract(request)
+
+
+@pytest.mark.parametrize("strategy", ["single", "chunked"])
+@pytest.mark.parametrize("invalid", ["schema", "vocabulary", "blank_quote"])
+def test_invalid_proposal_without_quote_does_not_block_valid_context_claims(
+    tmp_path, strategy, invalid
+):
+    reading, context = situated_reading()
+    malformed = claim(reading)
+    malformed["source"].pop("transcription_excerpt")
+    if invalid == "schema":
+        malformed.pop("value")
+    elif invalid == "vocabulary":
+        malformed["property"] = "unsupported_relation"
+    else:
+        malformed["source"]["transcription_excerpt"] = {
+            "language": "en",
+            "text": "",
+        }
+    replies = [answer(claim(reading), malformed)]
+    if strategy == "chunked":
+        replies.insert(0, manifest())
+    result = extract(
+        ExtractionRequest(
+            reading,
+            reading.artifact,
+            strategy=strategy,
+            context=context,
+            state_dir=tmp_path,
+            rejects_dump=tmp_path / "rejects.json",
+        ),
+        ScriptedClient(*replies),
+    )
+    assert len(result.require_complete().claims) == 1
+    assert result.incomplete_reasons == []
+    rejected = json.loads((tmp_path / "rejects.json").read_text())
+    assert len(rejected) == 1
+    assert SOURCE_SUPPORT not in rejected[0]["reasons"]
+    if invalid == "vocabulary":
+        assert any("unknown property" in p for p in rejected[0]["problems"])
+
+
+@pytest.mark.parametrize("strategy", ["single", "chunked", "file"])
+@pytest.mark.parametrize("quote", [PRIMARY[:-1] + "-", PRIMARY])
+def test_literal_primary_quote_keeps_strict_quote_quality_diagnostic(
+    tmp_path, strategy, quote
+):
+    text = PRIMARY[:-1] + "-\n" + PRIMARY
+    reading, context = situated_reading(text)
+    assert quote in reading.text
+    assert not Transcript(reading.text).spans(quote)
+    request = ExtractionRequest(
+        reading,
+        reading.artifact,
+        strategy=strategy,
+        context=context,
+        state_dir=tmp_path,
+    )
+    if strategy == "file":
+        path = tmp_path / "manual.json"
+        path.write_text(json.dumps({"claims": [claim(reading, quote)]}))
+        request = replace(request, claims_file=path)
+        result = extract(request)
+    else:
+        replies = [answer(claim(reading, quote))]
+        if strategy == "chunked":
+            replies.insert(0, manifest())
+        result = extract(request, ScriptedClient(*replies))
+    batch = result.require_complete()
+    assert len(batch.claims) == 1
+    assert batch.claims[0].source.artifact == reading.artifact
+    assert batch.claims[0].source.transcription_excerpt.text == quote
+    assert (
+        len(excerpt_audit(batch.claims, Transcript(reading.text))["missing"])
+        == 1
+    )
+
+
+@pytest.mark.parametrize("strategy", ["single", "chunked"])
+def test_context_evidence_uses_original_quote_before_length_clipping(
+    tmp_path, strategy
+):
+    text = (PRIMARY + " ") * 20
+    reading, context = situated_reading(text)
+    replies = [answer(claim(reading, text))]
+    if strategy == "chunked":
+        replies.insert(0, manifest())
+    batch = extract(
+        ExtractionRequest(
+            reading,
+            reading.artifact,
+            strategy=strategy,
+            context=context,
+            state_dir=tmp_path,
+        ),
+        ScriptedClient(*replies),
+    ).require_complete()
+    assert len(batch.claims) == 1
+    assert batch.claims[0].source.transcription_excerpt.text.endswith("…")
+    assert (
+        len(excerpt_audit(batch.claims, Transcript(reading.text))["missing"])
+        == 1
+    )
+
+
+def test_literal_primary_quote_locates_repeated_parts_but_not_mixed_owners():
+    text = PRIMARY[:-1] + "-\n" + PRIMARY
+    reading, _ = situated_reading(text)
+    support = reading.source_context.readings[0].support
+    other_part = support.model_copy(update={"part_id": sha256_text("repeat")})
+    reading.source_context = image_source_context(
+        reading, [support, other_part]
+    )
+    accepted, rejected = bind_source_support(
+        [claim(reading, PRIMARY)], reading, allow_literal_quote=True
+    )
+    assert not rejected
+    assert accepted[0]["source"]["artifact"] == reading.artifact.model_dump(
+        mode="json"
+    )
+    spans = reading.source_context.readings
+    reading.source_context.readings = [
+        spans[0],
+        spans[1].model_copy(
+            update={"owner": ArtifactRef.from_bytes(b"other original")}
+        ),
+    ]
+    accepted, rejected = bind_source_support(
+        [claim(reading, PRIMARY)], reading, allow_literal_quote=True
+    )
+    assert not accepted
+    assert "ambiguous source ownership" in rejected[0]["problems"][0]
+
+
+def test_file_adapter_checks_vocabulary_before_context_evidence(tmp_path):
+    reading, context = situated_reading()
+    malformed = claim(reading)
+    malformed["property"] = "unsupported_relation"
+    malformed["source"].pop("transcription_excerpt")
+    path = tmp_path / "manual.json"
+    path.write_text(json.dumps({"claims": [claim(reading), malformed]}))
+    with pytest.raises(ExtractionFailed, match="manifest validation"):
+        extract(
+            ExtractionRequest(
+                reading,
+                reading.artifact,
+                strategy="file",
+                claims_file=path,
+                context=context,
+            )
+        )
+
+
+def test_foreign_appellation_cannot_change_manifest_aliases(tmp_path):
+    reading, context = situated_reading()
+    appellation = claim(reading, FOREIGN)
+    appellation["property"] = "referred_to_as"
+    appellation["value"] = {
+        "type": "monolingual",
+        "value": {"text": "Gus", "language": "en"},
+    }
+    result = extract(
+        ExtractionRequest(
+            reading, reading.artifact, context=context, state_dir=tmp_path
+        ),
+        ScriptedClient(manifest(), answer(claim(reading), appellation)),
+    )
+    assert result.status == "incomplete"
+    assert len(result.diagnostic_batch.claims) == 1
+    assert result.diagnostic_batch.entities[0].label == "Gustave Lobig"
+    assert "Gus" not in result.diagnostic_batch.entities[0].aliases
 
 
 @pytest.mark.parametrize("strategy", ["single", "chunked"])
@@ -348,18 +523,27 @@ def test_context_change_alters_prompt_and_dependency_not_primary_source():
     assert results[0].batch.claims == results[1].batch.claims
 
 
-def test_context_cannot_change_primary_owner_without_structural_support():
-    reading, _ = situated_reading()
+def test_context_cannot_change_primary_owner_without_structural_support(
+    tmp_path,
+):
+    reading, context = situated_reading()
     reading = reading.model_copy(update={"source_context": None})
     foreign = claim(reading)
     foreign["source"]["artifact"] = ArtifactRef.from_bytes(
         b"other"
     ).model_dump(mode="json")
-    accepted, rejected = bind_source_support(
-        [foreign], reading, require_primary_quote=True
-    )
-    assert accepted == []
-    assert "primary source owner" in rejected[0]["problems"][0]
+    path = tmp_path / "manual.json"
+    path.write_text(json.dumps({"claims": [foreign]}))
+    with pytest.raises(ExtractionFailed, match="primary source owner"):
+        extract(
+            ExtractionRequest(
+                reading,
+                reading.artifact,
+                strategy="file",
+                claims_file=path,
+                context=context,
+            )
+        )
 
 
 @pytest.mark.parametrize("available", [False, True])
