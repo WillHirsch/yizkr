@@ -38,8 +38,8 @@ from yizkr.pipeline.llm import (
     OutputLimitReached,
     PassPaused,
     cached_client,
+    open_cache,
 )
-from yizkr.pipeline.llmcache import EngineCache
 from yizkr.pipeline.orchestrate import FAILED
 from yizkr.pipeline.rundir import NEEDS_ATTENTION, StageState, run_state
 from yizkr.pipeline.transcribe import Transcription
@@ -1503,7 +1503,7 @@ class TestParallelChunks:
                     raise answer
                 return answer
 
-        cache = EngineCache(tmp_path / "cache")
+        cache = open_cache(tmp_path / "cache")
         state = tmp_path / "state"
         state.mkdir()
         prior = state / "coverage.json"

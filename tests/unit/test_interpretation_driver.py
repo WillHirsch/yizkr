@@ -16,8 +16,7 @@ from yizkr.claims import ClaimBatch, ExtractionRunMetadata
 from yizkr.core.corpus import ExclusionList
 from yizkr.pipeline import text_stages
 from yizkr.pipeline.estimate import CHUNKS, Estimator, _keyed, _Made, _Tally
-from yizkr.pipeline.llm import cached_client
-from yizkr.pipeline.llmcache import CacheAsIs, EngineCache
+from yizkr.pipeline.llm import cached_client, open_cache, read_cache
 from yizkr.pipeline.orchestrate import Orchestrator
 from yizkr.pipeline.review import export_review_csv
 from yizkr.pipeline.scratch import ScratchDriver
@@ -281,7 +280,7 @@ def test_estimate_context_is_read_only_and_future_readings_are_unknown(
     client = RecordingClient()
     client.engine, client.model, client.effort = "fictional", "fictional", None
     client.config_hash = "fictional-context-reader"
-    cache = EngineCache(tmp_path / "cache")
+    cache = open_cache(tmp_path / "cache")
     monkeypatch.setattr(
         driver,
         "_llm",
@@ -313,7 +312,7 @@ def test_estimate_context_is_read_only_and_future_readings_are_unknown(
     # including image readings whose temporary preparation is then closed.
     fresh = Estimator(folder, tmp_path / "fresh", exclusions=ExclusionList())
     fresh.documents()
-    fresh._as_is = CacheAsIs(tmp_path / "cache")
+    fresh._as_is = read_cache(tmp_path / "cache")
     monkeypatch.setattr(
         fresh,
         "_engine_for",

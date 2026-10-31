@@ -24,8 +24,8 @@ from yizkr.pipeline.llm import (
     PassPaused,
     cached_client,
     observed_client,
+    open_cache,
 )
-from yizkr.pipeline.llmcache import EngineCache
 from yizkr.pipeline.stages import sha256_file, sha256_text
 from yizkr.pipeline.text_stages import (
     CritiqueRequest,
@@ -679,7 +679,7 @@ def test_model_fingerprint_survives_observation_and_response_caching(tmp_path):
     engine.config_hash = sha256_text("fictional scripted configuration")
     client = cached_client(
         observed_client(engine, role="extract", events=lambda *_a, **_k: None),
-        EngineCache(tmp_path / "cache"),
+        open_cache(tmp_path / "cache"),
         role="extract",
     )
     request = ExtractionRequest(

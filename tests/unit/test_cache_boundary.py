@@ -1,6 +1,6 @@
 """Guard for the LLM cache's boundary (#225, ADR-0032).
 
-Only the client factory, yizkr.pipeline.llm, imports the cache module:
+Only the client factory and its provider-session service import the cache:
 the pipeline reaches the cache only through a client the factory wraps.
 So the pipeline cannot come to depend on it, and removing the cache means
 no longer wrapping the client. This test parses every module under
@@ -30,8 +30,12 @@ SRC = Path(__file__).resolve().parents[2] / "src" / "yizkr"
 CACHE_MODULE = "yizkr.pipeline.llmcache"
 CACHE_NAME = CACHE_MODULE.rpartition(".")[2]
 NAMES_THE_CACHE = re.compile(rf"\b{CACHE_NAME}\b")
-# the modules that may import it: the factory, and the module itself
-ALLOWED = {"yizkr/pipeline/llm.py", "yizkr/pipeline/llmcache.py"}
+# Response storage and its execution-side composition stay at the engine edge.
+ALLOWED = {
+    "yizkr/pipeline/llm.py",
+    "yizkr/pipeline/llmcache.py",
+    "yizkr/pipeline/provider_sessions.py",
+}
 IMPORTERS = ("import_module", "__import__")
 
 
@@ -213,15 +217,15 @@ def importers(root: Path) -> dict[str, list[str]]:
 # -- the rule, applied to the package --------------------------------------
 
 
-def test_only_the_client_factory_imports_the_cache():
+def test_only_engine_execution_imports_the_cache():
     outside = {
         path: reasons
         for path, reasons in importers(SRC).items()
         if path not in ALLOWED
     }
     assert outside == {}, (
-        "only the client factory (yizkr.pipeline.llm) may import the LLM "
-        "cache: take a client from the factory instead (ADR-0032)"
+        "only engine execution may import the LLM cache: take a client "
+        "from the factory instead (ADR-0032)"
     )
     # the factory does import it, so the rule is not passed vacuously
     assert "yizkr/pipeline/llm.py" in importers(SRC)

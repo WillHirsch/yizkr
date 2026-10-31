@@ -109,7 +109,13 @@ class FakeCli:
         projects = self.projects_of(kwargs["env"])
         if "--resume" in command:
             parent = command[command.index("--resume") + 1]
-            if not list(projects.glob(f"*/{parent}.jsonl")):
+            restored_path = Path(parent)
+            exists = (
+                restored_path.is_file()
+                if restored_path.is_absolute()
+                else bool(list(projects.glob(f"*/{parent}.jsonl")))
+            )
+            if not exists:
                 return Completed(
                     stderr=f"No conversation found with session ID: {parent}",
                     returncode=1,
@@ -1084,13 +1090,15 @@ class TestTranscripts:
         session = second.resume_conversation(
             "list the entities", "answer", kept
         )
-        assert session == handle
+        assert session != handle
         assert len(cli.calls) == calls
-        transcript = cli.projects / PROJECT / f"{handle}.jsonl"
-        assert transcript.read_bytes() == kept[f"{PROJECT}/{handle}.jsonl"]
+        assert second.keep_conversation(session) == kept
         assert second.fork(session, "chunk 1") == "answer"
         command, _ = cli.calls[-1]
-        assert command[command.index("--resume") + 1] == handle
+        transcript = Path(command[command.index("--resume") + 1])
+        assert transcript.is_absolute()
+        assert not transcript.is_relative_to(cli.projects)
+        assert transcript.read_bytes() == kept[f"{PROJECT}/{handle}.jsonl"]
         assert "--fork-session" in command
         second.close_conversation(session)
         assert not transcript.exists()
@@ -1115,15 +1123,18 @@ class TestTranscripts:
             )
         assert not (tmp_path / "claude-config" / "elsewhere").exists()
 
-    def test_a_conversation_open_already_is_not_resumed(self, cli):
-        """Resuming a session the client holds open would let the second
-        holder's release pull the transcript from under the first."""
+    def test_a_kept_copy_does_not_release_the_open_original(self, cli):
+        """A restored copy owns separate files even in the same client."""
         client = ClaudeCodeClient()
         _, handle = client.open_conversation("list the entities")
         kept = client.keep_conversation(handle)
-        with pytest.raises(ValueError, match="open already"):
-            client.resume_conversation("list the entities", "answer", kept)
+        restored = client.resume_conversation(
+            "list the entities", "answer", kept
+        )
+        assert restored != handle
+        client.close_conversation(restored)
         assert cli.transcripts() == {f"{handle}.jsonl"}
+        assert client.fork(handle, "chunk 1") == "answer"
         client.close_conversation(handle)
         assert cli.transcripts() == set()
 
