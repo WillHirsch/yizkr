@@ -30,7 +30,7 @@ The scratch write key and instance watermark guard reset/register/write reuse. T
 
 Run manifests, stage events, control requests, anomalies, reports and diffs make completed, failed and reused work inspectable. The [runbook](../runbooks/scratch-run.md), [report guide](../RUN_REPORT.md), [diff guide](../RUN_DIFF.md) and [monitor guide](../MONITOR.md) describe the current commands.
 
-Anomalies and model critique are advice, not human approval, source truth or permission to discard legitimate contradictions. Detailed outputs remain local-only; only approved aggregate summaries may be posted. Cancellation should preserve completed work, but current subprocess/worker cancellation and abandoned-run detection have limitations; #724 and #725 track those improvements.
+Anomalies and model critique are advice, not human approval, source truth or permission to discard legitimate contradictions. Detailed outputs remain local-only; only approved aggregate summaries may be posted. Cancellation preserves completed work and stops owned calls and workers within the [execution ownership bounds](../ARCHITECTURE.md#cancellation-and-execution-ownership). Abandoned-run detection remains #725.
 
 ### 4. Checking prompt, schema and model changes: `needs:scratch-diff`
 

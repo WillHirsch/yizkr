@@ -88,6 +88,8 @@ The live monitor ([docs/MONITOR.md](../MONITOR.md)): per stage, what is pending,
 
 ## Pause, resume and abort
 
+See [cancellation and execution ownership](../ARCHITECTURE.md#cancellation-and-execution-ownership) for process cleanup, API cancellation and the limits around already-dispatched graph effects.
+
 ```sh
 uv run yizkr scratch pause  [<run>] [--stage NAME | --kind NAME] [--reason TEXT]
 uv run yizkr scratch resume [<run>] [--stage NAME | --kind NAME] [--reason TEXT]
@@ -97,12 +99,12 @@ uv run yizkr scratch abort  [<run>] [--stage NAME | --kind NAME] [--reason TEXT]
 The monitor's command line (`:` or Enter) asks the same. A request names the whole run, a stage (`transcription`, `extraction`, `critique`, `gedcom`, or a corpus stage) or a kind (`text`, `media` for a photograph or an image read whole, `pdf`, `presentation`, `gedcom`, `excerpt`), and goes into the run's control file, which the driver reads before each stage of each document and before each corpus stage. With no run named, the command takes the latest, and says which run it wrote to.
 
 - **Pause** holds its slice until a resume. The stage in flight finishes; the rest of the run goes on, and the driver waits only when nothing else can go on.
-- **Abort** holds its slice for the rest of the invocation. Once nothing else can go on, the invocation ends `stopped`. A run whose documents' stages are held does not go past the barrier. `resume` does not lift an abort: invoke the run again.
+- **Abort** signals matching active model calls and workers and holds its slice for the rest of the invocation. Once nothing else can go on, the invocation ends `stopped`. A run whose documents' stages are held does not go past the barrier. `resume` does not lift an abort: invoke the run again.
 - **An abort outranks a pause.** A stage an abort covers stays stopped whatever else is resumed, so a pause of its stage, its kind or the run that also covers it makes the driver wait for nothing: when an abort holds every stage left, the invocation ends `stopped` at once.
-- **Ctrl-C** stops the invocation at once, with the engine's calls in flight; it ends `interrupted`.
+- **Ctrl-C** cancels owned model calls and waits, stops new worker dispatch and joins cooperative workers within the shutdown bound; the invocation ends `interrupted`.
 - **Anomaly checks** (#196) pause or abort a slice on their own, through the same control file, and the driver honours them as it does yours.
 
-Nothing completed is lost: every call answered is in the cache, and every view made is in its document's directory.
+Completed cached answers and published views remain available for reuse. Responses arriving after cancellation are not cached or published as completed work.
 
 **Subscription limits.** A call the subscription refuses never fails a document: the engine waits, or pauses the pass with the time it can go on. Then the invocation ends `paused`, and the driver waits until a minute past that time, and never less than a minute when that time has passed already (the engine can hold its pause past the time it reported). It reads the control file as it waits: an abort of the run ends the wait, and a pause of the run keeps it waiting until a resume. It then invokes the run again by itself, and every request in force as the new invocation starts stays in force, the whole run's included, one made while the driver got ready again too. A wait can last a window's length, days for a weekly window, and all the while the process holds the runs directory and the LLM cache, so no other scratch run or cache user can start; Ctrl-C or `yizkr scratch abort` ends the wait. A pause with no such time ends the driver, which prints the engine's reason and what to do: a call reported to have run on usage credits (turn extra usage off on the account, then run the command again), a claude CLI that changed during the run, an LLM cache another process holds, or a cache folder the LLM cache refuses (What stays local, below).
 

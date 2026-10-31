@@ -139,6 +139,7 @@ from yizkr.claims import (
 )
 from yizkr.core.corpus import ExclusionList, file_sha1, is_excluded
 from yizkr.core.wiki import WikiClient
+from yizkr.pipeline.cancellation import check_cancelled
 from yizkr.pipeline.presentation import IMAGE_SUFFIXES, DerivedMediaRecord
 
 # a title is compared with the instance's labels, and set, in the form
@@ -649,6 +650,7 @@ def ensure_self_typed(
     if not dry_run:
         for claim in missing:
             _append(item, claim)
+        check_cancelled()
         item.write(summary=summary)
     return True
 
@@ -1132,6 +1134,7 @@ class Registrar:
         )
         # upload before any item is made, and only when no file of the
         # item holds the bytes already
+        check_cancelled()
         file_page = (
             held[0]
             if held
@@ -1163,6 +1166,7 @@ class Registrar:
             )
             changed = changed or outcome != "present"
         if changed:
+            check_cancelled()
             artifact = artifact.write(summary="ingest: artifact statements")
         label = str(artifact.labels.get("en") or title)
         instance.label(artifact_qid, label)
@@ -1212,6 +1216,7 @@ class Registrar:
         description = _fitted(_stored_term(description or ""))
         if description:
             item.descriptions.set("en", description)
+        check_cancelled()
         return item.write(summary="ingest: register artifact")
 
     def _fragment(
@@ -1259,6 +1264,7 @@ class Registrar:
                 page,
             ),
         )
+        check_cancelled()
         fragment = fragment.write(summary="ingest: register fragment")
         instance.label(fragment.id, label)
         instance.fragments[key] = fragment.id
@@ -1514,6 +1520,7 @@ class Registrar:
                 if not PurePosixPath(name).suffix:
                     name += suffix
                 upload = _upload_name(name, record.title, record.container)
+                check_cancelled()
                 held = [self.client.upload_file(path, filename=upload)]
             if item is None:
                 item = self.client.wbi.item.new()
@@ -1585,6 +1592,7 @@ class Registrar:
                 outcome = _ensure_referenced(item, claim, stated_in, container)
                 changed = changed or outcome != "present"
             if changed:
+                check_cancelled()
                 item = item.write(summary="ingest: derived media")
             if item.labels.get("en"):
                 instance.label(item.id, str(item.labels.get("en")))

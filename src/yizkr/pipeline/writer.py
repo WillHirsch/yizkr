@@ -488,6 +488,7 @@ from yizkr.claims import (
 from yizkr.core.dates import UnsupportedDate
 from yizkr.core.wiki import ItemLabels, WikiClient
 from yizkr.model.schema import load_acceptance
+from yizkr.pipeline.cancellation import check_cancelled
 from yizkr.pipeline.review import (
     claim_id,
     entity_records,
@@ -2270,6 +2271,7 @@ class BatchWriter:
                 source_artifact_qid, result.run_qid
             )
             self._append(item, hint)
+        check_cancelled()
         item = item.write(summary="ingest: entity proposed by extraction")
         qid = item.id
         result.notes_written += noted
@@ -2745,6 +2747,7 @@ class BatchWriter:
         if not missing:
             return
         item.aliases.set("en", sorted(existing | set(missing)))
+        check_cancelled()
         item.write(summary="ingest: aliases from document entity manifest")
         self._entity_cache[qid] = self.client.wbi.item.get(qid)
 
@@ -3042,6 +3045,7 @@ class BatchWriter:
         item = self.client.wbi.item.new()
         item.labels.set("en", label)
         item.descriptions.set("en", description)
+        check_cancelled()
         item = item.write(summary="ingest: extraction run")
         self._labels.made(label, item.id)
         # The run item is the document of its own execution (same
@@ -3400,6 +3404,7 @@ class BatchWriter:
                 return
             for block in added:
                 target.references.add(block)
+            check_cancelled()
             entity.write(summary="ingest: run block on a type statement")
             result.notes_written += sum(map(self._noted, added))
             self._entity_cache[qid] = self.client.wbi.item.get(qid)
@@ -3417,6 +3422,7 @@ class BatchWriter:
             ]
             for reference in added:
                 target.references.add(reference)
+            check_cancelled()
             entity.write(
                 summary="ingest: additional source for existing type statement"
             )
@@ -3425,6 +3431,7 @@ class BatchWriter:
         else:
             claim.references = references
             self._append(entity, claim, beside_equal=True)
+            check_cancelled()
             entity.write(summary="ingest: type statement from another source")
             result.type_statements_written += 1
             result.notes_written += sum(
@@ -3921,6 +3928,7 @@ class BatchWriter:
                     subject_qid
                 ) or self.client.wbi.item.get(subject_qid)
                 self._append(entity, wbi_claim)
+                check_cancelled()
                 entity.write(summary=claim_summary)
                 self._entity_cache[subject_qid] = self.client.wbi.item.get(
                     subject_qid
@@ -3961,6 +3969,7 @@ class BatchWriter:
         asserts a fact, and where, is knowledge, not just the fact)."""
         for block in blocks:
             statement.references.add(block)
+        check_cancelled()
         self._entity_cache[subject_qid].write(
             summary="ingest: additional source for existing statement"
         )

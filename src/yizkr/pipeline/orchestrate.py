@@ -160,7 +160,6 @@ import sys
 import threading
 from collections import Counter
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -177,6 +176,13 @@ from yizkr.core.corpus import (
 )
 from yizkr.core.wiki import WikiClient
 from yizkr.pipeline import stage_planning
+from yizkr.pipeline.cancellation import (
+    Cancellation,
+    RunCancelled,
+    cancellation_scope,
+    check_cancelled,
+    current_cancellation,
+)
 from yizkr.pipeline.rundir import (
     ALERTS,
     CONTROL,
@@ -203,6 +209,7 @@ from yizkr.pipeline.stages import (
     sha256_file,
     sha256_text,
 )
+from yizkr.pipeline.workers import WorkerShutdownTimeout
 
 GEDCOM_SUFFIXES = {".ged"}
 TEXT_SUFFIXES = {".txt", ".md"}
@@ -893,6 +900,7 @@ class Orchestrator:
         refresh: Collection[str] = (),
         epochs: Mapping[str, int] | None = None,
         fixed_settings: bool = False,
+        cancellation: Cancellation | None = None,
         log=print,
     ) -> None:
         self.folder = folder
@@ -976,6 +984,12 @@ class Orchestrator:
         # one did: the run was stopped even when no document was left to
         # dispatch after it
         self._run_held: str | None = None
+        self._cancellation_parent = cancellation or current_cancellation()
+        self.cancellation = Cancellation(parent=self._cancellation_parent)
+        self._cancellation_used = False
+        self._control_active = False
+        self._active_work: dict[Cancellation, tuple[str, str | None]] = {}
+        self._cancellation_lock = threading.Lock()
 
     # -- lazy connections --------------------------------------------------
 
@@ -1052,7 +1066,13 @@ class Orchestrator:
                 from yizkr.pipeline.llm import make_client
 
                 effort, model = self._engine_settings(role)
-                engine = make_client(self.llm, effort=effort, model=model)
+                check_cancelled()
+                engine = make_client(
+                    self.llm,
+                    effort=effort,
+                    model=model,
+                    cancellation=self.cancellation,
+                )
                 try:
                     self.rundir.record_engine(
                         role,
@@ -1108,6 +1128,7 @@ class Orchestrator:
         longer found, and those calls miss as absent."""
         from yizkr.pipeline.llm import observed_client
 
+        check_cancelled()
         engine = observed_client(self._engine(role), role=role, events=events)
         cache = self._llm_cache()
         if cache is None:
@@ -1342,6 +1363,91 @@ class Orchestrator:
             return
         self.exclusions = follow_decks(self.exclusions, self.folder)
 
+    @contextlib.contextmanager
+    def _cancellation_scope(self):
+        """Own the invocation signal and its control-file watcher."""
+        if self._cancellation_used:
+            self.cancellation = Cancellation(parent=self._cancellation_parent)
+        self._cancellation_used = True
+        finished = threading.Event()
+        invocation_signal = self.cancellation
+
+        def watch():
+            while not finished.wait(0.1):
+                if not self._control_active:
+                    continue
+                try:
+                    control = self.rundir.control()
+                    if finished.is_set():
+                        return
+                    if control.scopes.get("run") == "aborted":
+                        invocation_signal.cancel("run aborted")
+                    with self._cancellation_lock:
+                        active = list(self._active_work.items())
+                    for token, (stage, kind) in active:
+                        for scope in (f"stage:{stage}", f"kind:{kind}"):
+                            if control.scopes.get(scope) == "aborted":
+                                token.cancel(f"{scope} aborted")
+                                break
+                except Exception as exc:
+                    if not finished.is_set():
+                        invocation_signal.cancel(exception=exc)
+                    return
+
+        watcher = threading.Thread(
+            target=watch, name="yizkr-run-control", daemon=True
+        )
+        watcher.start()
+        try:
+            with cancellation_scope(self.cancellation):
+                self.cancellation.check()
+                yield
+        except KeyboardInterrupt as exc:
+            self.cancellation.cancel(exception=exc)
+            raise
+        finally:
+            self._control_active = False
+            finished.set()
+            watcher.join(timeout=1.0)
+            self.cancellation.close()
+
+    def _cancellation_reason(self, exc: RunCancelled) -> str:
+        """Keep native control reasons; never copy arbitrary exception text."""
+        reason = str(exc)
+        control = self.rundir.control()
+        if any(
+            state == "aborted" and reason == f"{scope} aborted"
+            for scope, state in control.scopes.items()
+        ):
+            return reason
+        return type(exc).__name__
+
+    @contextlib.contextmanager
+    def _stage_cancellation(self, stage: str, kind: str | None = None):
+        """Bind borrowed calls to the active stage's abort scope."""
+        token = Cancellation(
+            parent=current_cancellation() or self.cancellation
+        )
+        with self._cancellation_lock:
+            self._active_work[token] = (stage, kind)
+        try:
+            with cancellation_scope(token):
+                if self._control_active:
+                    control = self.rundir.control()
+                    if control.scopes.get("run") == "aborted":
+                        self.cancellation.cancel("run aborted")
+                    for scope in (f"stage:{stage}", f"kind:{kind}"):
+                        if control.scopes.get(scope) == "aborted":
+                            token.cancel(f"{scope} aborted")
+                            break
+                token.check()
+                yield token
+                token.check()
+        finally:
+            with self._cancellation_lock:
+                self._active_work.pop(token, None)
+            token.close()
+
     # -- stages ---------------------------------------------------------------
 
     def _run_stage(
@@ -1359,6 +1465,7 @@ class Orchestrator:
         output needs attention, if any) and when it fails, with the
         reason. The reasons are kept in the document's state, for the
         runs that reuse the stage's view."""
+        check_cancelled()
         where = {"subject": doc.sha1, "kind": doc.kind, "stage": stage}
         control = self.rundir.control()
         stopped = control.stopped(stage=stage, kind=doc.kind)
@@ -1381,7 +1488,8 @@ class Orchestrator:
             outcomes.pop(stage, None)
             doc.state.detail = detail | {"stage_results": outcomes}
         try:
-            result = compute()
+            with self._stage_cancellation(stage, doc.kind):
+                result = compute()
         except BaseException as exc:
             if typed_result:
                 from yizkr.pipeline.llm import PassPaused
@@ -1390,14 +1498,21 @@ class Orchestrator:
                 # Preserve an explicit incomplete result and its diagnostics;
                 # otherwise an earlier successful attempt cannot describe this
                 # failed, paused or cancelled computation.
-                if stage not in outcomes:
+                if (
+                    stage not in outcomes
+                    or outcomes[stage]["status"] == "complete"
+                ):
                     outcomes[stage] = {
                         "status": "paused"
                         if isinstance(exc, PassPaused)
                         else "cancelled"
-                        if isinstance(exc, KeyboardInterrupt)
+                        if isinstance(exc, (KeyboardInterrupt, RunCancelled))
                         else "failed"
                     }
+            if isinstance(exc, RunCancelled):
+                self.rundir.emit(
+                    "cancelled", reason=self._cancellation_reason(exc), **where
+                )
             if isinstance(exc, Exception):
                 reason = f"{type(exc).__name__}: {exc}"
                 self.rundir.emit("failed", reason=reason[:500], **where)
@@ -1577,6 +1692,7 @@ class Orchestrator:
 
     def _record_view(self, doc: DocumentRun, view: Path) -> None:
         """Record a published product and its generation dependencies."""
+        check_cancelled()
         observed = self._view_dependencies.pop((doc.dir, view.name))
         doc.derivations.record(
             view, inputs=observed.inputs, processing=observed.processing
@@ -1597,6 +1713,7 @@ class Orchestrator:
         A view `recheck` fails is moved aside, never deleted, with a
         `set-aside` event that gives the reason, and its record is
         forgotten. None when the view is to be made."""
+        check_cancelled()
         _role, stage = doc.views[view]
         inspected = self._inspect_view(doc, view, load, recheck)
         inspected.require_value()
@@ -2391,6 +2508,7 @@ class Orchestrator:
             result = self._transcribe(doc, self._route(doc))
             try:
                 transcription = result.require_complete()
+                check_cancelled()
                 self._record_pdf_inventory(doc)
                 if result.products is not None:
                     self._keep_reading(doc, result.products)
@@ -2571,6 +2689,7 @@ class Orchestrator:
         This describes computed products; Derivations remains the authority
         for persisted-view reuse and the caller publishes the accepted view.
         """
+        check_cancelled()
         detail = dict(doc.state.detail or {})
         outcomes = dict(detail.get("stage_results") or {})
         outcomes[stage] = {
@@ -2658,6 +2777,7 @@ class Orchestrator:
         ):
             return
         findings = self._step_critique(doc, batch)
+        check_cancelled()
         changed = _write_view(
             doc.critique,
             json.dumps(
@@ -3088,6 +3208,7 @@ class Orchestrator:
         changed = False
         if batch is None:
             batch = self._step_batch(doc)
+            check_cancelled()
             changed = self._update_batch_view(doc, batch)
             self._record_view(doc, doc.batch)
             from yizkr.pipeline import anomalies
@@ -3151,6 +3272,15 @@ class Orchestrator:
             doc.state.status = PAUSED
             self.log(f"  {doc.source.name}: {exc}")
             status = PAUSED
+        except RunCancelled as exc:
+            self._run_held = self._cancellation_reason(exc)
+            doc.state.status = PAUSED
+            self._save(doc)
+            if self.cancellation.is_set():
+                raise
+            return PAUSED
+        except WorkerShutdownTimeout:
+            raise
         except Exception as exc:  # per-document isolation: others continue
             self._fail(doc, _why(exc))
             return FAILED
@@ -3271,6 +3401,7 @@ class Orchestrator:
         self._interpretation_pending = set(parents)
         self._interpretation_failed = set()
         for owner in sorted(parents):
+            check_cancelled()
             parent = parents[owner]
             stop = self.rundir.control().stopped(
                 stage="transcription", kind=parent.kind
@@ -3293,6 +3424,13 @@ class Orchestrator:
                     raise OSError(error)
             except DispatchStopped:
                 continue
+            except RunCancelled:
+                self._interpretation_readings.pop(owner, None)
+                if self.cancellation.is_set():
+                    raise
+                continue
+            except WorkerShutdownTimeout:
+                raise
             except Exception as exc:
                 self._fail(parent, _why(exc))
                 self._interpretation_failed.add(owner)
@@ -3303,6 +3441,7 @@ class Orchestrator:
     def _advance(
         self, doc: DocumentRun, *, stop_after_extract: bool = False
     ) -> str:
+        check_cancelled()
         self._prepare_document(doc)
         content_sha1 = doc.sha1
         # content-identity dedup (ADR-0010): claim this file's bytes; if an
@@ -3358,6 +3497,7 @@ class Orchestrator:
         if stop_after_extract:
             return doc.state.status
 
+        check_cancelled()
         derivations = doc.derivations
         if batch.entities and not derivations.current(doc.equivalences):
             proposals = self._export(
@@ -3422,21 +3562,37 @@ class Orchestrator:
             return doc.state.status
 
         if not derivations.current(doc.write_result):
-            # the run's identity map must hold every mention of the batch,
-            # and the instance no other map's writes, before anything is
-            # registered or written (_mapped)
-            approved = self._approved(doc, resolved)
-            self._mapped(doc, approved, instance=True)
-            # registration is part of the write: the document's artifact,
-            # and a deck's fragments and a deck's or a PDF's bound image
-            # sources, are found or made by the SHA-1 of their bytes just
-            # before the claims that cite them are written (ADR-0025 §2)
-            doc.state.artifact_qid = self._step_register(doc)
-            self.log(f"  registered as {doc.state.artifact_qid}")
-            summary = self._step_write(doc, resolved, approved)
-            atomic_write_text(doc.write_result, json.dumps(summary, indent=2))
-            derivations.record(doc.write_result)
-            doc.state.detail = (doc.state.detail or {}) | {"write": summary}
+            stop = self.rundir.control().stopped(stage="write", kind=doc.kind)
+            if stop:
+                raise DispatchStopped(f"write not dispatched: {stop}")
+            try:
+                with self._stage_cancellation("write", doc.kind):
+                    # Confirm this batch's identity map before registration
+                    # or any other graph effect.
+                    approved = self._approved(doc, resolved)
+                    self._mapped(doc, approved, instance=True)
+                    # Register the artifact and its bound inner sources just
+                    # before writing the claims that cite them (ADR-0025).
+                    doc.state.artifact_qid = self._step_register(doc)
+                    self.log(f"  registered as {doc.state.artifact_qid}")
+                    summary = self._step_write(doc, resolved, approved)
+                    check_cancelled()
+                    atomic_write_text(
+                        doc.write_result, json.dumps(summary, indent=2)
+                    )
+                    derivations.record(doc.write_result)
+                    doc.state.detail = (doc.state.detail or {}) | {
+                        "write": summary
+                    }
+            except RunCancelled as exc:
+                self.rundir.emit(
+                    "cancelled",
+                    subject=doc.sha1,
+                    kind=doc.kind,
+                    stage="write",
+                    reason=self._cancellation_reason(exc),
+                )
+                raise
         doc.state.status = WRITTEN
         return doc.state.status
 
@@ -3555,6 +3711,10 @@ class Orchestrator:
         )
 
     def run(self) -> int:
+        with self._cancellation_scope():
+            return self._run()
+
+    def _run(self) -> int:
         from yizkr.pipeline.llm import PassPaused
         from yizkr.pipeline.transcribe import preflight_vision_transcription
 
@@ -3602,6 +3762,7 @@ class Orchestrator:
         # each run is an invocation of its own in the run directory
         self.rundir = RunDir(self.state_dir)
         self._start_run(docs)
+        self._control_active = True
 
         # the control request that stopped the run before a document, if
         # one did, and the run-scope one that held a stage, if one did
@@ -3617,6 +3778,7 @@ class Orchestrator:
             # an excerpt joins the documents once its container's
             # transcription has read it, after the documents of the folder
             for doc in docs:
+                check_cancelled()
                 control = self.rundir.control()
                 stopped = control.stopped()
                 if stopped:
@@ -3644,7 +3806,13 @@ class Orchestrator:
                         f"  (serial) paused until {doc.source.name} is written"
                     )
                     break
-        except KeyboardInterrupt:
+        except RunCancelled as exc:
+            self._end_invocation(
+                found, "stopped", reason=self._cancellation_reason(exc)
+            )
+            return 2
+        except KeyboardInterrupt as exc:
+            self.cancellation.cancel(exception=exc)
             self._end_invocation(found, "interrupted")
             raise
         except BaseException as exc:
@@ -3759,15 +3927,13 @@ class Orchestrator:
         and written after it, one at a time."""
 
         def extract_one(doc: DocumentRun) -> None:
+            check_cancelled()
             self.log(f"{doc.source.name} [{doc.state.status}]")
             self.advance(doc, stop_after_extract=True)
 
-        if self.extract_concurrency == 1:
-            for doc in docs:
-                extract_one(doc)
-            return
-        with ThreadPoolExecutor(max_workers=self.extract_concurrency) as pool:
-            list(pool.map(extract_one, docs))
+        from yizkr.pipeline.workers import map_workers
+
+        map_workers(extract_one, docs, concurrency=self.extract_concurrency)
 
     def _entity_keys(self, doc: DocumentRun) -> set[str]:
         """Name keys of a document's extractable entities, for the overlap

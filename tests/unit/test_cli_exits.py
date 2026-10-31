@@ -27,6 +27,7 @@ from yizkr.core.exits import (
     EXIT_STOPPED,
 )
 from yizkr.pipeline import scratch
+from yizkr.pipeline.cancellation import RunCancelled
 from yizkr.pipeline.llm import (
     REFUSAL_STOP,
     ClassifierRefused,
@@ -1193,6 +1194,13 @@ class TestIngestRun:
 
         assert self.run(tmp_path, monkeypatch, step) == EXIT_INTERRUPTED
         assert capsys.readouterr().err == "interrupted\n"
+
+    def test_cancellation_is_stopped(self, tmp_path, monkeypatch, capsys):
+        def step():
+            raise RunCancelled("operator abort")
+
+        assert self.run(tmp_path, monkeypatch, step) == EXIT_STOPPED
+        assert capsys.readouterr().err == "cancelled: operator abort\n"
 
     @pytest.mark.parametrize(
         "status", [EXIT_OK, EXIT_FAILED, EXIT_STOPPED], ids=str

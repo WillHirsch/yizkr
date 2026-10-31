@@ -207,7 +207,7 @@ def cli(monkeypatch, tmp_path, clock) -> RefusingCli:
     other = subprocess.run
     plain = install_fake_cli(monkeypatch, tmp_path)
     refusing = RefusingCli(plain.projects, other)
-    monkeypatch.setattr(llm.subprocess, "run", refusing)
+    monkeypatch.setattr(llm, "_run_process", refusing)
     return refusing
 
 

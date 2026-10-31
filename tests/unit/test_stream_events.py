@@ -403,7 +403,7 @@ def cli(monkeypatch, tmp_path, clock) -> StreamCli:
     other = subprocess.run
     plain = install_fake_cli(monkeypatch, tmp_path)
     fake = StreamCli(plain.projects, other)
-    monkeypatch.setattr(llm.subprocess, "run", fake)
+    monkeypatch.setattr(llm, "_run_process", fake)
     return fake
 
 
@@ -1125,14 +1125,20 @@ class TestAtOutputLimit:
         stops = ["max_tokens", "end_turn", "Max Tokens", None]
 
         class Messages:
-            def create(self, **request):
+            async def create(self, **request):
                 text = types.SimpleNamespace(type="text", text="an answer")
                 return types.SimpleNamespace(
                     model=RESOLVED, content=[text], stop_reason=stops.pop(0)
                 )
 
         package = types.ModuleType("anthropic")
-        package.Anthropic = lambda: types.SimpleNamespace(messages=Messages())
+
+        async def close():
+            pass
+
+        package.AsyncAnthropic = lambda **kwargs: types.SimpleNamespace(
+            messages=Messages(), close=close
+        )
         monkeypatch.setitem(sys.modules, "anthropic", package)
         monkeypatch.setenv("ANTHROPIC_API_KEY", "a-test-key")
         engine = llm.AnthropicClient(model=MODEL)

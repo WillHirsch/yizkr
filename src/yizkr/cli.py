@@ -2603,6 +2603,7 @@ def main(argv: list[str] | None = None) -> int:
         EXIT_REFUSED,
         EXIT_STOPPED,
     )
+    from yizkr.pipeline.cancellation import RunCancelled
     from yizkr.pipeline.llm import PassPaused
     from yizkr.pipeline.rundir import RunSettingsConflict
 
@@ -2624,6 +2625,9 @@ def main(argv: list[str] | None = None) -> int:
     except RunSettingsConflict as exc:
         print(str(exc), file=sys.stderr)
         return EXIT_REFUSED
+    except RunCancelled as exc:
+        print(f"cancelled: {exc}", file=sys.stderr)
+        return EXIT_STOPPED
     except PassPaused as exc:
         # the engine's own account of the pause, and what to do
         print(str(exc), file=sys.stderr)

@@ -184,6 +184,24 @@ def _no_claude_config(monkeypatch, tmp_path_factory):
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(missing))
 
 
+@pytest.fixture(autouse=True)
+def _no_provider_processes(monkeypatch):
+    """Unit providers require an explicit authored process stand-in."""
+    from yizkr.pipeline import llm
+
+    attempted = []
+
+    def refused(*args, **kwargs):
+        attempted.append(True)
+        pytest.fail("an offline test attempted an unmocked provider process")
+
+    monkeypatch.setattr(llm, "_run_process", refused)
+    yield
+    assert not attempted, (
+        "an offline test swallowed a provider-process refusal"
+    )
+
+
 # The stack's connection settings, which Config.load reads from the
 # environment before the env file.
 CONNECTION_VARIABLES = (

@@ -161,7 +161,7 @@ def install_fake_cli(monkeypatch, tmp_path) -> FakeCli:
     config directory and a temporary directory of its own."""
     config = tmp_path / "claude-config"
     fake = FakeCli(config / "projects")
-    monkeypatch.setattr(llm.subprocess, "run", fake)
+    monkeypatch.setattr(llm, "_run_process", fake)
     # a fresh pass: nothing pinned or paused by an earlier test
     monkeypatch.setattr(llm, "_PIN", llm._CliPin())
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
