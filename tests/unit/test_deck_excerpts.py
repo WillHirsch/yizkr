@@ -1036,10 +1036,10 @@ class TestADeckSImages:
         assert reader.read == []
         doc = document(second, "library-talk-2018.pptx")
         assert doc.state.status == AWAITING_CLAIMS, doc.state.error
-        (aside,) = this_run(second, "set-aside")
-        assert aside["reason"] == (
-            f"image {LETTER_SHA1[:12]} has no eligible, unambiguous "
-            "reading input"
+        assert any(
+            event.get("stage") == "transcription"
+            and event.get("subject") == doc.sha1
+            for event in this_run(second, "started")
         )
         assert transcription_of(doc).pages[1].images == []
         assert derived_transcription(doc.dir, LETTER_SHA1).exists()
@@ -1300,7 +1300,7 @@ class TestAGlobFollowsTheBytes:
     ):
         """A first run with no glob reads the letter's top from the booklet
         and both decks and keeps its reading; a second lists `image2.jpg`.
-        The views that mark it are set aside and made again without it,
+        The views that mark it are made again without it,
         nothing is read, and the reading still on disk makes no excerpt:
         the second deck's record names the image by `image7.jpg`, so only
         the gathered SHA-1 keeps it out. Nothing of it is registered or
@@ -1333,13 +1333,17 @@ class TestAGlobFollowsTheBytes:
         )
         assert reader.read == []
         assert again._excerpts == {}
-        reasons = {event["reason"] for event in this_run(again, "set-aside")}
-        assert reasons == {
-            f"image {SHARED_LETTER_SHA1[:12]} has no eligible, unambiguous "
-            "reading input",
-            f"the never-ingest list names image {SHARED_LETTER_SHA1[:12]}, "
-            "which it marks",
+        reread = {
+            event["subject"]
+            for event in this_run(again, "started")
+            if event.get("stage") == "transcription"
         }
+        assert reread == {doc.sha1 for doc in again.documents()}
+        for doc in again.documents():
+            assert all(
+                SHARED_LETTER_SHA1 not in page.images
+                for page in transcription_of(doc).pages
+            )
         later = document(again, "library-talk-2019.pptx")
         assert derived_transcription(later.dir, SHARED_LETTER_SHA1).exists()
         wiki = FakeWiki()

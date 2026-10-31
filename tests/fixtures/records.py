@@ -67,6 +67,7 @@ def stricter_check(monkeypatch, pattern: str, name: str = "stricter") -> None:
 
     from yizkr.pipeline import (
         anomalies,
+        media_stages,
         transcribe,
         transcription_check,
     )
@@ -93,5 +94,5 @@ def stricter_check(monkeypatch, pattern: str, name: str = "stricter") -> None:
             }
         )
 
-    for module in (transcription_check, transcribe, anomalies):
+    for module in (transcription_check, transcribe, anomalies, media_stages):
         monkeypatch.setattr(module, "check_transcription", stricter)

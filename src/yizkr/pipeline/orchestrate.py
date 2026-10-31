@@ -24,10 +24,9 @@ directory: the transcription (`transcription.json`), the batch
 critique (`critique.json`). A view is reused while the inputs recorded
 for it are unchanged, and made again when they change, or when
 `--refresh` names the role that makes it (MODEL_ROLES), which makes it
-again in place. Text documents also record their declared generation
-settings and semantic code/resource dependencies; execution and estimation
-use the same side-effect-free freshness plan. Other adapters retain
-input-only compatibility until they migrate. Reused readings still pass the
+again in place. Each stage records its declared generation settings and
+semantic code/resource dependencies; execution and estimation use the same
+side-effect-free freshness plan. Reused readings still pass the
 transcription check: a transcription made by a route whose transcriber
 checks its output (CHECKED_ROUTES) is checked again whenever it is
 reused, and one that now fails is moved aside and made again in the
@@ -245,16 +244,6 @@ PAGED = "paged"
 # and the estimate alike; route names, not the engine prefixes
 # yizkr.pipeline.anomalies.CHECKED_ROUTES judges
 CHECKED_ROUTES = frozenset(("vision", PAGED, "text-file", EXCERPT))
-# the transcription routes the driver dispatches (Orchestrator._transcribe),
-# each to the name of the Orchestrator method that transcribes by it
-TRANSCRIBERS = {
-    "vision": "_transcribe_vision",
-    PAGED: "_transcribe_paged",
-    "text-file": "_transcribe_text_file",
-    "correction": "_transcribe_correction",
-    EXCERPT: "_transcribe_excerpt",
-}
-
 # the model a role runs when the run names none of its own; the engines
 # read it themselves (yizkr.pipeline.llm)
 MODEL_VARIABLE = "YIZKR_LLM_MODEL"
@@ -820,7 +809,7 @@ class ExcerptRun(DocumentRun):
     image's bytes and its reading in its own directory (presentation.
     derived_transcription); the first one's copy of the bytes is its
     source. Its transcription is the reading the container's
-    transcription made of it (Orchestrator._transcribe_excerpt), so no
+    transcription made of it (media_stages.read_excerpt), so no
     model is asked again. Its title names one of its places, the first in
     sorted order of the names the container's source projection gives it
     (container_sources.BoundSource.names): "<the PDF's title> — page 6,
@@ -1380,7 +1369,12 @@ class Orchestrator:
             self.rundir.emit("held", reason=stopped, **where)
             raise DispatchStopped(f"{stage} not dispatched: {stopped}")
         self.rundir.emit("started", **where)
-        typed_result = stage in {"extraction", "gedcom", "critique"}
+        typed_result = stage in {
+            "transcription",
+            "extraction",
+            "gedcom",
+            "critique",
+        }
         if typed_result:
             detail = dict(doc.state.detail or {})
             outcomes = dict(detail.get("stage_results") or {})
@@ -1428,35 +1422,54 @@ class Orchestrator:
         return role in self.refresh
 
     def _processing_dependencies(
-        self, doc: DocumentRun, stage: str
-    ) -> dict[str, Any] | None:
-        """Declared generation dependencies for text and deterministic stages.
+        self, doc: DocumentRun, stage: str, *, route: str | None = None
+    ) -> dict[str, Any]:
+        """Observe declared generation inputs without creating a client."""
+        from yizkr.pipeline.textlayer import is_pdf_input
 
-        This does not start an engine or calculate its response-cache key.
-        Provider installation/session checks remain at client dispatch.
-        Other input adapters retain their existing file-based reuse rules.
-        """
         descriptor = stage_planning.STAGES[stage]
-        if descriptor.process == "deterministic":
-            configuration = {}
-        elif doc.kind != "text":
-            return None
-        elif stage == "transcription":
-            configuration = {
-                "route": self._route(doc),
-                "language": self.language,
-                "fallback_language": self.fallback_language,
-            }
-        else:
-            role = stage_planning.STAGES[stage].role
-            effort, _ = self._engine_settings(role)
-            model, _ = self._configured_model(role)
-            configuration = {
-                "engine": self.llm,
-                "model": model,
-                "effort": effort if self.llm != "anthropic" else None,
-                "epoch": self.epochs.get(role, 0),
-            }
+        configuration = {}
+        if descriptor.process != "deterministic":
+            route = route or self._route(doc)
+            if stage == "transcription":
+                from yizkr.pipeline.media_stages import (
+                    excerpt_dependencies,
+                    preparation_dependencies,
+                )
+
+                configuration.update(
+                    route=route,
+                    language=self.language,
+                    fallback_language=self.fallback_language,
+                )
+                prepared = (
+                    self._media_preparation(doc)
+                    if doc.kind != "text"
+                    else None
+                )
+                if prepared is not None:
+                    configuration["preparation"] = preparation_dependencies(
+                        prepared
+                    )
+                if route == EXCERPT:
+                    candidates = self._excerpt_candidates(doc)
+                    if not candidates:
+                        raise OSError(
+                            "no current verified container image reading"
+                        )
+                    configuration["excerpt"] = excerpt_dependencies(
+                        candidates[0]
+                    )
+            if stage != "transcription" or route in {"vision", PAGED}:
+                role = descriptor.role
+                effort, _ = self._engine_settings(role)
+                model, _ = self._configured_model(role)
+                configuration.update(
+                    engine=self.llm,
+                    model=model,
+                    effort=effort if self.llm != "anthropic" else None,
+                    epoch=self.epochs.get(role, 0),
+                )
             if stage == "extraction":
                 from yizkr.pipeline.text_stages import ExtractionRequest
 
@@ -1468,18 +1481,24 @@ class Orchestrator:
                     read_preparation=True,
                 )
         return stage_planning.processing_dependencies(
-            stage, configuration=configuration, source_sha1=doc.sha1
+            stage,
+            configuration=configuration,
+            source_sha1=doc.sha1,
+            document_kind=PDF
+            if doc.kind not in {"text", "gedcom"} and is_pdf_input(doc.source)
+            else doc.kind,
         )
 
     def _require_processing_dependencies(
-        self, doc: DocumentRun, stage: str
-    ) -> dict[str, Any] | None:
+        self, doc: DocumentRun, stage: str, *, route: str | None = None
+    ) -> dict[str, Any]:
         """Observe required processing inputs before a stage may execute."""
         try:
-            return self._processing_dependencies(doc, stage)
+            return self._processing_dependencies(doc, stage, route=route)
         except OSError as exc:
             raise ProcessingUnavailable(
-                f"cannot inspect {stage} processing dependencies: {exc}"
+                f"cannot inspect {stage} processing dependencies: "
+                f"{type(exc).__name__}: {exc}"
             ) from exc
 
     def _inspect_view(
@@ -1760,67 +1779,40 @@ class Orchestrator:
             inventory, doc.dir, data=data, excluded=self._excluded_image
         )
 
-    def _presentation(self, doc: DocumentRun):
-        """The deck unpacked, kept by the SHA-1 of its bytes: a deck is
-        unpacked once for each content it has had, so one whose bytes
-        change between two runs of the orchestrator is unpacked again."""
-        from yizkr.pipeline.presentation import unpack_pptx
+    def _media_preparation(self, doc: DocumentRun):
+        """Current deterministic preparation, shared by readers and reuse."""
+        from yizkr.pipeline.media_stages import (
+            PreparationRequest,
+            prepare_container,
+        )
 
-        if not hasattr(self, "_presentation_cache"):
-            self._presentation_cache: dict[str, object] = {}
-        if doc.sha1 not in self._presentation_cache:
-            self._presentation_cache[doc.sha1] = unpack_pptx(doc.source)
-        return self._presentation_cache[doc.sha1]
+        if not hasattr(self, "_media_preparations"):
+            self._media_preparations = {}
+        key = (doc.dir, doc.sha1)
+        if key not in self._media_preparations:
+            self._media_preparations[key] = prepare_container(
+                PreparationRequest(
+                    source=doc.source,
+                    expected_artifact=ArtifactRef(sha1=doc.sha1),
+                    existing_directory=doc.dir,
+                    excluded=self._excluded_image,
+                )
+            )
+        return self._media_preparations[key]
+
+    def _presentation(self, doc: DocumentRun):
+        prepared = self._media_preparation(doc)
+        if prepared is None or prepared.presentation is None:
+            raise ValueError("source has no prepared presentation")
+        return prepared.presentation
 
     def _container_preparation(self, doc: DocumentRun):
-        """Prepare source correspondence without changing persisted views."""
-        from yizkr.pipeline.container_inventory import read_inventory
-        from yizkr.pipeline.container_sources import prepare_sources
-        from yizkr.pipeline.presentation import read_derived_media
-        from yizkr.pipeline.textlayer import is_pdf_input
-
-        if doc.kind != "presentation" and not is_pdf_input(doc.source):
+        """Expose current preparation without publishing persisted views."""
+        prepared = self._media_preparation(doc)
+        if prepared is None:
             return None
-        if not hasattr(self, "_container_preparations"):
-            self._container_preparations = {}
-        key = (doc.dir, doc.sha1)
-        if key in self._container_preparations:
-            # Readers may adopt a prepared copy and add render lineage.
-            # Observe their current inventory, not the earlier object.
-            if doc.kind == "presentation":
-                content = self._presentation(doc)
-                return content.inventory, content.inventory_bytes
-            plan = self._pdf_structure(doc)
-            return plan.inventory, plan.data
-        previous = read_inventory(doc.dir, verify_bytes=False)
-        legacy = read_derived_media(doc.dir)
-        if doc.kind == "presentation":
-            content = self._presentation(doc)
-            inventory = content.inventory
-            data = dict(content.inventory_bytes)
-            if inventory is None or inventory.source.sha1 != doc.sha1:
-                raise ValueError(
-                    "container inventory belongs to another source"
-                )
-        else:
-            plan = self._pdf_structure(doc)
-            inventory, data = plan.inventory, plan.data
-        prepared = prepare_sources(
-            inventory,
-            data,
-            doc.dir,
-            previous=previous,
-            legacy=legacy,
-            excluded=self._excluded_image,
-        )
-        if doc.kind == "presentation":
-            content.inventory = prepared
-            content.inventory_bytes = data
-        else:
-            plan.replace_inventory(prepared)
-            plan.apply_exclusions(self._excluded_image)
-        self._container_preparations[key] = prepared, data
-        return prepared, data
+        # Readers can add representations and outcomes to this preparation.
+        return prepared.inventory, prepared.data
 
     def _record_container_inventory(self, doc: DocumentRun) -> None:
         """Publish source correspondence while retaining human products."""
@@ -1832,28 +1824,10 @@ class Orchestrator:
             keep_inventory(inventory, data, doc.dir)
 
     def _pdf_inventory(self, doc: DocumentRun):
-        self._container_preparation(doc)
-        return self._pdf_structure(doc)
-
-    def _pdf_structure(self, doc: DocumentRun):
-        """Prepare source parts and admission once per PDF in this invocation.
-
-        This operation is read-only so execution and estimation share the
-        same plan. A persisted inventory does not authorize current input;
-        its exclusions and preparation are observed again from source bytes.
-        """
-        from yizkr.pipeline.pdf_inventory import inventory_pdf
-
-        if not hasattr(self, "_pdf_inventory_cache"):
-            self._pdf_inventory_cache = {}
-        if doc.sha1 not in self._pdf_inventory_cache:
-            data = doc.source.read_bytes()
-            if hashlib.sha1(data).hexdigest() != doc.sha1:
-                raise ValueError("PDF source changed during preparation")
-            self._pdf_inventory_cache[doc.sha1] = inventory_pdf(
-                data, self._excluded_image
-            )
-        return self._pdf_inventory_cache[doc.sha1]
+        prepared = self._media_preparation(doc)
+        if prepared is None or prepared.pdf is None:
+            raise ValueError("source has no prepared PDF")
+        return prepared.pdf
 
     def _record_pdf_inventory(self, doc: DocumentRun) -> None:
         """Publish PDF source parts before choosing or reusing a reading.
@@ -2189,35 +2163,33 @@ class Orchestrator:
             update={"source_context": source_context(transcription, sources)}
         )
 
+    def _excerpt_candidates(self, doc: ExcerptRun):
+        """Verified readings in the existing deterministic placement order."""
+        return [
+            check.reading
+            for container in doc.containers
+            if (check := self._image_reading(container, doc.sha1)).reading
+            is not None
+        ]
+
     def _locate_excerpt(self, doc: ExcerptRun, transcription):
         """Bind excerpt readings to verified original image parts."""
         from yizkr.pipeline.container_sources import image_source_context
         from yizkr.pipeline.source_context import SourceContext
-        from yizkr.pipeline.transcribe import Transcription, reading_digest
+        from yizkr.pipeline.transcribe import reading_digest
 
         context = SourceContext(
             container=ArtifactRef(sha1=doc.containers[0].sha1),
             limitations=["excerpt has no matching verified container reading"],
         )
-        for container in doc.containers:
-            projection = self._container_sources(container)
-            source = projection.sources.get(doc.sha1) if projection else None
-            if source is None or source.reading_path is None:
-                continue
-            if self._image_failure(container, doc.sha1) is not None:
-                continue
-            kept = Transcription.model_validate_json(
-                (container.dir / source.reading_path).read_bytes()
+        for candidate in self._excerpt_candidates(doc):
+            # Language resolution can change without changing the image text.
+            kept = candidate.transcription.model_copy(
+                update={"language": transcription.language}
             )
-            # The excerpt may resolve its language under current settings;
-            # its actual reading content must still be the verified product.
-            kept = kept.model_copy(update={"language": transcription.language})
             if reading_digest(kept) != reading_digest(transcription):
                 continue
-            context = image_source_context(
-                transcription,
-                [projection.support(part_id) for part_id in source.part_ids],
-            )
+            context = image_source_context(transcription, candidate.supports)
             break
         return transcription.model_copy(update={"source_context": context})
 
@@ -2388,230 +2360,134 @@ class Orchestrator:
                 return failure
         return None
 
+    def _image_reading(
+        self, doc: DocumentRun, sha1: str, *, verify_product: bool = True
+    ):
+        """Verify a saved image product against current source preparation."""
+        from yizkr.pipeline.media_stages import verify_image_reading
+
+        return verify_image_reading(
+            self._container_sources(doc),
+            sha1,
+            doc.dir,
+            verify_product=verify_product,
+        )
+
     def _image_failure(
         self, doc: DocumentRun, sha1: str, *, verify_product: bool = True
     ) -> str | None:
-        """Why the check fails the transcription the document's directory
-        keeps of the image with this SHA-1, or None when it passes, or
-        when the directory keeps none: an image's reading that failed has
-        none, and nothing downstream reads one."""
-        from yizkr.pipeline.presentation import derived_transcription
-        from yizkr.pipeline.transcribe import Transcription, reading_digest
-        from yizkr.pipeline.transcription_check import (
-            TranscriptionCheckFailed,
-            check_transcription,
-        )
-
-        path = derived_transcription(doc.dir, sha1)
-        image = f"image {sha1[:12]}"
-        try:
-            payload = path.read_bytes()
-            kept = Transcription.model_validate_json(payload)
-        except FileNotFoundError:
-            return None
-        except (OSError, ValueError, RecursionError) as exc:
-            return f"the transcription of {image} cannot be read ({_why(exc)})"
-        if kept.artifact.sha1 != sha1:
-            return f"the transcription of {image} names another image"
-        projection = self._container_sources(doc)
-        source = projection.sources.get(sha1) if projection else None
-        if source is None or not source.readable:
-            return f"{image} has no eligible, unambiguous reading input"
-        if verify_product:
-            digest = hashlib.sha256(payload).hexdigest()
-            for part in projection.inventory.parts:
-                if part.id not in source.part_ids:
-                    continue
-                outcome = part.reading
-                if (
-                    outcome.state == "read"
-                    and outcome.product == path.relative_to(doc.dir).as_posix()
-                    and outcome.product_sha256 != digest
-                ):
-                    return f"the recorded transcription of {image} has changed"
-        if kept.source_context is not None:
-            digest = reading_digest(kept)
-            if any(
-                located.support.reading_sha256 not in {None, digest}
-                for located in kept.source_context.readings
-            ):
-                return f"the source support of {image} names another reading"
-        observed_input = kept.reading_input or kept.artifact
-        if observed_input != source.current_input.representation:
-            return f"the prepared representation of {image} has changed"
-        check = check_transcription(
-            kept.text, pages=1, record=kept.record(), expect_record=True
-        )
-        if check.passed:
-            return None
-        return f"{TranscriptionCheckFailed(check)} ({image})"
+        return self._image_reading(
+            doc, sha1, verify_product=verify_product
+        ).failure
 
     def _step_transcribe(self, doc: DocumentRun):
-        """Transcribe the document by its route, record the language it
-        was found to be in, and write the transcription view. What a
-        container read page by page made beside its transcription, its
-        images and their transcriptions, is kept first (`_keep_reading`),
-        and what of it needs attention is the stage's attention."""
+        """Read through the shared operation, then publish its products."""
         from yizkr.pipeline.textlayer import is_pdf_input
         from yizkr.pipeline.transcribe import is_paged
 
-        method = self._route(doc)
-
         def transcribe():
             self._record_pdf_inventory(doc)
-            return self._transcribe(doc, method)
+            result = self._transcribe(doc, self._route(doc))
+            try:
+                transcription = result.require_complete()
+                self._record_pdf_inventory(doc)
+                if result.products is not None:
+                    self._keep_reading(doc, result.products)
+                resolution = result.resolution
+                doc.state.detail = (doc.state.detail or {}) | {
+                    "language": {
+                        "code": resolution.code,
+                        "source": resolution.source,
+                        "confidence": resolution.confidence,
+                    }
+                }
+                changed = _write_view(
+                    doc.transcription, transcription.model_dump_json(indent=2)
+                )
+                if is_pdf_input(doc.source):
+                    self._keep_inventory_readings(
+                        doc, transcription=transcription
+                    )
+                if is_paged(transcription) and changed:
+                    self.log(
+                        f"  {doc.source.name}: {_read_by_page(transcription)}"
+                    )
+                if self.language == "auto" and changed:
+                    self.log(
+                        f"  {doc.source.name}: language "
+                        f"{resolution.describe()}"
+                    )
+            finally:
+                result.close()
+            self._record_stage_result(doc, "transcription", result)
+            return result
 
-        transcription, resolution = self._run_stage(
+        result = self._run_stage(
             doc,
             "transcription",
             transcribe,
-            attention=_reading_attention,
+            attention=lambda result: result.attention,
         )
-        self._record_pdf_inventory(doc)
-        reading = transcription.reading
-        if reading is not None:
-            try:
-                self._keep_reading(doc, transcription)
-            finally:
-                reading.close()
-                transcription.forget_reading()
-        # detection is a per-document choice with real graph effect (the
-        # excerpt language tag): record it, and surface it when it was
-        # inferred rather than forced, so a wrong guess is reviewable.
-        doc.state.detail = (doc.state.detail or {}) | {
-            "language": {
-                "code": resolution.code,
-                "source": resolution.source,
-                "confidence": resolution.confidence,
-            }
-        }
-        changed = _write_view(
-            doc.transcription, transcription.model_dump_json(indent=2)
-        )
-        if is_pdf_input(doc.source):
-            self._keep_inventory_readings(doc, transcription=transcription)
-        if is_paged(transcription) and changed:
-            self.log(f"  {doc.source.name}: {_read_by_page(transcription)}")
-        if self.language == "auto" and changed:
-            self.log(f"  {doc.source.name}: language {resolution.describe()}")
-        return transcription
+        return result.transcription
 
     def _transcribe(self, doc: DocumentRun, method: str):
-        """(transcription, language resolution) by the routed method, its
-        transcriber named in TRANSCRIBERS."""
-        return getattr(self, TRANSCRIBERS[method])(doc)
-
-    def _transcribe_excerpt(self, doc: DocumentRun):
-        """(transcription, language resolution) of an excerpt: the reading
-        of its image that a container placing it keeps (presentation.
-        derived_transcription), the first of them whose reading names the
-        image and passes the check (`_image_failure`). No model is asked:
-        the container's transcription read the image, through the LLM
-        cache. Its class and pages are the reading's; its flag is the one
-        the check made now raises on the reading, as a reused view's is,
-        not the one stored with it; and its language comes from the
-        reading's record (language.record_language), as a vision
-        transcription's does; from its text (language.resolve_language)
-        only for a reading with no record. RuntimeError when none keeps one."""
-        from yizkr.pipeline.language import record_language, resolve_language
-        from yizkr.pipeline.transcribe import Transcription
-        from yizkr.pipeline.transcription_check import check_transcription
-
-        for container in doc.containers:
-            projection = self._container_sources(container)
-            source = projection.sources.get(doc.sha1) if projection else None
-            if source is None or source.reading_path is None:
-                continue
-            path = container.dir / source.reading_path
-            if self._image_failure(container, doc.sha1):
-                continue
-            kept = Transcription.model_validate_json(path.read_text())
-            record = kept.record()
-            resolution = (
-                record_language(
-                    record.pages,
-                    self.language,
-                    fallback=self.fallback_language,
-                )
-                if record is not None
-                else resolve_language(
-                    kept.text, self.language, fallback=self.fallback_language
-                )
-            )
-            check = check_transcription(
-                kept.text, pages=1, record=record, expect_record=True
-            )
-            flag = check.signature if check.flagged else None
-            return kept.model_copy(
-                update={"language": resolution.code, "flag": flag}
-            ), resolution
-        raise RuntimeError(
-            f"no container that places image {doc.sha1[:12]} keeps a reading "
-            "of it that passes the transcription check"
+        """Construct a shared read request without publishing any products."""
+        from yizkr.pipeline.media_stages import (
+            ExcerptReadRequest,
+            MediaReadRequest,
+            MediaReadResult,
+            read_excerpt,
+            read_media,
         )
-
-    def _transcribe_paged(self, doc: DocumentRun):
-        """(transcription, language resolution) by the paged route: a
-        container read page by page by its format's reader
-        (transcribe.PagedTranscriber), a deck slide by slide
-        (transcribe.DeckTranscriber) and a PDF page by page when any of its
-        pages has a usable text layer or it reads an image on its own
-        (transcribe.PdfPageTranscriber); a PDF with neither is read whole
-        (`_transcribe_vision`). Nothing is written: what the page-by-page
-        reading made beside the transcription rides on it
-        (`Transcription.reading`) for `_step_transcribe` to keep."""
-        from yizkr.pipeline.transcribe import (
-            DeckTranscriber,
-            PdfPageTranscriber,
-        )
-
-        reader = (
-            DeckTranscriber
-            if doc.source.suffix.lower() in PRESENTATION_SUFFIXES
-            else PdfPageTranscriber
-        )
-        self._container_preparation(doc)
-        paged = reader(
-            functools.partial(self._llm, "transcribe", doc),
-            language=self.language,
-            fallback_language=self.fallback_language,
-            excluded=self._excluded_image,
-            **(
-                {"inventory": self._pdf_inventory(doc)}
-                if reader is PdfPageTranscriber
-                else {"content": self._presentation(doc)}
-            ),
-        )
-        transcription = paged.transcribe(doc.source)
-        if transcription is not None:
-            return transcription, paged.last_resolution
-        return self._transcribe_vision(doc)
-
-    def _transcribe_vision(self, doc: DocumentRun):
-        """(transcription, language resolution) by the vision engine,
-        reading the document whole: an image, or a PDF none of whose
-        pages has a usable text layer and none of whose images is read on
-        its own."""
+        from yizkr.pipeline.text_stages import TextReadRequest, read_text
         from yizkr.pipeline.textlayer import check_pdf_vision, is_pdf_input
-        from yizkr.pipeline.transcribe import LlmVisionTranscriber
 
-        inventory = None
-        if is_pdf_input(doc.source):
-            inventory = self._pdf_inventory(doc)
-            check_pdf_vision(
-                doc.source, self._excluded_image, inventory=inventory
+        if method == EXCERPT:
+            return read_excerpt(
+                ExcerptReadRequest(
+                    owner=ArtifactRef(sha1=doc.sha1),
+                    candidates=self._excerpt_candidates(doc),
+                    language=self.language,
+                    fallback_language=self.fallback_language,
+                )
             )
-        # the transcriber checks what the engine or the cache answers, and
-        # rejects an answer that fails the check (ADR-0032)
-        transcriber = LlmVisionTranscriber(
-            self._llm("transcribe", doc),
-            language=self.language,
-            fallback_language=self.fallback_language,
-            excluded=self._excluded_image,
-            pdf_inventory=inventory,
+        if method in {PAGED, "vision"}:
+            return read_media(
+                MediaReadRequest(
+                    source=doc.source,
+                    route=method,
+                    expected_artifact=ArtifactRef(sha1=doc.sha1),
+                    language=self.language,
+                    fallback_language=self.fallback_language,
+                    prepared=self._media_preparation(doc),
+                    excluded=self._excluded_image,
+                ),
+                client=functools.partial(self._llm, "transcribe", doc),
+            )
+        if method not in {"text-file", "correction"}:
+            raise ValueError(f"unknown transcription route: {method}")
+        if method == "correction" and is_pdf_input(doc.source):
+            check_pdf_vision(
+                doc.source,
+                self._excluded_image,
+                inventory=self._pdf_inventory(doc),
+            )
+        result = read_text(
+            TextReadRequest(
+                source=doc.source,
+                text_file=doc.correction
+                if method == "correction"
+                else doc.source,
+                language=self.language,
+                fallback_language=self.fallback_language,
+                correction=method == "correction",
+            )
         )
-        transcription = transcriber.transcribe(doc.source)
-        return transcription, transcriber.last_resolution
+        return MediaReadResult(
+            transcription=result.transcription,
+            resolution=result.resolution,
+            dependencies=result.dependencies,
+        )
 
     def _excluded_image(self, sha1: str, names: Sequence[str] = ()) -> bool:
         """Does the never-ingest list name an image a paged container
@@ -2627,7 +2503,7 @@ class Orchestrator:
             for name in names or [None]
         )
 
-    def _keep_reading(self, doc: DocumentRun, transcription) -> None:
+    def _keep_reading(self, doc: DocumentRun, reading) -> None:
         """Publish image readings beside the source inventory.
 
         Reading paths retain their supported compatibility names. Source and
@@ -2636,7 +2512,6 @@ class Orchestrator:
         """
         from yizkr.pipeline.presentation import derived_transcription
 
-        reading = transcription.reading
         self._record_container_inventory(doc)
         for image in reading.images:
             path = derived_transcription(doc.dir, image.sha1)
@@ -2647,40 +2522,6 @@ class Orchestrator:
                     path, image.transcription.model_dump_json(indent=2)
                 )
         self._keep_inventory_readings(doc, reading)
-
-    def _transcribe_text_file(self, doc: DocumentRun):
-        from yizkr.pipeline.text_stages import TextReadRequest, read_text
-
-        result = read_text(
-            TextReadRequest(
-                source=doc.source,
-                text_file=doc.source,
-                language=self.language,
-                fallback_language=self.fallback_language,
-            )
-        )
-        return result.transcription, result.resolution
-
-    def _transcribe_correction(self, doc: DocumentRun):
-        from yizkr.pipeline.text_stages import TextReadRequest, read_text
-        from yizkr.pipeline.textlayer import check_pdf_vision, is_pdf_input
-
-        if is_pdf_input(doc.source):
-            check_pdf_vision(
-                doc.source,
-                self._excluded_image,
-                inventory=self._pdf_inventory(doc),
-            )
-        result = read_text(
-            TextReadRequest(
-                source=doc.source,
-                text_file=doc.correction,
-                language=self.language,
-                fallback_language=self.fallback_language,
-                correction=True,
-            )
-        )
-        return result.transcription, result.resolution
 
     def _step_extract(self, doc: DocumentRun, transcription) -> ClaimBatch:
         from yizkr.pipeline import text_stages
@@ -3116,7 +2957,6 @@ class Orchestrator:
                 sha1 in corpus
                 or medium.reading_path is None
                 or not medium.readable
-                or self._image_failure(doc, sha1) is not None
                 or not self._image_shows_a_page(doc, sha1)
             ):
                 continue
@@ -3136,20 +2976,15 @@ class Orchestrator:
         document: its record calls some page transcribed or illegible,
         not every page blank or not a document page (a reading with no
         record is judged by its text alone, and does)."""
-        from yizkr.pipeline.transcribe import Transcription
         from yizkr.pipeline.transcription_record import (
             BLANK,
             NOT_A_DOCUMENT_PAGE,
         )
 
-        projection = self._container_sources(doc)
-        source = projection.sources.get(sha1) if projection else None
-        if source is None or source.reading_path is None:
+        checked = self._image_reading(doc, sha1)
+        if checked.reading is None:
             return False
-        kept = Transcription.model_validate_json(
-            (doc.dir / source.reading_path).read_text()
-        )
-        record = kept.record()
+        record = checked.reading.transcription.record()
         nothing = {BLANK, NOT_A_DOCUMENT_PAGE}
         return record is None or not set(record.statuses()) <= nothing
 
@@ -4004,15 +3839,6 @@ def _read_by_page(transcription) -> str:
         [f"{count} {method}" for method, count in sorted(methods.items())]
         + [f"{images} image(s) read on their own"]
     )
-
-
-def _reading_attention(result: tuple) -> list[str]:
-    """What of a page-by-page reading of a container needs attention
-    (transcribe.PagedReading.attention), for the transcription stage's
-    `done` event: nothing for any other transcription."""
-    transcription, _resolution = result
-    reading = transcription.reading
-    return reading.attention() if reading is not None else []
 
 
 def _findings(text: str) -> list:

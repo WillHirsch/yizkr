@@ -61,7 +61,6 @@ from yizkr.pipeline.estimate import FIRST_TURNS, Estimator, StageCalls
 from yizkr.pipeline.llmcache import CacheRefused
 from yizkr.pipeline.orchestrate import (
     CHECKED_ROUTES,
-    TRANSCRIBERS,
     Orchestrator,
     ProcessingUnavailable,
 )
@@ -1724,6 +1723,89 @@ class TestCacheAsIs:
 
 
 class TestNothingTouched:
+    def test_replaced_media_observes_vision_dependencies_before_old_correction(
+        self, tmp_path, engine, monkeypatch
+    ):
+        corpus = Corpus(tmp_path / "corpus")
+        corpus.image(PHOTO, "studio-photo-1890s")
+        run(tmp_path, corpus, engine)
+        (run_dir,) = scratch.runs_in(runs_dir(tmp_path))
+        correction = run_dir / Path(PHOTO).stem / "transcription.corrected.txt"
+        correction.write_text(corpus.texts[PHOTO])
+        source = corpus.folder / PHOTO
+        source.write_bytes(source.read_bytes() + b"changed fictional source")
+        original = stage_planning.processing_dependencies
+        routes = []
+
+        def unreadable_vision(stage, **kwargs):
+            if stage == "transcription":
+                route = kwargs["configuration"]["route"]
+                routes.append(route)
+                if route == "vision":
+                    raise OSError("fictional vision dependency is unreadable")
+            return original(stage, **kwargs)
+
+        monkeypatch.setattr(
+            stage_planning, "processing_dependencies", unreadable_vision
+        )
+        before = tree(tmp_path)
+        with pytest.raises(RuntimeError, match="cannot inspect transcription"):
+            estimate_of(tmp_path, corpus, engine, resume=LATEST)
+        assert routes == ["vision"]
+        assert tree(tmp_path) == before
+
+    def test_native_container_estimate_needs_no_model_client(
+        self, tmp_path, engine, monkeypatch
+    ):
+        corpus = Corpus(tmp_path / "corpus")
+        corpus.deck("Hutmacherei.pptx", "gegr. 1863, Brunnenring 35")
+
+        def refuse_client(*args, **kwargs):
+            raise AssertionError("native text must not construct a model")
+
+        monkeypatch.setattr(llm, "make_client", refuse_client)
+        before = tree(tmp_path)
+        counted = estimate_of(tmp_path, corpus, engine, until="transcription")
+        assert counted.stages["transcription"].made == 1
+        assert not per_stage(counted, "engine_calls")
+        assert tree(tmp_path) == before
+
+    @pytest.mark.parametrize("kind", ["media", "presentation"])
+    @pytest.mark.parametrize("stage", ["transcription", "extraction"])
+    @pytest.mark.parametrize("resume", [False, True])
+    def test_media_processing_must_be_observable_without_writing(
+        self, tmp_path, engine, monkeypatch, kind, stage, resume
+    ):
+        corpus = Corpus(tmp_path / "corpus")
+        if kind == "media":
+            corpus.image(PHOTO, "studio-photo-1890s")
+        else:
+            corpus.deck("Hutmacherei.pptx", "gegr. 1863, Brunnenring 35")
+        if resume:
+            run(tmp_path, corpus, engine)
+        previous = stage_planning.processing_dependencies
+
+        def unreadable(name, **kwargs):
+            if name == stage:
+                raise OSError("fictional media dependency is unreadable")
+            return previous(name, **kwargs)
+
+        monkeypatch.setattr(
+            stage_planning, "processing_dependencies", unreadable
+        )
+        before, calls = tree(tmp_path), len(engine.calls)
+        with pytest.raises(
+            RuntimeError, match=f"cannot inspect {stage} processing"
+        ):
+            estimate_of(
+                tmp_path,
+                corpus,
+                engine,
+                **({"resume": LATEST} if resume else {}),
+            )
+        assert tree(tmp_path) == before
+        assert len(engine.calls) == calls
+
     @pytest.mark.parametrize("resume", [False, True], ids=["fresh", "changed"])
     def test_missing_processing_blocks_after_an_upstream_read(
         self, tmp_path, engine, monkeypatch, resume
@@ -1906,9 +1988,7 @@ class TestCheckedRoutes:
     CHECKED_ROUTES. Each looks the view up through a stand-in that notes
     whether it was handed a recheck; nothing is read or run."""
 
-    # every route the driver transcribes by (Orchestrator._transcribe),
-    # read from its dispatch map (#662)
-    ROUTES = tuple(TRANSCRIBERS)
+    ROUTES = ("vision", "paged", "text-file", "correction", "excerpt")
     # the dispatched routes whose transcribers do not check their output:
     # a curator's correction is taken as it stands
     UNCHECKED = frozenset({"correction"})
@@ -1918,18 +1998,6 @@ class TestCheckedRoutes:
         every checked route is dispatched."""
         assert set(self.ROUTES) == CHECKED_ROUTES | self.UNCHECKED
         assert not CHECKED_ROUTES & self.UNCHECKED
-
-    def test_the_driver_dispatches_by_the_map(self, monkeypatch):
-        """Orchestrator._transcribe calls the method its route names."""
-        called = []
-        for name in TRANSCRIBERS.values():
-            monkeypatch.setattr(
-                Orchestrator, name, lambda self, doc, n=name: called.append(n)
-            )
-        driver = object.__new__(Orchestrator)
-        for route in self.ROUTES:
-            driver._transcribe(None, route)
-        assert called == [TRANSCRIBERS[r] for r in self.ROUTES]
 
     @pytest.mark.parametrize("route", ROUTES)
     def test_the_estimate_rechecks_where_the_driver_does(
@@ -1969,6 +2037,11 @@ class TestCheckedRoutes:
         with pytest.raises(_Looked):
             estimator._transcription(doc, False, None)
         monkeypatch.setattr(Estimator, "_fresh", lambda self, doc: False)
+        monkeypatch.setattr(
+            Estimator,
+            "_require_processing_dependencies",
+            lambda *args, **kwargs: {},
+        )
         monkeypatch.setattr(Estimator, "_stands", looked("excerpt"))
         with pytest.raises(_Looked):
             estimator._stale_stages(doc, ["transcription"])

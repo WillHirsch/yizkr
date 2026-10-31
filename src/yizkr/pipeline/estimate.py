@@ -553,6 +553,7 @@ class Estimator(ScratchDriver):
         self._tally = _Tally(self._asked)
         self._context_made: dict[str, _Made] = {}
         self._context_images: dict[str, dict[str, Transcription]] = {}
+        self._reading_pages = False
 
     def run(self) -> int:
         """An estimator counts a run's calls, and never makes the run:
@@ -563,8 +564,11 @@ class Estimator(ScratchDriver):
         """The role's client for one document, as the driver's stages see
         it, but for the engine: behind the cache as it is, keyed as the
         run keys its calls, and answering none itself; what the cache
-        does is counted for the stage in hand. The role's client is
-        started already (_engine_for)."""
+        does is counted for the stage in hand. A deterministic reading
+        never requests this capability and starts no client."""
+        self._engine_for(role)
+        if role == "transcribe":
+            self._keyed[role].reading_pages = self._reading_pages
         return llm.cached_client(
             self._keyed[role],
             self._as_is,
@@ -651,6 +655,13 @@ class Estimator(ScratchDriver):
             if self._within("transcription"):
                 for owner in sorted(parents):
                     parent = parents[owner]
+                    self._require_processing_dependencies(
+                        parent,
+                        "transcription",
+                        route=self._transcription_route(
+                            parent, self._fresh(parent)
+                        ),
+                    )
                     self._tally = _Tally(self._asked)
                     outcome = self._transcription(
                         parent, self._fresh(parent), _Made()
@@ -767,6 +778,13 @@ class Estimator(ScratchDriver):
         """
         return self._inspect_view(doc, view, load, recheck).require_value()
 
+    def _transcription_route(self, doc: DocumentRun, fresh: bool) -> str:
+        """The route after execution would set aside an obsolete directory."""
+        if not fresh:
+            return self._route(doc)
+        route = route_transcription(doc.source, None)
+        return EXCERPT if doc.kind == EXCERPT and route == "vision" else route
+
     def _count(self, doc: DocumentRun) -> dict[str, _Made]:
         """What each stage the invocation plans for the document comes to,
         in order, up to one that fails in the run."""
@@ -806,11 +824,18 @@ class Estimator(ScratchDriver):
                     changed=view is None,
                 )
                 continue
-            if doc.kind == "text":
-                # Fresh views and changed upstream products cannot be
-                # reused, but still need inspectable generation inputs
-                # before any model client or estimated call is planned.
-                self._require_processing_dependencies(doc, stage)
+            # Fresh views and changed upstream products cannot be reused,
+            # but still need inspectable generation inputs before any
+            # model client or estimated call is planned.
+            self._require_processing_dependencies(
+                doc,
+                stage,
+                **(
+                    {"route": self._transcription_route(doc, fresh)}
+                    if stage == "transcription"
+                    else {}
+                ),
+            )
             self._tally = _Tally(self._asked)
             if stage == "critique":
                 # the critique reads the batch and the transcription
@@ -829,9 +854,7 @@ class Estimator(ScratchDriver):
     ) -> _Made:
         from yizkr.pipeline.textlayer import PdfExclusionError, is_pdf_input
 
-        method = route_transcription(
-            doc.source, None if fresh else doc.correction
-        )
+        method = self._transcription_route(doc, fresh)
         if not fresh:
             recheck = (
                 functools.partial(self._transcription_failure, doc)
@@ -851,40 +874,45 @@ class Estimator(ScratchDriver):
                 located = self._locate_transcription(doc, view)
                 changed = located.source_context != view.source_context
                 return _Made(reused=True, view=located, changed=changed)
-        if method in ("vision", PAGED):
-            self._engine_for("transcribe")
         made = _Made(tally=self._tally)
         keyed = self._keyed.get("transcribe")
-        paged = keyed is not None and method == PAGED
-        if paged:
-            keyed.reading_pages, keyed.stood_in = True, 0
+        self._reading_pages = method == PAGED
+        if keyed is not None:
+            keyed.stood_in = 0
+        result = None
         try:
-            transcription, _resolution = self._transcribe(doc, method)
+            result = self._transcribe(doc, method)
+            transcription = result.require_complete()
             transcription = self._locate_transcription(doc, transcription)
+            # Keep actual cached image readings before temporary prepared
+            # files are closed. Unknown model answers remain estimates.
+            if result.products is not None:
+                self._context_images[doc.sha1] = {
+                    image.sha1: image.transcription
+                    for image in result.products.images
+                    if image.transcription is not None
+                    and image.failure is None
+                }
+                made.images = [
+                    image.sha1
+                    for image in result.products.images
+                    if _may_be_excerpt(image)
+                ]
         except _Unanswered:
             return made
+        except (ScratchRefused, RunSettingsConflict, llm.PassPaused):
+            raise
         except Exception as exc:
             made.fails = _why(exc)
             return made
         finally:
-            if paged:
+            self._reading_pages = False
+            keyed = self._keyed.get("transcribe")
+            if keyed is not None:
                 keyed.reading_pages = False
-        # a container read page by page keeps its images in a scratch folder,
-        # which the estimate keeps nothing of but their SHA-1s
-        if transcription.reading is not None:
-            self._context_images[doc.sha1] = {
-                image.sha1: image.transcription
-                for image in transcription.reading.images
-                if image.transcription is not None and image.failure is None
-            }
-            made.images = [
-                image.sha1
-                for image in transcription.reading.images
-                if _may_be_excerpt(image)
-            ]
-            transcription.reading.close()
-            transcription.forget_reading()
-        if paged and keyed.stood_in:
+            if result is not None:
+                result.close()
+        if method == PAGED and keyed is not None and keyed.stood_in:
             # a reading stood in for the engine's: the transcription is the
             # engine's to make, and the extraction after it is estimated
             return made
@@ -1249,7 +1277,8 @@ class Estimator(ScratchDriver):
         judged as they stand; otherwise, or when it cannot be made (the
         excerpt fails there), it is the first stage made, and every one
         after it is made too."""
-        route = self._route(excerpt)
+        fresh = self._fresh(excerpt)
+        route = self._transcription_route(excerpt, fresh)
         checked = route in CHECKED_ROUTES
         views = {
             "transcription": (
@@ -1266,7 +1295,13 @@ class Estimator(ScratchDriver):
             ),
             "critique": (excerpt.critique, _findings, _unreadable_critique),
         }
-        if self._fresh(excerpt):
+        for stage in planned:
+            self._require_processing_dependencies(
+                excerpt,
+                stage,
+                **({"route": route} if stage == "transcription" else {}),
+            )
+        if fresh:
             return list(planned)
         unknown_context = False
         if any(stage in {"extraction", "critique"} for stage in planned):
@@ -1283,7 +1318,8 @@ class Estimator(ScratchDriver):
             if stage != "transcription":
                 return left + planned[at:]
             try:
-                remade, _resolution = self._transcribe(excerpt, route)
+                with self._transcribe(excerpt, route) as result:
+                    remade = result.require_complete()
             except Exception:
                 return [stage]
             if content_hash(
