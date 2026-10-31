@@ -89,6 +89,11 @@ from yizkr.claims import (
 from yizkr.core import verbatim
 from yizkr.core.config import Config
 from yizkr.core.wiki import WikiClient
+from yizkr.core.write_recovery import (
+    CreationRefused,
+    CreationRegistry,
+    write_existing,
+)
 from yizkr.pipeline.extract import scan_json_objects
 from yizkr.pipeline.gedcom import UNDETERMINED
 from yizkr.pipeline.llm import (
@@ -1151,12 +1156,12 @@ def write_link(
         for block in references.references:
             if writer._reference_key(block) not in present:
                 existing.references.add(block)
-        entity.write(summary=REFERENCED_SUMMARY)
+        write_existing(entity, summary=REFERENCED_SUMMARY)
         outcome = REFERENCED
     else:
         claim.references = references
         writer._append(entity, claim)
-        entity.write(summary=WRITTEN_SUMMARY)
+        write_existing(entity, summary=WRITTEN_SUMMARY)
         outcome = WRITTEN
     writer._entity_cache[child] = writer.client.wbi.item.get(child)
     return outcome
@@ -1236,21 +1241,19 @@ def ensure_places_run_item(
     description: str = RUN_DESCRIPTION,
     marks: dict[str, str] | None = None,
 ) -> str:
-    """The pass's run item, found by its label, which must name one item
-    alone (WikiClient.find_item_by_label raises when two items hold it),
-    or made. Its ``instance of
+    """The pass's run item, recovered through its durable creation binding
+    for the full fingerprint, model and run marks. Its ``instance of
     -> extraction run`` cites the item itself, so it is written in a
     second write, and a run item that a pass cut short between the two
     writes left without it gets it when the next pass finds it
     (registrar.ensure_self_typed). Raises ValueError, naming the
     characters, before anything is read when the label holds a character
     Python's Unicode tables do not know (writer.unknown_characters): the
-    instance may keep it in another form, and the next pass would not
-    find the item by it and would make another. The label is looked for
-    and sent in the form the instance keeps a label in, as the writer
+    instance may keep it in another form. The display label is sent in
+    the form the instance keeps a label in, as the writer
     sends one (writer._term_text: trimmed, one line, in Unicode NFC, cut
-    to the characters the instance holds), so a model identifier given
-    in another form, such as NFD, finds the item made for it.
+    to the characters the instance holds). A matching legacy label with
+    no binding requires verified migration rather than term-based adoption.
     `description` is the description a new item takes, and `marks` the
     string statements it states of itself (registrar.ensure_self_typed),
     as a scratch run's place stage marks its run item."""
@@ -1261,7 +1264,7 @@ def ensure_places_run_item(
         unknown_characters,
     )
 
-    label = f"place-hierarchy run {model} {fingerprint}"
+    label = f"place-hierarchy run {model} {fingerprint[:10]}"
     unknown = unknown_characters(label)
     if unknown:
         raise ValueError(
@@ -1269,12 +1272,33 @@ def ensure_places_run_item(
             f"give the model identifier without it. Nothing was written"
         )
     label = _term_text(label)
-    qid = client.find_item_by_label(label)
-    if qid is None:
+    registry = CreationRegistry(client)
+    operation = {
+        "kind": "place-hierarchy-run",
+        "fingerprint": fingerprint,
+        "model": model,
+        "marks": marks or {},
+    }
+    binding = registry.lookup(operation)
+    if binding is None:
+        if client.find_item_by_label(label) is not None:
+            raise CreationRefused(
+                "a place run has matching display terms but no creation "
+                "binding; verified migration is required"
+            )
         item = client.wbi.item.new()
         item.labels.set("en", label)
         item.descriptions.set("en", description)
-        qid = item.write(summary="reconcile-places: run item").id
+        binding = registry.create(
+            operation, item, summary="reconcile-places: run item"
+        )
+    else:
+        binding = registry.reconcile(operation)
+        if binding is None:
+            raise CreationRefused(
+                "the place run's creation binding disappeared"
+            )
+    qid = binding.qid
     ensure_self_typed(
         client,
         qid,
@@ -1323,7 +1347,7 @@ def apply_answers(
     writer = BatchWriter(client)
     counts = {WRITTEN: 0, REFERENCED: 0, PRESENT: 0}
     run_qid = None
-    fingerprint = hashlib.sha256(csv_path.read_bytes()).hexdigest()[:10]
+    fingerprint = hashlib.sha256(csv_path.read_bytes()).hexdigest()
 
     def run_item() -> str:
         nonlocal run_qid

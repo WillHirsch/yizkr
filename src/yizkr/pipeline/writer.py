@@ -55,16 +55,14 @@ Per batch, the writer:
    is an entity, ADR-0036), or of a reference property (`stated_in`, a
    judgement note's), as its own property or a qualifier's: validation
    refuses both, and `yizkr write` takes a batch without validating it;
-1. mints an extraction-run item from the batch metadata (idempotent:
-   matched by a deterministic label containing the batch content hash,
-   which must name one item alone: when two items hold it the write
-   fails before it writes any claim, `ItemLabels.sole`),
+1. creates or recovers an extraction-run item through its durable creation
+   binding, keyed by the full batch fingerprint, map and run marks,
    with its run details in the label/description — items describe
    themselves; statements stay reserved for source-attributed claims.
    Its one statement, `instance of -> extraction run`, cites the run
    item itself, the document of its own execution, so it goes in a
-   write after the one that makes the item. A run item found by its
-   label without that statement, as a write cut short between the two
+   write after the one that makes the item. A recorded run item without
+   that statement, as a write cut short between the two
    leaves it, gains it then; one that states it already, at any rank
    and under any reference, is left as it is (`ensure_self_typed` in
    yizkr.pipeline.registrar). A writer given `run_marks` states them of
@@ -81,8 +79,10 @@ Per batch, the writer:
    (UnmappedMention) when it is written with no map, or when the map does
    not hold every mention of the batch under an artifact its claims cite
    (mapped_clusters); an entity an approved equivalence names (ADR-0007)
-   needs none, as its record names its item by QID. No item is ever found
-   by its label alone, so a curator's decision that two entities are
+   needs none, as its record names its item by QID. A durable creation
+   binding maps the map/cluster locator to its stable entity ID and QID;
+   no item is adopted from its label or description, so a curator's
+   decision that two entities are
    distinct, and the map's keeping two mentions apart, are never undone by
    a label they share. A cluster's item is made under its label (the label
    most of its mentions give, then the longest, of those the writer can
@@ -97,27 +97,26 @@ Per batch, the writer:
    second on, the cluster's place among the map's clusters of its label and
    kind, in the order of their cluster ids, so two people of one name,
    which Wikibase refuses as two items with one label and one description,
-   take two descriptions, and a write of a batch with the same map, on the
-   instance or after a reset, finds each cluster's item again: the earliest
-   item under its label whose English description is its description
-   (_cluster_item). Only the items under the label are read for it. The
+   take two descriptions. Repeated writes recover the recorded QID even
+   after a curator changes its display terms. A matching legacy label and
+   description without a binding require explicit migration. The
    description is never a summary or a ref's description, which may give
    what the source asserts of the entity, such as its life dates, nor a
    title, which may name a living person, nor a QID or a digest. A minted
    item whose description would be its label gets none, with a warning, as
    Wikibase refuses an item whose label and description are the same. The
-   keys hold within one map, so an instance holds the writes of one map: a
-   run item's label gives the map's tag, and a batch written with another
-   map than the instance's run items record is refused before anything is
-   written (OtherIdentityMap), unless the caller allows maps to mix
+   compatibility locators hold within one map, so an instance holds the
+   writes of one map: existing run labels are checked and an immutable
+   graph reservation protects the map before creation. Another map is
+   refused unless the caller explicitly allows isolated maps to mix
    (`one_map`), as on an instance whose writers keep their labels apart; a
    scratch run resets the instance before it writes its one map (ADR-0025).
    The mentions are read from the batch the map was made from, when the
    caller gives it (`mapped_from`): the reviewed batch a write is given may
    have lost claims, which would move the mentions of a batch without an
    entity manifest. The instance's labels are read once a write, with the
-   vocabulary known, and the run item is found among them and the items the
-   write makes (`_FoundLabels`); a label two or more items hold names the
+   vocabulary known, for collision planning (`_FoundLabels`); a label two
+   or more items hold names the
    numerically earliest of them (`ItemLabels`). Each item is made in one
    write, with its label, its description, its aliases, its `instance of`,
    and an unclassified entity's `type hint`, the last two with two
@@ -125,7 +124,9 @@ Per batch, the writer:
    that mints it, and inferred from extraction run -> the run item, the
    run block of its `instance of` with the entity's judgement note, a kind
    or an identity call, where its record gives one (step 3); so a
-   write that fails leaves no item, and none without its kind. An entity's
+   successful creation always contains its kind. A lost response is
+   reconciled through its durable dispatch marker before retrying; it is
+   never taken as proof that no item was made. An entity's
    kind is the extraction's proposal, a machine write like any claim
    (ADR-0003). A local ref resolves through the batch's entity-manifest
    record of its id when there is one (ADR-0007, read through
@@ -487,8 +488,12 @@ from yizkr.claims import (
 )
 from yizkr.core.dates import UnsupportedDate
 from yizkr.core.wiki import ItemLabels, WikiClient
+from yizkr.core.write_recovery import (
+    CreationRefused,
+    CreationRegistry,
+    write_existing,
+)
 from yizkr.model.schema import load_acceptance
-from yizkr.pipeline.cancellation import check_cancelled
 from yizkr.pipeline.review import (
     claim_id,
     entity_records,
@@ -1322,8 +1327,9 @@ class _Placement:
     (BatchWriter._registered_under); and `blocked`, for a cluster refused
     because it may take neither its label nor its tagged label, the QIDs of
     the items under those two, "" for an item the batch makes.
-    `description` is the description its item is made with and found by
-    (source_descriptor); `aliases`, the aliases its item is made with or
+    `description` is the description its new item is made with
+    (source_descriptor); established QIDs come from durable bindings.
+    `aliases`, the aliases its item is made with or
     gains: `alias`, the labels of the cluster's other mentions, and the
     labels and aliases the batch gives its mentions; `cluster`, its id."""
 
@@ -1868,8 +1874,8 @@ def _cut(text: str, limit: int) -> str:
 
 
 def _run_terms(batch: ClaimBatch, identity_hash: str = "") -> tuple[str, str]:
-    """The label and description of the batch's run item, as the writer
-    looks for and writes them. The description records the hash of the
+    """The display label and description of the batch's run item.
+    The description records the hash of the
     identity map the batch is written with, when there is one
     (`identity_hash`), and the label gives "map" and its first MAP_TAG hex
     digits after the run's date, before the model identifier, which a cut
@@ -1881,8 +1887,8 @@ def _run_terms(batch: ClaimBatch, identity_hash: str = "") -> tuple[str, str]:
     holds, so each batch's run item keeps a label of its own (_term_text).
     Raises ValueError, naming the characters, when either holds a character
     Python's Unicode tables do not know (unknown_characters), whole, before
-    any cut: the instance may keep it in another form, and a re-run would
-    mint the run item again. Both are machine text, from the run's own
+    any cut: the instance may keep it in another form. Both are machine
+    text, from the run's own
     settings, so the batch is refused before anything is read or written
     rather than its run left unlabelled."""
     run = batch.extraction_run
@@ -2014,6 +2020,7 @@ class BatchWriter:
         docstring)."""
         self.client = client
         self.dry_run = dry_run
+        self._creation_registry = CreationRegistry(client)
         self.run_marks = dict(run_marks or {})
         self.properties, self.items = client.vocabulary()
         self._entity_cache: dict[str, object] = {}
@@ -2052,10 +2059,11 @@ class BatchWriter:
         # per write_batch call: the item each label names, the instance's
         # labels read once (_FoundLabels)
         self._labels = _FoundLabels(client)
-        # per write_batch call: (label, description) -> the item of a
-        # cluster, found or made by the write (_cluster_item), and the
+        # per write_batch call: (label, description) -> a new item's
+        # dry-run placeholder, and the
         # clusters whose found item has been given its aliases
         self._items: dict[tuple[str, str], str] = {}
+        self._bound_clusters: dict[str, str] = {}
         self._aliased: set[str] = set()
         # per write_batch call: how each statement a claim matches stood
         # before the write (_before_write)
@@ -2198,11 +2206,19 @@ class BatchWriter:
         description = placement.description
         existing = self._cluster_item(placement)
         if existing:
+            if not self.dry_run and placement.cluster not in self._aliased:
+                # A read-only lookup may have recovered the original
+                # creation from its dispatch marker; commit its receipt.
+                self._creation_registry.reconcile(
+                    self._cluster_operation(placement.cluster)
+                )
             self._flag_held(placement, existing, result)
             if placement.cluster not in self._aliased:
                 # the cluster's names, once a write, append-only
                 self._aliased.add(placement.cluster)
-                self._ensure_aliases(existing, list(placement.aliases))
+                self._ensure_aliases(
+                    existing, [placement.label, *placement.aliases]
+                )
             result.created_items[ref.local_id] = existing
             return existing
         # Wikibase refuses an item whose label and description are the
@@ -2225,8 +2241,9 @@ class BatchWriter:
             self._flag_held(placement, placeholder, result)
             return placeholder
         # The item is made whole in one write: its label, description and
-        # aliases, its kind and an unclassified entity's type hint, so a
-        # write that fails leaves no item, and none without its kind. The
+        # aliases, its kind and an unclassified entity's type hint. The
+        # registry reconciles a lost response through the dispatch marker.
+        # The
         # kind and type hint come from the extraction, never from review,
         # so they carry the run reference even when the claim that
         # mentions the entity is a curated one (ADR-0003).
@@ -2271,11 +2288,23 @@ class BatchWriter:
                 source_artifact_qid, result.run_qid
             )
             self._append(item, hint)
-        check_cancelled()
-        item = item.write(summary="ingest: entity proposed by extraction")
-        qid = item.id
+        binding = self._creation_registry.create(
+            self._cluster_operation(placement.cluster),
+            item,
+            summary="ingest: entity proposed by extraction",
+        )
+        qid = binding.qid
+        self._bound_clusters[placement.cluster] = qid
+        if not binding.created:
+            # Another dispatcher may have completed the same intent after
+            # planning. Its existing kind/source evidence is reconciled by
+            # the ordinary found-item path, never counted as our new mint.
+            self._ensure_aliases(qid, [placement.label, *placement.aliases])
+            self._aliased.add(placement.cluster)
+            self._flag_held(placement, qid, result)
+            result.created_items[ref.local_id] = qid
+            return qid
         result.notes_written += noted
-        self._items[(label, description)] = qid
         if source_artifact_qid:
             self._minted_with[qid] = (
                 instance_of,
@@ -2332,13 +2361,19 @@ class BatchWriter:
         )
 
     def _cluster_item(self, placement: _Placement) -> str | None:
-        """The item of a cluster placed so (_Placement): the item the write
-        found or made for it, or the earliest of the items under its label
-        whose English description is its description (one that is the
-        label goes without one, as it is made), or None, when the writer
-        makes it one. Only the items under its label are read (_entity), so
-        no item is found by its label alone, and no item of another cluster
-        under the label is ever taken (step 2 of the module docstring)."""
+        """The cluster's recorded QID, unaffected by its current terms.
+
+        A matching legacy label and description without a binding require
+        migration; those display terms cannot establish entity identity.
+        """
+        if placement.cluster in self._bound_clusters:
+            return self._bound_clusters[placement.cluster]
+        binding = self._creation_registry.lookup(
+            self._cluster_operation(placement.cluster)
+        )
+        if binding is not None:
+            self._bound_clusters[placement.cluster] = binding.qid
+            return binding.qid
         description = (
             ""
             if placement.description == placement.label
@@ -2350,9 +2385,18 @@ class BatchWriter:
         for qid in self._labels.items().holders(placement.label):
             held = str(self._entity(qid).descriptions.get("en") or "")
             if held == description:
-                self._items[key] = qid
-                return qid
+                raise CreationRefused(
+                    "an unbound cluster matches existing display terms; "
+                    "verified identity migration is required before writing"
+                )
         return None
+
+    def _cluster_operation(self, cluster: str) -> dict[str, str]:
+        return {
+            "kind": "cluster",
+            "map": self._identity_hash,
+            "cluster": cluster,
+        }
 
     def _artifact_kind(self, qid: str) -> str | None:
         """The artifact kind of the artifact `qid`, as a source descriptor
@@ -2535,8 +2579,8 @@ class BatchWriter:
         artifact-kind one its tagged label. `labels` finds the items under
         the labels, before the first write.
 
-        Each placement carries the description its item is made with and
-        found by (source_descriptor): the cluster's kind, the artifact kind
+        Each placement carries the description a new item is made with
+        (source_descriptor): the cluster's kind, the artifact kind
         of the document its mentions come from (_artifact_kind), or how
         many documents they come from, and the cluster's place among the
         map's clusters of its label and kind; and the aliases its item is
@@ -2570,9 +2614,29 @@ class BatchWriter:
             for cid in members:
                 terms = self._terms[cid]
                 if is_artifact_kind(terms.kind) == artifact:
-                    placed[cid] = self._place(
-                        terms.label, terms.kind, labels, planned
+                    binding = self._creation_registry.lookup(
+                        self._cluster_operation(cid)
                     )
+                    if binding is not None:
+                        self._bound_clusters[cid] = binding.qid
+                        # A curator may change terms or reuse the old
+                        # label. Neither changes this established binding.
+                        held = (
+                            tuple(
+                                registered
+                                for registered in self._registered_under(
+                                    terms.label, labels
+                                )
+                                if registered[0] != binding.qid
+                            )
+                            if artifact
+                            else ()
+                        )
+                        placed[cid] = _Placement(terms.label, held=held)
+                    else:
+                        placed[cid] = self._place(
+                            terms.label, terms.kind, labels, planned
+                        )
         source = None
         if any(self._terms[cid].sources == 1 for cid in placed):
             source = self._artifact_kind(
@@ -2747,8 +2811,9 @@ class BatchWriter:
         if not missing:
             return
         item.aliases.set("en", sorted(existing | set(missing)))
-        check_cancelled()
-        item.write(summary="ingest: aliases from document entity manifest")
+        write_existing(
+            item, summary="ingest: aliases from document entity manifest"
+        )
         self._entity_cache[qid] = self.client.wbi.item.get(qid)
 
     # -- WBI datavalue construction -----------------------------------------
@@ -3025,9 +3090,12 @@ class BatchWriter:
         label, description = _run_terms(batch, identity_hash)
         from yizkr.pipeline.registrar import ensure_self_typed
 
-        # the run item's label is its key, and names one item alone
-        existing = self._labels.sole(label)
-        if existing:
+        operation = self._run_operation(batch, identity_hash)
+        binding = self._run_binding(batch, identity_hash)
+        if binding is not None:
+            existing = binding.qid
+            if not self.dry_run:
+                self._creation_registry.reconcile(operation)
             # a write cut short between the two below left the run item
             # without its kind, which it gains now; one that states it
             # already, in any way, is left as it is
@@ -3045,20 +3113,43 @@ class BatchWriter:
         item = self.client.wbi.item.new()
         item.labels.set("en", label)
         item.descriptions.set("en", description)
-        check_cancelled()
-        item = item.write(summary="ingest: extraction run")
-        self._labels.made(label, item.id)
+        binding = self._creation_registry.create(
+            operation, item, summary="ingest: extraction run"
+        )
+        self._labels.made(label, binding.qid)
         # The run item is the document of its own execution (same
         # convention as the model manifest, docs/MODELING.md): its kind
         # cites the item itself, so it is written once the item has an id.
         ensure_self_typed(
             self.client,
-            item.id,
+            binding.qid,
             "extraction_run",
             summary="ingest: run item statements",
             marks=self.run_marks,
         )
-        return item.id
+        return binding.qid
+
+    def _run_operation(self, batch: ClaimBatch, identity_hash: str) -> dict:
+        canonical = json.dumps(batch.model_dump(mode="json"), sort_keys=True)
+        return {
+            "kind": "extraction-run",
+            "map": identity_hash,
+            "batch": hashlib.sha256(canonical.encode()).hexdigest(),
+            "marks": self.run_marks,
+        }
+
+    def _run_binding(self, batch: ClaimBatch, identity_hash: str):
+        binding = self._creation_registry.lookup(
+            self._run_operation(batch, identity_hash)
+        )
+        if binding is None:
+            label, _ = _run_terms(batch, identity_hash)
+            if self._labels.items().holders(label):
+                raise CreationRefused(
+                    "an extraction run has matching display terms but no "
+                    "creation binding; verified migration is required"
+                )
+        return binding
 
     # -- statement existence check -------------------------------------------
 
@@ -3404,8 +3495,9 @@ class BatchWriter:
                 return
             for block in added:
                 target.references.add(block)
-            check_cancelled()
-            entity.write(summary="ingest: run block on a type statement")
+            write_existing(
+                entity, summary="ingest: run block on a type statement"
+            )
             result.notes_written += sum(map(self._noted, added))
             self._entity_cache[qid] = self.client.wbi.item.get(qid)
             return
@@ -3422,17 +3514,20 @@ class BatchWriter:
             ]
             for reference in added:
                 target.references.add(reference)
-            check_cancelled()
-            entity.write(
-                summary="ingest: additional source for existing type statement"
+            write_existing(
+                entity,
+                summary=(
+                    "ingest: additional source for existing type statement"
+                ),
             )
             result.type_statements_referenced += 1
             result.notes_written += sum(map(self._noted, added))
         else:
             claim.references = references
             self._append(entity, claim, beside_equal=True)
-            check_cancelled()
-            entity.write(summary="ingest: type statement from another source")
+            write_existing(
+                entity, summary="ingest: type statement from another source"
+            )
             result.type_statements_written += 1
             result.notes_written += sum(
                 map(self._noted, references.references)
@@ -3776,6 +3871,7 @@ class BatchWriter:
         # have been hashed by a registration since (_registered)
         self._labels = _FoundLabels(self.client)
         self._items = {}
+        self._bound_clusters = {}
         self._aliased = set()
         self._entity_cache = {}
         self._before = {}
@@ -3785,6 +3881,7 @@ class BatchWriter:
             others = self._other_maps()
             if others:
                 raise OtherIdentityMap(others)
+            self._creation_registry.check_identity_map(self._identity_hash)
         # found before the first write, in a dry run as well: the claims
         # whose own text the instance cannot hold, which the loop below
         # leaves out whole
@@ -3831,6 +3928,14 @@ class BatchWriter:
         ]
         refused_terms, term_warnings = self._unknown_terms(unnamed)
         warnings += term_warnings
+        # Legacy display terms are not a migration. Refuse before even
+        # aliases or process metadata are written, and reserve the map
+        # atomically before any creation can race a different map.
+        for placement in self._placements.values():
+            self._cluster_item(placement)
+        self._run_binding(batch, self._identity_hash)
+        if not self.dry_run and one_map and self._identity_hash:
+            self._creation_registry.claim_identity_map(self._identity_hash)
         # reviewed equivalences (ADR-0007): resolve replaced these
         # entities' refs with QIDs, so materialization never sees them —
         # contribute the document's aliases to the existing items here
@@ -3928,8 +4033,7 @@ class BatchWriter:
                     subject_qid
                 ) or self.client.wbi.item.get(subject_qid)
                 self._append(entity, wbi_claim)
-                check_cancelled()
-                entity.write(summary=claim_summary)
+                write_existing(entity, summary=claim_summary)
                 self._entity_cache[subject_qid] = self.client.wbi.item.get(
                     subject_qid
                 )
@@ -3969,9 +4073,9 @@ class BatchWriter:
         asserts a fact, and where, is knowledge, not just the fact)."""
         for block in blocks:
             statement.references.add(block)
-        check_cancelled()
-        self._entity_cache[subject_qid].write(
-            summary="ingest: additional source for existing statement"
+        write_existing(
+            self._entity_cache[subject_qid],
+            summary="ingest: additional source for existing statement",
         )
         self._entity_cache[subject_qid] = self.client.wbi.item.get(subject_qid)
         result.referenced += 1

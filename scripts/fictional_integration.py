@@ -32,6 +32,18 @@ REQUIRED_CASES = (
         "tests.fictional_integration.test_container_sources",
         "test_common_sources_preserve_owners_placements_and_citations",
     ),
+    (
+        "tests.fictional_integration.test_write_recovery",
+        "test_interrupted_writer_recovers_after_curator_term_changes",
+    ),
+    (
+        "tests.fictional_integration.test_write_recovery",
+        "test_interrupted_source_registration_recovers_without_orphan",
+    ),
+    (
+        "tests.fictional_integration.test_write_recovery",
+        "test_concurrent_creation_reserves_one_dispatch",
+    ),
 )
 SOURCES = (
     "pyproject.toml",

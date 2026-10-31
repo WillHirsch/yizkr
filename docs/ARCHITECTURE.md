@@ -74,7 +74,30 @@ Implementation: [claim contract](../src/yizkr/claims.py), [writer](../src/yizkr/
 
 The [ingestion overview and preparation detail](../src/yizkr/pipeline/README.md#the-ingest-loop-one-command-two-gates-repeat) show how `yizkr ingest run` advances documents through transcription, extraction, identity review where proposals exist, claim review and writing. Saving a reviewed CSV and rerunning the same command advances the workflow. Registration occurs at write time; the current document stages before write do not access the wiki.
 
-The same guide expands [serial ingestion](../src/yizkr/pipeline/README.md#resolving-entities-across-artifacts) and corpus clustering. These views complement the unattended development path below. The current writer refuses a different identity map on an instance already written under another map; reviewed CSVs alone do not make it an incremental retained workflow. The contract permits explicit, recorded graph snapshots for reconciliation, with relevant write-precondition checks, but that path and durable assignment/review state are not implemented (#85, #107, #130, #723).
+The same guide expands [serial ingestion](../src/yizkr/pipeline/README.md#resolving-entities-across-artifacts) and corpus clustering. These views complement the unattended development path below. The current writer refuses a different identity map on an instance already written under another map; reviewed CSVs alone do not make it an incremental retained workflow. Item creation has the recovery mechanism below. Recorded graph-snapshot reconciliation and durable assignment/review revisions remain work under #107, #130 and #723.
+
+## Item creation and interrupted-write recovery
+
+The shared [creation registry](../src/yizkr/core/write_recovery.py) stores its authority in immutable MediaWiki pages under `Project:Yizkr write recovery/`. Before creating an item, it reserves an operation intent with an opaque entity ID, deployment ID, generation and initial-payload digest. A create-only dispatch page permits one creation attempt across independent clients. The initial item revision carries the intent marker in its edit summary; a receipt binds the entity ID to that QID and creation revision. Labels and descriptions are display text, never recovery evidence.
+
+```mermaid
+flowchart LR
+    operation["Source / fragment / cluster / run operation"] --> intent["Immutable intent<br/>entity ID + initial-payload digest"]
+    generation["Deployment + generation"] --> intent
+    intent --> dispatch["Create-only dispatch reservation"]
+    dispatch --> item["Item + marked creation revision"]
+    item --> receipt["Immutable QID / revision receipt"]
+    intent --> recovery["Resume: authoritative revision checks"]
+    item --> recovery
+    recovery -->|one verified effect| receipt
+    recovery -->|missing / ambiguous / incompatible| blocked["Refuse affected operation"]
+```
+
+Registration, page fragments, extracted entities and process-run items use this registry. A stopped write can recover the original item after a curator edits its label or description, then finish missing self-references or claims. Recovery reads authoritative wiki pages and revisions, without relying on WDQS freshness. An existing dispatch with no visible creation is uncertain, even if a request might never have reached the server: another creation is refused. Multiple matches, hidden or edited evidence, incompatible records and generation changes also refuse recovery.
+
+Updates to existing items send the read revision as `baserevid` and disable automatic request retries. A conflict or uncertain response stops affected work for rereading and reconciliation. This protects individual updates; it does not serialize a whole batch or make it atomic. Completed effects remain, and cancellation after dispatch does not prove that nothing was written.
+
+The generation can initialize on an empty or vocabulary-only graph. An existing ingested graph without that authority needs verified migration; matching display terms cannot supply it. The one-map guard remains. [#130](https://github.com/WillHirsch/yizkr/issues/130) must extend these bindings with assignments and migration rather than introduce a competing registry. The generation travels with the database and its backups: restoring a complete database also restores its generation, so out-of-band rollback or cloning is not automatically detected. Existing scratch reset/reuse and retained-state guards still apply. This recovery support does not establish general incremental ingestion or authorize a keeper transition.
 
 ## Container inventory
 
@@ -217,7 +240,7 @@ Claude calls and version probes run in owned process groups. Cancellation signal
 
 Worker joining has a five-second bound after cancellation. Python cannot forcibly kill arbitrary custom worker threads: an uncooperative worker causes an explicit `WorkerShutdownTimeout`, prevents automatic pause/resume, and defers shared conversation cleanup until the worker exits. Such custom work is outside the supported bounded-shutdown guarantee and may keep the Python process alive. Normal cleanup never cancels a parent invocation merely because one borrowed child scope finishes.
 
-Registrar and writer checkpoints stop before their next graph mutation or upload. An already-dispatched graph request or destructive reset may still complete under its existing safeguards; cancellation is not rollback and does not prove that no effect occurred. Durable write-intent recovery remains [#85](https://github.com/WillHirsch/yizkr/issues/85). The [session service](#provider-conversation-ownership) owns restoration, replay and release. Engine shutdown precedes session-service cleanup; an active borrowed conversation is released only after its last borrower exits.
+Registrar and writer checkpoints stop before their next graph mutation or upload. An already-dispatched graph request or destructive reset may still complete under its existing safeguards; cancellation is not rollback and does not prove that no effect occurred. [Item creation recovery](#item-creation-and-interrupted-write-recovery) reconciles reserved creation attempts; existing-item updates require fresh revision checks. The [session service](#provider-conversation-ownership) owns restoration, replay and release. Engine shutdown precedes session-service cleanup; an active borrowed conversation is released only after its last borrower exits.
 
 ## Whole-corpus scratch runs
 

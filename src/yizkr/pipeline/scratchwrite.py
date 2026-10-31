@@ -1472,7 +1472,7 @@ def run_places(context: Any) -> list[str]:
             if record.get("run_qid") is None:
                 record["run_qid"] = hierarchy.ensure_places_run_item(
                     client,
-                    target[:10],
+                    target,
                     place_model(context)["model"] or "engine-default",
                     description=PLACE_RUN_DESCRIPTION,
                     marks={

@@ -139,6 +139,7 @@ from yizkr.claims import (
 )
 from yizkr.core.corpus import ExclusionList, file_sha1, is_excluded
 from yizkr.core.wiki import WikiClient
+from yizkr.core.write_recovery import CreationRegistry, write_existing
 from yizkr.pipeline.cancellation import check_cancelled
 from yizkr.pipeline.presentation import IMAGE_SUFFIXES, DerivedMediaRecord
 
@@ -651,7 +652,7 @@ def ensure_self_typed(
         for claim in missing:
             _append(item, claim)
         check_cancelled()
-        item.write(summary=summary)
+        write_existing(item, summary=summary)
     return True
 
 
@@ -746,9 +747,9 @@ def _file_key(page: str) -> str:
 @dataclass
 class _Instance:
     """What registration finds items by, read from the instance once and
-    kept current with what the registrar writes. Where two items carry
-    one key (a duplicate the keys exist to prevent), the numerically
-    earliest is taken, as `WikiClient.string_statement_index` takes it."""
+    kept current with what the registrar writes. Identity lookups refuse
+    duplicate holders; display and diagnostic indexes remain deterministic.
+    """
 
     # English label -> the items that carry it
     labels: dict[str, set[str]] = field(default_factory=dict)
@@ -756,6 +757,10 @@ class _Instance:
     by_sha1: dict[str, str] = field(default_factory=dict)
     # (artifact, page number) -> the artifact's fragment for that page
     fragments: dict[tuple[str, str], str] = field(default_factory=dict)
+    hash_holders: dict[str, set[str]] = field(default_factory=dict)
+    fragment_holders: dict[tuple[str, str], set[str]] = field(
+        default_factory=dict
+    )
     # a wiki file (_file_key) -> the items whose `media file` names it
     files: dict[str, set[str]] = field(default_factory=dict)
     # the items with no hash: each has no `media SHA-1` and names a `media
@@ -836,9 +841,29 @@ class _Instance:
             fragments={
                 key: _earliest(qids) for key, qids in fragments.items()
             },
+            hash_holders={key: set(qids) for key, qids in hashes.items()},
+            fragment_holders={
+                key: set(qids) for key, qids in fragments.items()
+            },
             files=files,
             unhashed=unhashed,
         )
+
+    def source(self, sha1: str) -> str | None:
+        if len(self.hash_holders.get(sha1, ())) > 1:
+            raise RuntimeError(
+                "multiple source items carry the media identity; "
+                "review is required"
+            )
+        return self.by_sha1.get(sha1)
+
+    def fragment(self, key: tuple[str, str]) -> str | None:
+        if len(self.fragment_holders.get(key, ())) > 1:
+            raise RuntimeError(
+                "multiple fragments carry the same source/page identity; "
+                "review is required"
+            )
+        return self.fragments.get(key)
 
     def label(self, qid: str, label: str) -> None:
         self.labels.setdefault(label, set()).add(qid)
@@ -910,6 +935,7 @@ class Registrar:
     ) -> None:
         self.client = client
         self.exclusions = exclusions
+        self._creations = CreationRegistry(client)
         self._instance: _Instance | None = None
         self.flags: list[RegistrationFlag] = []
 
@@ -1117,8 +1143,19 @@ class Registrar:
         media_sha1 = properties["media_sha1"]
         instance = self._read()
 
-        found = instance.by_sha1.get(content_sha1)
+        operation = {"kind": "source", "sha1": content_sha1}
+        binding = self._creations.lookup(operation)
+        found = instance.source(content_sha1)
+        if binding is not None:
+            if found is not None and found != binding.qid:
+                raise RuntimeError(
+                    "source identity disagrees with its creation receipt"
+                )
+            found = binding.qid
         artifact = self.client.wbi.item.get(found) if found else None
+        self._verify_source(artifact, media_sha1, content_sha1)
+        if binding is not None:
+            self._creations.reconcile(operation)
         created = changed = artifact is None
         # a new item's label is settled before anything is uploaded or
         # written
@@ -1144,9 +1181,11 @@ class Registrar:
         )
 
         if created:
-            artifact = self._new_artifact(description)
-            artifact.labels.set("en", new_label)
-        elif self._takes_alias(artifact, title, content_sha1):
+            artifact, created = self._new_artifact(
+                description, content_sha1, new_label
+            )
+            self._verify_source(artifact, media_sha1, content_sha1)
+        if not created and self._takes_alias(artifact, title, content_sha1):
             # the same bytes under another name: the name is an alias
             aliases = {str(a) for a in (artifact.aliases.get("en") or [])}
             artifact.aliases.set("en", sorted(aliases | {title}))
@@ -1167,10 +1206,13 @@ class Registrar:
             changed = changed or outcome != "present"
         if changed:
             check_cancelled()
-            artifact = artifact.write(summary="ingest: artifact statements")
+            artifact = write_existing(
+                artifact, summary="ingest: artifact statements"
+            )
         label = str(artifact.labels.get("en") or title)
         instance.label(artifact_qid, label)
         instance.by_sha1.setdefault(content_sha1, artifact_qid)
+        instance.unhashed.discard(artifact_qid)
         instance.file(artifact_qid, file_page)
 
         fragment_qids = {
@@ -1202,22 +1244,33 @@ class Registrar:
             flags=flags,
         )
 
-    def _new_artifact(self, description: str | None):
-        """A new artifact item, with its description alone, in the form
-        Wikibase stores it in and cut to the TERM_LIMIT characters it
-        takes, ending in "…" (_fitted): a longer one, such as one that
-        names a long file, would be refused, and no item made. Its
-        statements cite the item itself, so they are written once it has
-        an id, with its label: a registration cut short between the two
-        writes leaves an item with no label and no statement, which
-        nothing finds and which takes no label from the artifact
-        registered after it."""
+    @staticmethod
+    def _verify_source(item, media_sha1: str, expected: str) -> None:
+        if item is not None:
+            hashes = _existing_claim_strings(item, media_sha1)
+            if hashes and hashes != {expected}:
+                raise RuntimeError(
+                    "source bytes identity disagrees with its creation receipt"
+                )
+
+    def _new_artifact(self, description: str | None, sha1: str, label: str):
+        """Create or recover the source before its self-referenced statements.
+
+        The creation intent binds the source's bytes independently of its
+        display terms. Recovery can therefore finish an interrupted source
+        registration without changing a curator's label or description.
+        """
         item = self.client.wbi.item.new()
+        item.labels.set("en", label)
         description = _fitted(_stored_term(description or ""))
         if description:
             item.descriptions.set("en", description)
-        check_cancelled()
-        return item.write(summary="ingest: register artifact")
+        binding = self._creations.create(
+            {"kind": "source", "sha1": sha1},
+            item,
+            summary="ingest: register artifact",
+        )
+        return self.client.wbi.item.get(binding.qid), binding.created
 
     def _fragment(
         self,
@@ -1231,8 +1284,19 @@ class Registrar:
         the artifact."""
         instance = self._read()
         key = (artifact_qid, str(page))
-        if key in instance.fragments:
-            return instance.fragments[key]
+        operation = {"kind": "fragment", "parent": artifact_qid, "page": page}
+        binding = self._creations.lookup(operation)
+        found = instance.fragment(key)
+        if binding is not None:
+            if found is not None and found != binding.qid:
+                raise RuntimeError(
+                    "fragment identity disagrees with its creation receipt"
+                )
+            self._verify_fragment(binding.qid, artifact_qid, page)
+            self._creations.reconcile(operation)
+            return binding.qid
+        if found is not None:
+            return found
         properties, items = self.client.vocabulary()
         stated_in = properties["stated_in"]
         # the artifact's label is cut to fit, if need be: the fragment's
@@ -1264,11 +1328,34 @@ class Registrar:
                 page,
             ),
         )
-        check_cancelled()
-        fragment = fragment.write(summary="ingest: register fragment")
-        instance.label(fragment.id, label)
-        instance.fragments[key] = fragment.id
-        return fragment.id
+        binding = self._creations.create(
+            operation, fragment, summary="ingest: register fragment"
+        )
+        self._verify_fragment(binding.qid, artifact_qid, page)
+        instance.label(binding.qid, label)
+        instance.fragments[key] = binding.qid
+        return binding.qid
+
+    def _verify_fragment(self, qid: str, parent: str, page: int) -> None:
+        properties, items = self.client.vocabulary()
+        item = self.client.wbi.item.get(qid)
+        roles = set()
+        for claim in item.claims.get(properties["part_of"]) or []:
+            value = (claim.mainsnak.datavalue or {}).get("value", {})
+            if not isinstance(value, dict):
+                continue
+            for qualifier in (
+                claim.qualifiers.get(properties["page_number"]) or []
+            ):
+                roles.add(
+                    (value.get("id"), (qualifier.datavalue or {}).get("value"))
+                )
+        if roles != {(parent, str(page))} or items[
+            "artifact_fragment"
+        ] not in _existing_claim_targets(item, properties["instance_of"]):
+            raise RuntimeError(
+                "fragment structure disagrees with its creation receipt"
+            )
 
     def register_container_sources(
         self,
@@ -1446,7 +1533,7 @@ class Registrar:
         if not record.media:
             return {}
         instance = self._read()
-        container = instance.by_sha1.get(record.source_sha1)
+        container = instance.source(record.source_sha1)
         if container is None:
             raise LookupError(
                 f"no item carries media SHA-1 {record.source_sha1[:12]}: "
@@ -1497,8 +1584,19 @@ class Registrar:
             # the container's title is cut to fit, if need be: a medium's
             # labels and aliases only display it
             labels = [_fitted(title, f" — {name}") for name in names]
-            found = instance.by_sha1.get(key)
+            operation = {"kind": "source", "sha1": key}
+            binding = self._creations.lookup(operation)
+            found = instance.source(key)
+            if binding is not None:
+                if found is not None and found != binding.qid:
+                    raise RuntimeError(
+                        "source identity disagrees with its creation receipt"
+                    )
+                found = binding.qid
             item = self.client.wbi.item.get(found) if found else None
+            self._verify_source(item, media_sha1, key)
+            if binding is not None:
+                self._creations.reconcile(operation)
             changed = item is None
             # a new item's label is settled before anything is uploaded
             new_label = (
@@ -1593,10 +1691,39 @@ class Registrar:
                 changed = changed or outcome != "present"
             if changed:
                 check_cancelled()
-                item = item.write(summary="ingest: derived media")
+                if item.id is None:
+                    binding = self._creations.create(
+                        operation, item, summary="ingest: derived media"
+                    )
+                    item = self.client.wbi.item.get(binding.qid)
+                    self._verify_source(item, media_sha1, key)
+                    # A competing caller may have completed this same source
+                    # in another container. Reconcile this container's support
+                    # against the returned item rather than losing it with the
+                    # unused proposal.
+                    if not binding.created:
+                        changed = False
+                        for name in labels:
+                            if self._takes_alias(item, name, key):
+                                item.aliases.set("en", name)
+                                changed = True
+                        for claim in statements:
+                            outcome = _ensure_referenced(
+                                item, claim, stated_in, container
+                            )
+                            changed = changed or outcome != "present"
+                        if changed:
+                            item = write_existing(
+                                item, summary="ingest: derived media"
+                            )
+                else:
+                    item = write_existing(
+                        item, summary="ingest: derived media"
+                    )
             if item.labels.get("en"):
                 instance.label(item.id, str(item.labels.get("en")))
             instance.by_sha1.setdefault(key, item.id)
+            instance.unhashed.discard(item.id)
             for page in held:
                 instance.file(item.id, page)
             # flagged on every registration while a condition holds, under

@@ -34,6 +34,7 @@ from tests.unit.test_pipeline import (
     FakeWiki,
 )
 from yizkr.claims import Claim, ClaimBatch
+from yizkr.core.write_recovery import AmbiguousCreation
 from yizkr.pipeline.clustering import (
     ClusteringInputError,
     IdentityMap,
@@ -489,10 +490,12 @@ class TestTwoEugensOfOneDocument:
                 wiki, first.created_items[local_id]
             ) == _description(other, second.created_items[local_id])
 
-    def test_a_failed_write_leaves_no_item(self, monkeypatch):
+    def test_an_unknown_creation_is_not_retried(self, monkeypatch):
         # the second Eugen's one write fails: the first's item is whole,
         # the second has none, nothing under the label lacks its
-        # description or kind, and a re-run mints the second whole
+        # description or kind. A missing response cannot prove that the
+        # second creation will never commit, so retry preserves the first
+        # and refuses the uncertain dispatch instead of creating another.
         wiki = _wiki()
         identity = mapped(_eugens())
         items = wiki.wbi.item
@@ -514,16 +517,19 @@ class TestTwoEugensOfOneDocument:
             return item
 
         monkeypatch.setattr(items, "new", failing)
-        with pytest.raises(ConnectionError):
+        with pytest.raises(AmbiguousCreation) as stopped:
             BatchWriter(wiki).write_batch(_eugens(), identity=identity)
+        assert isinstance(stopped.value.__cause__, ConnectionError)
         (first,) = _labelled(wiki, EUGEN)
         assert _description(wiki, first) in (REPORT, f"{REPORT} (2)")
         assert wiki.wbi.item.get(first).claims.get(PROPERTIES["instance_of"])
 
         monkeypatch.setattr(items, "new", new)
-        written = BatchWriter(wiki).write_batch(_eugens(), identity=identity)
-        assert len(_labelled(wiki, EUGEN)) == 2
-        assert first in written.created_items.values()
+        writes = items.writes
+        with pytest.raises(AmbiguousCreation):
+            BatchWriter(wiki).write_batch(_eugens(), identity=identity)
+        assert _labelled(wiki, EUGEN) == [first]
+        assert items.writes == writes
 
 
 # -- the acceptance of #109 ---------------------------------------------------
@@ -969,21 +975,21 @@ class TestTheRunItem:
         assert described.endswith(f", identity map {identity.hash}")
 
     def test_another_map_has_a_run_item_of_its_own(self):
-        # on an instance whose writers keep their labels apart, as the
-        # live tests' do, where maps may mix
+        # Process metadata for distinct map revisions has distinct durable
+        # identity; this does not authorize migration of their entities.
         wiki = _wiki()
-        first = BatchWriter(wiki).write_batch(
-            _eugens(), identity=mapped(_eugens())
+        first = BatchWriter(wiki).ensure_run_item(
+            _eugens(), mapped(_eugens()).hash
         )
-        other = BatchWriter(wiki).write_batch(
-            _eugens(), identity=mapped(_eugens(), _tree()), one_map=False
+        other = BatchWriter(wiki).ensure_run_item(
+            _eugens(), mapped(_eugens(), _tree()).hash
         )
-        assert other.run_qid != first.run_qid
-        again = BatchWriter(wiki).write_batch(
-            _eugens(), identity=mapped(_eugens()), one_map=False
+        assert other != first
+        again = BatchWriter(wiki).ensure_run_item(
+            _eugens(), mapped(_eugens()).hash
         )
-        assert again.run_qid == first.run_qid
-        label = str(wiki.wbi.item.get(first.run_qid).labels.get("en"))
+        assert again == first
+        label = str(wiki.wbi.item.get(first).labels.get("en"))
         assert label.startswith(
             f"extraction run 2026-07-12 map {mapped(_eugens()).hash[:12]} "
         )
