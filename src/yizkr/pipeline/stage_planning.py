@@ -237,6 +237,30 @@ _EXTRACTION_PROMPTS = tuple(
         "preparation-pointer",
     )
 )
+# Media operations retain the same model prompts and source bindings as their
+# format readers. Reading freshness must also observe the code that prepares
+# those inputs; extraction consumes the resulting located transcription.
+MEDIA_READING_RESOURCES = (
+    "core/corpus.py",
+    "pipeline/media_stages.py",
+    "pipeline/containers.py",
+    "pipeline/container_inventory.py",
+    "pipeline/container_sources.py",
+)
+PDF_READING_RESOURCES = (
+    "pipeline/pdf_inventory.py",
+    "pipeline/presentation.py",
+    "pipeline/textlayer.py",
+)
+PRESENTATION_READING_RESOURCES = (
+    "pipeline/presentation.py",
+    "pipeline/pptx_inventory.py",
+)
+VISION_READING_RESOURCES = (
+    "pipeline/llm.py",
+    "pipeline/prompts/__init__.py",
+    "pipeline/prompts/transcription.md",
+)
 PROCESSING_RESOURCES = {
     "transcription": tuple(sorted((*_SHARED, *_SCHEMA, *_READING))),
     "extraction": tuple(
@@ -285,9 +309,12 @@ PROCESSING_RESOURCES = {
 }
 
 
-def _libraries() -> dict[str, str | None]:
+def _libraries(*, pdf: bool = False) -> dict[str, str | None]:
     observed = {}
-    for name in ("pydantic", "PyYAML", "py3langid"):
+    names = ("pydantic", "PyYAML", "py3langid")
+    if pdf:
+        names += ("pypdf", "pypdfium2")
+    for name in names:
         try:
             observed[name] = version(name)
         except PackageNotFoundError:
@@ -300,6 +327,7 @@ def processing_dependencies(
     *,
     configuration: Mapping[str, Any],
     source_sha1: str,
+    document_kind: str = "text",
     package=None,
 ) -> dict[str, Any]:
     """Fingerprint explicit settings and packaged semantic dependencies.
@@ -308,20 +336,31 @@ def processing_dependencies(
     resource trees. A missing dependency raises rather than making two missing
     files compare equal. Installed semantic-library versions are also recorded.
     No model client, host setting or runtime state is read.
+    ``document_kind`` names the caller's inspected format, including PDF bytes
+    stored with another suffix; it selects format-specific reader dependencies.
     Whole-file hashes conservatively reprocess the affected stage after a code
     edit; compatible model responses can still be reused. Documentation outside
     the declared prompt resources has no bearing on this fingerprint.
     """
-    paths = PROCESSING_RESOURCES[stage]
+    paths = set(PROCESSING_RESOURCES[stage])
+    pdf_reading = stage == "transcription" and document_kind == "pdf"
+    if stage == "transcription" and document_kind != "text":
+        paths.update(MEDIA_READING_RESOURCES)
+        if pdf_reading:
+            paths.update(PDF_READING_RESOURCES)
+        elif document_kind == "presentation":
+            paths.update(PRESENTATION_READING_RESOURCES)
+        if configuration.get("route") in {"vision", "paged"}:
+            paths.update(VISION_READING_RESOURCES)
     root = files("yizkr") if package is None else package
     return {
         "format": 1,
         "stage": stage,
         "source_sha1": source_sha1,
         "configuration": json.loads(canonical_json(configuration)),
-        "libraries": _libraries(),
+        "libraries": _libraries(pdf=pdf_reading),
         "resources": {
             path: hashlib.sha256(root.joinpath(path).read_bytes()).hexdigest()
-            for path in paths
+            for path in sorted(paths)
         },
     }

@@ -466,7 +466,7 @@ def cmd_transcribe(args) -> int:
         _refuse_archive_for_vision(args.file)
     exclusions = _refuse_if_excluded(args, args.file)
     excluded = (
-        (lambda sha1: exclusions.match(sha1=sha1) is not None)
+        (lambda sha1, names=(): exclusions.match(sha1=sha1) is not None)
         if exclusions is not None
         else None
     )
@@ -497,8 +497,8 @@ def cmd_transcribe(args) -> int:
         ).transcription
     elif args.engine == "llm":
         from yizkr.pipeline.llm import make_client
+        from yizkr.pipeline.media_stages import MediaReadRequest, read_media
         from yizkr.pipeline.transcribe import (
-            LlmVisionTranscriber,
             MissingPrerequisite,
             preflight_vision_transcription,
         )
@@ -509,13 +509,17 @@ def cmd_transcribe(args) -> int:
             sys.exit(str(exc))
         client = make_client(args.llm)
         try:
-            transcriber = LlmVisionTranscriber(
-                client,
-                language=args.language,
-                fallback_language=args.fallback_language,
-                excluded=excluded,
-            )
-            transcription = transcriber.transcribe(args.file)
+            with read_media(
+                MediaReadRequest(
+                    source=args.file,
+                    route="vision",
+                    language=args.language,
+                    fallback_language=args.fallback_language,
+                    excluded=excluded,
+                ),
+                lambda: client,
+            ) as result:
+                transcription = result.transcription
         finally:
             _close_owned_client(client)
     else:  # htr

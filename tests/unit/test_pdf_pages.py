@@ -806,13 +806,14 @@ class TestImages:
             exclusions=ExclusionList(),
         )
         (doc,) = orchestrator.documents()
-        transcription, _resolution = orchestrator._transcribe(doc, PAGED)
-        assert not doc.dir.exists()
-        reading = transcription.reading
-        (image,) = reading.images
-        assert image.path.read_bytes() == png(300, 120, 1, LETTER_IMAGE.data)
-        assert image.transcription.text == page_text(EXCERPT)
-        reading.close()
+        with orchestrator._transcribe(doc, PAGED) as result:
+            assert not doc.dir.exists()
+            assert result.transcription.reading is None
+            (image,) = result.products.images
+            assert image.path.read_bytes() == png(
+                300, 120, 1, LETTER_IMAGE.data
+            )
+            assert image.transcription.text == page_text(EXCERPT)
         assert not image.path.exists()
 
 
@@ -2123,7 +2124,11 @@ class TestReuse:
         assert json.loads(superseded.read_text())["text"] == page_text(EXCERPT)
         # the excerpt's transcription, the image's reading, is made again
         # from the new one
-        (aside,) = set_asides(again, "excerpt")
+        assert any(
+            event.get("stage") == "transcription"
+            and event.get("subject") == LETTER_SHA1
+            for event in this_run(again, "started")
+        )
         excerpt = excerpt_of(again, LETTER_SHA1)
         assert transcription_of(excerpt).text == page_text("Liebes Pünktchen!")
 

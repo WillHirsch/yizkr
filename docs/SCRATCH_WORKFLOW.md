@@ -2,7 +2,7 @@
 
 This guide expands the [whole-corpus overview](ARCHITECTURE.md#whole-corpus-scratch-runs) into the inputs, processing and outputs of each implemented stage. Use the [scratch-run runbook](runbooks/scratch-run.md) for commands and operational procedures.
 
-This is the implemented disposable rebuild mode. The [current contract](CONTRACT.md) also requires retained ingestion and permits explicit graph-snapshot inputs for reconciliation; shared text and deterministic GEDCOM operations and their freshness planning are implemented, while durable identity/review state and media adapter migration (#719) remain implementation work. Current scratch writes refuse retained instances and never confer human approval.
+This is the implemented disposable rebuild mode. The [current contract](CONTRACT.md) also requires retained ingestion and permits explicit graph-snapshot inputs for reconciliation; shared document operations and their freshness planning are implemented, while durable identity/review state remains implementation work. Current scratch writes refuse retained instances and never confer human approval.
 
 In the paths below, `R` is a run directory such as `var/scratch/<run-id>`, and `D` is one document's directory within it. Ordinary documents use `R/<document-directory>/`; independently read embedded images use `R/excerpts/<media-sha1>/`. These are path templates, not example corpus contents. For real corpus runs, all these products are local-only runtime data.
 
@@ -10,7 +10,7 @@ Rectangles represent processing or explicitly labelled transient data; cylinders
 
 ## Stage contracts
 
-The contracts below describe current data products and processing. [Shared operations](ARCHITECTURE.md#shared-text-stage-operations) implement text reading, extraction, critique and deterministic GEDCOM adaptation; media/container readers and corpus stages retain their own adapters. Publication remains caller-owned. A fixed registry declares stages, roles and artifacts for execution, estimation and reports; execution and estimation share read-only view observation and a pure freshness decision. Text and GEDCOM documents compare declared generation dependencies as well as input hashes. Older records for those kinds missing that metadata recompute once; legacy media/container adapters retain their existing reuse rules. See [view and response reuse](LLM_CACHE.md#views). Stage names in the logs are `transcription`, `extraction`, `critique`, `gedcom`, `clustering`, `reset`, `register`, `write`, `places` and `site`. `transcribe` and `extract` are the model-role names used by configuration and flags such as `--refresh`, rather than the logged stage names.
+The contracts below describe current data products and processing. [Shared operations](ARCHITECTURE.md#shared-document-stage-operations) implement text/media reading, excerpt adoption, extraction, critique and deterministic GEDCOM adaptation; format decoding stays in its adapters. Publication and scheduling remain caller-owned. A fixed registry declares stages, roles and artifacts for execution, estimation and reports; execution and estimation share read-only view observation and a pure freshness decision. All supported document kinds compare declared generation dependencies as well as input hashes. Older records missing that metadata recompute once. See [view and response reuse](LLM_CACHE.md#views). Stage names in the logs are `transcription`, `extraction`, `critique`, `gedcom`, `clustering`, `reset`, `register`, `write`, `places` and `site`. `transcribe` and `extract` are the model-role names used by configuration and flags such as `--refresh`, rather than the logged stage names.
 
 ### Per-document stages
 
@@ -122,7 +122,7 @@ The pipeline does not write `D/derived-media.json`. One kept from an existing ru
 
 An independently read image can become an excerpt document when it has a transcribed or illegible document page. Images that are wholly blank or not document pages, excluded images and images already represented by corpus files do not become excerpts. Repeated placements share the bound media owner while retaining every occurrence. The container keeps its own text; the image's claims cite its bound owner and source-part support. Excerpt extraction and critique then produce their own `batch.json` and `critique.json`. Ambiguous body/notes or compiler/inner-source support makes extraction incomplete; any supported claims remain diagnostic and are not accepted for writing.
 
-Implementation: [routing and excerpt adoption](../src/yizkr/pipeline/orchestrate.py), [transcribers](../src/yizkr/pipeline/transcribe.py), [transcription record](../src/yizkr/pipeline/transcription_record.py) and [container readers](../src/yizkr/pipeline/containers.py).
+Implementation: [typed preparation, reading and excerpt operations](../src/yizkr/pipeline/media_stages.py), [scheduling and publication](../src/yizkr/pipeline/orchestrate.py), [transcribers](../src/yizkr/pipeline/transcribe.py), [transcription record](../src/yizkr/pipeline/transcription_record.py) and [container readers](../src/yizkr/pipeline/containers.py).
 
 ### Interpretation context for scanned pages
 

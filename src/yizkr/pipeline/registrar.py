@@ -1040,6 +1040,24 @@ class Registrar:
             and self._read().labels.get(name, set()) <= {item.id}
         )
 
+    def check_media_source(
+        self, media_path: Path, *, sha1: str | None = None
+    ) -> str:
+        """Admit current source bytes before preparation or any wiki access."""
+        content_sha1 = file_sha1(media_path)
+        if sha1 is not None and sha1 != content_sha1:
+            raise RuntimeError(
+                f"{media_path.name} no longer has the bytes it was read "
+                f"with (SHA-1 {sha1[:12]}, now {content_sha1[:12]}); "
+                f"nothing was registered"
+            )
+        if self._excluded([media_path.name], content_sha1):
+            raise ExcludedMedia(
+                f"{media_path.name} is on the never-ingest list; nothing "
+                f"was registered or uploaded"
+            )
+        return content_sha1
+
     def register_artifact(
         self,
         media_path: Path | None,
@@ -1078,18 +1096,7 @@ class Registrar:
                 "an artifact is registered by the SHA-1 of its media "
                 "(ADR-0010): give its media file"
             )
-        content_sha1 = file_sha1(media_path)
-        if sha1 is not None and sha1 != content_sha1:
-            raise RuntimeError(
-                f"{media_path.name} no longer has the bytes it was read "
-                f"with (SHA-1 {sha1[:12]}, now {content_sha1[:12]}); "
-                f"nothing was registered"
-            )
-        if self._excluded([media_path.name], content_sha1):
-            raise ExcludedMedia(
-                f"{media_path.name} is on the never-ingest list; nothing "
-                f"was registered or uploaded"
-            )
+        content_sha1 = self.check_media_source(media_path, sha1=sha1)
         title = _stored_term(title)
         if not title:
             raise ValueError(

@@ -202,14 +202,124 @@ def test_unavailable_dependency_blocks_even_a_missing_output_or_refresh():
 @pytest.fixture
 def package(tmp_path, monkeypatch):
     root = tmp_path / "fictional-package"
-    for name in {
-        path for paths in PROCESSING_RESOURCES.values() for path in paths
-    }:
+    for name in (
+        {path for paths in PROCESSING_RESOURCES.values() for path in paths}
+        | set(planning.MEDIA_READING_RESOURCES)
+        | set(planning.PDF_READING_RESOURCES)
+        | set(planning.PRESENTATION_READING_RESOURCES)
+        | set(planning.VISION_READING_RESOURCES)
+    ):
         path = root / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(f"fictional semantic resource: {name}\n")
     monkeypatch.setattr(planning, "version", lambda name: "fictional-version")
     return root
+
+
+@pytest.mark.parametrize(
+    ("kind", "route", "resource"),
+    [
+        ("media", "vision", "pipeline/prompts/transcription.md"),
+        ("pdf", "paged", "pipeline/pdf_inventory.py"),
+        ("pdf", "correction", "pipeline/textlayer.py"),
+        ("presentation", "paged", "pipeline/pptx_inventory.py"),
+        ("excerpt", "excerpt", "pipeline/container_sources.py"),
+        ("excerpt", "excerpt", "pipeline/media_stages.py"),
+    ],
+)
+def test_media_generation_observes_its_reader_resources(
+    package, kind, route, resource
+):
+    def observe():
+        return processing_dependencies(
+            "transcription",
+            package=package,
+            source_sha1="1" * 40,
+            document_kind=kind,
+            configuration={"route": route},
+        )
+
+    before = observe()
+    path = package / resource
+    path.write_text(path.read_text() + "changed fictional reader policy\n")
+    plan = plan_view(
+        exists=True,
+        recorded_inputs={},
+        current_inputs={},
+        recorded_processing=before,
+        processing=observe(),
+    )
+    assert plan.changed_dependencies == (f"processing.resources.{resource}",)
+
+
+@pytest.mark.parametrize("kind", ["pdf", "presentation", "media", "excerpt"])
+def test_deterministic_reading_does_not_depend_on_the_vision_prompt(
+    package, kind
+):
+    def observe():
+        return processing_dependencies(
+            "transcription",
+            package=package,
+            source_sha1="1" * 40,
+            document_kind=kind,
+            configuration={"route": "correction"},
+        )
+
+    before = observe()
+    (package / "pipeline/prompts/transcription.md").write_text(
+        "different fictional model instructions"
+    )
+    assert observe() == before
+
+
+def test_pdf_parser_versions_affect_only_pdf_reading(package, monkeypatch):
+    def observe(kind, stage="transcription"):
+        return processing_dependencies(
+            stage,
+            package=package,
+            source_sha1="1" * 40,
+            document_kind=kind,
+            configuration={"route": "paged"},
+        )
+
+    before = {kind: observe(kind) for kind in ("pdf", "presentation", "text")}
+    extraction = observe("pdf", "extraction")
+    monkeypatch.setattr(
+        planning,
+        "version",
+        lambda name: (
+            "changed-version"
+            if name in {"pypdf", "pypdfium2"}
+            else "fictional-version"
+        ),
+    )
+    assert observe("pdf") != before["pdf"]
+    assert observe("presentation") == before["presentation"]
+    assert observe("text") == before["text"]
+    assert observe("pdf", "extraction") == extraction
+
+
+def test_excerpt_reading_changes_are_generation_inputs(package):
+    def observe(reading):
+        return processing_dependencies(
+            "transcription",
+            package=package,
+            source_sha1="1" * 40,
+            document_kind="excerpt",
+            configuration={"route": "excerpt", "reading_sha256": reading},
+        )
+
+    before = observe("original-reading")
+    plan = plan_view(
+        exists=True,
+        recorded_inputs={},
+        current_inputs={},
+        recorded_processing=before,
+        processing=observe("corrected-reading"),
+    )
+    assert plan.changed_dependencies == (
+        "processing.configuration.reading_sha256",
+    )
 
 
 def fingerprint(package, **configuration):

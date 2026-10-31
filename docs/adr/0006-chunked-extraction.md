@@ -129,7 +129,7 @@ Amended by #668 (2026-10-24): the source rule of the chunk prompt and of the sin
                              --chunk-retries N      (default 2)
                              --cache DIR
 
-`--cache DIR` reuses compatible completed calls; without it, every call reaches the engine. `auto` (the standalone default) chooses chunked extraction above 4,000 transcription characters. Run ingestion explicitly selects chunked extraction for its entity manifest. Both use the [shared text-stage operations](../ARCHITECTURE.md#shared-text-stage-operations).
+`--cache DIR` reuses compatible completed calls; without it, every call reaches the engine. `auto` (the standalone default) chooses chunked extraction above 4,000 transcription characters. Run ingestion explicitly selects chunked extraction for its entity manifest. Both use the [shared text-stage operations](../ARCHITECTURE.md#shared-document-stage-operations).
 
 Only a complete extraction publishes `--out`. An incomplete chunked or single-call result returns EXIT_FAILED and keeps salvage in `<out>.partial.json`, a diagnostic envelope rather than a consumable claim batch. Missing terminal sentinels and output-limit stops are incomplete even when some claims can be parsed. A successful empty batch is distinct and reports its reason. Raw responses, rejected claims and compatible cached calls remain available; a complete retry removes the incomplete envelope.
 

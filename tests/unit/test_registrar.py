@@ -3333,32 +3333,61 @@ class TestStepRegister:
         assert sha1(SHOP_FRONT) in hashes and sha1(STUDIO) not in hashes
         assert sha1(STUDIO) not in wiki.files.values()
 
-    def test_a_listed_document_is_refused_before_the_wiki(self, tmp_path):
-        """The list is asked again at registration: a document it names,
-        by a list the run was not started with, say, asks nothing of the
-        wiki and uploads nothing."""
+    @staticmethod
+    def source_for_admission(folder, kind):
+        from tests.fixtures import pdfs
+
+        source = folder / f"portrait-1890s.{kind}"
+        if kind == "pptx":
+            build_deck(source)
+        elif kind == "pdf":
+            source.write_bytes(pdfs.pdf([pdfs.Page()]))
+        else:
+            source.write_bytes(PORTRAIT)
+        return source
+
+    @pytest.mark.parametrize("kind", ["png", "pdf", "pptx"])
+    def test_a_listed_document_is_refused_before_the_wiki(
+        self, tmp_path, monkeypatch, kind
+    ):
+        """Current exclusions refuse all source types before preparation."""
         from yizkr.pipeline.orchestrate import DocumentRun
 
         wiki = Untouchable()
         orchestrator, _ = self.orchestrator(tmp_path, wiki)
-        source = orchestrator.folder / "portrait-1890s.png"
-        source.write_bytes(PORTRAIT)
+        source = self.source_for_admission(orchestrator.folder, kind)
         doc = DocumentRun(source, orchestrator.state_dir)
-        orchestrator.exclusions = ExclusionList.parse(sha1(PORTRAIT))
+        orchestrator.exclusions = ExclusionList.parse(
+            sha1(source.read_bytes())
+        )
+        monkeypatch.setattr(
+            orchestrator,
+            "_record_container_inventory",
+            lambda *_args: pytest.fail("excluded source reached preparation"),
+        )
         with pytest.raises(ExcludedMedia):
             orchestrator._step_register(doc)
         assert wiki.asked == []
+        assert not doc.dir.exists()
 
-    def test_a_source_changed_since_it_was_read_is_refused(self, tmp_path):
+    @pytest.mark.parametrize("kind", ["png", "pdf", "pptx"])
+    def test_a_source_changed_since_it_was_read_is_refused(
+        self, tmp_path, monkeypatch, kind
+    ):
         wiki = Untouchable()
-        orchestrator, _ = self.orchestrator(
-            tmp_path, wiki, [("portrait-1890s.png", PORTRAIT)]
-        )
+        orchestrator, _ = self.orchestrator(tmp_path, wiki)
+        source = self.source_for_admission(orchestrator.folder, kind)
         (doc,) = orchestrator.documents()
-        doc.source.write_bytes(RESCAN)  # after the run read its SHA-1
+        source.write_bytes(RESCAN)  # after the run read its SHA-1
+        monkeypatch.setattr(
+            orchestrator,
+            "_record_container_inventory",
+            lambda *_args: pytest.fail("changed source reached preparation"),
+        )
         with pytest.raises(RuntimeError, match="no longer has the bytes"):
             orchestrator._step_register(doc)
         assert wiki.asked == []
+        assert not doc.dir.exists()
 
     def test_each_write_reads_the_instance_afresh(self, tmp_path):
         """Each write's registrar reads the instance anew, so a label an
