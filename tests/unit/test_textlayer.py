@@ -19,6 +19,7 @@ import pytest
 from tests.fixtures import example_universe as u
 from tests.fixtures import pdfs
 from yizkr.pipeline import textlayer
+from yizkr.pipeline.containers import IMAGE_SOURCE
 from yizkr.pipeline.textlayer import (
     JPEG_SUFFIX,
     NONE,
@@ -189,16 +190,19 @@ class TestPages:
         assert result.pages[0].text == TITLE
         assert result.by_own_text
 
-    def test_a_scan_with_an_ocr_layer_is_read_by_vision(self, tmp_path):
+    def test_a_scan_with_invisible_ocr_reads_only_its_original_image(
+        self, tmp_path
+    ):
         """An OCR layer is drawn invisibly: it is a machine's reading, not
         the page's text, and the page is a scan."""
         result = read(tmp_path, scan(ocr=EXTRACT))
-        assert methods(result) == [VISION]
+        assert methods(result) == [IMAGE_SOURCE]
         assert result.pages[0].text == ""
-        # a PDF with no page read from its text layer is read whole, and
-        # nothing is written for it
-        assert not result.by_own_text
-        assert written(tmp_path) == []
+        # The original remains independently readable despite the page's
+        # unusable machine-generated text layer.
+        (image,) = result.images.values()
+        assert image.path.read_bytes() == pdfs.JPEG
+        assert result.pages[0].vision is None
 
     def test_text_in_render_mode_7_is_no_part_of_the_text_layer(
         self, tmp_path
@@ -241,13 +245,13 @@ class TestPages:
         self, tmp_path
     ):
         """However much of it there is, text laid over a picture that fills
-        the page is read by vision, as the owner decided, and no image is
-        read on its own."""
+        the page is read by vision; its original picture remains a source
+        independently of the overlaid text."""
         page = pdfs.Page().image(pdfs.gray(300, 400), 0, 0, 595, 842)
         page.text(pdfs.lines(TRANSLATION, HISTORY))
         result = read(tmp_path, page)
         assert methods(result) == [VISION]
-        assert result.images == {}
+        assert len(result.images) == 1
 
     def test_text_beside_a_large_image_reads_its_text_layer(self, tmp_path):
         """An excerpt that fills most of the page, with its caption beside
@@ -328,15 +332,16 @@ class TestPages:
         assert methods(result) == [TEXT_LAYER]
         assert result.pages[0].text.endswith("\ufffd")
 
-    def test_a_page_with_no_text_layer_is_read_by_vision(self, tmp_path):
-        """A page that draws a picture and no text at all, with room
-        around it: nothing on it can be read but by vision, which reads it
-        whole, as the compilation's page."""
+    def test_a_page_showing_one_image_uses_its_source_reading(self, tmp_path):
+        """The original inset image owns its source; rendering its page
+        does not replace that identity."""
         photo = pdfs.Page().image(pdfs.gray(200, 150), 100, 300, 400, 300)
         result = read(tmp_path, typed(TITLE), photo)
-        assert methods(result) == [TEXT_LAYER, VISION]
-        assert result.pages[1].images == []
-        assert result.images == {}
+        assert methods(result) == [TEXT_LAYER, IMAGE_SOURCE]
+        (image,) = result.images.values()
+        assert result.pages[1].images == [(1, image.sha1)]
+        assert image.sha1 in result.sources.sources
+        assert result.pages[1].vision is None
 
     def test_a_page_that_draws_only_paths_is_read_by_vision(self, tmp_path):
         """Text drawn as outlines is paths, and no text layer: the page is
@@ -587,9 +592,10 @@ class TestHiddenText:
 class TestWhatVisionReads:
     def test_a_scanned_page_gives_its_image_as_held(self, tmp_path):
         result = read(tmp_path, typed(TITLE), scan(ocr=EXTRACT))
-        vision = result.pages[1].vision
-        assert vision.name == "page-2.jpg"
-        assert vision.read_bytes() == pdfs.JPEG
+        (image,) = result.images.values()
+        assert result.pages[1].method == IMAGE_SOURCE
+        assert result.pages[1].vision is None
+        assert image.path.read_bytes() == pdfs.JPEG
 
     def test_a_page_that_draws_more_is_rendered(self, tmp_path):
         page = scan().text([STAMP], y=20)
@@ -606,20 +612,30 @@ class TestWhatVisionReads:
         assert textlayer.RENDER_LONG_EDGE == 1600
 
     @pytest.mark.parametrize(
-        "change",
+        "change, method",
         [
-            lambda page: setattr(page, "rotate", 90),
-            lambda page: page.annotate(
-                "/Subtype /Square /Rect [72 400 300 440]"
+            (lambda page: setattr(page, "rotate", 90), IMAGE_SOURCE),
+            (
+                lambda page: page.annotate(
+                    "/Subtype /Square /Rect [72 400 300 440]"
+                ),
+                VISION,
             ),
         ],
         ids=["rotated", "annotated"],
     )
-    def test_a_rotated_or_annotated_scan_is_rendered(self, tmp_path, change):
+    def test_rotation_keeps_image_route_but_annotations_need_a_page_read(
+        self, tmp_path, change, method
+    ):
         page = scan()
         change(page)
         result = read(tmp_path, typed(TITLE), page)
-        assert result.pages[1].vision.suffix == PNG_SUFFIX
+        assert result.pages[1].method == method
+        if method == IMAGE_SOURCE:
+            assert result.pages[1].vision is None
+        else:
+            assert result.pages[1].vision.suffix == PNG_SUFFIX
+        assert len(result.images) == 1
 
     def test_a_scan_placed_through_a_form_is_rendered(self, tmp_path):
         """A form's own matrix and bounding box can turn or cut what it
@@ -632,35 +648,37 @@ class TestWhatVisionReads:
         assert methods(result) == [TEXT_LAYER, VISION]
         assert result.pages[1].vision.suffix == PNG_SUFFIX
 
-    def test_a_mirrored_scan_is_rendered(self, tmp_path):
+    def test_a_mirrored_scan_keeps_the_original_image_source(self, tmp_path):
         page = pdfs.Page().image(
             pdfs.jpeg(), 0, 0, pdfs.WIDTH, pdfs.HEIGHT, mirrored=True
         )
         result = read(tmp_path, typed(TITLE), page)
-        assert result.pages[1].vision.suffix == PNG_SUFFIX
+        assert result.pages[1].method == IMAGE_SOURCE
+        assert result.pages[1].vision is None
+        (image,) = result.images.values()
+        assert image.path.read_bytes() == pdfs.JPEG
 
-    @pytest.mark.parametrize(
-        "height, suffix", [(720, JPEG_SUFFIX), (719, PNG_SUFFIX)]
-    )
-    def test_the_boundary_of_a_page_s_one_image(
-        self, tmp_path, height, suffix
+    @pytest.mark.parametrize("height", [720, 719, 200])
+    def test_page_coverage_does_not_create_a_second_image_read(
+        self, tmp_path, height
     ):
-        """A page's one image covering exactly BACKGROUND_COVER of it is
-        given as held; a point less, and the page is rendered."""
         page = pdfs.Page(width=SIDE, height=TALL)
         page.image(pdfs.jpeg(), 0, 0, SIDE, height)
         result = read(tmp_path, typed(TITLE), page)
-        assert result.pages[1].vision.suffix == suffix
+        assert result.pages[1].method == IMAGE_SOURCE
+        assert result.pages[1].vision is None
+        (image,) = result.images.values()
+        assert image.path.read_bytes() == pdfs.JPEG
 
-    def test_an_image_partly_off_the_page_counts_for_its_part_on_it(
+    def test_an_image_partly_off_the_page_is_read_as_its_original(
         self, tmp_path
     ):
-        """The page's one image, placed mostly beyond its edge: what falls
-        on the page covers too little of it to stand for the page, which
-        is rendered."""
+        """The placement is a partial view of the same image source."""
         page = pdfs.Page().image(pdfs.jpeg(), 400, 0, 1000, pdfs.HEIGHT)
         result = read(tmp_path, typed(TITLE), page)
-        assert result.pages[1].vision.suffix == PNG_SUFFIX
+        assert result.pages[1].method == IMAGE_SOURCE
+        assert result.pages[1].vision is None
+        assert len(result.images) == 1
 
     def test_a_scan_pdfium_cannot_decode_is_rendered(self, tmp_path):
         """A page's one image in a filter PDFium does not know: it cannot
@@ -745,7 +763,9 @@ class TestImages:
         assert placed.path.read_bytes() == png(150, 100, 3, image.data)
 
     def test_one_image_placed_twice_is_one_image(self, tmp_path):
-        image = pdfs.gray(300, 120)
+        # Complete original JPEG bytes prove shared media across these
+        # distinct PDF image objects; equal decoded PNGs would not.
+        image = pdfs.jpeg()
         twice = self.booklet_page(image).image(image, 72, 100, 150, 60)
         result = read(tmp_path, twice, typed(TITLE), self.booklet_page(image))
         (placed,) = result.images.values()
@@ -757,9 +777,8 @@ class TestImages:
             [(1, placed.sha1)],
         ]
 
-    def test_decoration_is_not_read(self, tmp_path):
-        """An image under MIN_IMAGE_SIDE pixels on a side, or under
-        MIN_IMAGE_PIXELS in all, could hold no more than a word."""
+    def test_small_images_are_read_as_original_sources(self, tmp_path):
+        """Pixel dimensions do not establish that an image has no evidence."""
         page = self.booklet_page(pdfs.gray(300, 120))
         page.image(pdfs.gray(20, 600, shade=1), 500, 100, 20, 300)
         page.image(pdfs.gray(99, 100, shade=2), 420, 50, 99, 100)
@@ -767,27 +786,36 @@ class TestImages:
         page.image(kept, 72, 50, 100, 100)
         result = read(tmp_path, page)
         assert methods(result) == [TEXT_LAYER]
-        assert len(result.images) == 2
-        assert [place for place, _sha1 in result.pages[0].images] == [1, 2]
+        assert len(result.images) == 4
+        assert [place for place, _sha1 in result.pages[0].images] == [
+            1,
+            2,
+            3,
+            4,
+        ]
         assert hashlib.sha1(png(100, 100, 1, kept.data)).hexdigest() in (
             result.images
         )
 
-    @pytest.mark.parametrize("width, read_on_its_own", [(24, 1), (23, 0)])
-    def test_the_boundary_of_decoration(
-        self, tmp_path, width, read_on_its_own
-    ):
-        """An image MIN_IMAGE_SIDE pixels wide (and over MIN_IMAGE_PIXELS in
-        all) is read; a pixel narrower, it is decoration."""
+    @pytest.mark.parametrize("width", [1, 23, 24])
+    def test_narrow_original_images_are_read(self, tmp_path, width):
         page = typed(TITLE).image(pdfs.gray(width, 500), 400, 100, 20, 400)
-        assert len(read(tmp_path, page).images) == read_on_its_own
+        assert len(read(tmp_path, page).images) == 1
+
+    def test_an_original_outside_the_page_is_still_read(self, tmp_path):
+        page = typed(TITLE).image(pdfs.jpeg(), 900, 100, 128, 96)
+        result = read(tmp_path, page)
+        assert methods(result) == [TEXT_LAYER]
+        (image,) = result.images.values()
+        assert image.path.read_bytes() == pdfs.JPEG
+        assert result.pages[0].images == [(1, image.sha1)]
 
     def test_an_image_in_a_form_is_placed_where_the_form_puts_it(
         self, tmp_path
     ):
         """A form XObject scaled over the whole page puts its image over
         the whole page, over the text painted before it: that page is read
-        by vision, and its image is not read on its own."""
+        by vision, while its original image remains independently readable."""
         within = typed(TITLE).form_image(
             pdfs.rgb(150, 100), 100, 300, 240, 160
         )
@@ -795,7 +823,7 @@ class TestImages:
             pdfs.rgb(150, 100), 0, 0, pdfs.WIDTH, pdfs.HEIGHT
         )
         assert len(read(tmp_path / "within", within).images) == 1
-        assert read(tmp_path / "covering", covering).images == {}
+        assert len(read(tmp_path / "covering", covering).images) == 1
 
     def test_an_image_the_never_ingest_list_names_is_left_out(self, tmp_path):
         image = pdfs.gray(300, 120)
@@ -814,16 +842,19 @@ class TestImages:
         result = read(tmp_path, page)
         assert result.images == {}
         assert result.pages[0].images == []
-        assert result.notes == [
-            "image not read on its own: page 1, image 1: PDFium could not "
-            "give its bytes, so it is not read"
-        ]
+        assert any("PDFium" in reason for reason in result.notes)
 
-    def test_no_image_is_read_on_a_page_read_by_vision(self, tmp_path):
+    def test_inner_sources_are_read_independently_of_the_page_route(
+        self, tmp_path
+    ):
         page = scan().image(pdfs.gray(300, 120), 72, 480, 300, 200)
         result = read(tmp_path, typed(TITLE), page)
         assert methods(result) == [TEXT_LAYER, VISION]
-        assert result.images == {}
+        assert len(result.images) == 2
+        assert all(
+            owner in result.sources.sources
+            for _ordinal, owner in result.pages[1].images
+        )
 
 
 class TestUnionArea:

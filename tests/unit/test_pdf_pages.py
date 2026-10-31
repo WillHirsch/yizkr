@@ -1,12 +1,12 @@
 """PDFs read page by page (#176): the transcription route, the images a
 PDF places within its pages, the views, and the LLM cache's keys.
 
-A PDF with a page that reads from its text layer is read page by page:
-those pages without a model call, its other pages by vision, and each
-image placed within a text-layer page by vision on its own, as a witness
-of its own (#178, ADR-0008). A PDF with no such page is read whole through
-a checked bitmap-only representation. Cache reuse follows those submitted
-bytes, while attribution remains to the original PDF. The orchestrator uses
+A PDF with usable native text or readable image sources is read page by
+page. Each original image is read once under its own owner; a page showing
+only that image keeps a marker without duplicating its reading or claims.
+Other vision pages are rendered. A PDF with no usable text or readable
+image source is read through a checked bitmap-only representation. Cache
+reuse follows the submitted bytes. The orchestrator uses
 wiring (tests/unit/test_llmcache.py's CachedRun), and a scripted engine
 reads each file a vision call gives it. Every PDF is fictional
 (tests/fixtures/pdfs.py), its texts the universe's (docs/EXAMPLES.md).
@@ -59,7 +59,6 @@ from yizkr.pipeline.orchestrate import (
 from yizkr.pipeline.presentation import (
     DERIVED_MEDIA,
     derived_transcription,
-    read_derived_media,
 )
 from yizkr.pipeline.rundir import RunDir, RunSettingsConflict
 from yizkr.pipeline.scratch import EXIT_OK, LATEST, runs_in
@@ -72,6 +71,16 @@ from yizkr.pipeline.transcribe import (
     TranscribedPage,
     Transcription,
 )
+
+
+def saved_sources(directory):
+    from yizkr.pipeline.container_inventory import read_inventory
+    from yizkr.pipeline.container_sources import project_sources
+
+    inventory = read_inventory(directory)
+    assert inventory is not None
+    return project_sources(inventory, directory)
+
 
 SOURCES = {source.key: source for source in u.SOURCES}
 HISTORY = SOURCES["family-history-2008"].text
@@ -122,16 +131,17 @@ def typed(*paragraphs: str, **options) -> pdfs.Page:
     return pdfs.Page().text(pdfs.lines(*paragraphs), **options)
 
 
-def scanned() -> pdfs.Page:
-    """A scanned page: one JPEG covering it, with an OCR layer drawn
-    invisibly over it."""
-    page = pdfs.Page().image(pdfs.jpeg(), 0, 0, pdfs.WIDTH, pdfs.HEIGHT)
-    return page.text(pdfs.lines(EXTRACT), mode=pdfs.INVISIBLE)
+def vision_page() -> pdfs.Page:
+    """Native text whose font has no usable Unicode map needs rendering.
+
+    It holds no original embedded image, so its reading belongs to the PDF.
+    """
+    return pdfs.Page().text(pdfs.lines(EXTRACT), font=pdfs.GARBLED)
 
 
 def history(second: pdfs.Page | None = None) -> bytes:
     """The two typed pages of the 2008 family history; a copy may have its
-    second page as `second` instead (scanned, say)."""
+    second page as `second` instead (rendered, say)."""
     return pdfs.pdf([typed(FIRST), second or typed(SECOND)])
 
 
@@ -148,8 +158,49 @@ def booklet(image: pdfs.Image = LETTER_IMAGE) -> bytes:
 
 
 def extract() -> bytes:
-    """The birth register extract, a scan with an OCR layer."""
-    return pdfs.pdf([scanned()])
+    """The birth register extract with an unreadable native text layer."""
+    return pdfs.pdf([vision_page()])
+
+
+def reading_location(prompt: str, page: str | None = None):
+    """A real page and text line from the scripted engine's input reading."""
+    current = None
+    for line in re.findall(r"^\d+: (.*)$", prompt, re.M):
+        marker = re.match(r"\[(?:Page|Slide) (\d+)\]", line)
+        if marker:
+            current = marker[1]
+        elif (
+            current is not None
+            and line.strip()
+            and not line.startswith("[")
+            and (page is None or page == current)
+        ):
+            return current, line
+    return None
+
+
+def located_pipeline_answers(kind, prompt, opening):
+    """The canned pipeline claim with support present in its input reading.
+
+    These answers exercise pipeline wiring, not model interpretation quality.
+    Unpaged fixtures retain their existing response shape.
+    """
+    answer = pipeline_answers(kind, prompt, opening)
+    location = reading_location(opening or prompt)
+    if location is None:
+        return answer
+    page, quote = location
+    lines = []
+    for line in answer.splitlines():
+        value = json.loads(line) if line.startswith("{") else None
+        if isinstance(value, dict) and isinstance(value.get("source"), dict):
+            value["source"] |= {
+                "page_number": page,
+                "transcription_excerpt": {"text": quote, "language": "en"},
+            }
+            line = json.dumps(value)
+        lines.append(line)
+    return "\n".join(lines)
 
 
 class Reader(Engine):
@@ -162,7 +213,7 @@ class Reader(Engine):
     read, by name, with the SHA-1 of its bytes."""
 
     def __init__(self, readings: dict[str, str | list[str]], **kwargs):
-        super().__init__(pipeline_answers, **kwargs)
+        super().__init__(located_pipeline_answers, **kwargs)
         self.readings = {
             name: list(reading) if isinstance(reading, list) else [reading]
             for name, reading in readings.items()
@@ -320,7 +371,7 @@ class TestTheRoute:
         """What the engine reads of a page is the page's text, without the
         blank lines it may begin or end with, so the page's markers and
         the next page's stand where they always do."""
-        corpus = folder(tmp_path, family_history=history(scanned()))
+        corpus = folder(tmp_path, family_history=history(vision_page()))
         reader = Reader({"page-2": f"\n\n{EXTRACT.strip()}\n\n"})
         doc = document(run(tmp_path, corpus, reader), "family-history.pdf")
         transcription = transcription_of(doc)
@@ -341,7 +392,7 @@ class TestTheRoute:
             for page in transcription.pages
         ] == [("text-layer", 1), ("text-layer", 0)]
 
-    def test_a_scanned_pdf_is_read_whole(self, tmp_path):
+    def test_a_pdf_without_usable_text_or_images_is_read_whole(self, tmp_path):
         """A PDF none of whose pages reads from its text layer is read by
         one vision call over a checked, rendered PDF. Its source identity
         remains the original PDF; its pages are read by that call."""
@@ -361,15 +412,60 @@ class TestTheRoute:
         ] == [(1, "transcribed", "vision")]
         assert not (doc.dir / DERIVED_MEDIA).exists()
 
+    def test_repeated_scans_read_and_extract_only_the_original_image(
+        self, tmp_path
+    ):
+        image_sha1 = hashlib.sha1(pdfs.JPEG).hexdigest()
+        pages = [
+            pdfs.Page()
+            .image(pdfs.jpeg(), 40, 60, 500, 700)
+            .text(pdfs.lines(EXTRACT), mode=pdfs.INVISIBLE)
+            for _ in range(2)
+        ]
+        corpus = folder(tmp_path, birth_extract_1938=pdfs.pdf(pages))
+        reader = Reader({image_sha1: EXTRACT})
+        first = run(tmp_path, corpus, reader)
+        doc = document(first, "birth-extract-1938.pdf")
+        assert doc.state.status == AWAITING_CLAIMS, doc.state.error
+        assert reader.names() == [f"{image_sha1}.jpg"]
+        transcription = transcription_of(doc)
+        assert page_methods(transcription) == [
+            (1, "image-source"),
+            (2, "image-source"),
+        ]
+        assert all(
+            not transcription.page_text(page) for page in transcription.pages
+        )
+        assert (
+            ClaimBatch.model_validate_json(doc.batch.read_text()).claims == []
+        )
+        excerpt = excerpt_of(first, image_sha1)
+        batch = ClaimBatch.model_validate_json(excerpt.batch.read_text())
+        assert batch.claims
+        assert {claim.source.artifact.sha1 for claim in batch.claims} == {
+            image_sha1
+        }
+        assert all(
+            claim.source.support is not None
+            and claim.source.support.locator.kind == "image"
+            and claim.source.support.placements
+            and all(
+                placement.locator.position in {1, 2}
+                for placement in claim.source.support.placements
+            )
+            for claim in batch.claims
+        )
+        assert saved_sources(doc.dir).sources[image_sha1].slides == [1, 2]
+        before = excerpt.batch.read_bytes()
+        again = run(tmp_path, corpus, RefusingReader({}))
+        assert excerpt_of(again, image_sha1).batch.read_bytes() == before
+
     def test_a_mixed_pdf_reads_each_page_by_its_method(self, tmp_path):
-        """The typed page from its text layer; the scanned one by vision,
-        from the scan's JPEG as the PDF holds it."""
-        corpus = folder(tmp_path, family_history=history(scanned()))
+        """Usable native text needs no call; unusable text is rendered."""
+        corpus = folder(tmp_path, family_history=history(vision_page()))
         reader = Reader({"page-2": SECOND})
         doc = document(run(tmp_path, corpus, reader), "family-history.pdf")
-        assert reader.read == [
-            ("page-2.jpg", hashlib.sha1(pdfs.JPEG).hexdigest())
-        ]
+        assert reader.names() == ["page-2.png"]
         transcription = transcription_of(doc)
         assert page_methods(transcription) == [
             (1, "text-layer"),
@@ -381,14 +477,14 @@ class TestTheRoute:
         assert transcription.page_text(transcription.pages[1]) == SECOND
         first = "\n".join(pdfs.lines(FIRST))
         assert transcription.text == f"[Page 1]\n{first}\n\n[Page 2]\n{SECOND}"
-        # the scan's OCR layer is no part of it
+        # unusable native text is replaced by the rendered reading
         assert "Standesamt" not in transcription.text
 
     def test_each_page_carries_the_record_s_fields(self, tmp_path):
         """A page read by vision takes the fields of its reading's record
         (#389); a page read from its text layer is transcribed, with no
         printed number, languages or notes, since no engine read it."""
-        corpus = folder(tmp_path, family_history=history(scanned()))
+        corpus = folder(tmp_path, family_history=history(vision_page()))
         reading = json.dumps(
             {
                 "document_class": "unclassified",
@@ -405,7 +501,7 @@ class TestTheRoute:
         reader = Reader({"page-2": reading})
         doc = document(run(tmp_path, corpus, reader), "family-history.pdf")
         transcription = transcription_of(doc)
-        typed_page, scanned_page = transcription.pages
+        typed_page, rendered_page = transcription.pages
         assert (
             typed_page.status,
             typed_page.printed_page,
@@ -413,10 +509,10 @@ class TestTheRoute:
             typed_page.notes,
         ) == ("transcribed", None, [], "")
         assert (
-            scanned_page.status,
-            scanned_page.printed_page,
-            scanned_page.languages,
-            scanned_page.notes,
+            rendered_page.status,
+            rendered_page.printed_page,
+            rendered_page.languages,
+            rendered_page.notes,
         ) == ("transcribed", "2", ["en"], "a coffee ring in the margin")
         assert transcription.printed_pages() == {2: "2"}
         # no call saw the PDF whole, so it has no class
@@ -437,7 +533,7 @@ class TestTheRoute:
     def test_a_flagged_vision_page_flags_the_pdf(self, tmp_path):
         """The flag of a vision page's reading, here from its notes, is
         the transcription's."""
-        corpus = folder(tmp_path, family_history=history(scanned()))
+        corpus = folder(tmp_path, family_history=history(vision_page()))
         reading = json.dumps(
             {
                 "document_class": "unclassified",
@@ -490,7 +586,7 @@ class TestTheRoute:
     def test_a_page_read_by_vision_that_fails_the_check_fails_it(
         self, tmp_path
     ):
-        corpus = folder(tmp_path, family_history=history(scanned()))
+        corpus = folder(tmp_path, family_history=history(vision_page()))
         reader = Reader({"page-2": Raw(REFUSAL)})
         orchestrator = run(tmp_path, corpus, reader)
         doc = document(orchestrator, "family-history.pdf")
@@ -591,13 +687,12 @@ class TestImages:
         assert kept.text == page_text(EXCERPT)
         assert kept.language == "de"
         # and the image is recorded as the booklet's derived medium
-        record = read_derived_media(doc.dir)
-        assert record.source_sha1 == doc.sha1
-        assert record.title == "booklet"
-        medium = record.media[LETTER_SHA1]
+        record = saved_sources(doc.dir)
+        assert record.inventory.source.sha1 == doc.sha1
+        medium = record.sources[LETTER_SHA1]
         assert medium.names == ["page 6, image 1"]
         assert medium.slides == [6]
-        assert medium.file == f"derived-media/{LETTER_SHA1}.png"
+        assert medium.file == f"representations/{LETTER_SHA1}.png"
 
     def test_the_claims_read_from_the_booklet_cite_it_alone(self, tmp_path):
         corpus = folder(tmp_path, booklet=booklet())
@@ -618,15 +713,18 @@ class TestImages:
         assert not any("Angerring 11" in prompt for prompt in extraction)
 
     def test_one_image_placed_twice_is_read_once(self, tmp_path):
-        page = typed(TITLE).image(LETTER_IMAGE, 72, 400, 300, 120)
+        page = typed(TITLE).image(SHARED_LETTER_IMAGE, 72, 400, 300, 120)
         data = pdfs.pdf(
-            [page, typed(SOFTWARE).image(LETTER_IMAGE, 72, 400, 300, 120)]
+            [
+                page,
+                typed(SOFTWARE).image(SHARED_LETTER_IMAGE, 72, 400, 300, 120),
+            ]
         )
         corpus = folder(tmp_path, booklet=data)
-        reader = Reader({LETTER_SHA1: EXCERPT})
+        reader = Reader({SHARED_LETTER_SHA1: EXCERPT})
         doc = document(run(tmp_path, corpus, reader), "booklet.pdf")
-        assert reader.names() == [f"{LETTER_SHA1}.png"]
-        medium = read_derived_media(doc.dir).media[LETTER_SHA1]
+        assert reader.names() == [f"{SHARED_LETTER_SHA1}.jpg"]
+        medium = saved_sources(doc.dir).sources[SHARED_LETTER_SHA1]
         assert medium.names == ["page 1, image 1", "page 2, image 1"]
         assert medium.slides == [1, 2]
 
@@ -649,7 +747,7 @@ class TestImages:
         transcription = transcription_of(doc)
         assert LETTER_SHA1 not in transcription.text
         assert transcription.pages[5].images == []
-        assert read_derived_media(doc.dir).media == {}
+        assert saved_sources(doc.dir).sources == {}
         assert not (doc.dir / "derived-media").exists()
 
     def test_an_image_whose_reading_fails_needs_attention(self, tmp_path):
@@ -673,7 +771,7 @@ class TestImages:
         )
         assert "(not-a-record)" in reason
         assert not derived_transcription(doc.dir, LETTER_SHA1).exists()
-        assert LETTER_SHA1 in read_derived_media(doc.dir).media
+        assert LETTER_SHA1 in saved_sources(doc.dir).sources
 
     def test_an_image_that_cannot_be_read_needs_attention(self, tmp_path):
         broken = pdfs.Image(
@@ -690,10 +788,9 @@ class TestImages:
             for event in this_run(orchestrator, "done")
             if event["stage"] == "transcription"
         ]
-        assert done["attention"] == [
-            "image not read on its own: page 6, image 1: PDFium could not "
-            "give its bytes, so it is not read"
-        ]
+        (attention,) = done["attention"]
+        assert attention.startswith("image not read on its own:")
+        assert "PDFium image preparation failed" in attention
 
     def test_nothing_is_written_until_the_stage_keeps_it(self, tmp_path):
         """The route writes nothing into the document's directory, so a
@@ -838,10 +935,16 @@ class TestAScratchRun:
         assert not list(scratch.glob("yizkr-pdf-*"))
 
 
+# The two compilations share these original JPEG bytes, not merely a decoded
+# PNG. Original-media identity establishes their common letter owner.
+SHARED_LETTER_IMAGE = pdfs.jpeg()
+SHARED_LETTER_SHA1 = hashlib.sha1(SHARED_LETTER_IMAGE.data).hexdigest()
+
+
 def album() -> bytes:
     """A second compilation: a typed title page, and a page that places
     the letter's top, as the booklet does, beside two other images."""
-    page = pdfs.Page().image(LETTER_IMAGE, 72, 600, 200, 80)
+    page = pdfs.Page().image(SHARED_LETTER_IMAGE, 72, 600, 200, 80)
     for shade, x in ((1, 300), (2, 72)):
         page.image(pdfs.gray(300, 120, shade=shade), x, 480, 200, 80)
     page.text(pdfs.lines(CAPTION, TRANSLATION), y=400)
@@ -857,7 +960,12 @@ def gray_sha1(shade: int) -> str:
 def compilations(tmp_path: Path) -> Corpus:
     """The booklet and the album, the engine reading each image as the
     letter excerpt and each compilation as its translation."""
-    corpus = the_booklet(tmp_path)
+    corpus = Corpus(tmp_path / "corpus")
+    (corpus.folder / "booklet.pdf").write_bytes(booklet(SHARED_LETTER_IMAGE))
+    corpus.texts["booklet.pdf"] = "\n".join(
+        pdfs.lines(CAPTION, TRANSLATION, COMMENT)
+    )
+    corpus.texts[f"{SHARED_LETTER_SHA1}.jpg"] = EXCERPT
     (corpus.folder / "album.pdf").write_bytes(album())
     corpus.texts["album.pdf"] = "\n".join(pdfs.lines(TITLE))
     for sha1 in (gray_sha1(1), gray_sha1(2)):
@@ -994,10 +1102,8 @@ class TestTheCallEstimateCountsExcerpts:
         if held:
             run_scratch(tmp_path, corpus, engine, until="transcription")
             assert len(list(runs_dir(tmp_path).glob("*/excerpts/*"))) == 3
-        (corpus.folder / "letter.png").write_bytes(
-            png(300, 120, 1, LETTER_IMAGE.data)
-        )
-        corpus.texts["letter.png"] = EXCERPT
+        (corpus.folder / "letter.jpg").write_bytes(SHARED_LETTER_IMAGE.data)
+        corpus.texts["letter.jpg"] = EXCERPT
         excerpts = estimate_of(tmp_path, corpus, engine).excerpts
         # the booklet places the letter's top alone, so only the album
         # places an image that may become an excerpt
@@ -1364,8 +1470,8 @@ class TestTheCallEstimateCountsExcerpts:
         (excerpt,) = (runs_dir(tmp_path)).glob("*/excerpts/*")
         transcription = excerpt / "transcription.json"
         assert transcription.is_file()
+        reread_the_letter(tmp_path, corpus, engine)
         transcription.unlink()
-        reread_the_letter(tmp_path)
         counted = estimate_of(tmp_path, corpus, engine, resume=LATEST)
         assert counted.stages["transcription"].reused == 1
         assert counted.excerpts.images == 1
@@ -1428,7 +1534,7 @@ class TestTheCallEstimateCountsExcerpts:
         run_scratch(tmp_path, corpus, engine)
         held = runs_dir(tmp_path).glob("*/excerpts/*")
         excerpts = {path.name: path for path in held}
-        for sha1 in (gray_sha1(1), LETTER_SHA1):
+        for sha1 in (gray_sha1(1), SHARED_LETTER_SHA1):
             for path in excerpts[sha1].glob("critique*"):
                 path.unlink()
         (excerpts[gray_sha1(2)] / "batch.json").unlink()
@@ -1641,15 +1747,25 @@ class TestTheCallEstimateCountsExcerpts:
         ]
 
 
-def reread_the_letter(tmp_path: Path) -> None:
-    """Make the booklet's kept reading of the letter's image read one
-    house number otherwise, as a reading made again may: the check passes
-    it, and the excerpt's transcription made from it differs."""
-    (container,) = runs_dir(tmp_path).glob("*/booklet")
-    reading = derived_transcription(container, LETTER_SHA1)
-    text = reading.read_text()
-    assert text.count("Angerring 11") == 1
-    reading.write_text(text.replace("Angerring 11", "Angerring 71"))
+def reread_the_letter(tmp_path: Path, corpus: Corpus, fake) -> None:
+    """Refresh the real stage with a different fictional model reading.
+
+    Its inventory outcome and located context must be recorded by the same
+    path as normal readings; editing a saved product would damage integrity.
+    """
+    name = f"{LETTER_SHA1}.png"
+    assert corpus.texts[name].count("Angerring 11") == 1
+    corpus.texts[name] = corpus.texts[name].replace(
+        "Angerring 11", "Angerring 71"
+    )
+    run_scratch(
+        tmp_path,
+        corpus,
+        fake,
+        resume=LATEST,
+        refresh=["transcribe"],
+        until="transcription",
+    )
 
 
 def excerpt_calls(fake, before: int) -> list[str]:
@@ -1733,7 +1849,7 @@ class TestReuse:
     the vision engine read it, and never where its text layer did."""
 
     def test_a_stricter_check_reads_a_page_again(self, tmp_path, monkeypatch):
-        corpus = folder(tmp_path, family_history=history(scanned()))
+        corpus = folder(tmp_path, family_history=history(vision_page()))
         reader = Reader({"page-2": [SECOND, "Klara left Flörburg first."]})
         run(tmp_path, corpus, reader)
         stricter_check(monkeypatch, "followed her in 1939")
@@ -1742,7 +1858,7 @@ class TestReuse:
         (aside,) = set_asides(again)
         assert aside["stage"] == "transcription"
         assert aside["reason"].endswith("(page 2)")
-        assert reader.names() == ["page-2.jpg", "page-2.jpg"]
+        assert reader.names() == ["page-2.png", "page-2.png"]
         transcription = transcription_of(doc)
         assert transcription.page_text(transcription.pages[1]) == (
             "Klara left Flörburg first."
@@ -1759,7 +1875,7 @@ class TestReuse:
         a document page needs no text when it is made, and is checked on
         reuse as it was then: three runs read it once, and set nothing
         aside."""
-        corpus = folder(tmp_path, family_history=history(scanned()))
+        corpus = folder(tmp_path, family_history=history(vision_page()))
         reading = json.dumps(
             {
                 "document_class": "unclassified",
@@ -1770,7 +1886,7 @@ class TestReuse:
         for _run in range(3):
             again = run(tmp_path, corpus, reader)
             assert set_asides(again) == []
-        assert reader.names() == ["page-2.jpg"]
+        assert reader.names() == ["page-2.png"]
         doc = document(again, "family-history.pdf")
         assert transcription_of(doc).pages[1].status == status
         assert not (doc.dir / "transcription.superseded-1.json").exists()
@@ -1779,13 +1895,13 @@ class TestReuse:
         """A vision page whose record's text reads as an announcement is
         a source's sentence when made and on every reuse: three runs read
         it once and set nothing aside."""
-        corpus = folder(tmp_path, family_history=history(scanned()))
+        corpus = folder(tmp_path, family_history=history(vision_page()))
         line = "I will bring the documents to Stupfield."
         reader = Reader({"page-2": record_answer(line)})
         for _run in range(3):
             again = run(tmp_path, corpus, reader)
             assert set_asides(again) == []
-        assert reader.names() == ["page-2.jpg"]
+        assert reader.names() == ["page-2.png"]
         doc = document(again, "family-history.pdf")
         assert again._transcription(doc).flag == "narration-only"
 
@@ -1800,7 +1916,7 @@ class TestReuse:
 
         if whole:
             read_whole(monkeypatch)
-        corpus = folder(tmp_path, family_history=history(scanned()))
+        corpus = folder(tmp_path, family_history=history(vision_page()))
         whole_record = json.dumps(
             {
                 "document_class": "unclassified",
@@ -1840,7 +1956,8 @@ class TestReuse:
         """Two vision pages flagged by two signatures: the first page's
         flag is the PDF's, when made and on reuse."""
         corpus = folder(
-            tmp_path, scans=pdfs.pdf([typed(FIRST), scanned(), scanned()])
+            tmp_path,
+            scans=pdfs.pdf([typed(FIRST), vision_page(), vision_page()]),
         )
         reader = Reader(
             {
@@ -1887,7 +2004,7 @@ class TestReuse:
         again, and the transcription-flag alert follows it."""
         if whole:
             read_whole(monkeypatch)
-        corpus = folder(tmp_path, family_history=history(scanned()))
+        corpus = folder(tmp_path, family_history=history(vision_page()))
         reader = Reader(
             {
                 "page-2": SECOND,
@@ -1936,8 +2053,10 @@ class TestReuse:
         kept.write_text(json.dumps(view))
         again = run(tmp_path, corpus, reader)
         (aside,) = set_asides(again)
-        assert "(not-a-record)" in aside["reason"]
-        assert aside["reason"].endswith(f"(image {LETTER_SHA1[:12]})")
+        assert aside["reason"] == (
+            f"the recorded transcription of image {LETTER_SHA1[:12]} "
+            "has changed"
+        )
         assert "document_class" in json.loads(kept.read_text())
 
     def test_a_pdf_read_whole_is_checked_for_its_page_count_on_reuse(

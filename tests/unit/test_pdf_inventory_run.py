@@ -24,6 +24,7 @@ from tests.unit.test_pdf_pages import (
     folder,
     renderer,  # noqa: F401
     run,
+    vision_page,
 )
 from yizkr.core.corpus import ExclusionList
 from yizkr.pipeline.container_inventory import (
@@ -77,7 +78,7 @@ def test_native_pdf_records_original_parts_and_actual_image_reading(tmp_path):
     )
 
 
-def test_contextual_representations_keep_distinct_legacy_readings(
+def test_contextual_representations_do_not_invent_distinct_source_owners(
     tmp_path, monkeypatch
 ):
     # Substitute decoder results, not parsing or reading: this does not claim
@@ -103,20 +104,21 @@ def test_contextual_representations_keep_distinct_legacy_readings(
     assert doc.state.status == AWAITING_CLAIMS, doc.state.error
     (part,) = embedded(saved(doc))
     assert {rep.byte_object.sha1 for rep in part.representations} == digests
-    assert {digest for _name, digest in reader.read} == digests
-    assert set(read_derived_media(doc.dir).media) == digests
-    assert all(
+    assert reader.read == []
+    assert read_derived_media(doc.dir) is None
+    assert not any(
         derived_transcription(doc.dir, digest).is_file() for digest in digests
     )
-    assert part.reading.state == "unsupported"
-    assert "contextual" in part.reading.reason
+    assert part.owner_binding is None
+    assert "unique prepared" in part.ownership_issue
+    assert part.reading.state == "unattempted"
     assert part.reading.product is None
 
 
 def test_whole_pdf_publishes_inventory_before_model_and_keeps_render_lineage(
     tmp_path,
 ):
-    corpus = folder(tmp_path, birth_extract_1938=pdfs.pdf([scan()]))
+    corpus = folder(tmp_path, birth_extract_1938=pdfs.pdf([vision_page()]))
 
     class InspectingReader(Reader):
         def complete(self, prompt, image_paths=()):
@@ -125,14 +127,14 @@ def test_whole_pdf_publishes_inventory_before_model_and_keeps_render_lineage(
                 assert len(records) == 1
                 inventory = read_inventory(records[0].parent)
                 assert inventory is not None
-                assert embedded(inventory)
+                assert any(p.kind == "page_body" for p in inventory.parts)
             return super().complete(prompt, image_paths)
 
     reader = InspectingReader({"birth-extract-1938.pdf": EXTRACT})
     doc = document(run(tmp_path, corpus, reader), "birth-extract-1938.pdf")
     assert doc.state.status == AWAITING_CLAIMS, doc.state.error
     inventory = saved(doc)
-    assert embedded(inventory)
+    assert any(p.kind == "page_body" for p in inventory.parts)
     representations = [r for p in inventory.parts for r in p.representations]
     whole = [r for r in representations if r.method == "rendered-pdf-v1"]
     assert len(whole) == 1
@@ -143,7 +145,7 @@ def test_whole_pdf_publishes_inventory_before_model_and_keeps_render_lineage(
 
 @pytest.mark.parametrize("damage", [None, "missing-record", "missing-render"])
 def test_reused_whole_pdf_keeps_or_restores_prepared_lineage(tmp_path, damage):
-    corpus = folder(tmp_path, birth_extract_1938=pdfs.pdf([scan()]))
+    corpus = folder(tmp_path, birth_extract_1938=pdfs.pdf([vision_page()]))
     first = document(
         run(tmp_path, corpus, Reader({"birth-extract-1938.pdf": EXTRACT})),
         "birth-extract-1938.pdf",
@@ -176,7 +178,9 @@ def test_reused_whole_pdf_keeps_or_restores_prepared_lineage(tmp_path, damage):
 def test_whole_pdf_blank_outcome_does_not_count_page_markers_as_content(
     tmp_path,
 ):
-    corpus = folder(tmp_path, family_booklet_2011=pdfs.pdf([scan(), scan()]))
+    corpus = folder(
+        tmp_path, family_booklet_2011=pdfs.pdf([vision_page(), vision_page()])
+    )
     doc = document(
         run(
             tmp_path,
@@ -291,7 +295,7 @@ def test_failed_image_reading_remains_distinct_from_unattempted(tmp_path):
 
 
 def test_estimate_rechecks_without_publishing_missing_inventory(tmp_path):
-    corpus = folder(tmp_path, birth_extract_1938=pdfs.pdf([scan()]))
+    corpus = folder(tmp_path, birth_extract_1938=pdfs.pdf([vision_page()]))
     doc = document(
         run(tmp_path, corpus, Reader({"birth-extract-1938.pdf": EXTRACT})),
         "birth-extract-1938.pdf",

@@ -26,7 +26,7 @@ import pytest
 
 from tests.fixtures import pdfs
 from tests.fixtures.records import page_text, record_answer, record_page
-from tests.unit.test_deck_excerpts import RULE, talk_folder
+from tests.unit.test_deck_excerpts import library_talk, talk_folder
 from tests.unit.test_orchestrate import this_run
 from tests.unit.test_pdf_pages import (
     CAPTION,
@@ -35,6 +35,8 @@ from tests.unit.test_pdf_pages import (
     LETTER_IMAGE,
     LETTER_SHA1,
     REFUSAL,
+    SHARED_LETTER_IMAGE,
+    SHARED_LETTER_SHA1,
     SOFTWARE,
     SOURCES,
     TRANSLATION,
@@ -71,6 +73,11 @@ from tests.unit.test_scratch import (  # noqa: F401
 from yizkr.claims import ClaimBatch
 from yizkr.core.corpus import ExclusionList
 from yizkr.pipeline import scratch
+from yizkr.pipeline.container_inventory import (
+    CONTAINER_INVENTORY,
+    read_inventory,
+)
+from yizkr.pipeline.container_sources import project_sources
 from yizkr.pipeline.language import detect_language
 from yizkr.pipeline.orchestrate import (
     AWAITING_CLAIMS,
@@ -84,10 +91,8 @@ from yizkr.pipeline.orchestrate import (
     EXCERPT as KIND,
 )
 from yizkr.pipeline.presentation import (
-    DERIVED_MEDIA,
     DERIVED_MEDIA_DIR,
     derived_transcription,
-    read_derived_media,
 )
 from yizkr.pipeline.registrar import ExcludedMedia
 from yizkr.pipeline.report import build, render_markdown
@@ -158,6 +163,12 @@ def planned(orchestrator) -> dict[str, str]:
     }
 
 
+def saved_sources(directory):
+    inventory = read_inventory(directory)
+    assert inventory is not None
+    return project_sources(inventory, directory)
+
+
 class TestAnExcerpt:
     def test_an_image_is_extracted_as_a_document_of_its_own(self, tmp_path):
         corpus = folder(tmp_path, booklet=booklet())
@@ -200,19 +211,25 @@ class TestAnExcerpt:
         assert end["statuses"] == {AWAITING_CLAIMS: 2}
 
     def test_the_same_image_in_two_pdfs_is_one_witness(self, tmp_path):
-        corpus = folder(tmp_path, booklet=booklet(), reprint=reprint())
-        orchestrator = run(tmp_path, corpus, Reader({LETTER_SHA1: EXCERPT}))
+        corpus = folder(
+            tmp_path,
+            booklet=booklet(SHARED_LETTER_IMAGE),
+            reprint=reprint(SHARED_LETTER_IMAGE),
+        )
+        orchestrator = run(
+            tmp_path, corpus, Reader({SHARED_LETTER_SHA1: EXCERPT})
+        )
         first = document(orchestrator, "booklet.pdf")
         second = document(orchestrator, "reprint.pdf")
-        excerpt = excerpt_of(orchestrator, LETTER_SHA1)
+        excerpt = excerpt_of(orchestrator, SHARED_LETTER_SHA1)
         assert [c.dir for c in excerpt.containers] == [first.dir, second.dir]
         assert [path.name for path in excerpt.dir.parent.iterdir()] == [
-            LETTER_SHA1
+            SHARED_LETTER_SHA1
         ]
         extractions = [
             event
             for event in this_run(orchestrator, "started")
-            if event["subject"] == LETTER_SHA1
+            if event["subject"] == SHARED_LETTER_SHA1
             and event["stage"] == "extraction"
         ]
         assert len(extractions) == 1
@@ -454,32 +471,38 @@ class TestAnExcerpt:
 
 
 class TestReuse:
-    """A reused transcription of a PDF read page by page is made again
-    when what it marks is not kept whole beside it: its images' record
-    and bytes are restored, an image whose reading failed is read again,
-    and the never-ingest list is asked again about every image it
-    marks."""
+    """Source metadata/bytes recover without invalidating intact readings.
+
+    Lost or failed readings are made again; current exclusions still govern
+    every admitted source, regardless of what an older transcription marks.
+    """
 
     @pytest.mark.parametrize("lost", ["folder", "record", "bytes"])
     def test_a_lost_record_or_image_is_restored(self, tmp_path, lost):
         corpus = folder(tmp_path, booklet=booklet())
         reader = Reader({LETTER_SHA1: EXCERPT})
         doc = document(run(tmp_path, corpus, reader), "booklet.pdf")
+        before = doc.transcription.read_bytes()
+        source = saved_sources(doc.dir).sources[LETTER_SHA1]
         if lost == "folder":
             shutil.rmtree(doc.dir / DERIVED_MEDIA_DIR)
         elif lost == "record":
-            (doc.dir / DERIVED_MEDIA).unlink()
+            (doc.dir / CONTAINER_INVENTORY).unlink()
         else:
-            (doc.dir / DERIVED_MEDIA_DIR / f"{LETTER_SHA1}.png").unlink()
+            (doc.dir / source.file).unlink()
         again = run(tmp_path, corpus, reader)
-        (aside,) = set_asides(again)
-        assert aside["stage"] == "transcription"
-        assert aside["reason"].startswith("the record of the images")
-        record = read_derived_media(doc.dir)
-        assert list(record.media) == [LETTER_SHA1]
-        assert (doc.dir / record.media[LETTER_SHA1].file).read_bytes() == (
-            LETTER_PNG
-        )
+        if lost == "folder":
+            (aside,) = set_asides(again)
+            assert aside["stage"] == "transcription"
+            assert "has no transcription of its own" in aside["reason"]
+        else:
+            assert set_asides(again) == []
+            assert doc.transcription.read_bytes() == before
+        sources = saved_sources(doc.dir)
+        assert list(sources.sources) == [LETTER_SHA1]
+        assert (
+            doc.dir / sources.sources[LETTER_SHA1].file
+        ).read_bytes() == LETTER_PNG
         kept = derived_transcription(doc.dir, LETTER_SHA1)
         assert json.loads(kept.read_text())["text"] == page_text(EXCERPT)
         assert transcription_of(excerpt_of(again, LETTER_SHA1)).text == (
@@ -505,8 +528,8 @@ class TestReuse:
 
     def test_the_never_ingest_list_is_asked_again(self, tmp_path):
         """An image the list names once its reading was kept: the PDF's
-        transcription is made again without it, the record names it no
-        more, and it is no excerpt."""
+        transcription is made again without it, the common projection no
+        longer admits it, and it is no excerpt."""
         corpus = folder(tmp_path, booklet=booklet())
         run(tmp_path, corpus, Reader({LETTER_SHA1: EXCERPT}))
         reader = Reader({})
@@ -524,7 +547,7 @@ class TestReuse:
         )
         assert reader.read == []
         assert LETTER_SHA1 not in transcription_of(doc).text
-        assert read_derived_media(doc.dir).media == {}
+        assert saved_sources(doc.dir).sources == {}
         assert again._excerpts == {}
         assert not [
             event
@@ -543,7 +566,10 @@ class TestRegistration:
         corpus = folder(tmp_path, **documents)
         options = {} if exclusions is None else {"exclusions": exclusions}
         orchestrator = run(
-            tmp_path, corpus, Reader({LETTER_SHA1: EXCERPT}), **options
+            tmp_path,
+            corpus,
+            Reader({LETTER_SHA1: EXCERPT, SHARED_LETTER_SHA1: EXCERPT}),
+            **options,
         )
         wiki = FakeWiki()
         orchestrator._client = wiki
@@ -587,9 +613,11 @@ class TestRegistration:
         self, tmp_path
     ):
         orchestrator, wiki = self.made(
-            tmp_path, booklet=booklet(), reprint=reprint()
+            tmp_path,
+            booklet=booklet(SHARED_LETTER_IMAGE),
+            reprint=reprint(SHARED_LETTER_IMAGE),
         )
-        excerpt = excerpt_of(orchestrator, LETTER_SHA1)
+        excerpt = excerpt_of(orchestrator, SHARED_LETTER_SHA1)
         image = Orchestrator._step_register(orchestrator, excerpt)
         pdfs_ = {
             doc.source.name: strings(wiki, qid, "media_sha1")
@@ -605,14 +633,25 @@ class TestRegistration:
             "2",
         }
 
-    def test_a_record_made_for_other_bytes_registers_nothing(self, tmp_path):
-        orchestrator, _wiki = self.made(tmp_path, booklet=booklet())
+    def test_foreign_metadata_cannot_change_the_registered_source(
+        self, tmp_path
+    ):
+        orchestrator, wiki = self.made(tmp_path, booklet=booklet())
         doc = document(orchestrator, "booklet.pdf")
-        assert orchestrator._placed_images(doc) is not None
-        record = json.loads((doc.dir / DERIVED_MEDIA).read_text())
-        record["source_sha1"] = "b" * 40
-        (doc.dir / DERIVED_MEDIA).write_text(json.dumps(record))
-        assert orchestrator._placed_images(doc) is None
+        record = json.loads((doc.dir / CONTAINER_INVENTORY).read_text())
+        record["source"]["sha1"] = "b" * 40
+        (doc.dir / CONTAINER_INVENTORY).write_text(json.dumps(record))
+        again = run(tmp_path, orchestrator.folder, Reader({}))
+        again._client = wiki
+        doc = document(again, "booklet.pdf")
+        Orchestrator._step_register(again, doc)
+        sources = saved_sources(doc.dir)
+        assert sources.inventory.source.sha1 == doc.sha1
+        assert list(sources.sources) == [LETTER_SHA1]
+        assert not any(
+            strings(wiki, qid, "media_sha1") == ["b" * 40]
+            for qid in wiki.entities
+        )
 
     def test_a_glob_on_a_place_name_leaves_the_image_in(self, tmp_path):
         """A `page*` glob matches no image of the booklet: its image is
@@ -633,12 +672,10 @@ class TestRegistration:
         excerpt = excerpt_of(orchestrator, LETTER_SHA1)
         assert Orchestrator._step_register(orchestrator, excerpt) == image
 
-    def test_a_deck_s_record_marked_a_pdf_s_is_made_again(self, tmp_path):
-        """A deck's record of its media that says it is a PDF's, its bytes
-        the deck's as they are now, is no deck's record: the write makes
-        it again, so a glob on the image's name in the archive still
-        leaves it out, as the reader does, and nothing of it is registered
-        or uploaded (ADR-0008)."""
+    def test_reconstructed_deck_inventory_keeps_current_exclusions(
+        self, tmp_path
+    ):
+        """A damaged format marker cannot bypass current named exclusions."""
         corpus = talk_folder(tmp_path)
         orchestrator = run(
             tmp_path,
@@ -649,13 +686,11 @@ class TestRegistration:
         wiki = FakeWiki()
         orchestrator._client = wiki
         doc = document(orchestrator, "library-talk-2018.pptx")
-        record = json.loads((doc.dir / DERIVED_MEDIA).read_text())
-        assert LETTER_SHA1 in record["media"]
+        record = json.loads((doc.dir / CONTAINER_INVENTORY).read_text())
         record["container"] = "pdf"
-        (doc.dir / DERIVED_MEDIA).write_text(json.dumps(record))
-        assert not orchestrator._derived_media_current(doc)
+        (doc.dir / CONTAINER_INVENTORY).write_text(json.dumps(record))
         Orchestrator._step_register(orchestrator, doc)
-        assert read_derived_media(doc.dir).container == "presentation"
+        assert saved_sources(doc.dir).inventory.container == "presentation"
         assert LETTER_SHA1 not in orchestrator.registered_media()[doc.sha1]
         assert LETTER_SHA1 not in wiki.files.values()
         assert not [
@@ -667,11 +702,18 @@ class TestRegistration:
     @staticmethod
     def talk_and_booklet(tmp_path, listed: str):
         """The talk and the booklet, which place the same bytes of the
-        letter's top (the deck's `image2.png`), run under a list holding
+        letter's top (the deck's `image2.jpg`), run under a list holding
         `listed`, and their containers registered on the in-memory wiki:
         (orchestrator, wiki, reader, the booklet, the deck)."""
-        corpus = talk_folder(tmp_path, **{"booklet.pdf": booklet()})
-        reader = Reader({LETTER_SHA1: EXCERPT})
+        corpus = talk_folder(
+            tmp_path, **{"booklet.pdf": booklet(SHARED_LETTER_IMAGE)}
+        )
+        library_talk(
+            corpus / "library-talk-2018.pptx",
+            letter=SHARED_LETTER_IMAGE.data,
+            letter_name="image2.jpg",
+        )
+        reader = Reader({SHARED_LETTER_SHA1: EXCERPT})
         orchestrator = run(
             tmp_path,
             corpus,
@@ -689,38 +731,39 @@ class TestRegistration:
 
     @pytest.mark.parametrize(
         "listed",
-        ["image2.png", f"{INSCRIPTION_SHA1}\nimage2.png"],
+        ["image2.jpg", f"{INSCRIPTION_SHA1}\nimage2.jpg"],
         ids=["glob", "sha1 and glob"],
     )
     def test_a_glob_on_a_deck_s_image_keeps_its_bytes_out_of_a_pdf(
         self, tmp_path, listed
     ):
-        """An `image2.png` glob names the letter's top in the deck, by its
+        """An `image2.jpg` glob names the letter's top in the deck, by its
         name in the archive, and its bytes stay out of the booklet too,
         which places them as "page 6, image 1" and is read first (#620):
         neither reads it, neither marks it, no excerpt is made of it, and
-        neither registers or uploads it. The rule the deck embeds, which
-        the glob does not name, is registered with the deck as ever."""
+        neither registers or uploads it. The tiny rule remains auxiliary
+        rather than acquiring an independent source owner."""
         orchestrator, wiki, reader, pdf, talk = self.talk_and_booklet(
             tmp_path, listed
         )
         assert reader.read == []
         assert orchestrator._excerpts == {}
-        assert LETTER_SHA1 not in planned(orchestrator)
+        assert SHARED_LETTER_SHA1 not in planned(orchestrator)
         for doc in (pdf, talk):
             assert not any(page.images for page in transcription_of(doc).pages)
-            assert not derived_transcription(doc.dir, LETTER_SHA1).exists()
-        assert LETTER_SHA1 not in (read_derived_media(pdf.dir) or {}).media
+            assert not derived_transcription(
+                doc.dir, SHARED_LETTER_SHA1
+            ).exists()
+        assert SHARED_LETTER_SHA1 not in saved_sources(pdf.dir).sources
         registered = orchestrator.registered_media()
-        assert LETTER_SHA1 not in registered.get(pdf.sha1, {})
-        assert sorted(registered[talk.sha1]) == [
-            hashlib.sha1(RULE).hexdigest()
-        ]
-        assert LETTER_SHA1 not in wiki.files.values()
+        assert SHARED_LETTER_SHA1 not in registered.get(pdf.sha1, {})
+        # The tiny rule is auxiliary, not an independent source owner.
+        assert registered[talk.sha1] == {}
+        assert SHARED_LETTER_SHA1 not in wiki.files.values()
         assert not [
             qid
             for qid in wiki.entities
-            if strings(wiki, qid, "media_sha1") == [LETTER_SHA1]
+            if strings(wiki, qid, "media_sha1") == [SHARED_LETTER_SHA1]
         ]
 
     def test_a_listed_deck_s_named_image_stays_out_of_a_pdf(self, tmp_path):
@@ -763,15 +806,15 @@ class TestRegistration:
         orchestrator, wiki, reader, pdf, talk = self.talk_and_booklet(
             tmp_path, "image1.png"
         )
-        assert {sha1 for _name, sha1 in reader.read} == {LETTER_SHA1}
-        excerpt = excerpt_of(orchestrator, LETTER_SHA1)
+        assert {sha1 for _name, sha1 in reader.read} == {SHARED_LETTER_SHA1}
+        excerpt = excerpt_of(orchestrator, SHARED_LETTER_SHA1)
         assert sorted(c.source.name for c in excerpt.containers) == [
             "booklet.pdf",
             "library-talk-2018.pptx",
         ]
         registered = orchestrator.registered_media()
-        assert list(registered[pdf.sha1]) == [LETTER_SHA1]
-        assert list(registered[talk.sha1]) == [LETTER_SHA1]
+        assert list(registered[pdf.sha1]) == [SHARED_LETTER_SHA1]
+        assert list(registered[talk.sha1]) == [SHARED_LETTER_SHA1]
 
     def test_an_excerpt_the_list_names_now_is_refused(self, tmp_path):
         orchestrator, wiki = self.made(tmp_path, booklet=booklet())

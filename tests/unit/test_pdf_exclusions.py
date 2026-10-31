@@ -121,9 +121,10 @@ def test_allowed_mixed_pdf_sends_the_rendered_page(tmp_path):
             "text-layer",
             "vision",
         ]
-        assert len(client.sent()) == 1
+        assert len(client.sent()) == 2
         assert client.sent()[0].startswith(b"\x89PNG\r\n\x1a\n")
         assert client.sent()[0] != path.read_bytes()
+        assert client.sent()[1] == PERMITTED_PNG
         assert EXTRACT in result.text
     finally:
         close(result)
@@ -159,7 +160,7 @@ def test_excluded_image_blocks_all_vision_pdf_before_fallback(
 
 
 def test_allowed_whole_pdf_is_rebuilt_without_unused_excluded_bytes(tmp_path):
-    page = scan()
+    page = pdfs.Page().text(pdfs.lines(EXTRACT), font=pdfs.GARBLED)
     # A resource named in the PDF but never painted can be omitted safely.
     # Giving the original PDF to the model would still disclose its bytes.
     page.images["Unused"] = pdfs.jpeg()
@@ -171,6 +172,12 @@ def test_allowed_whole_pdf_is_rebuilt_without_unused_excluded_bytes(tmp_path):
     try:
         assert EXTRACT in result.text
         assert result.artifact.sha1 == hashlib.sha1(original).hexdigest()
+        assert result.source_context is not None
+        (reading,) = result.source_context.readings
+        assert reading.state == "attributed"
+        assert reading.owner == result.artifact
+        assert reading.support.locator.position == 1
+        assert result.text[reading.start : reading.end] == EXTRACT
         assert len(client.sent()) == 1
         submitted = client.sent()[0]
         assert submitted.startswith(b"%PDF-")

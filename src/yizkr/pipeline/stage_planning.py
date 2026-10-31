@@ -48,7 +48,11 @@ STAGES = {
             "extract",
             1,
             "batch.json",
-            ("transcription.json", "preparation.pointer.txt"),
+            (
+                "transcription.json",
+                "preparation.pointer.txt",
+                "interpretation-context.json",
+            ),
             "model",
             _READ_KINDS,
         ),
@@ -66,7 +70,11 @@ STAGES = {
             "critique",
             2,
             "critique.json",
-            ("batch.json", "transcription.json"),
+            (
+                "batch.json",
+                "transcription.json",
+                "interpretation-context.json",
+            ),
             "model",
             _READ_KINDS,
         ),
@@ -186,6 +194,7 @@ def plan_view(
 # Prompt/resource bytes remain exact: whitespace can change a model request.
 _SCHEMA = (
     "claims.py",
+    "source_structure.py",
     "core/dates.py",
     "core/verbatim.py",
     "model/schema.py",
@@ -193,6 +202,7 @@ _SCHEMA = (
 )
 _READING = (
     "pipeline/transcribe.py",
+    "pipeline/source_context.py",
     "pipeline/language.py",
     "pipeline/transcription_record.py",
     "pipeline/transcription_check.py",
@@ -201,6 +211,7 @@ _SHARED = ("pipeline/text_stages.py", "pipeline/stages.py")
 _EXTRACTION = (
     "pipeline/extract.py",
     "pipeline/chunking.py",
+    "pipeline/interpretation_context.py",
     "pipeline/preparation.py",
     "pipeline/names.py",
     "pipeline/review.py",
@@ -248,6 +259,7 @@ PROCESSING_RESOURCES = {
                 "pipeline/critique.py",
                 "pipeline/chunking.py",
                 "pipeline/extract.py",
+                "pipeline/interpretation_context.py",
                 "pipeline/review.py",
                 "pipeline/llm.py",
                 "pipeline/prompts/__init__.py",

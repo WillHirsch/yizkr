@@ -64,6 +64,7 @@ from yizkr.pipeline.extract import (
     scan_json_objects,
     vocabulary_prompt_lines,
 )
+from yizkr.pipeline.interpretation_context import InterpretationContext
 from yizkr.pipeline.llm import (
     CUT_OFF_AT_LIMIT,
     ClassifierRefused,
@@ -77,6 +78,7 @@ from yizkr.pipeline.llm import (
 )
 from yizkr.pipeline.prompts import load_prompt
 from yizkr.pipeline.review import claim_id
+from yizkr.pipeline.source_context import bind_source_support, support_failure
 from yizkr.pipeline.stages import atomic_write_text
 from yizkr.pipeline.transcribe import Transcription
 
@@ -556,7 +558,9 @@ class ChunkedClaimExtractor:
         log: Callable[[str], None] | None = None,
         read_preparation: bool = False,
         pointer: str | None = None,
+        context: InterpretationContext | None = None,
     ) -> None:
+        self.context = context
         self.client = client
         self.read_preparation = read_preparation
         self.pointer = pointer
@@ -574,6 +578,7 @@ class ChunkedClaimExtractor:
         self._chunks_done = 0
         self._state_lock = threading.Lock()
         self.failed_chunks: list[str] = []
+        self.incomplete_reasons: list[str] = []
         self.failure_reasons: dict[str, str] = {}
         # chunks asked again because every claim of their answer lacked
         # the same required field (_ask_again)
@@ -713,6 +718,8 @@ class ChunkedClaimExtractor:
             language=transcription.language,
             numbered_text=number_lines(transcription.prompt_text()),
         )
+        if self.context is not None and self.context.has_context:
+            prompt += self.context.prompt_block()
         if self.read_preparation:
             prompt += preparation.manifest_block(self.pointer)
         return self._first_turn(
@@ -873,6 +880,8 @@ class ChunkedClaimExtractor:
             language=transcription.language,
             numbered_text=number_lines(transcription.prompt_text()),
         )
+        if self.context is not None and self.context.has_context:
+            prompt += self.context.prompt_block()
         segmentation, handle, reasons, answered = self._first_turn(
             prompt,
             lambda response: self._parse_segmentation(response, line_count),
@@ -987,7 +996,7 @@ class ChunkedClaimExtractor:
         inline_document: bool,
     ) -> str:
         property_keys, item_keys = vocabulary_prompt_lines()
-        return CHUNK_PROMPT.format(
+        prompt = CHUNK_PROMPT.format(
             artifact_sha1=artifact.sha1,
             language=transcription.language,
             property_keys=property_keys,
@@ -999,6 +1008,9 @@ class ChunkedClaimExtractor:
                 transcription, artifact, inline_document
             ),
         )
+        if self.context is not None and self.context.has_context:
+            prompt += self.context.prompt_block()
+        return prompt
 
     def _chunk_prompt(
         self,
@@ -1207,16 +1219,18 @@ class ChunkedClaimExtractor:
     def extract(
         self, transcription: Transcription, artifact: ArtifactRef
     ) -> ClaimBatch:
-        """The document's batch, every claim citing `artifact`, the
-        document's content key, by which the prompts name the document too,
-        and the page number printed on the page it cites, where the
-        transcription's record gives one (cite_artifact). The prompts
+        """Proposed claims with source identity and support assigned from
+        located reading context after model claims are merged. The prompts
+        name `artifact`; printed page labels come from the reading record
+        (cite_artifact). The prompts
         carry the transcription's text with each printed page number
         beside its page's marker, every line where it is in the text
         (Transcription.prompt_text). When its conversation has to be
         opened again and answers differently (ConversationChanged), the
         pass is void and the extraction starts over from the new answer,
         at most twice."""
+        if self.context is not None:
+            self.context.validate_target(transcription)
         for _pass in range(2):
             try:
                 return self._extract(transcription, artifact)
@@ -1229,6 +1243,7 @@ class ChunkedClaimExtractor:
     ) -> ClaimBatch:
         text_lines = transcription.prompt_text().splitlines()
         self.failed_chunks = []
+        self.incomplete_reasons = []
         self.failure_reasons = {}
         self.retried_chunks = 0
         self.gaps = []
@@ -1371,8 +1386,14 @@ class ChunkedClaimExtractor:
                 transcription,
                 artifact,
             ),
+            transcription=transcription,
         )
-        self._refuse_empty(batch, chunks=total)
+        if not (
+            self.context is not None
+            and self.context.has_context
+            and self.incomplete_reasons
+        ):
+            self._refuse_empty(batch, chunks=total)
         self.attention = self._attention(batch, chunks=total)
         if self.read_preparation:
             self.attention += preparation.attention(
@@ -1552,6 +1573,7 @@ class ChunkedClaimExtractor:
         text: str | None = None,
         reading: Any = _UNREAD,
         stated: SourceReference | None = None,
+        transcription: Transcription | None = None,
     ) -> tuple[ClaimBatch, dict[str, str]]:
         """Merge chunk claims into one validated batch, each claim citing
         `artifact`, the page number printed on its page where
@@ -1561,8 +1583,10 @@ class ChunkedClaimExtractor:
         as side outputs: the coverage counts the rejects by reason
         (rejected_by_reason), and, when `text`, the transcription, is
         given, the claims whose excerpt it does not hold (excerpt_audit),
-        each kept in the side output `quotes.json`. Such a claim stays
-        in the batch: the miss is counted, never a reject.
+        each kept in the side output `quotes.json`. Without interpretation
+        context these misses remain for critique. With other sources supplied
+        as context, an excerpt outside the primary reading is an attribution
+        reject, so a neighbour's evidence cannot acquire the primary owner.
 
         `reading`, the document's statement about its preparation as the
         manifest read it (preparation.parse; None when unread), marks
@@ -1606,6 +1630,18 @@ class ChunkedClaimExtractor:
         if reading is not _UNREAD:
             raw_claims, dropped = preparation.drop_markers(raw_claims)
         deduped = cite_artifact(raw_claims, artifact, printed_pages)
+        deduped, attribution_rejects = bind_source_support(
+            deduped,
+            transcription,
+            allow_literal_quote=(
+                self.context is not None and self.context.has_context
+            ),
+        )
+        primary_transcription = (
+            transcription
+            if self.context is not None and self.context.has_context
+            else None
+        )
         run = run_metadata(self.client.model_identifier).model_dump(
             mode="json"
         )
@@ -1613,7 +1649,12 @@ class ChunkedClaimExtractor:
         settled_rejects: list[dict] = []
         self._appellations = {"labels": 0, "label_names": 0, "parts": 0}
         if entities is not None:
-            settled = _settle_names(deduped, entities, run)
+            settled = _settle_names(
+                deduped,
+                entities,
+                run,
+                primary_transcription=primary_transcription,
+            )
             deduped, entities_payload = settled.claims, settled.entities
             settled_rejects = settled.rejects
             self._appellations = {
@@ -1632,9 +1673,14 @@ class ChunkedClaimExtractor:
             entities=entities_payload,
             placed=placed,
             dropped=self._dropped_kinds,
+            primary_transcription=primary_transcription,
         )
-        rejects = transform_rejects + settled_rejects + rejects
+        rejects = (
+            transform_rejects + attribution_rejects + settled_rejects + rejects
+        )
         self._rejects = rejects
+        if reason := support_failure(rejects):
+            self.incomplete_reasons.append(reason)
         self._marked = {"marked": 0, "straddling": 0, "unlocated": 0}
         if reading is not _UNREAD:
             claims, self._marked = preparation.mark(
@@ -1964,7 +2010,11 @@ def _subject_id(claim: dict) -> str | None:
 
 
 def _settle_names(
-    claims: list[dict], entities: list[EntityRecord], run: dict
+    claims: list[dict],
+    entities: list[EntityRecord],
+    run: dict,
+    *,
+    primary_transcription: Transcription | None = None,
 ) -> _Settled:
     """Each entity's label set and its alias bag cleaned (ADR-0022 §4,
     ADR-0035 §8; names.normalize_entity_dict), once the chunks' claims
@@ -1991,7 +2041,12 @@ def _settle_names(
     for index, claim in enumerate(claims):
         if claim.get("property") not in ("referred_to_as", "name"):
             continue
-        checked, rejected = salvage_valid_claims([claim], run, entities=given)
+        checked, rejected = salvage_valid_claims(
+            [claim],
+            run,
+            entities=given,
+            primary_transcription=primary_transcription,
+        )
         if checked.claims:
             valid.append(claim)
         else:

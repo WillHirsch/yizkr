@@ -28,17 +28,15 @@ import itertools
 import json
 import time
 import unicodedata
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from tests.unit.test_no_wiki_before_write import (
-    DECK,
-    SHOP_FRONT,
-    build_deck,
-)
-from tests.unit.test_no_wiki_before_write import PORTRAIT as STUDIO
+from tests.unit.test_no_wiki_before_write import DECK
+from tests.unit.test_no_wiki_before_write import build_deck as reference_deck
+from tests.unit.test_presentation import DECK_TIME
 from tests.unit.test_upload_warnings import FakeMediaWiki, FakeUploadClient
 from yizkr.core.corpus import ExclusionList
 from yizkr.core.wiki import WikiClient
@@ -52,7 +50,6 @@ from yizkr.pipeline.presentation import (
 from yizkr.pipeline.registrar import (
     ExcludedMedia,
     Registrar,
-    _cites,
     _cut_to_fit,
     _ensure_referenced,
     _fitted,
@@ -178,6 +175,15 @@ def _statements(entity, pid: str) -> list[dict]:
     return [claim.get_json() for claim in entity.claims.get(pid)]
 
 
+def _cites(claim, stated_in_pid: str, source_qid: str) -> bool:
+    return any(
+        isinstance(value := (snak.datavalue or {}).get("value"), dict)
+        and value.get("id") == source_qid
+        for reference in claim.references.references
+        for snak in reference.snaks.get(stated_in_pid) or ()
+    )
+
+
 class TestEnsureReferenced:
     def test_new_deck_appends_its_own_part_of_statement(self):
         entity = _entity()
@@ -265,6 +271,7 @@ class FakeWiki:
         "page_number": "P6",
         "media_file": "P57",
         "media_sha1": "P58",
+        "source_part_locator": "P59",
     }
     ITEMS = {
         "photograph": "Q2",
@@ -2418,6 +2425,189 @@ class TestFragments:
 # -- derived media, from their record (ADR-0008; #50, #128) -------------------
 
 
+def unplaced_source(
+    tmp_path, container_kind, *, placed_copy=False, prepared=False
+):
+    """A verified original part without a visible occurrence."""
+    from yizkr.claims import ArtifactRef, StructuralLocator
+    from yizkr.pipeline.container_inventory import (
+        ContainerInventory,
+        Eligibility,
+        MediaOwnerBinding,
+        Placement,
+        SourcePart,
+        keep_inventory,
+        structural_id,
+    )
+    from yizkr.pipeline.container_sources import project_sources
+
+    source = scan(
+        tmp_path,
+        b"fictional Library Talk container",
+        "library-talk.pdf" if container_kind == "pdf" else "library-talk.pptx",
+    )
+    container = ArtifactRef.from_path(source)
+    owner = ArtifactRef.from_bytes(IMAGE)
+    locator = StructuralLocator(
+        kind="image" if container_kind == "pdf" else "embedded_resource",
+        path="/objects/9" if container_kind == "pdf" else None,
+        package_part="ppt/media/shop.png" if container_kind != "pdf" else None,
+    )
+    part = SourcePart(
+        id=structural_id(container, locator),
+        kind="embedded_resource",
+        locator=locator,
+        byte_object=ArtifactRef.from_bytes(b"fictional encoded source")
+        if prepared
+        else owner,
+        source_role="independent",
+        eligibility=Eligibility(state="allowed"),
+        owner_binding=MediaOwnerBinding(
+            artifact=owner,
+            file=f"container-parts/{owner.sha1}.png",
+            media_type="image/png",
+            basis="prepared-part" if prepared else "original-media",
+        ),
+    )
+    parts, placements = [part], []
+    if placed_copy:
+        body_locator = StructuralLocator(kind="page_body", position=2)
+        body = SourcePart(
+            id=structural_id(container, body_locator),
+            kind="page_body",
+            locator=body_locator,
+        )
+        copy_locator = StructuralLocator(kind="image", path="/objects/10")
+        painted = part.model_copy(
+            update={
+                "id": structural_id(container, copy_locator),
+                "locator": copy_locator,
+            },
+            deep=True,
+        )
+        paint_locator = StructuralLocator(
+            kind="paint", position=2, path="/pages/2/content/op[1]"
+        )
+        parts.extend([body, painted])
+        placements.append(
+            Placement(
+                id=structural_id(container, paint_locator),
+                parent=body.id,
+                child=painted.id,
+                locator=paint_locator,
+                order=1,
+                occurrence="paint",
+            )
+        )
+    inventory = ContainerInventory(
+        source=container,
+        container=container_kind,
+        parts=parts,
+        placements=placements,
+    )
+    directory = tmp_path / "unplaced-state"
+    keep_inventory(inventory, {owner.sha1: IMAGE}, directory)
+    return source, project_sources(inventory, directory), directory
+
+
+class TestRegisterUnplacedSources:
+    @pytest.mark.parametrize(
+        "container_kind, prepared",
+        [("pdf", False), ("presentation", False), ("pdf", True)],
+    )
+    def test_original_part_has_composition_without_invented_page(
+        self, tmp_path, container_kind, prepared
+    ):
+        source, sources, directory = unplaced_source(
+            tmp_path, container_kind, prepared=prepared
+        )
+        wiki = FakeWiki()
+        registration = Registrar(wiki)
+        container = registration.register_artifact(
+            source, "artifact", "Library Talk 2018"
+        ).artifact_qid
+        owners = registration.register_container_sources(
+            sources, directory, title="Library Talk 2018"
+        )
+        image = wiki.entities[owners[sha1(IMAGE)]]
+        (composition,) = image["claims"][P["part_of"]]
+        assert value(composition) == container
+        assert not composition.get("qualifiers")
+        assert cited(composition) == [container]
+        assert json.loads(
+            composition["references"][0]["snaks"][P["source_part_locator"]][0][
+                "datavalue"
+            ]["value"]
+        ) == {
+            "container": sources.inventory.source.sha1,
+            "part": sources.inventory.parts[0].id,
+            "kind": sources.inventory.parts[0].locator.kind,
+        }
+        assert "(" not in image["descriptions"]["en"]["value"]
+        before, writes = copy.deepcopy(wiki.entities), wiki.writes
+        assert (
+            Registrar(wiki).register_container_sources(
+                sources, directory, title="Library Talk 2018"
+            )
+            == owners
+        )
+        assert wiki.entities == before
+        assert wiki.writes == writes
+
+    def test_unplaced_original_and_painted_copy_keep_both_locations(
+        self, tmp_path
+    ):
+        source, sources, directory = unplaced_source(
+            tmp_path, "pdf", placed_copy=True
+        )
+        wiki = FakeWiki()
+        registration = Registrar(wiki)
+        registration.register_artifact(source, "artifact", "Library Talk 2018")
+        owners = registration.register_container_sources(
+            sources, directory, title="Library Talk 2018"
+        )
+        assert len(owners) == 1
+        image = wiki.entities[owners[sha1(IMAGE)]]
+        composition = image["claims"][P["part_of"]]
+        assert len(composition) == 2
+        assert sum(bool(claim.get("qualifiers")) for claim in composition) == 1
+        records = [
+            json.loads(snak["datavalue"]["value"])
+            for claim in composition
+            for reference in claim["references"]
+            for snak in reference["snaks"][P["source_part_locator"]]
+        ]
+        assert {record["part"] for record in records} == {
+            part.id
+            for part in sources.inventory.parts
+            if part.kind == "embedded_resource"
+        }
+        assert {record.get("placement_position") for record in records} == {
+            None,
+            2,
+        }
+
+    def test_unplaced_prepared_owner_needs_original_part_binding(
+        self, tmp_path
+    ):
+        source, sources, directory = unplaced_source(
+            tmp_path, "pdf", prepared=True
+        )
+        wiki = FakeWiki()
+        registration = Registrar(wiki)
+        registration.register_artifact(source, "artifact", "Library Talk 2018")
+        bound = sources.sources[sha1(IMAGE)]
+        registration.register_artifact(
+            directory / bound.file, "photograph", "Library Talk image"
+        )
+        before = copy.deepcopy(wiki.entities)
+        with pytest.raises(ValueError, match="original source-part binding"):
+            Registrar(wiki).register_container_sources(
+                sources, directory, title="Library Talk 2018"
+            )
+        assert wiki.entities == before
+
+
 def deck_file(tmp_path, name: str) -> Path:
     """A deck's bytes: only their SHA-1 matters to registration."""
     return scan(tmp_path, f"PK synthetic deck {name}".encode(), f"{name}.pptx")
@@ -2924,6 +3114,54 @@ class TestRegisterDerivedMedia:
 # -- the write's registration of a document (Orchestrator._step_register) ----
 
 
+def _source_png(shade: int) -> bytes:
+    from yizkr.pipeline.textlayer import png
+
+    return png(160, 100, 1, bytes([shade]) * 16000)
+
+
+SHOP_FRONT = _source_png(40)
+STUDIO = _source_png(160)
+
+
+def build_deck(path):
+    """The fictional deck's intended photographs are actually painted.
+
+    The refusing-wiki fixture uses tiny resources to avoid image model work;
+    registration instead needs non-decorative source images with p:pic uses.
+    """
+    reference_deck(path, shop_front=SHOP_FRONT)
+    with zipfile.ZipFile(path) as archive:
+        members = [(info, archive.read(info)) for info in archive.infolist()]
+    with zipfile.ZipFile(path, "w") as archive:
+        for info, data in members:
+            if info.filename in {
+                "ppt/media/image2.png",
+                "ppt/media/image4.png",
+            }:
+                data = STUDIO
+            for number, images in ((1, 1), (2, 2), (3, 1)):
+                if info.filename != f"ppt/slides/slide{number}.xml":
+                    continue
+                pictures = "".join(
+                    "<p:pic><p:nvPicPr>"
+                    f'<p:cNvPr id="{index + 10}" name="photograph"/>'
+                    "<p:cNvPicPr/><p:nvPr/></p:nvPicPr>"
+                    '<p:blipFill><a:blip xmlns:r="http://schemas.'
+                    'openxmlformats.org/officeDocument/2006/relationships" '
+                    f'r:embed="rId{index + 10}"/></p:blipFill>'
+                    "<p:spPr/></p:pic>"
+                    for index in range(images)
+                )
+                data = data.replace(
+                    b"</p:spTree>", pictures.encode() + b"</p:spTree>"
+                )
+            archive.writestr(
+                zipfile.ZipInfo(info.filename, date_time=DECK_TIME), data
+            )
+    return path
+
+
 def parts_of(wiki, whole: str) -> dict[str, dict[str, list[str]]]:
     """For each kind of item `part of` the whole ("fragment" or
     "medium"): page -> the items on it."""
@@ -3086,10 +3324,7 @@ class TestStepRegister:
         build_deck(orchestrator.folder / DECK)
         (doc,) = orchestrator.documents()
         orchestrator._step_register(doc)
-        assert (
-            "  derived media: 1 registered, 1 left out (never-ingest list)"
-            in (lines)
-        )
+        assert "  derived media: 1 registered" in lines
         hashes = {
             hashed
             for qid in wiki.entities

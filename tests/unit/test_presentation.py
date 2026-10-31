@@ -8,11 +8,13 @@ import zipfile
 
 import pytest
 
-from yizkr.pipeline.presentation import (
-    read_derived_media,
-    slide_transcript,
-    unpack_pptx,
+from tests.fixtures import pdfs
+from yizkr.pipeline.container_inventory import (
+    CONTAINER_INVENTORY,
+    read_inventory,
 )
+from yizkr.pipeline.presentation import slide_transcript, unpack_pptx
+from yizkr.pipeline.rundir import DONE, run_state
 
 CT = "[Content_Types].xml"
 # every member of a built deck carries this one timestamp, so the same
@@ -122,7 +124,7 @@ def build_deck(path, reorder=False):
             "ppt/notesSlides/notesSlide1.xml",
             slide_xml(["Scanned from the family album"]),
         )
-        put(archive, "ppt/media/image1.jpeg", b"\xff\xd8fakejpeg")
+        put(archive, "ppt/media/image1.jpeg", pdfs.JPEG)
         put(archive, "ppt/media/clip1.mp4", b"fakemp4")
     return path
 
@@ -183,7 +185,8 @@ class TestTranscript:
 
 class TestOrchestratorBranch:
     def test_pptx_routes_through_adapter(self, tmp_path):
-        from tests.unit.test_orchestrate import ScriptedOrchestrator, quiet
+        from tests.unit.test_orchestrate import ScriptedOrchestrator
+        from tests.unit.test_pdf_pages import Reader
 
         folder = tmp_path / "docs"
         folder.mkdir()
@@ -191,18 +194,20 @@ class TestOrchestratorBranch:
 
         from yizkr.pipeline.orchestrate import Orchestrator
 
+        image_sha1 = hashlib.sha1(pdfs.JPEG).hexdigest()
+        reader = Reader({image_sha1: ""})
+
         class ScriptedDeck(ScriptedOrchestrator):
+            def _llm(self, role, doc):
+                return (
+                    reader if role == "transcribe" else super()._llm(role, doc)
+                )
+
             def _step_batch(self, doc):
                 # use the REAL branch: deterministic pptx transcription,
                 # then the (scripted) extract below
                 self.calls.append(f"batch:{doc.source.name}")
                 return Orchestrator._step_batch(self, doc)
-
-            def _step_derive_media(self, doc):
-                # the real step, which records the media in the document's
-                # directory (#128)
-                self.calls.append(f"derive:{doc.source.name}")
-                return Orchestrator._step_derive_media(self, doc)
 
             def _step_extract(self, doc, transcription):
                 self.calls.append("extract")
@@ -212,21 +217,43 @@ class TestOrchestratorBranch:
 
                 return make_batch()
 
-        orchestrator = ScriptedDeck(folder, tmp_path / "state", log=quiet)
+        lines: list[str] = []
+        orchestrator = ScriptedDeck(
+            folder,
+            tmp_path / "state",
+            log=lambda line, **kwargs: lines.append(line),
+        )
         orchestrator.run()
         (doc,) = orchestrator.documents()
-        assert "derive:Family Deck.pptx" in orchestrator.calls
+        # the film is no image: the log counts it, and the deck's
+        # transcription needs no attention for it
+        assert (
+            "  Family Deck.pptx: 1 embedded .mp4 media not read (images only)"
+            in lines
+        )
+        assert (
+            run_state(orchestrator.rundir)[(doc.sha1, "transcription")].status
+            == DONE
+        )
         # the deck waits at a gate, and is registered only by its write
         # (#103)
         assert "register:Family Deck.pptx" not in orchestrator.calls
         assert doc.state.artifact_qid is None
-        record = read_derived_media(doc.dir)
-        image = hashlib.sha1(b"\xff\xd8fakejpeg").hexdigest()
-        assert (record.source_sha1, record.title) == (doc.sha1, "Family Deck")
+        # its media are inventoried in the document's directory (#128), by
+        # their names in the archive and the SHA-1s of their bytes
+        inventory = read_inventory(doc.dir)
+        assert inventory.source.sha1 == doc.sha1
         assert {
-            key: (medium.names, medium.slides)
-            for key, medium in record.media.items()
-        } == {image: (["image1.jpeg"], [1, 2])}
-        # derived media are recorded once, and a re-run finds the record
+            part.locator.package_part: part.byte_object.sha1
+            for part in inventory.parts
+            if part.kind == "embedded_resource"
+        } == {
+            "ppt/media/image1.jpeg": image_sha1,
+            "ppt/media/clip1.mp4": hashlib.sha1(b"fakemp4").hexdigest(),
+        }
+        # a re-run finds the inventory whole, and leaves it as it stands
+        record = doc.dir / CONTAINER_INVENTORY
+        kept = (record.stat().st_ino, record.read_bytes())
         orchestrator.run()
-        assert orchestrator.calls.count("derive:Family Deck.pptx") == 1
+        assert (record.stat().st_ino, record.read_bytes()) == kept
+        assert reader.read == [(f"{image_sha1}.jpeg", image_sha1)]

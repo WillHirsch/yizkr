@@ -405,6 +405,45 @@ def test_a_structural_reference_without_a_shape_discloses_unknown_visibility(
     )
 
 
+@pytest.mark.parametrize("location", ["notes", "extension"])
+def test_a_background_outside_the_direct_slide_fill_is_not_promoted(
+    tmp_path, location
+):
+    def background(members):
+        fill = (
+            '<p:bg><p:bgPr><a:blipFill><a:blip r:embed="unused"/>'
+            "</a:blipFill></p:bgPr></p:bg>"
+        )
+        if location == "notes":
+            key = "ppt/notesSlides/notesSlide9.xml"
+            members[key] = (
+                members[key]
+                .replace(f'xmlns:a="{A}"', f'xmlns:a="{A}" xmlns:r="{R}"')
+                .replace("<p:cSld>", "<p:cSld>" + fill)
+            )
+            members["ppt/notesSlides/_rels/notesSlide9.xml.rels"] = (
+                relationships(
+                    ("unused", "image", "../media/relationship.png", False)
+                )
+            )
+        else:
+            key = "ppt/slides/slide9.xml"
+            members[key] = members[key].replace(
+                "</p:sld>", "<p:extLst>" + fill + "</p:extLst></p:sld>"
+            )
+
+    source = tmp_path / "library-talk-2018.pptx"
+    source_deck(source, background)
+    inventory = unpack_pptx(source).inventory
+    (occurrence,) = [
+        p for p in inventory.placements if "/p:bg[1]/" in p.locator.path
+    ]
+    assert occurrence.occurrence == "reference"
+    assert any(
+        "visible placement unknown" in note for note in occurrence.limitations
+    )
+
+
 def test_chart_bytes_are_retained_and_inherited_layout_is_an_explicit_limit(
     tmp_path,
 ):
@@ -505,3 +544,398 @@ def test_an_unreferenced_alias_excludes_the_same_bytes_from_both_reader_views(
         for part in inventory.parts
         if part.byte_object and part.byte_object.sha1 == photo
     } == {"excluded"}
+
+
+def inherited_background_deck(
+    path, image, *, origin="layout", index=1001, override=None, change=None
+):
+    """The library talk reuses the letter image through its native styles."""
+    namespaces = f'xmlns:p="{P}" xmlns:a="{A}" xmlns:r="{R}"'
+    fill = (
+        '<a:blipFill><a:blip r:embed="letter"/>'
+        '<a:srcRect l="1250" t="2500"/>'
+        "<a:stretch><a:fillRect/></a:stretch></a:blipFill>"
+    )
+    picture_background = f"<p:bg><p:bgPr>{fill}</p:bgPr></p:bg>"
+    themed_background = (
+        f'<p:bg><p:bgRef idx="{index}">'
+        '<a:schemeClr val="bg1"/></p:bgRef></p:bg>'
+    )
+    members = {
+        "ppt/presentation.xml": (
+            f"<p:presentation {namespaces}><p:sldIdLst>"
+            '<p:sldId id="256" r:id="first"/>'
+            '<p:sldId id="257" r:id="second"/>'
+            "</p:sldIdLst></p:presentation>"
+        ),
+        "ppt/_rels/presentation.xml.rels": relationships(
+            ("first", "slide", "slides/slide1.xml", False),
+            ("second", "slide", "slides/slide2.xml", False),
+        ),
+        "ppt/slideLayouts/slideLayout1.xml": (
+            f"<p:sldLayout {namespaces}><p:cSld>"
+            + (picture_background if origin == "layout" else "")
+            + "<p:spTree/></p:cSld></p:sldLayout>"
+        ),
+        "ppt/slideLayouts/_rels/slideLayout1.xml.rels": relationships(
+            (
+                "master",
+                "slideMaster",
+                "../slideMasters/slideMaster1.xml",
+                False,
+            ),
+            ("letter", "image", "../media/letter.png", False),
+        ),
+        "ppt/slideMasters/slideMaster1.xml": (
+            f"<p:sldMaster {namespaces}><p:cSld>"
+            + (
+                picture_background
+                if origin == "master"
+                else themed_background
+                if origin.startswith("theme")
+                else ""
+            )
+            + "<p:spTree/></p:cSld></p:sldMaster>"
+        ),
+        "ppt/slideMasters/_rels/slideMaster1.xml.rels": relationships(
+            ("theme", "theme", "../theme/theme1.xml", False),
+            ("letter", "image", "../media/letter.png", False),
+        ),
+        "ppt/media/letter.png": image,
+    }
+    styles = (
+        f'<a:fmtScheme name="library"><a:fillStyleLst>{fill}</a:fillStyleLst>'
+        f"<a:bgFillStyleLst>{fill}</a:bgFillStyleLst></a:fmtScheme>"
+    )
+    members["ppt/theme/theme1.xml"] = (
+        f"<a:theme {namespaces}><a:themeElements>{styles}"
+        "</a:themeElements></a:theme>"
+    )
+    members["ppt/theme/_rels/theme1.xml.rels"] = relationships(
+        ("letter", "image", "../media/letter.png", False)
+    )
+    if origin == "theme-override":
+        members["ppt/theme/themeOverride1.xml"] = (
+            f"<a:themeOverride {namespaces}>{styles}</a:themeOverride>"
+        )
+        members["ppt/theme/_rels/themeOverride1.xml.rels"] = relationships(
+            ("letter", "image", "../media/letter.png", False)
+        )
+    for position in (1, 2):
+        background = ""
+        if position == 2 and override is not None:
+            background = (
+                picture_background
+                if override == "picture"
+                else f"<p:bg><p:bgPr><a:{override}/></p:bgPr></p:bg>"
+            )
+        members[f"ppt/slides/slide{position}.xml"] = (
+            f"<p:sld {namespaces}><p:cSld>{background}<p:spTree>"
+            + body("Nicholas Lobig's library talk")
+            + "</p:spTree></p:cSld></p:sld>"
+        )
+        entries = [
+            (
+                "layout",
+                "slideLayout",
+                "../slideLayouts/slideLayout1.xml",
+                False,
+            )
+        ]
+        if position == 2 and override == "picture":
+            entries.append(("letter", "image", "../media/letter.png", False))
+        if origin == "theme-override":
+            entries.append(
+                (
+                    "override",
+                    "themeOverride",
+                    "../theme/themeOverride1.xml",
+                    False,
+                )
+            )
+        members[f"ppt/slides/_rels/slide{position}.xml.rels"] = relationships(
+            *entries
+        )
+    if change is not None:
+        change(members)
+    with zipfile.ZipFile(path, "w") as archive:
+        for name, data in members.items():
+            archive.writestr(
+                zipfile.ZipInfo(name, date_time=(2020, 1, 1, 0, 0, 0)), data
+            )
+    return path
+
+
+@pytest.mark.parametrize(
+    "origin,index",
+    [
+        ("layout", 1001),
+        ("master", 1001),
+        ("theme", 1001),
+        ("theme", 1),
+        ("theme-override", 1001),
+    ],
+)
+def test_effective_background_retains_native_origin_and_actual_slide(
+    tmp_path, origin, index
+):
+    source = inherited_background_deck(
+        tmp_path / "library-talk-2018.pptx", PHOTO, origin=origin, index=index
+    )
+    inventory = unpack_pptx(source).inventory
+    placed = inventory.placements
+    assert [p.locator.position for p in placed] == [1, 2]
+    assert len({p.id for p in placed}) == 2
+    assert len({p.child for p in placed}) == 1
+    parents = {part.id: part for part in inventory.parts}
+    assert [parents[p.parent].locator.package_part for p in placed] == [
+        "ppt/slides/slide1.xml",
+        "ppt/slides/slide2.xml",
+    ]
+    expected = {
+        "layout": "ppt/slideLayouts/slideLayout1.xml",
+        "master": "ppt/slideMasters/slideMaster1.xml",
+        "theme": "ppt/theme/theme1.xml",
+        "theme-override": "ppt/theme/themeOverride1.xml",
+    }[origin]
+    assert {p.locator.package_part for p in placed} == {expected}
+    assert all(
+        p.occurrence == "paint" and p.locator.relationship_id == "letter"
+        for p in placed
+    )
+    assert all("a:blip[1]/@r:embed" in p.locator.path for p in placed)
+    assert all(
+        p.layout[0]["slide_part"] == parents[p.parent].locator.package_part
+        for p in placed
+    )
+    for placement in placed:
+        layout = placement.layout[0]
+        fill = (
+            layout["resolved_fill"]
+            if origin.startswith("theme")
+            else layout["transforms"][0]
+        )
+        assert fill["children"][1]["attributes"] == {"l": "1250", "t": "2500"}
+        assert fill["children"][2]["element"] == "a:stretch"
+
+
+@pytest.mark.parametrize("override", ["solidFill", "noFill", "picture"])
+def test_slide_background_overrides_inherited_picture_without_extra_placement(
+    tmp_path, override
+):
+    source = inherited_background_deck(
+        tmp_path / "library-talk-2018.pptx",
+        PHOTO,
+        origin="master",
+        override=override,
+    )
+    placed = unpack_pptx(source).inventory.placements
+    assert [p.locator.position for p in placed] == (
+        [1, 2] if override == "picture" else [1]
+    )
+    if override == "picture":
+        assert placed[1].locator.package_part == "ppt/slides/slide2.xml"
+
+
+def test_layout_non_picture_background_stops_master_inheritance(tmp_path):
+    def override(members):
+        key = "ppt/slideLayouts/slideLayout1.xml"
+        members[key] = members[key].replace(
+            "<p:cSld>", "<p:cSld><p:bg><p:bgPr><a:noFill/></p:bgPr></p:bg>"
+        )
+
+    source = inherited_background_deck(
+        tmp_path / "library-talk-2018.pptx",
+        PHOTO,
+        origin="master",
+        change=override,
+    )
+    inventory = unpack_pptx(source).inventory
+    assert inventory.placements == []
+    assert by_package(inventory)[
+        "ppt/media/letter.png"
+    ].byte_object == ArtifactRef.from_bytes(PHOTO)
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "layout",
+        "master",
+        "image",
+        "theme",
+        "index",
+        "external",
+        "unsupported",
+        "ambiguous",
+        "bad-theme",
+    ],
+)
+def test_unresolved_effective_background_refuses_reading_before_client(
+    tmp_path, failure
+):
+    from yizkr.pipeline.transcribe import DeckTranscriber
+
+    def break_reference(members):
+        if failure in {"layout", "master", "image", "theme"}:
+            members.pop(
+                {
+                    "layout": "ppt/slideLayouts/slideLayout1.xml",
+                    "master": "ppt/slideMasters/slideMaster1.xml",
+                    "image": "ppt/media/letter.png",
+                    "theme": "ppt/theme/theme1.xml",
+                }[failure]
+            )
+        elif failure == "external":
+            key = "ppt/theme/_rels/theme1.xml.rels"
+            members[key] = relationships(
+                ("letter", "image", "https://example.invalid/letter.png", True)
+            )
+        elif failure == "unsupported":
+            key = "ppt/theme/theme1.xml"
+            members[key] = (
+                members[key]
+                .replace("<a:blipFill>", "<a:grpFill>")
+                .replace("</a:blipFill>", "</a:grpFill>")
+            )
+        elif failure == "bad-theme":
+            members["ppt/theme/theme1.xml"] = "<unsupported/>"
+        elif failure == "ambiguous":
+            key = "ppt/slides/_rels/slide1.xml.rels"
+            members[key] = members[key].replace(
+                "</Relationships>",
+                f'<Relationship Id="other" Type="{R}/slideLayout" '
+                'Target="../slideLayouts/slideLayout1.xml"/></Relationships>',
+            )
+
+    source = inherited_background_deck(
+        tmp_path / "library-talk-2018.pptx",
+        PHOTO,
+        origin="theme",
+        index=1009 if failure == "index" else 1001,
+        change=break_reference,
+    )
+    inventory = unpack_pptx(source).inventory
+    first = by_package(inventory)["ppt/slides/slide1.xml"]
+    assert first.reading.state == "failed"
+    assert "effective slide background unavailable" in first.reading.reason
+    assert not inventory.complete
+
+    def no_client():
+        pytest.fail("an unresolved background cannot dispatch a model")
+
+    with pytest.raises(
+        ValueError, match="effective slide background unavailable"
+    ):
+        DeckTranscriber(no_client).transcribe(source)
+
+
+def test_shape_image_fill_retains_crop_and_does_not_promote_vector_shapes(
+    tmp_path,
+):
+    def image_fill(members):
+        key = "ppt/slides/slide1.xml"
+        members[key] = members[key].replace(
+            "<p:spPr/>",
+            '<p:spPr><a:blipFill><a:blip r:embed="letter"/>'
+            '<a:srcRect l="6000"/><a:tile tx="12"/>'
+            "</a:blipFill></p:spPr>",
+        )
+        key = "ppt/slides/_rels/slide1.xml.rels"
+        members[key] = members[key].replace(
+            "</Relationships>",
+            f'<Relationship Id="letter" Type="{R}/image" '
+            'Target="../media/letter.png"/></Relationships>',
+        )
+
+    source = inherited_background_deck(
+        tmp_path / "library-talk-2018.pptx", PHOTO, change=image_fill
+    )
+    inventory = unpack_pptx(source).inventory
+    placed = [
+        p for p in inventory.placements if "/p:spPr[1]/" in p.locator.path
+    ]
+    assert len(placed) == 1
+    assert placed[0].occurrence == "paint"
+    assert placed[0].locator.position == 1
+    (fill,) = placed[0].layout[0]["transforms"]
+    assert fill["element"] == "a:blipFill"
+    assert fill["children"][1]["attributes"] == {"l": "6000"}
+    assert fill["children"][2]["attributes"] == {"tx": "12"}
+    assert len(inventory.placements) == 3  # two backgrounds, one filled shape
+
+
+@pytest.mark.parametrize("definition", ["bgPr", "bgRef"])
+def test_duplicate_background_definitions_refuse_reading(tmp_path, definition):
+    from yizkr.pipeline.transcribe import DeckTranscriber
+
+    def duplicate(members):
+        key = (
+            "ppt/slideLayouts/slideLayout1.xml"
+            if definition == "bgPr"
+            else "ppt/slideMasters/slideMaster1.xml"
+        )
+        extra = (
+            "<p:bgPr><a:noFill/></p:bgPr>"
+            if definition == "bgPr"
+            else '<p:bgRef idx="0"/>'
+        )
+        members[key] = members[key].replace("</p:bg>", extra + "</p:bg>")
+
+    source = inherited_background_deck(
+        tmp_path / "library-talk-2018.pptx",
+        PHOTO,
+        origin="layout" if definition == "bgPr" else "theme",
+        change=duplicate,
+    )
+    inventory = unpack_pptx(source).inventory
+    bodies = [p for p in inventory.parts if p.kind == "slide_body"]
+    assert all(p.reading.state == "failed" for p in bodies)
+    assert all(
+        "ambiguous or unsupported background" in p.reading.reason
+        for p in bodies
+    )
+    assert not inventory.placements
+
+    def no_client():
+        pytest.fail("ambiguous background cannot dispatch a model")
+
+    with pytest.raises(
+        ValueError, match="ambiguous or unsupported background"
+    ):
+        DeckTranscriber(no_client).transcribe(source)
+
+
+def test_background_extension_reference_survives_without_becoming_paint(
+    tmp_path,
+):
+    def extension(members):
+        key = "ppt/slides/slide2.xml"
+        members[key] = members[key].replace(
+            "</p:bgPr>",
+            '<p:extLst><a:blip r:embed="unused"/></p:extLst></p:bgPr>',
+        )
+        key = "ppt/slides/_rels/slide2.xml.rels"
+        members[key] = members[key].replace(
+            "</Relationships>",
+            f'<Relationship Id="unused" Type="{R}/image" '
+            'Target="../media/unused.png"/></Relationships>',
+        )
+        members["ppt/media/unused.png"] = PHOTO + b"unplaced album image"
+
+    source = inherited_background_deck(
+        tmp_path / "library-talk-2018.pptx",
+        PHOTO,
+        override="picture",
+        change=extension,
+    )
+    inventory = unpack_pptx(source).inventory
+    part = by_package(inventory)["ppt/media/unused.png"]
+    (reference,) = [p for p in inventory.placements if p.child == part.id]
+    assert reference.occurrence == "reference"
+    assert reference.locator.position == 2
+    assert reference.locator.package_part == "ppt/slides/slide2.xml"
+    assert "/p:bgPr[1]/p:extLst[1]/a:blip[1]" in reference.locator.path
+    assert "visible placement unknown" in reference.limitations[0]
+    paints = [p for p in inventory.placements if p.occurrence == "paint"]
+    assert [p.locator.position for p in paints] == [1, 2]

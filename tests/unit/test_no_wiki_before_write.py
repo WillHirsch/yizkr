@@ -16,8 +16,8 @@ the wiki, not only that nothing raised.
 The steps are those #128 lists that have code: transcription (by vision,
 from a text file, from slide text and from a curator's correction) and
 its check, extraction (entity manifest, chunks, critique), the GEDCOM
-adapter, a deck's slide text and derived media, the reconcile step, the
-per-document adjudication (`reconcile.adjudicate`) given a roster,
+adapter, a deck's slide text and container inventory, the reconcile
+step, the per-document adjudication (`reconcile.adjudicate`) given a roster,
 corpus clustering (#105), the scratch driver's corpus stage, over the
 batches those steps made, and the adjudication of its ambiguous pairs
 (#106) through a fake engine. Flags have no code yet; #112 requires them
@@ -61,7 +61,12 @@ from yizkr.claims import ClaimBatch
 from yizkr.core.config import Config
 from yizkr.core.corpus import ExclusionList
 from yizkr.core.wiki import WikiClient
-from yizkr.pipeline.container_inventory import read_inventory
+from yizkr.pipeline.container_inventory import (
+    CONTAINER_INVENTORY,
+    ContainerInventory,
+    read_inventory,
+)
+from yizkr.pipeline.container_sources import project_sources
 from yizkr.pipeline.orchestrate import (
     AWAITING_CLAIMS,
     BATCHED,
@@ -71,7 +76,6 @@ from yizkr.pipeline.orchestrate import (
     Orchestrator,
 )
 from yizkr.pipeline.presentation import (
-    DERIVED_MEDIA,
     DERIVED_MEDIA_DIR,
     DerivedMediaRecord,
     PresentationContent,
@@ -176,9 +180,8 @@ DECK = "Hutmacherei zum Blauen Hut.pptx"
 # also a document of its own in the corpus
 def tiny_png(caption: str) -> bytes:
     """A 1x1 PNG carrying `caption` in a text chunk, so that each caption
-    gives other bytes: decoration, which a deck's transcription does not
-    read on its own (yizkr.pipeline.containers), though the deck's
-    record keeps it and the write registers it."""
+    gives other bytes. It is an independent original image even at this
+    size; a slide relationship alone still places it nowhere."""
 
     def chunk(kind: bytes, data: bytes) -> bytes:
         body = kind + data
@@ -315,6 +318,7 @@ PEOPLE = {
     "postcard-1938.txt": ("Klara Löbig", 1917),
     "studio-photo-1890s.png": ("Eugen Löbig", 1836),
     DECK: ("Eugen Löbig", 1836),
+    f"{sha1(PORTRAIT)}.png": ("Eugen Löbig", 1836),
 }
 
 
@@ -322,8 +326,10 @@ class ScriptedEngine:
     """A scripted model for one document. It reads the portrait as the
     text on its mount and reverse, names one person, emits one claim about
     them citing the document by the SHA-1 of its bytes, and finds nothing
-    to critique. It has no conversation capability, so chunks see the
-    document inline."""
+    to critique. In a paged reading the claim also cites the first line of
+    text on a page and that page, as the extraction prompt asks, so its
+    source part can be located. It has no conversation capability, so
+    chunks see the document inline."""
 
     model_identifier = "scripted-model"
 
@@ -332,6 +338,8 @@ class ScriptedEngine:
 
     def complete(self, prompt: str, image_paths=()) -> str:
         if image_paths:
+            if sha1(Path(image_paths[0]).read_bytes()) == sha1(SHOP_FRONT):
+                return record_answer("")
             return record_answer(
                 SOURCES["studio-photo-1890s"].text,
                 document_class="photograph",
@@ -375,6 +383,16 @@ class ScriptedEngine:
                 "artifact": {"kind": "artifact", "sha1": self.source_sha1}
             },
         }
+        # test_pdf_pages imports this module, by way of test_scratch
+        from tests.unit.test_pdf_pages import reading_location
+
+        location = reading_location(prompt)
+        if location is not None:
+            page, line = location
+            claim["source"] |= {
+                "page_number": page,
+                "transcription_excerpt": {"text": line, "language": "en"},
+            }
         return json.dumps(claim) + '\n{"done": true, "claims_emitted": 1}'
 
 
@@ -386,26 +404,19 @@ class BeforeTheWrite(Orchestrator):
     """`ingest run`'s orchestrator with the wiki refusing and the engine
     scripted. The resolve step, which uses the wiki and is not a step
     #128 covers, is replaced: it leaves the batch as it is. Registration,
-    part of the write, is not replaced. Each recording of a deck's derived
-    media is noted by the deck's file name."""
+    part of the write, is not replaced."""
 
     def __init__(self, folder: Path, state_dir: Path, refusals, **kwargs):
         kwargs.setdefault("exclusions", ExclusionList())
         super().__init__(folder, state_dir, log=quiet, **kwargs)
         self._client = Refusing(refusals, "wiki")
         self._config = Refusing(refusals, "connection settings")
-        # the file name of the deck, per recording of its derived media
-        self.recordings: list[str] = []
 
     def _llm(self, role, doc):
         return ScriptedEngine(doc.sha1, *PEOPLE[doc.source.name])
 
     def _step_resolve(self, doc, batch):
         return batch
-
-    def _step_derive_media(self, doc):
-        self.recordings.append(doc.source.name)
-        return super()._step_derive_media(doc)
 
 
 def this_run(orchestrator: Orchestrator, name: str) -> set[tuple[str, str]]:
@@ -430,11 +441,28 @@ def the_deck(orchestrator: Orchestrator):
     return deck
 
 
-def media_of(record: DerivedMediaRecord) -> dict[str, tuple[list, list]]:
-    """media SHA-1 -> (names, slides)"""
+def inventory_files(deck) -> dict[str, tuple[int, bytes]]:
+    """The deck's inventory and each file it names: by its path in the
+    deck's directory, its inode and bytes, so a file left untouched keeps
+    both."""
+    inventory = read_inventory(deck.dir)
+    assert inventory is not None
+    names = [CONTAINER_INVENTORY] + [
+        part.file for part in inventory.parts if part.file is not None
+    ]
     return {
-        key: (medium.names, medium.slides)
-        for key, medium in record.media.items()
+        name: ((deck.dir / name).stat().st_ino, (deck.dir / name).read_bytes())
+        for name in names
+    }
+
+
+def embedded_of(inventory: ContainerInventory) -> dict[str, str]:
+    """package part -> the SHA-1 of its bytes, of each resource the deck
+    embeds"""
+    return {
+        part.locator.package_part: part.byte_object.sha1
+        for part in inventory.parts
+        if part.kind == "embedded_resource"
     }
 
 
@@ -470,7 +498,9 @@ def test_rerunning_reuses_and_rechecks_the_views_without_the_wiki(
     tmp_path, refusals
 ):
     folder = corpus(tmp_path)
-    BeforeTheWrite(folder, tmp_path / "state", refusals).run()
+    first = BeforeTheWrite(folder, tmp_path / "state", refusals)
+    first.run()
+    kept = inventory_files(the_deck(first))
 
     # every view stands, and the vision and text-file transcriptions are
     # checked again as they are reused
@@ -479,7 +509,8 @@ def test_rerunning_reuses_and_rechecks_the_views_without_the_wiki(
     docs = again.documents()
     for doc in docs:
         assert stages(doc) <= this_run(again, REUSED)
-    assert again.recordings == []  # the deck's record stands too
+    # the deck's inventory stands too, every file of it untouched
+    assert inventory_files(the_deck(again)) == kept
 
     # a curator's correction makes the postcard's transcription again, and
     # its batch from it
@@ -542,8 +573,8 @@ def test_serial_extraction_in_parallel_leaves_the_wiki_alone(
     tmp_path, refusals
 ):
     """Serial mode's extract-all pass (ADR-0019) runs documents in
-    parallel, a deck's derived media recorded among them, and asks
-    nothing of the wiki."""
+    parallel, a deck's inventory recorded among them, and asks nothing of
+    the wiki."""
     orchestrator = BeforeTheWrite(
         corpus(tmp_path),
         tmp_path / "state",
@@ -554,7 +585,8 @@ def test_serial_extraction_in_parallel_leaves_the_wiki_alone(
     assert orchestrator.run() == 2
 
     assert refusals.asked == []
-    assert orchestrator.recordings == [DECK]
+    deck = the_deck(orchestrator)
+    assert read_inventory(deck.dir).source.sha1 == deck.sha1
     docs = orchestrator.documents()
     states = run_state(orchestrator.rundir)
     for doc in docs:
@@ -747,10 +779,10 @@ class ScriptedAdjudicator:
         )
 
 
-# -- a deck's derived media ---------------------------------------------------
+# -- a deck's container inventory --------------------------------------------
 
 
-def test_a_decks_derived_media_are_recorded_by_sha1(tmp_path, refusals):
+def test_a_decks_media_are_inventoried_by_sha1(tmp_path, refusals):
     orchestrator = BeforeTheWrite(
         corpus(tmp_path), tmp_path / "state", refusals
     )
@@ -758,31 +790,43 @@ def test_a_decks_derived_media_are_recorded_by_sha1(tmp_path, refusals):
     assert refusals.asked == []
 
     deck = the_deck(orchestrator)
-    record = read_derived_media(deck.dir)
-    # each distinct image once, by its bytes, with every name and slide;
-    # the film is not an image, so it is not recorded
-    assert (record.source_sha1, record.title) == (
-        deck.sha1,
-        "Hutmacherei zum Blauen Hut",
-    )
-    assert media_of(record) == {
-        sha1(SHOP_FRONT): (["image1.png"], [1, 2]),
-        sha1(PORTRAIT): (["image2.png", "image4.png"], [2, 3]),
+    inventory = read_inventory(deck.dir)
+    assert inventory.source.sha1 == deck.sha1
+    # each resource the deck embeds is a part of its own, by its name in
+    # the archive and the SHA-1 of its bytes, the film too; the portrait's
+    # two names keep one file of its bytes
+    assert embedded_of(inventory) == {
+        "ppt/media/image1.png": sha1(SHOP_FRONT),
+        "ppt/media/image2.png": sha1(PORTRAIT),
+        "ppt/media/image4.png": sha1(PORTRAIT),
+        "ppt/media/clip1.mp4": sha1(FILM),
     }
-    for key, medium in record.media.items():
-        assert sha1((deck.dir / medium.file).read_bytes()) == key
-    # the portrait is also a document of its own: the same key, so the
-    # same artifact when both are registered (ADR-0010)
-    (portrait,) = [
-        doc for doc in orchestrator.documents() if doc.kind == "media"
-    ]
-    assert portrait.sha1 in record.media
+    for part in inventory.parts:
+        if part.file is not None:
+            assert sha1((deck.dir / part.file).read_bytes()) == (
+                part.byte_object.sha1
+            )
+    # Each original image is read independently, but the relationships
+    # establish no visible placement. The two portrait aliases share one
+    # owner; the film does not become an image source.
+    assert inventory.placements == []
+    sources = project_sources(inventory, deck.dir).sources
+    assert set(sources) == {sha1(SHOP_FRONT), sha1(PORTRAIT)}
+    assert all(
+        source.readable and not source.placements
+        for source in sources.values()
+    )
+    assert all(
+        part.reading.state == "read"
+        for part in inventory.parts
+        if part.kind == "embedded_resource" and part.media_type == "image/png"
+    )
 
 
 def test_a_deck_changed_between_two_runs_is_unpacked_again(tmp_path, refusals):
     """One orchestrator runs twice, and the deck's bytes change between
-    the runs: the second run records and transcribes the deck as it is
-    now, not as the first run unpacked it."""
+    the runs: the second run inventories and transcribes the deck as it
+    is now, not as the first run unpacked it."""
     folder = deck_alone(tmp_path)
     orchestrator = BeforeTheWrite(folder, tmp_path / "state", refusals)
     orchestrator.run()
@@ -798,11 +842,13 @@ def test_a_deck_changed_between_two_runs_is_unpacked_again(tmp_path, refusals):
 
     deck = the_deck(orchestrator)
     assert deck.sha1 != first
-    record = read_derived_media(deck.dir)
-    assert record.source_sha1 == deck.sha1
-    assert media_of(record) == {
-        sha1(retouched): (["image1.png"], [1, 2]),
-        sha1(PORTRAIT): (["image2.png", "image4.png"], [2, 3]),
+    inventory = read_inventory(deck.dir)
+    assert inventory.source.sha1 == deck.sha1
+    assert embedded_of(inventory) == {
+        "ppt/media/image1.png": sha1(retouched),
+        "ppt/media/image2.png": sha1(PORTRAIT),
+        "ppt/media/image4.png": sha1(PORTRAIT),
+        "ppt/media/clip1.mp4": sha1(FILM),
     }
     transcription = json.loads(deck.transcription.read_text())["text"]
     assert "Inh. Sebastian Löbig" in transcription
@@ -811,75 +857,90 @@ def test_a_deck_changed_between_two_runs_is_unpacked_again(tmp_path, refusals):
 
 
 class TestTheRecordIsCurrentWhileItIsWhole:
-    """A deck's derived media are recorded again exactly when the record
-    in its directory is missing or damaged, was made for other bytes
-    than the deck's, or lacks the file of a medium it names: a regular
-    file, named for the medium's SHA-1 and holding the bytes that SHA-1
-    names. Never because of what state.json says."""
+    """A deck's inventory is made from the deck's bytes on each run, and
+    published again exactly where the one in its directory is missing or
+    damaged, was made for other bytes than the deck's, or lacks the file
+    of a part it names: a regular file holding the bytes its SHA-1 names.
+    A whole one stands, every file of it untouched. Never because of what
+    state.json says."""
 
     def run_twice(self, tmp_path, refusals, between=None, **layout):
         folder = deck_alone(tmp_path, **layout)
         first = BeforeTheWrite(folder, tmp_path / "state", refusals)
         first.run()
         deck = the_deck(first)
-        recorded = read_derived_media(deck.dir)
+        recorded = read_inventory(deck.dir)
         assert recorded is not None
+        kept = inventory_files(deck)
         if between is not None:
             between(deck)
         second = BeforeTheWrite(folder, tmp_path / "state", refusals)
         second.run()
         assert refusals.asked == []
-        return recorded, second, deck
+        return recorded, kept, deck
 
     @staticmethod
     def portrait(deck) -> Path:
-        return deck.dir / DERIVED_MEDIA_DIR / f"{sha1(PORTRAIT)}.png"
+        return deck.dir / "container-parts" / f"{sha1(PORTRAIT)}.png"
 
     @staticmethod
-    def assert_made_again(recorded, second, deck) -> None:
-        """The second run recorded the media again, and each medium's
-        file is a regular file holding its bytes."""
-        assert second.recordings == [DECK]
-        assert read_derived_media(deck.dir) == recorded
-        for key, medium in recorded.media.items():
-            path = deck.dir / medium.file
-            assert not path.is_symlink()
-            assert sha1(path.read_bytes()) == key
+    def assert_made_again(recorded, deck) -> None:
+        """The second run published the inventory again, and each file it
+        names is a regular file holding its bytes."""
+        again = read_inventory(deck.dir)
+        assert again is not None
+        expected = recorded.model_dump()
+        for index, part in enumerate(again.parts):
+            original = recorded.parts[index].owner_binding
+            if original is not None and part.owner_binding is not None:
+                # When inventory metadata is lost, surviving located readings
+                # prove the same owner. Only its recovery basis differs.
+                assert part.owner_binding.basis in {
+                    original.basis,
+                    "verified-legacy-reading",
+                }
+                expected["parts"][index]["owner_binding"]["basis"] = (
+                    part.owner_binding.basis
+                )
+        assert again.model_dump() == expected
+        for part in again.parts:
+            if part.file is not None:
+                path = deck.dir / part.file
+                assert not path.is_symlink()
+                assert sha1(path.read_bytes()) == part.byte_object.sha1
 
     def test_a_whole_record_stands(self, tmp_path, refusals):
-        recorded, second, deck = self.run_twice(tmp_path, refusals)
-        assert second.recordings == []
-        assert read_derived_media(deck.dir) == recorded
+        recorded, kept, deck = self.run_twice(tmp_path, refusals)
+        assert inventory_files(deck) == kept
+        assert read_inventory(deck.dir).model_dump() == recorded.model_dump()
 
     def test_a_deleted_record_is_made_again(self, tmp_path, refusals):
         def delete(deck):
-            (deck.dir / DERIVED_MEDIA).unlink()
+            (deck.dir / CONTAINER_INVENTORY).unlink()
 
-        recorded, second, deck = self.run_twice(tmp_path, refusals, delete)
-        assert second.recordings == [DECK]
-        assert read_derived_media(deck.dir) == recorded
+        recorded, _, deck = self.run_twice(tmp_path, refusals, delete)
+        self.assert_made_again(recorded, deck)
 
     def test_a_record_that_lost_bytes_is_made_again(self, tmp_path, refusals):
         def lose(deck):
-            (deck.dir / DERIVED_MEDIA_DIR / f"{sha1(PORTRAIT)}.png").unlink()
+            self.portrait(deck).unlink()
 
-        recorded, second, deck = self.run_twice(tmp_path, refusals, lose)
-        assert second.recordings == [DECK]
-        assert read_derived_media(deck.dir) == recorded
+        recorded, _, deck = self.run_twice(tmp_path, refusals, lose)
+        self.assert_made_again(recorded, deck)
 
     def test_a_truncated_medium_is_made_again(self, tmp_path, refusals):
         def truncate(deck):
             self.portrait(deck).write_bytes(b"")
 
-        recorded, second, deck = self.run_twice(tmp_path, refusals, truncate)
-        self.assert_made_again(recorded, second, deck)
+        recorded, _, deck = self.run_twice(tmp_path, refusals, truncate)
+        self.assert_made_again(recorded, deck)
 
     def test_an_overwritten_medium_is_made_again(self, tmp_path, refusals):
         def overwrite(deck):
             self.portrait(deck).write_bytes(b"\x89PNG synthetic: retouched")
 
-        recorded, second, deck = self.run_twice(tmp_path, refusals, overwrite)
-        self.assert_made_again(recorded, second, deck)
+        recorded, _, deck = self.run_twice(tmp_path, refusals, overwrite)
+        self.assert_made_again(recorded, deck)
 
     def test_a_medium_linked_from_outside_is_made_again(
         self, tmp_path, refusals
@@ -898,8 +959,8 @@ class TestTheRecordIsCurrentWhileItIsWhole:
             self.portrait(deck).unlink()
             self.portrait(deck).symlink_to(elsewhere)
 
-        recorded, second, deck = self.run_twice(tmp_path, refusals, link)
-        self.assert_made_again(recorded, second, deck)
+        recorded, _, deck = self.run_twice(tmp_path, refusals, link)
+        self.assert_made_again(recorded, deck)
         after = elsewhere.stat()  # replaced, not written through
         assert (after.st_ino, after.st_mtime_ns) == (
             before.st_ino,
@@ -915,102 +976,103 @@ class TestTheRecordIsCurrentWhileItIsWhole:
         def unreadable(deck):
             self.portrait(deck).chmod(0)
 
-        recorded, second, deck = self.run_twice(tmp_path, refusals, unreadable)
-        self.assert_made_again(recorded, second, deck)
+        recorded, _, deck = self.run_twice(tmp_path, refusals, unreadable)
+        self.assert_made_again(recorded, deck)
 
-    def test_a_record_whose_media_name_each_others_files_is_made_again(
+    def test_a_record_whose_parts_name_each_others_files_is_made_again(
         self, tmp_path, refusals
     ):
         def swap(deck):
-            path = deck.dir / DERIVED_MEDIA
+            path = deck.dir / CONTAINER_INVENTORY
             data = json.loads(path.read_text())
-            one, other = data["media"].values()
+            one, other = [
+                part
+                for part in data["parts"]
+                if part["kind"] == "embedded_resource"
+                and part["locator"]["package_part"]
+                in {"ppt/media/image1.png", "ppt/media/image2.png"}
+            ]
             one["file"], other["file"] = other["file"], one["file"]
             path.write_text(json.dumps(data))
 
-        recorded, second, deck = self.run_twice(tmp_path, refusals, swap)
-        self.assert_made_again(recorded, second, deck)
+        recorded, _, deck = self.run_twice(tmp_path, refusals, swap)
+        self.assert_made_again(recorded, deck)
 
-    def test_a_medium_whose_file_is_named_for_other_bytes_is_made_again(
+    def test_a_part_whose_file_is_named_for_other_bytes_is_made_again(
         self, tmp_path, refusals
     ):
         # the portrait's bytes, kept under a name that is not their SHA-1
-        misnamed = f"{DERIVED_MEDIA_DIR}/{'0' * 40}.png"
+        misnamed = f"container-parts/{'0' * 40}.png"
 
         def rename(deck):
             self.portrait(deck).rename(deck.dir / misnamed)
-            path = deck.dir / DERIVED_MEDIA
+            path = deck.dir / CONTAINER_INVENTORY
             data = json.loads(path.read_text())
-            data["media"][sha1(PORTRAIT)]["file"] = misnamed
+            for part in data["parts"]:
+                if part["file"] == f"container-parts/{sha1(PORTRAIT)}.png":
+                    part["file"] = misnamed
             path.write_text(json.dumps(data))
 
-        recorded, second, deck = self.run_twice(tmp_path, refusals, rename)
-        self.assert_made_again(recorded, second, deck)
+        recorded, _, deck = self.run_twice(tmp_path, refusals, rename)
+        self.assert_made_again(recorded, deck)
 
     def test_a_record_naming_another_file_is_made_again(
         self, tmp_path, refusals
     ):
-        # a record whose media point outside its folder, at a file the
-        # write must never upload
+        # a record whose parts point at a file of the directory that is no
+        # part's, which the write must never upload
         def redirect(deck):
-            path = deck.dir / DERIVED_MEDIA
+            path = deck.dir / CONTAINER_INVENTORY
             data = json.loads(path.read_text())
-            for medium in data["media"].values():
-                medium["file"] = "state.json"
+            for part in data["parts"]:
+                if part["file"] is not None:
+                    part["file"] = "state.json"
             path.write_text(json.dumps(data))
 
-        recorded, second, deck = self.run_twice(tmp_path, refusals, redirect)
-        assert second.recordings == [DECK]
-        assert read_derived_media(deck.dir) == recorded
+        recorded, _, deck = self.run_twice(tmp_path, refusals, redirect)
+        self.assert_made_again(recorded, deck)
 
     def test_a_damaged_record_is_made_again(self, tmp_path, refusals):
         def damage(deck):
-            (deck.dir / DERIVED_MEDIA).write_text('{"source_sha1": ')
+            (deck.dir / CONTAINER_INVENTORY).write_text('{"format": ')
 
-        recorded, second, deck = self.run_twice(tmp_path, refusals, damage)
-        assert second.recordings == [DECK]
-        assert read_derived_media(deck.dir) == recorded
+        recorded, _, deck = self.run_twice(tmp_path, refusals, damage)
+        self.assert_made_again(recorded, deck)
 
     def test_a_record_for_other_deck_bytes_is_made_again(
         self, tmp_path, refusals
     ):
-        # whole, with every medium's file, but made for another source's
+        # whole, with every part's file, but made for another source's
         # bytes, as in a directory two sources have shared
         def another_deck(deck):
-            path = deck.dir / DERIVED_MEDIA
+            path = deck.dir / CONTAINER_INVENTORY
             data = json.loads(path.read_text())
-            data["source_sha1"] = sha1(b"another deck")
+            data["source"]["sha1"] = sha1(b"another deck")
             path.write_text(json.dumps(data))
 
-        recorded, second, deck = self.run_twice(
-            tmp_path, refusals, another_deck
-        )
-        assert second.recordings == [DECK]
-        assert read_derived_media(deck.dir) == recorded
+        recorded, _, deck = self.run_twice(tmp_path, refusals, another_deck)
+        self.assert_made_again(recorded, deck)
 
     def test_a_directory_without_a_record_gets_one(self, tmp_path, refusals):
         """A deck directory that registered its media and holds no record
-        of them: the media are recorded, whatever its state.json notes."""
+        of them: the deck is inventoried, whatever its state.json notes."""
 
         def registered(deck):
-            (deck.dir / DERIVED_MEDIA).unlink()
-            shutil.rmtree(deck.dir / DERIVED_MEDIA_DIR)
+            (deck.dir / CONTAINER_INVENTORY).unlink()
+            shutil.rmtree(deck.dir / "container-parts")
             state = DocumentState.load(deck.state_path)
             state.detail = (state.detail or {}) | {
                 "derived_media": {"image1.png": "Q501", "image2.png": "Q502"}
             }
             state.save(deck.state_path)
 
-        recorded, second, deck = self.run_twice(tmp_path, refusals, registered)
-        assert second.recordings == [DECK]
-        assert read_derived_media(deck.dir) == recorded
+        recorded, _, deck = self.run_twice(tmp_path, refusals, registered)
+        self.assert_made_again(recorded, deck)
 
     def test_a_deck_without_images_is_recorded_once(self, tmp_path, refusals):
-        recorded, second, deck = self.run_twice(
-            tmp_path, refusals, media=False
-        )
-        assert recorded.media == {}
-        assert second.recordings == []
+        recorded, kept, deck = self.run_twice(tmp_path, refusals, media=False)
+        assert embedded_of(recorded) == {}
+        assert inventory_files(deck) == kept
         assert not (deck.dir / DERIVED_MEDIA_DIR).exists()
 
 

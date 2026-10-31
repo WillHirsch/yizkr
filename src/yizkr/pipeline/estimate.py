@@ -59,8 +59,8 @@ and the waits for the subscription, which are no calls. Nor is a slice
 the anomaly checks pause as the run unfolds (docs/ANOMALIES.md): it
 makes fewer calls than counted.
 
-**Excerpts.** An image a PDF places within a text-layer page, or a deck
-embeds on a slide, read on its own, becomes a document of its own, an
+**Excerpts.** An independent image a PDF places on any of its pages, or
+a deck paints on a slide, read on its own, becomes a document of its own, an
 excerpt (ADR-0008), found only as its container is transcribed, so no
 plan names it beforehand. The container's transcription stage, taken
 through the pipeline's own code, reads it page by page as the run does
@@ -551,6 +551,8 @@ class Estimator(ScratchDriver):
         self._asked: set[str] = set()
         # the stage being counted
         self._tally = _Tally(self._asked)
+        self._context_made: dict[str, _Made] = {}
+        self._context_images: dict[str, dict[str, Transcription]] = {}
 
     def run(self) -> int:
         """An estimator counts a run's calls, and never makes the run:
@@ -639,6 +641,23 @@ class Estimator(ScratchDriver):
             return estimate
         self._refreshed = self._refreshes_made()
         try:
+            # Context-dependent owners need every matching parent reading
+            # before their extraction keys can be known, including canaries.
+            parents = {
+                parent.sha1: parent
+                for group in self._interpretation_parents.values()
+                for parent in group
+            }
+            if self._within("transcription"):
+                for owner in sorted(parents):
+                    parent = parents[owner]
+                    self._tally = _Tally(self._asked)
+                    outcome = self._transcription(
+                        parent, self._fresh(parent), _Made()
+                    )
+                    self._context_made[owner] = outcome
+                    if outcome.view is not None and not outcome.fails:
+                        self._interpretation_readings[owner] = outcome.view
             made = {doc: self._count(doc) for doc in taken}
             # an excerpt's stage left to make starts its role's engine
             # client too, as the run starts it
@@ -763,6 +782,11 @@ class Estimator(ScratchDriver):
         before = _Made()
         for descriptor in planned:
             stage = descriptor.name
+            if stage == "transcription" and doc.sha1 in self._context_made:
+                before = made[stage] = self._context_made[doc.sha1]
+                if before.fails:
+                    break
+                continue
             if descriptor.process == "deterministic":
                 # Even a missing output needs observable generation inputs.
                 # Deterministic adapters neither open a model nor its cache.
@@ -824,7 +848,9 @@ class Estimator(ScratchDriver):
             except PdfExclusionError as exc:
                 return _Made(fails=_why(exc))
             if view is not None:
-                return _Made(reused=True, view=view, changed=False)
+                located = self._locate_transcription(doc, view)
+                changed = located.source_context != view.source_context
+                return _Made(reused=True, view=located, changed=changed)
         if method in ("vision", PAGED):
             self._engine_for("transcribe")
         made = _Made(tally=self._tally)
@@ -834,6 +860,7 @@ class Estimator(ScratchDriver):
             keyed.reading_pages, keyed.stood_in = True, 0
         try:
             transcription, _resolution = self._transcribe(doc, method)
+            transcription = self._locate_transcription(doc, transcription)
         except _Unanswered:
             return made
         except Exception as exc:
@@ -845,6 +872,11 @@ class Estimator(ScratchDriver):
         # a container read page by page keeps its images in a scratch folder,
         # which the estimate keeps nothing of but their SHA-1s
         if transcription.reading is not None:
+            self._context_images[doc.sha1] = {
+                image.sha1: image.transcription
+                for image in transcription.reading.images
+                if image.transcription is not None and image.failure is None
+            }
             made.images = [
                 image.sha1
                 for image in transcription.reading.images
@@ -866,16 +898,43 @@ class Estimator(ScratchDriver):
     def _extraction(
         self, doc: DocumentRun, fresh: bool, before: _Made
     ) -> _Made:
+        unknown_context = self._estimate_interpretation_context(
+            doc, before.view
+        )
+        if unknown_context:
+            self._engine_for("extract")
+            return _Made(
+                estimated=CHUNKS if before.view is not None else WHOLE,
+                size=len(before.view.text)
+                if before.view is not None
+                else None,
+            )
         if not fresh and before.view is not None and not before.changed:
             view = self._stands(doc, doc.batch, ClaimBatch.model_validate_json)
             if view is not None:
                 return _Made(reused=True, view=view, changed=False)
+        from yizkr.pipeline import text_stages
+
+        if (
+            before.view is not None
+            and doc.pointed() is None
+            and text_stages.empty_container_reading(before.view)
+        ):
+            batch = text_stages.extract(
+                text_stages.ExtractionRequest(
+                    transcription=before.view,
+                    artifact=ArtifactRef(sha1=doc.sha1),
+                    strategy="chunked",
+                )
+            ).require_complete()
+            return _Made(view=batch, changed=self._batch_changed(doc, batch))
         self._engine_for("extract")
         if before.view is None:
             return _Made(estimated=WHOLE)
         made = _Made(tally=self._tally)
         keyed = self._keyed["extract"]
         extractor = _Extractor(self._llm("extract", doc), keyed, made.tally)
+        extractor.context = self._interpretation_contexts.get(doc.sha1)
         try:
             # read as the driver reads it, within the stage
             extractor.pointer = doc.pointed()
@@ -897,6 +956,9 @@ class Estimator(ScratchDriver):
         if extractor.failed_chunks:
             made.fails = f"{len(extractor.failed_chunks)} chunks failed"
             return made
+        if extractor.incomplete_reasons:
+            made.fails = "; ".join(extractor.incomplete_reasons)
+            return made
         if not made.tally.answered:
             made.view = batch
             made.changed = self._batch_changed(doc, batch)
@@ -913,8 +975,12 @@ class Estimator(ScratchDriver):
         transcription `transcribed` holds, as the driver builds its prompt
         (Orchestrator._step_critique): reused only when neither changed
         and the view stands, and estimated when either is not in hand."""
+        unknown_context = self._estimate_interpretation_context(
+            doc, transcribed.view
+        )
         if (
-            not fresh
+            not unknown_context
+            and not fresh
             and before.view is not None
             and not before.changed
             and transcribed.view is not None
@@ -926,14 +992,37 @@ class Estimator(ScratchDriver):
         ):
             return _Made(reused=True)
         self._engine_for("critique")
-        if before.view is None or transcribed.view is None:
+        if before.view is None or transcribed.view is None or unknown_context:
             return _Made(estimated=CRITIQUE)
         made = _Made(tally=self._tally)
         with contextlib.suppress(_Unanswered):
             run_critique(
-                self._llm("critique", doc), before.view, transcribed.view
+                self._llm("critique", doc),
+                before.view,
+                transcribed.view,
+                context=self._interpretation_contexts.get(doc.sha1),
             )
         return made
+
+    def _interpretation_images(self, parent, sources):
+        if parent.sha1 in self._context_images:
+            return self._context_images[parent.sha1]
+        return super()._interpretation_images(parent, sources)
+
+    def _estimate_interpretation_context(self, doc, transcription) -> bool:
+        """Future model answers leave context-dependent keys unknown."""
+        if any(
+            (made := self._context_made.get(parent.sha1)) is not None
+            and made.view is None
+            and not made.fails
+            for parent in self._interpretation_parents.get(doc.sha1, ())
+        ):
+            return True
+        if transcription is not None:
+            self._interpretation_contexts[doc.sha1] = (
+                self._interpretation_context(doc, transcription)
+            )
+        return False
 
     def _batch_changed(self, doc: DocumentRun, batch: ClaimBatch) -> bool:
         """Whether the batch differs from the one the document's views
@@ -1179,8 +1268,16 @@ class Estimator(ScratchDriver):
         }
         if self._fresh(excerpt):
             return list(planned)
+        unknown_context = False
+        if any(stage in {"extraction", "critique"} for stage in planned):
+            current = self._transcription_view(excerpt)
+            unknown_context = self._estimate_interpretation_context(
+                excerpt, current
+            )
         left: list[str] = []
         for at, stage in enumerate(planned):
+            if stage in {"extraction", "critique"} and unknown_context:
+                return left + planned[at:]
             if self._stands(excerpt, *views[stage]) is not None:
                 continue
             if stage != "transcription":

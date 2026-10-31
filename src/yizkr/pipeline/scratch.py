@@ -13,13 +13,14 @@ follows it as it follows any run.
 **Stages.** Each document takes the per-document stages its kind plans
 (orchestrate.DOCUMENT_STAGES): transcription, which the transcription
 check guards, extraction and the critique; or the GEDCOM adapter for a
-.ged file. An image a PDF places within a text-layer page, or a deck
-embeds on a slide, read on its own, is a document of its own, an excerpt
-(orchestrate.ExcerptRun), which takes the same stages once its
+.ged file. An independent image source a PDF places on any page, or a
+deck paints on a slide, read on its own, is a document of its own, an
+excerpt (orchestrate.ExcerptRun), which takes the same stages once its
 container's transcription has found it, and joins the run plan then.
 Nothing before the barrier reads or writes the wiki: no artifact is
-registered before the register stage, and a deck's derived media are
-recorded in its directory (ADR-0025 §2). There is no
+registered before the register stage, and a deck's or a PDF's image
+sources are recorded in its directory (`container-inventory.json`;
+ADR-0025 §2). There is no
 human stop. When every document's per-document stages have ended, done
 or failed, the run is at the **barrier**, and the driver runs the corpus
 stages registered with it (CORPUS_STAGES), in order, over the documents
@@ -1412,8 +1413,8 @@ class ScratchDriver(Orchestrator):
         orchestrator does before a document's stages, without its
         registration: a directory whose source bytes changed, or whose
         files nothing records, is set aside and started afresh (ADR-0010);
-        the directory's record comes first; and a deck's derived media are
-        recorded in it (ADR-0025 §2)."""
+        the directory's record comes first; and a presentation's common
+        source inventory is published before reading."""
         if doc.dir in self._prepared:
             return
         doc.state.error = None
@@ -1432,9 +1433,8 @@ class ScratchDriver(Orchestrator):
         doc.derivations.begin()
         doc.state.content_sha1 = doc.sha1
         doc.state.file = str(doc.source)
-        if doc.kind == "presentation" and not self._derived_media_current(doc):
-            record = self._step_derive_media(doc)
-            self.log(f"  derived media: {len(record.media)} recorded")
+        if doc.kind == "presentation":
+            self._record_container_inventory(doc)
         self._prepared.add(doc.dir)
 
     # -- refreshes ------------------------------------------------------------
@@ -1521,6 +1521,8 @@ class ScratchDriver(Orchestrator):
             self.log(f"  {doc.source.name}: {exc}")
             return _HELD
         except Exception as exc:
+            if stage == "transcription":
+                self._interpretation_readings.pop(doc.sha1, None)
             self._fail(doc, _why(exc))
             return _FAILED_HERE
         except BaseException:
@@ -1530,9 +1532,15 @@ class ScratchDriver(Orchestrator):
             raise
         unsaved = self._save(doc)
         if unsaved is not None:
+            if stage == "transcription":
+                self._interpretation_readings.pop(doc.sha1, None)
             self._fail(doc, unsaved, save=False)
             return _FAILED_HERE
         self._record_refreshes()
+        if stage == "transcription":
+            self._interpretation_readings[doc.sha1] = self._views.get(
+                (doc.sha1, doc.transcription.name)
+            )
         return _ENDED_HERE
 
     # -- the corpus ---------------------------------------------------------
@@ -1681,10 +1689,25 @@ class ScratchDriver(Orchestrator):
             waiting: set[str] = set()
             aborted: set[str] = set()
             behind: set[int] = set()
+            pending_readings = {
+                parent.sha1
+                for parent, phase in pending
+                if phase == "transcription"
+            }
             for doc, stage in pending:
                 if id(doc) in behind:
                     continue
                 behind.add(id(doc))
+                if stage == "extraction" and any(
+                    parent.sha1 in pending_readings
+                    for parent in self._interpretation_parents.get(
+                        doc.sha1, ()
+                    )
+                ):
+                    # Let the ordinary parent pairs handle their own control,
+                    # arrival and failure events. Never nest provider dispatch
+                    # inside the dependent extraction (including its canary).
+                    continue
                 stop = stop_of(control, stage=stage, kind=doc.kind)
                 if stop is None:
                     chosen = (doc, stage)

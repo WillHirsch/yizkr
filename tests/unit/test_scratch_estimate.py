@@ -50,6 +50,7 @@ from tests.unit.test_scratch import (  # noqa: F401
     fakes,
     quiet,
     runs_dir,
+    scripted_source,
     small,
 )
 from yizkr import cli
@@ -125,6 +126,7 @@ class Engine:
         self.cli_version = fake.cli
         self.config_hash = f"fake-{self.cli_version}-{self.model}-{effort}"
         self.model_identifier = f"claude-code/{self.cli_version}:{self.model}"
+        self.openings = {}
 
     def _call(self, what: str, name: str | None) -> int | None:
         """Log the call, run the hook, and number the answer, while
@@ -202,12 +204,14 @@ class Engine:
                     {"id": "e1", "label": "the reading room", "kind": "room"}
                 ]
             }
-        return note + json.dumps(answer), str(uuid.uuid4())
+        handle = str(uuid.uuid4())
+        self.openings[handle] = prompt
+        return note + json.dumps(answer), handle
 
     def fork(self, handle, prompt):
-        return self._chunk(prompt)
+        return self._chunk(prompt, opening=self.openings[handle])
 
-    def _chunk(self, prompt: str) -> str:
+    def _chunk(self, prompt: str, *, opening: str | None = None) -> str:
         name = self._document(prompt)
         number = self._call("chunk", name)
         seed = self.config_hash + ("" if self.fakes.same_claims else name)
@@ -218,12 +222,9 @@ class Engine:
             "subject": {"kind": "local", "local_id": "e1", "label": "Eugen"},
             "property": "date_of_birth",
             "value": {"type": "time", "year": year},
-            "source": {
-                "artifact": {
-                    "kind": "artifact",
-                    "sha1": self.fakes.corpus.sha1(name),
-                }
-            },
+            "source": scripted_source(
+                self.fakes.corpus, name, opening or prompt
+            ),
         }
         return json.dumps(claim) + '\n{"done": true, "claims_emitted": 1}'
 
@@ -234,7 +235,9 @@ class Engine:
         transcripts = [name for name in files if name.endswith(".jsonl")]
         if len(transcripts) != 1:
             raise ValueError("the kept files hold no single transcript")
-        return str(uuid.UUID(Path(transcripts[0]).stem))
+        handle = str(uuid.UUID(Path(transcripts[0]).stem))
+        self.openings[handle] = prompt
+        return handle
 
     def close_conversation(self, handle):
         pass
@@ -380,6 +383,75 @@ def tree(*roots: Path) -> dict:
 
 
 class TestCounts:
+    @pytest.mark.parametrize("operation", ["estimate", "run"])
+    @pytest.mark.parametrize("nonempty", [False, True])
+    def test_image_only_container_extraction_needs_no_model_client(
+        self, tmp_path, monkeypatch, operation, nonempty
+    ):
+        from tests.fixtures import pdfs
+        from yizkr.claims import ArtifactRef
+        from yizkr.pipeline.textlayer import read_pages
+        from yizkr.pipeline.transcribe import PdfPageTranscriber
+
+        class ModelNeeded(BaseException):
+            pass
+
+        requested = []
+
+        def model_needed(role, *args, **kwargs):
+            requested.append(role)
+            raise ModelNeeded
+
+        def no_client(*args, **kwargs):
+            pytest.fail("this check must not construct a model client")
+
+        monkeypatch.setattr(llm, "make_client", no_client)
+        corpus = tmp_path / "corpus"
+        corpus.mkdir()
+        source = corpus / "library-talk-image.pdf"
+        page = pdfs.Page().image(pdfs.jpeg(), 72, 400, 128, 96)
+        if nonempty:
+            page.text(pdfs.lines(u.SOURCES[0].text))
+        source.write_bytes(pdfs.pdf([page]))
+        prepared = tmp_path / "prepared"
+        prepared.mkdir()
+        pages = read_pages(source, prepared, excluded=lambda _: False)
+        assert pages.pages[0].method == (
+            "text-layer" if nonempty else "image-source"
+        )
+        transcription = PdfPageTranscriber(no_client)._transcription(
+            ArtifactRef.from_path(source), pages
+        )
+        assert transcription.source_context is not None
+        processor = Quiet(corpus, tmp_path / "run")
+        (doc,) = processor.documents()
+        monkeypatch.setattr(processor, "_engine_for", model_needed)
+        monkeypatch.setattr(processor, "_llm", model_needed)
+
+        def perform():
+            if operation == "run":
+                return processor._step_extract(doc, transcription)
+            made = processor._extraction(
+                doc, True, estimate._Made(view=transcription)
+            )
+            assert made.fails is made.estimated is None
+            assert made.tally.known == made.tally.hits == 0
+            assert not made.tally.asked
+            return made.view
+
+        if nonempty:
+            with pytest.raises(ModelNeeded):
+                perform()
+            assert requested == ["extract"]
+        else:
+            batch = perform()
+            assert batch.claims == batch.entities == []
+            assert batch.extraction_run.model_identifier == (
+                "deterministic:empty-container"
+            )
+            assert requested == []
+        assert processor._clients == {}
+
     def test_fresh_deterministic_stage_requires_observable_dependencies(
         self, tmp_path, monkeypatch
     ):
@@ -947,6 +1019,57 @@ class TestCounts:
         assert (transcription.made, transcription.engine_calls) == (2, 0)
         assert per_stage(counted, "known") == {"extraction": 2}
         assert per_stage(counted, "engine_calls") == made
+
+    def test_fresh_container_estimate_reuses_the_attributed_batch_and_critique(
+        self, tmp_path, engine
+    ):
+        """A fresh run reproduces source support before keying its critique."""
+        corpus = Corpus(tmp_path / "corpus")
+        corpus.deck("Hutmacherei.pptx", "gegr. 1863, Brunnenring 35")
+        run(tmp_path, corpus, engine)
+        counted = estimate_of(tmp_path, corpus, engine, new=True)
+        assert counted.stages["critique"].hits == 1
+        assert not per_stage(counted, "engine_calls")
+        assert run(tmp_path, corpus, engine, new=True) == Counter()
+
+    def test_cached_incomplete_source_attribution_stops_before_critique(
+        self, tmp_path, engine
+    ):
+        """A usable claim cannot hide another claim's unsupported source."""
+        corpus = Corpus(tmp_path / "corpus")
+        corpus.deck("Hutmacherei.pptx", "gegr. 1863, Brunnenring 35")
+        run(tmp_path, corpus, engine)
+        (fork,) = entries(tmp_path / "cache", role="extract", call="fork")
+        response = json.loads(fork.read_text())["response"]
+        good = json.loads(response.splitlines()[0])
+        unsupported = good | {
+            "property": "date_of_death",
+            "source": good["source"]
+            | {
+                "transcription_excerpt": {
+                    "text": "No such words occur in this fictional reading.",
+                    "language": "en",
+                }
+            },
+        }
+        answer_with(
+            fork,
+            "\n".join(
+                [
+                    json.dumps(good),
+                    json.dumps(unsupported),
+                    '{"done": true, "claims_emitted": 2}',
+                ]
+            ),
+        )
+        counted = estimate_of(tmp_path, corpus, engine, new=True)
+        assert counted.stages["extraction"].failing == 1
+        assert "critique" not in counted.stages
+        assert not per_stage(counted, "engine_calls")
+        assert (
+            run(tmp_path, corpus, engine, new=True, status=EXIT_FAILED)
+            == Counter()
+        )
 
     def test_the_mean_for_a_kind_counts_a_document_no_run_measured(
         self, tmp_path, engine

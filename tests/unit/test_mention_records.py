@@ -612,6 +612,7 @@ class TestReferenceProperties:
         "judgement",
         "judgement_note",
         "printed_page_number",
+        "source_part_locator",
     }
 
     def test_the_manifest_marks_them(self, manifest):

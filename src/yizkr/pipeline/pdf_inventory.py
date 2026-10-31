@@ -55,6 +55,20 @@ _INLINE_NAMES = {
     "/D": "/Decode",
     "/IM": "/ImageMask",
 }
+# Graphics state, color and path construction/clipping do not paint another
+# source. Text operators are checked separately for a valid invisible OCR
+# object. Path painting, shading and unknown operators are deliberately
+# absent: PDFium's object list alone cannot prove they were absent.
+_IMAGE_ONLY_OPERATORS = frozenset(
+    b"q Q cm w J j M d ri i gs "
+    b"CS cs SC SCN sc scn G g RG rg K k "
+    b"m l c v y h re W W* n Do "
+    b"BT ET Tc Tw Tz TL Tf Tr Ts Td TD Tm T* Tj TJ ' \"".split()
+) | {b"INLINE IMAGE"}
+_SHOW_TEXT_OPERATORS = frozenset((b"Tj", b"TJ", b"'", b'"'))
+_TEXT_OBJECT_OPERATORS = frozenset(
+    b"Tc Tw Tz TL Tf Tr Ts Td TD Tm T* Tj TJ ' \"".split()
+)
 
 
 def _value(value: Any) -> Any:
@@ -113,6 +127,28 @@ class PdfInventory:
     _reasons: dict[int, list[str]] = field(default_factory=dict)
     _fatal: str | None = None
 
+    def replace_inventory(self, inventory: ContainerInventory) -> None:
+        """Adopt prepared bindings without leaving stale ephemeral indexes."""
+        if inventory.source != self.inventory.source:
+            raise ValueError("replacement inventory names another PDF")
+        parts = {part.id: part for part in inventory.parts}
+        self.page_parts = {
+            page: parts[part.id] for page, part in self.page_parts.items()
+        }
+        self.image_parts = {
+            key: parts[part.id] for key, part in self.image_parts.items()
+        }
+        self.image_representations = {
+            key: next(
+                rep
+                for rep in self.image_parts[key].representations
+                if rep.byte_object == previous.byte_object
+                and rep.method == previous.method
+            )
+            for key, previous in self.image_representations.items()
+        }
+        self.inventory = inventory
+
     def verify(self, source_bytes: bytes) -> None:
         from yizkr.pipeline.textlayer import PdfExclusionError
 
@@ -134,12 +170,17 @@ class PdfInventory:
                 excluded(item.byte_object.sha1)
                 for item in (part, *part.representations)
                 if item.byte_object is not None
+            ) or (
+                part.owner_binding is not None
+                and excluded(part.owner_binding.artifact.sha1)
             ):
                 part.eligibility = Eligibility(
                     state="excluded",
                     reason="original stream or prepared image is excluded",
                 )
                 part.file = None
+                if part.owner_binding is not None:
+                    part.owner_binding.file = None
                 for representation in part.representations:
                     representation.file = None
                     representation.eligibility = part.eligibility.model_copy()
@@ -169,6 +210,12 @@ class PdfInventory:
             for item in (part, *part.representations)
             if item.file is not None
         }
+        wanted.update(
+            part.owner_binding.artifact.sha1
+            for part in self.inventory.parts
+            if part.owner_binding is not None
+            and part.owner_binding.file is not None
+        )
         for digest in set(self.data) - wanted:
             del self.data[digest]
 
@@ -252,6 +299,7 @@ class _Builder:
         self.resources: dict[str, SourcePart] = {}
         self.originals: dict[str, bytes] = {}
         self.paints: dict[int, list[tuple[SourcePart, Placement]]] = {}
+        self.non_image_content: set[int] = set()
 
     def part(
         self, kind: str, locator: StructuralLocator, **kwargs
@@ -315,6 +363,7 @@ class _Builder:
             ),
             byte_object=reference,
             media_type="application/vnd.pdf.image-stream",
+            source_role="independent",
             layout=[{"pdf_dictionary": dictionary}],
             eligibility=Eligibility(
                 state="excluded"
@@ -364,6 +413,7 @@ class _Builder:
             child=part.id,
             locator=locator,
             order=len(paints) + 1,
+            occurrence="paint",
             layout=layout,
             limitations=[
                 "Native graphics operators are uncomposed context; "
@@ -404,15 +454,46 @@ class _Builder:
         active.add(id(obj))
         state: list[dict] = []
         stack: list[list[dict]] = []
+        text_mode = 0
+        text_modes: list[int] = []
+        in_text = False
         try:
             for index, (operands, operator) in enumerate(
                 stream.operations, start=1
             ):
                 location = f"{path}/op[{index}]"
+                # A conservative image-only proof, not a second graphics
+                # interpreter. Unknown operators must not disappear merely
+                # because PDFium did not expose them as page objects.
+                if operator not in _IMAGE_ONLY_OPERATORS:
+                    self.non_image_content.add(number)
+                if operator in _TEXT_OBJECT_OPERATORS and not in_text:
+                    self.non_image_content.add(number)
+                if operator == b"BT":
+                    if in_text:
+                        self.non_image_content.add(number)
+                    in_text = True
+                elif operator == b"ET":
+                    if not in_text:
+                        self.non_image_content.add(number)
+                    in_text = False
+                elif operator == b"Tr":
+                    if len(operands) != 1 or operands[0] not in range(8):
+                        self.non_image_content.add(number)
+                        text_mode = -1
+                    else:
+                        text_mode = int(operands[0])
+                elif operator in _SHOW_TEXT_OPERATORS:
+                    if not in_text or text_mode != 3:
+                        self.non_image_content.add(number)
                 if operator == b"q":
                     stack.append(list(state))
+                    text_modes.append(text_mode)
                 elif operator == b"Q":
                     state = stack.pop() if stack else []
+                    if not text_modes:
+                        self.non_image_content.add(number)
+                    text_mode = text_modes.pop() if text_modes else 0
                 elif operator in (
                     b"cm",
                     b"W",
@@ -482,6 +563,8 @@ class _Builder:
                                 },
                             ),
                         )
+            if in_text or text_modes:
+                self.non_image_content.add(number)
         finally:
             active.remove(id(obj))
 
@@ -534,6 +617,7 @@ class _Builder:
                     child=part.id,
                     locator=locator,
                     order=index,
+                    occurrence="annotation",
                     layout=[{"pdf_rect": _metadata(annotation.get("/Rect"))}],
                 )
             )
@@ -615,7 +699,11 @@ class _Builder:
                 )
 
     def prepare(self, document: Any):
-        from yizkr.pipeline.textlayer import _MAX_FORM_DEPTH, image_bytes
+        from yizkr.pipeline.textlayer import (
+            _MAX_FORM_DEPTH,
+            _clip,
+            image_bytes,
+        )
 
         for number in range(1, self.plan.page_count + 1):
             page = document[number - 1]
@@ -647,6 +735,32 @@ class _Builder:
                             reason="native and PDFium image paints disagree",
                         )
                     continue
+                # A page showing only one original image is a view of that
+                # image's source, whatever its size or page coverage. Other
+                # painting, annotations and unknown native content prevent
+                # that attribution; rendering still has its own rules.
+                image_only_page = (
+                    len(images) == len(paints) == 1
+                    and all(
+                        obj.type == pdfium_c.FPDF_PAGEOBJ_IMAGE
+                        or (
+                            obj.type == pdfium_c.FPDF_PAGEOBJ_TEXT
+                            and pdfium_c.FPDFTextObj_GetTextRenderMode(obj.raw)
+                            == 3
+                        )
+                        for obj in objects
+                    )
+                    and images[0].container is None
+                    and _clip(images[0].get_bounds(), page.get_cropbox())
+                    is not None
+                    and number not in self.non_image_content
+                    and number not in self.plan._reasons
+                    and not any(
+                        p.parent == self.plan.page_parts[number].id
+                        and p.occurrence == "annotation"
+                        for p in self.plan.inventory.placements
+                    )
+                )
                 for ordinal, (obj, (part, placement)) in enumerate(
                     zip(images, paints, strict=True), start=1
                 ):
@@ -667,11 +781,19 @@ class _Builder:
                         )
                         continue
                     self.plan.image_parts[number, ordinal] = part
+                    if image_only_page:
+                        self.plan.page_parts[number].layout.append(
+                            {
+                                "image_only_source_part": part.id,
+                                "image_only_placement": placement.id,
+                            }
+                        )
                     placement.layout.append(
                         {
                             "pdfium_bounds": list(obj.get_bounds()),
                             "pdfium_matrix": list(obj.get_matrix().get()),
                             "coordinate_frame": "parent",
+                            "source_role": "independent",
                         }
                     )
                     try:
@@ -695,6 +817,8 @@ class _Builder:
                     self.plan.image_representations[number, ordinal] = (
                         representation
                     )
+                    if placement.id not in representation.placement_ids:
+                        representation.placement_ids.append(placement.id)
                     if part.eligibility.state == "excluded" or self.excluded(
                         representation.byte_object.sha1
                     ):

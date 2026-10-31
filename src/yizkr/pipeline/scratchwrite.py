@@ -10,7 +10,7 @@ by one key (write_key): the identity map's hash; each document's SHA-1
 with the canonical content hash of its batch, whole, run stamps included,
 since the run item's label holds them, and what registration reads of it
 (its kind, its title, its file name, which its artifact's description
-gives, the record of its derived media and, for an excerpt, the PDFs
+gives, its current bound sources and placements and, for an excerpt, the PDFs
 and decks that place it); the never-ingest list's hash; the writer's version
 (WRITER_VERSION and its code/resource dependencies, code_digest); and the model
 manifest's hash. Never a QID, an mtime or a timestamp. A batch's run
@@ -60,9 +60,10 @@ document afresh.
 
 **register** registers each document whose batch the write will take,
 as `ingest run` registers a document at its write (the orchestrator's
-_step_register): its artifact item, a deck's slides and the images it
-embeds, and the images a PDF places, each by the SHA-1 of its bytes,
-with registration's flags raised as alerts of the write. Its record keeps
+_step_register): its artifact item, a deck's slides, and the image
+sources of a deck or a PDF that its container inventory binds, each by
+the SHA-1 of its bytes, with registration's flags raised as alerts of
+the write. Its record keeps
 the derived media registered for each container, by SHA-1 with their
 QIDs, for the write. A batch the
 writer would refuse whole is refused here first, before anything of its
@@ -389,17 +390,47 @@ def code_digest() -> str:
     return package_digest(PACKAGE)
 
 
-def _registration(doc: Any) -> dict[str, Any]:
+def _registration(doc: Any, projection: Any) -> dict[str, Any]:
     """What registration reads of a document besides its bytes' SHA-1."""
-    from yizkr.pipeline.presentation import DERIVED_MEDIA
-
     containers = getattr(doc, "containers", None)
     source = getattr(doc, "source", None)
+    context = None
+    if projection is not None:
+        inventory = projection.inventory
+        if inventory.source.sha1 != doc.sha1:
+            raise ValueError("container inventory belongs to another source")
+        parts = {part.id: part for part in inventory.parts}
+        context = {
+            "source": inventory.source.sha1,
+            "container": inventory.container,
+            "sources": {
+                sha1: {
+                    "parts": sorted(bound.part_ids),
+                    "requires_recorded_binding": sorted(
+                        part_id
+                        for part_id in bound.part_ids
+                        if parts[part_id].owner_binding.basis
+                        == "prepared-part"
+                    ),
+                    "names": sorted(bound.names),
+                    "placements": [
+                        placement.model_dump(mode="json")
+                        for placement in sorted(
+                            bound.placements, key=lambda item: item.id
+                        )
+                    ],
+                }
+                for sha1, bound in sorted(projection.sources.items())
+            },
+            "unresolved": sorted(
+                (item.part_id, item.reason) for item in projection.unresolved
+            ),
+        }
     return {
         "kind": doc.kind,
         "title": getattr(doc.state, "title", None),
         "name": source.name if source is not None else None,
-        "derived_media": _file_hash(doc.dir / DERIVED_MEDIA),
+        "container_sources": context,
         "containers": (
             sorted(container.sha1 for container in containers)
             if containers
@@ -409,7 +440,11 @@ def _registration(doc: Any) -> dict[str, Any]:
 
 
 def write_key(
-    identity: Any, documents: Sequence[Any], exclusions: Any = None
+    identity: Any,
+    documents: Sequence[Any],
+    exclusions: Any = None,
+    *,
+    container_sources: Callable[[Any], Any],
 ) -> str:
     """The write key (the module docstring)."""
     from yizkr.pipeline.rundir import exclusions_record
@@ -425,7 +460,7 @@ def write_key(
                     canonical_json(extracted.model_dump(mode="json"))
                 )
             ),
-            "registration": _registration(doc),
+            "registration": _registration(doc, container_sources(doc)),
         }
     record = exclusions_record(exclusions) if exclusions is not None else None
     return sha256_text(
@@ -673,6 +708,7 @@ def _key_of(context: Any) -> tuple[Any, str]:
         identity,
         context.documents,
         getattr(context.driver, "exclusions", None),
+        container_sources=context.driver._container_sources,
     )
     return identity, key
 

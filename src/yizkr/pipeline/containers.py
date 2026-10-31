@@ -6,7 +6,7 @@ take one path: a reader per format gives the container's pages in order
 (`ContainerPages`), each with the method that reads it, its text where
 the file holds it, the file the vision engine is to read where it does
 not, and the images placed on it that are read on their own; and the
-images themselves, each once by the SHA-1 of its bytes (`PlacedImage`).
+images themselves, each once by its canonical owner's SHA-1 (`PlacedImage`).
 The transcription (yizkr.pipeline.transcribe.PagedTranscriber) makes the
 container's own transcription from them, page by page behind its page
 markers, and reads each image by the vision engine on its own, as a
@@ -15,19 +15,19 @@ witness of its own: an excerpt (yizkr.pipeline.orchestrate.ExcerptRun).
 The readers:
 
 - a PDF's, `yizkr.pipeline.textlayer.read_pages`: a page from its text
-  layer where it has a usable one, by vision otherwise, and the images
-  placed within its text-layer pages;
+  layer where it has a usable one, by vision otherwise, and its
+  independently bound image sources on any page;
 - a deck's, `yizkr.pipeline.presentation.read_slides`: each slide's text
   and speaker notes from the PPTX XML (`SLIDE_XML`), with no model call,
-  and the images the slide embeds.
+  and its independently bound original image sources.
 
-**Which images are read on their own** is the same rule for both: an
-image under `MIN_IMAGE_SIDE` pixels on a side, or under
-`MIN_IMAGE_PIXELS` pixels in all, is decoration, and is not read; nor is
-one the never-ingest list names by its SHA-1. A deck's image is read in
-the form the deck holds it, so one in a format the vision engine does not
-read (`VISION_SUFFIXES`), or whose size its header does not give
-(`image_size`), is not read, and the reader notes it.
+Original embedded images are independent sources regardless of size, page
+coverage or placement. Repeated uses share a reading while retaining each
+native occurrence. Unplaced resources acquire no invented page marker.
+Readers honour exclusions and require a verified readable representation;
+unsupported formats or unavailable inputs remain explicit. A verified
+image-only PDF page needs no duplicate container reading, while its original
+image still has its own source identity and reading.
 """
 
 from __future__ import annotations
@@ -35,15 +35,20 @@ from __future__ import annotations
 import struct
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
+from yizkr.claims import SourceSupport
 from yizkr.pipeline.container_inventory import ContainerInventory
+
+if TYPE_CHECKING:
+    from yizkr.pipeline.container_sources import ContainerSources
 
 # how a deck's slide is read: from the slide's XML, with no model call
 SLIDE_XML = "slide-xml"
 
-# below either, an image is decoration and is not read
-MIN_IMAGE_SIDE = 24
-MIN_IMAGE_PIXELS = 10_000
+# A page whose sole original image is read as its own source, with no
+# separate container-authored text or second extraction of those claims.
+IMAGE_SOURCE = "image-source"
 
 # the image formats the vision engine reads, by file suffix
 VISION_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp"})
@@ -51,14 +56,19 @@ VISION_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp"})
 
 @dataclass
 class PlacedImage:
-    """An image placed within a page and read on its own: its bytes, kept
-    in a file named for their SHA-1, and each place it has, as (page, its
-    place among that page's images read on their own, from 1)."""
+    """A bound source's current reading input and native paint occurrences.
+
+    `sha1` names its canonical owner; `path` may contain a newly prepared
+    representation with different bytes. Each place is (page, its place
+    among that page's images read on their own, from 1), and support
+    retains the original source part and placement IDs.
+    """
 
     sha1: str
     suffix: str
     path: Path
     places: list[tuple[int, int]] = field(default_factory=list)
+    source_supports: list[SourceSupport] = field(default_factory=list)
 
     @property
     def pages(self) -> list[int]:
@@ -93,23 +103,17 @@ class ContainerPages:
     notes: list[str] = field(default_factory=list)
     inventory: ContainerInventory | None = None
     inventory_bytes: dict[str, bytes] = field(default_factory=dict)
+    sources: ContainerSources | None = None
 
     @property
     def by_own_text(self) -> bool:
         """Does any page read from the text the file holds: a PDF's text
-        layer, a deck's slide XML? A PDF none of whose pages does is read
-        whole by the vision engine."""
+        layer, a deck's slide XML? A PDF none of whose pages does, and
+        that reads no image on its own, is read whole by the vision
+        engine."""
         return any(
             page.method not in ("vision", "none") for page in self.pages
         )
-
-
-def is_decoration(width: int, height: int) -> bool:
-    """Is an image of this size too small to hold legible text
-    (MIN_IMAGE_SIDE, MIN_IMAGE_PIXELS)?"""
-    return min(width, height) < MIN_IMAGE_SIDE or (
-        width * height < MIN_IMAGE_PIXELS
-    )
 
 
 def image_size(data: bytes) -> tuple[int, int] | None:

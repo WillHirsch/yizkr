@@ -32,6 +32,8 @@ from tests.unit.test_pdf_pages import (
     LETTER_IMAGE,
     LETTER_SHA1,
     REFUSAL,
+    SHARED_LETTER_IMAGE,
+    SHARED_LETTER_SHA1,
     SOURCES,
     TRANSLATION,
     Raw,
@@ -45,6 +47,7 @@ from tests.unit.test_pdf_pages import (
     run,
     transcription_of,
 )
+from tests.unit.test_pptx_inventory import inherited_background_deck
 from tests.unit.test_presentation import (
     DECK_TIME,
     IMAGE_REL,
@@ -68,11 +71,8 @@ from yizkr.core.corpus import (
 )
 from yizkr.pipeline import presentation, report
 from yizkr.pipeline.containers import (
-    MIN_IMAGE_PIXELS,
-    MIN_IMAGE_SIDE,
     SLIDE_XML,
     image_size,
-    is_decoration,
 )
 from yizkr.pipeline.monitor import reason_label
 from yizkr.pipeline.orchestrate import (
@@ -87,9 +87,7 @@ from yizkr.pipeline.orchestrate import (
     EXCERPT as EXCERPT_KIND,
 )
 from yizkr.pipeline.presentation import (
-    UNREAD_IMAGE,
     derived_transcription,
-    read_derived_media,
     read_slides,
     slide_transcript,
     unpack_pptx,
@@ -99,6 +97,16 @@ from yizkr.pipeline.rundir import exclusions_record
 from yizkr.pipeline.scratch import EXIT_OK
 from yizkr.pipeline.textlayer import png
 from yizkr.pipeline.transcribe import Transcription
+
+
+def saved_sources(directory):
+    from yizkr.pipeline.container_inventory import read_inventory
+    from yizkr.pipeline.container_sources import project_sources
+
+    inventory = read_inventory(directory)
+    assert inventory is not None
+    return project_sources(inventory, directory)
+
 
 _P = "http://schemas.openxmlformats.org/presentationml/2006/main"
 _A = "http://schemas.openxmlformats.org/drawingml/2006/main"
@@ -142,11 +150,14 @@ def deck(
     media: dict[str, bytes],
     *,
     painted: dict[int, list[str]] | None = None,
+    backgrounds: dict[int, str] | None = None,
 ) -> Path:
     """A deck of `slides`, each (its paragraphs, the names of the media
     its relationships name, in that order, its speaker notes or ""), the
     media's bytes by name. A slide's XML refers to its pictures in the
-    order `painted` gives for it, else in its relationships' order."""
+    order `painted` gives for it, else in its relationships' order.
+    `backgrounds` names direct slide picture fills using those relationships.
+    """
 
     def put(archive, name, data):
         archive.writestr(zipfile.ZipInfo(name, date_time=DECK_TIME), data)
@@ -174,6 +185,15 @@ def deck(
         )
         for n, (paragraphs, names, notes) in enumerate(slides, start=1):
             rid = {name: f"rId{10 + i}" for i, name in enumerate(names)}
+            background = (
+                "<p:bg><p:bgPr><a:blipFill><a:blip "
+                f'r:embed="{rid[backgrounds[n]]}"/>'
+                '<a:srcRect l="1250" t="2500"/>'
+                "<a:stretch><a:fillRect/></a:stretch>"
+                "</a:blipFill></p:bgPr></p:bg>"
+                if backgrounds and n in backgrounds
+                else ""
+            )
             pictures = "".join(
                 f'<p:pic><p:blipFill><a:blip r:embed="{rid[name]}"/>'
                 "</p:blipFill></p:pic>"
@@ -188,7 +208,8 @@ def deck(
                 archive,
                 f"ppt/slides/slide{n}.xml",
                 f'<p:sld xmlns:p="{_P}" xmlns:a="{_A}" xmlns:r="{_R}">'
-                f"<p:cSld><p:spTree>{body}{pictures}</p:spTree></p:cSld>"
+                f"<p:cSld>{background}<p:spTree>{body}{pictures}</p:spTree>"
+                "</p:cSld>"
                 "</p:sld>",
             )
             links = [
@@ -214,21 +235,37 @@ def deck(
     return path
 
 
-def library_talk(path: Path, *, letter: bytes = LETTER_PNG) -> Path:
-    """The talk: a title slide with a rule, the letter's slide with the
-    letter's top on it, and a closing slide."""
+def library_talk(
+    path: Path,
+    *,
+    letter: bytes | None = LETTER_PNG,
+    letter_name: str = "image2.png",
+    include_rule: bool = False,
+) -> Path:
+    """The talk's title, letter and closing slides; optional original rule.
+
+    Most cases isolate the letter's reading. Tests of tiny original images
+    request the rule explicitly rather than assuming it is unreadable.
+    """
+    media = {letter_name: letter} if letter is not None else {}
+    if include_rule:
+        media["image1.png"] = RULE
     return deck(
         path,
         [
             (
                 (TITLE, "Nicholas Lobig, library talk, 2018"),
-                ["image1.png"],
+                ["image1.png"] if include_rule else [],
                 "",
             ),
-            (LETTER_SLIDE, ["image2.png"], "From the family album"),
+            (
+                LETTER_SLIDE,
+                [letter_name] if letter is not None else [],
+                "From the family album",
+            ),
             (("Stupfield", "Their son: Nicholas 1950"), [], ""),
         ],
-        {"image1.png": RULE, "image2.png": letter},
+        media,
     )
 
 
@@ -309,24 +346,299 @@ class TestImageSize:
         assert image_size(b"II*\x00 a tiff") is None
         assert image_size(b"") is None
 
+
+class TestDirectPictureBackgrounds:
+    @pytest.mark.parametrize("background", [False, True])
+    def test_the_picture_is_read_and_extracted_in_either_placement(
+        self, tmp_path, background
+    ):
+        corpus = tmp_path / "corpus"
+        corpus.mkdir()
+        deck(
+            corpus / "library-talk-2018.pptx",
+            [((CAPTION,), ["letter.png"], "")],
+            {"letter.png": LETTER_PNG},
+            painted={1: []} if background else None,
+            backgrounds={1: "letter.png"} if background else None,
+        )
+        reader = Reader({LETTER_SHA1: EXCERPT})
+        driver = run(tmp_path, corpus, reader)
+        container = document(driver, "library-talk-2018.pptx")
+        excerpt = excerpt_of(driver, LETTER_SHA1)
+        assert reader.read == [(f"{LETTER_SHA1}.png", LETTER_SHA1)]
+        sources = saved_sources(container.dir)
+        assert set(sources.sources) == {LETTER_SHA1}
+        (placement,) = sources.sources[LETTER_SHA1].placements
+        assert placement.occurrence == "paint"
+        assert placement.locator.position == 1
+        assert placement.locator.package_part == "ppt/slides/slide1.xml"
+        assert ("/p:bg[1]/" in placement.locator.path) is background
+        if background:
+            (layout,) = placement.layout
+            assert layout["element"] == "p:bg"
+            (fill,) = layout["transforms"]
+            assert fill["element"] == "a:blipFill"
+            assert {
+                child["element"]: child["attributes"]
+                for child in fill["children"]
+            }["a:srcRect"] == {"l": "1250", "t": "2500"}
+        batch = ClaimBatch.model_validate_json(excerpt.batch.read_text())
+        assert batch.claims
+        assert {claim.source.artifact.sha1 for claim in batch.claims} == {
+            LETTER_SHA1
+        }
+        assert all(
+            claim.source.support.placements[0].id == placement.id
+            for claim in batch.claims
+        )
+        again = run(tmp_path, corpus, RefusingReader({}))
+        assert excerpt_of(again, LETTER_SHA1).dir == excerpt.dir
+        retained = saved_sources(document(again, "library-talk-2018.pptx").dir)
+        assert (
+            retained.sources[LETTER_SHA1].owner
+            == sources.sources[LETTER_SHA1].owner
+        )
+
+    def test_background_and_shape_repeats_share_one_reading_and_excerpt(
+        self, tmp_path
+    ):
+        corpus = tmp_path / "corpus"
+        corpus.mkdir()
+        deck(
+            corpus / "library-talk-2018.pptx",
+            [((CAPTION,), ["letter.png"], "")] * 2,
+            {"letter.png": LETTER_PNG},
+            painted={1: [], 2: ["letter.png"]},
+            backgrounds={1: "letter.png", 2: "letter.png"},
+        )
+        reader = Reader({LETTER_SHA1: EXCERPT})
+        driver = run(tmp_path, corpus, reader)
+        container = document(driver, "library-talk-2018.pptx")
+        assert reader.read == [(f"{LETTER_SHA1}.png", LETTER_SHA1)]
+        assert set(driver._excerpts) == {LETTER_SHA1}
+        sources = saved_sources(container.dir)
+        assert set(sources.sources) == {LETTER_SHA1}
+        placed = sources.sources[LETTER_SHA1].placements
+        assert [p.locator.position for p in placed] == [1, 2, 2]
+        assert all(p.occurrence == "paint" for p in placed)
+        assert len({p.id for p in placed}) == 3
+        assert sum("/p:bg[1]/" in p.locator.path for p in placed) == 2
+
+    @pytest.mark.parametrize("reason", ["sha1", "name"])
+    def test_backgrounds_obey_common_exclusion_rules(self, tmp_path, reason):
+        corpus = tmp_path / "corpus"
+        corpus.mkdir()
+        deck(
+            corpus / "library-talk-2018.pptx",
+            [((CAPTION,), ["letter.png"], "")],
+            {"letter.png": LETTER_PNG},
+            painted={1: []},
+            backgrounds={1: "letter.png"},
+        )
+        exclusions = ExclusionList.parse(
+            LETTER_SHA1 if reason == "sha1" else "letter.png"
+        )
+        reader = Reader({})
+        driver = run(tmp_path, corpus, reader, exclusions=exclusions)
+        container = document(driver, "library-talk-2018.pptx")
+        assert reader.read == []
+        assert driver._excerpts == {}
+        sources = saved_sources(container.dir)
+        assert sources.sources == {}
+        assert sources.inventory.placements[0].occurrence == "paint"
+
+    @pytest.mark.parametrize("background", [False, True])
+    def test_a_tiny_original_image_is_read_even_when_its_reading_is_empty(
+        self, tmp_path, background
+    ):
+        corpus = tmp_path / "corpus"
+        corpus.mkdir()
+        deck(
+            corpus / "library-talk-2018.pptx",
+            [((CAPTION,), ["rule.png"], "")],
+            {"rule.png": RULE},
+            painted={1: []} if background else None,
+            backgrounds={1: "rule.png"} if background else None,
+        )
+        digest = sha1(RULE)
+        reader = Reader({digest: ""})
+        driver = run(tmp_path, corpus, reader)
+        container = document(driver, "library-talk-2018.pptx")
+        assert reader.read == [(f"{digest}.png", digest)]
+        sources = saved_sources(container.dir)
+        assert set(sources.sources) == {digest}
+        (part,) = [
+            p for p in sources.inventory.parts if p.kind == "embedded_resource"
+        ]
+        assert part.source_role == "independent"
+        assert part.reading.state == "read" and part.reading.empty is True
+        assert len(sources.sources[digest].placements) == 1
+
+
+class TestInheritedPictureBackgrounds:
+    def test_a_legacy_reading_cannot_bypass_unresolved_background_inheritance(
+        self, tmp_path, monkeypatch
+    ):
+        from yizkr.pipeline.pptx_inventory import PptxPackage
+
+        corpus = tmp_path / "corpus"
+        corpus.mkdir()
+        inherited_background_deck(
+            corpus / "library-talk-2018.pptx",
+            LETTER_PNG,
+            origin="theme",
+            change=lambda members: members.pop("ppt/theme/theme1.xml"),
+        )
+        with monkeypatch.context() as before_inheritance:
+            before_inheritance.setattr(
+                PptxPackage, "_background", lambda self, parent: None
+            )
+            first = run(tmp_path, corpus, Reader({LETTER_SHA1: EXCERPT}))
+        original = document(first, "library-talk-2018.pptx")
+        assert original.state.status == AWAITING_CLAIMS, original.state.error
+        assert original.transcription.exists()
+        again = run(tmp_path, corpus, RefusingReader({}))
+        current = document(again, "library-talk-2018.pptx")
+        assert current.state.status == "failed"
+        assert "effective slide background unavailable" in current.state.error
+
     @pytest.mark.parametrize(
-        ("size", "decoration"),
-        [
-            ((MIN_IMAGE_SIDE, 500), False),
-            ((MIN_IMAGE_SIDE - 1, 500), True),
-            ((100, MIN_IMAGE_PIXELS // 100), False),
-            ((100, MIN_IMAGE_PIXELS // 100 - 1), True),
-        ],
+        "origin", ["layout", "master", "theme", "theme-override"]
     )
-    def test_decoration_is_the_pdf_s_rule(self, size, decoration):
-        assert is_decoration(*size) is decoration
+    def test_repeated_original_background_is_read_once_with_each_slide_support(
+        self, tmp_path, origin
+    ):
+        corpus = tmp_path / "corpus"
+        corpus.mkdir()
+        inherited_background_deck(
+            corpus / "library-talk-2018.pptx", LETTER_PNG, origin=origin
+        )
+        reader = Reader({LETTER_SHA1: EXCERPT})
+        driver = run(tmp_path, corpus, reader)
+        container = document(driver, "library-talk-2018.pptx")
+        excerpt = excerpt_of(driver, LETTER_SHA1)
+        assert reader.read == [(f"{LETTER_SHA1}.png", LETTER_SHA1)]
+        assert set(driver._excerpts) == {LETTER_SHA1}
+        (source,) = saved_sources(container.dir).sources.values()
+        assert [p.locator.position for p in source.placements] == [1, 2]
+        assert len({p.id for p in source.placements}) == 2
+        batch = ClaimBatch.model_validate_json(excerpt.batch.read_text())
+        assert batch.claims
+        assert {claim.source.artifact.sha1 for claim in batch.claims} == {
+            LETTER_SHA1
+        }
+        for claim in batch.claims:
+            assert {p.id for p in claim.source.support.placements} == {
+                p.id for p in source.placements
+            }
+        again = run(tmp_path, corpus, RefusingReader({}))
+        assert excerpt_of(again, LETTER_SHA1).dir == excerpt.dir
+        assert (
+            saved_sources(document(again, "library-talk-2018.pptx").dir)
+            .sources[LETTER_SHA1]
+            .owner
+            == source.owner
+        )
+
+    @pytest.mark.parametrize("exclusion", [LETTER_SHA1, "letter.png"])
+    def test_inherited_original_obeys_digest_and_name_exclusions(
+        self, tmp_path, exclusion
+    ):
+        corpus = tmp_path / "corpus"
+        corpus.mkdir()
+        inherited_background_deck(
+            corpus / "library-talk-2018.pptx", LETTER_PNG, origin="theme"
+        )
+        reader = RefusingReader({})
+        driver = run(
+            tmp_path, corpus, reader, exclusions=ExclusionList.parse(exclusion)
+        )
+        assert reader.read == []
+        assert driver._excerpts == {}
+        sources = saved_sources(document(driver, "library-talk-2018.pptx").dir)
+        assert sources.sources == {}
+        assert [p.locator.position for p in sources.inventory.placements] == [
+            1,
+            2,
+        ]
+
+    @pytest.mark.parametrize("override_all", [False, True])
+    def test_overridden_original_is_still_read_without_an_invented_placement(
+        self, tmp_path, override_all
+    ):
+        corpus = tmp_path / "corpus"
+        corpus.mkdir()
+
+        def layout_override(members):
+            key = "ppt/slideLayouts/slideLayout1.xml"
+            members[key] = members[key].replace(
+                "<p:cSld>",
+                "<p:cSld><p:bg><p:bgPr><a:noFill/></p:bgPr></p:bg>",
+            )
+
+        inherited_background_deck(
+            corpus / "library-talk-2018.pptx",
+            LETTER_PNG,
+            origin="master",
+            override="solidFill",
+            change=layout_override if override_all else None,
+        )
+        reader = Reader({LETTER_SHA1: EXCERPT})
+        driver = run(tmp_path, corpus, reader)
+        assert reader.read == [(f"{LETTER_SHA1}.png", LETTER_SHA1)]
+        source = saved_sources(
+            document(driver, "library-talk-2018.pptx").dir
+        ).sources[LETTER_SHA1]
+        assert [p.locator.position for p in source.placements] == (
+            [] if override_all else [1]
+        )
+        assert set(driver._excerpts) == {LETTER_SHA1}
 
 
 class TestReadSlides:
+    @pytest.mark.parametrize("width,height", [(1, 1), (0, 1), (1, 0)])
+    def test_original_image_needs_positive_dimensions_not_a_minimum_size(
+        self, tmp_path, width, height
+    ):
+        from yizkr.pipeline.transcribe import DeckTranscriber
+
+        image = png_of(width, height)
+        digest = sha1(image)
+        source = deck(
+            tmp_path / "library-talk-2018.pptx",
+            [((CAPTION,), ["image.png"], "")],
+            {"image.png": image},
+        )
+        reader = Reader({digest: ""})
+        content = unpack_pptx(source)
+        reading = DeckTranscriber(lambda: reader, content=content).transcribe(
+            source
+        )
+        try:
+            (part,) = [
+                p
+                for p in content.inventory.parts
+                if p.kind == "embedded_resource"
+            ]
+            assert part.source_role == "independent"
+            assert part.owner_binding.artifact.sha1 == digest
+            if width > 0 and height > 0:
+                assert reader.read == [(f"{digest}.png", digest)]
+                assert reading.pages[0].images == [digest]
+            else:
+                assert reader.read == []
+                assert reading.pages[0].images == []
+                assert any(
+                    "nonpositive dimensions" in note
+                    for note in reading._reading.notes
+                )
+        finally:
+            reading._reading.close()
+
     def test_each_slide_is_a_page_read_from_its_xml(self, tmp_path):
         """Each slide is a page read from its XML, its text the slide's
         text and notes; the letter's top is read on its own, written once
-        into the folder; the rule is decoration, and read by none."""
+        into the folder."""
         path = library_talk(tmp_path / "talk.pptx")
         read = read_slides(path, tmp_path)
         assert [(p.number, p.method) for p in read.pages] == [
@@ -353,8 +665,8 @@ class TestReadSlides:
     def test_images_take_the_order_the_slide_paints_them_in(self, tmp_path):
         """A slide's images are placed in the order its XML refers to
         them, whatever order its relationships list them in; the same
-        image twice on a slide, painted twice or held under two names, is
-        one place, and on two slides one image with a place on each."""
+        image twice on a slide retains both structural occurrences while
+        its identical original media bytes are read once."""
         first, second = png_of(120, 120, "first"), png_of(120, 120, "second")
         path = deck(
             tmp_path / "talk.pptx",
@@ -367,9 +679,14 @@ class TestReadSlides:
         )
         (tmp_path / "out").mkdir()
         read = read_slides(path, tmp_path / "out")
-        assert read.pages[0].images == [(1, sha1(second)), (2, sha1(first))]
+        assert read.pages[0].images == [
+            (1, sha1(second)),
+            (2, sha1(first)),
+            (3, sha1(second)),
+            (4, sha1(first)),
+        ]
         assert read.pages[1].images == [(1, sha1(first))]
-        assert read.images[sha1(first)].places == [(1, 2), (2, 1)]
+        assert read.images[sha1(first)].places == [(1, 2), (1, 4), (2, 1)]
 
     def test_an_image_the_engine_cannot_read_is_noted(self, tmp_path):
         """A TIFF, or an image whose header gives no size, is not read on
@@ -392,19 +709,46 @@ class TestReadSlides:
             excluded=lambda s, names=(): s == LETTER_SHA1,
         )
         assert read.images == {}
-        assert read.notes == [
-            f"{UNREAD_IMAGE}: slide 1, scan.tif (sha1 {sha1(tiff)[:12]}): a "
-            ".tif image, a format the vision engine does not read, so it is "
-            "not read",
-            f"{UNREAD_IMAGE}: slide 1, odd.png (sha1 {sha1(unsized)[:12]}): "
-            "an image whose size its header does not give, so it is not read",
-        ]
+        assert any(".tif" in reason for reason in read.notes)
+        assert any(
+            "size its header does not give" in reason for reason in read.notes
+        )
+        assert not any(LETTER_SHA1[:12] in reason for reason in read.notes)
         # the monitor shows a fixed phrase, never what the archive calls
         # the image
         assert {reason_label(note) for note in read.notes} == {
             "image not read on its own"
         }
         assert list((tmp_path / "out").iterdir()) == []
+
+    def test_an_unpainted_image_is_noted_but_a_film_is_not(self, tmp_path):
+        """A TIFF the slide only relates to is noted once as an image not
+        read on its own; a film beside it keeps its unsupported outcome in
+        the inventory, unnoted, so it asks no attention."""
+        film = b"\x00\x00\x00\x18ftypmp42 synthetic film"
+        path = deck(
+            tmp_path / "talk.pptx",
+            [(("Wastl and Hilde",), ["scan.tif", "clip1.mp4"], "")],
+            {
+                "scan.tif": b"II*\x00 the album page as a tiff",
+                "clip1.mp4": film,
+            },
+            painted={1: []},
+        )
+        (tmp_path / "out").mkdir()
+        read = read_slides(path, tmp_path / "out")
+        assert read.images == {}
+        (note,) = read.notes
+        assert ".tif image, a format the vision engine does not read" in note
+        assert reason_label(note) == "image not read on its own"
+        (unread,) = [
+            part
+            for part in read.inventory.parts
+            if part.kind == "embedded_resource"
+            and part.byte_object is not None
+            and part.byte_object.sha1 == sha1(film)
+        ]
+        assert unread.reading.state == "unsupported"
 
     def test_a_folder_of_the_archive_tells_two_images_apart(self, tmp_path):
         """Two images of one basename in two folders of the archive are two
@@ -425,9 +769,10 @@ class TestReadSlides:
             [(1, sha1(second))],
         ]
 
-    def test_an_image_its_xml_does_not_paint_is_read(self, tmp_path):
-        """An image only the slide's relationships name is still the
-        slide's, and read."""
+    def test_relationship_only_image_is_read_without_inventing_a_placement(
+        self, tmp_path
+    ):
+        """A package relationship does not establish a visible occurrence."""
         path = deck(
             tmp_path / "talk.pptx",
             [(("Wastl and Hilde",), [], ""), (LETTER_SLIDE, ["l.png"], "")],
@@ -436,7 +781,15 @@ class TestReadSlides:
         )
         (tmp_path / "out").mkdir()
         read = read_slides(path, tmp_path / "out")
-        assert read.pages[1].images == [(1, LETTER_SHA1)]
+        assert read.pages[1].images == []
+        assert set(read.images) == {LETTER_SHA1}
+        assert read.images[LETTER_SHA1].places == []
+        assert read.images[LETTER_SHA1].source_supports[0].placements == []
+        assert any(
+            part.byte_object.sha1 == LETTER_SHA1
+            for part in read.inventory.parts
+            if part.byte_object is not None
+        )
 
     def test_every_vision_format_is_read(self, tmp_path):
         """A JPEG, a GIF and a WebP of a readable size are each read, with
@@ -546,14 +899,13 @@ class TestADeckSImages:
     def test_every_image_marker_names_an_image_of_the_record(self, tmp_path):
         """Each `[Slide N, image k: sha1:…]` marker of the deck's
         transcription names an image the record of its derived media
-        names, on that slide, and the record still names the rule, which
-        the write registers though nothing reads it."""
+        names, on that slide."""
         reader = Reader({LETTER_SHA1: EXCERPT})
         doc = document(
             run(tmp_path, talk_folder(tmp_path), reader),
             "library-talk-2018.pptx",
         )
-        record = read_derived_media(doc.dir)
+        record = saved_sources(doc.dir)
         markers = re.findall(
             r"^\[Slide (\d+), image (\d+): sha1:([0-9a-f]{40})\]$",
             transcription_of(doc).text,
@@ -561,17 +913,15 @@ class TestADeckSImages:
         )
         assert markers == [("2", "1", LETTER_SHA1)]
         for slide, _place, marked in markers:
-            assert int(slide) in record.media[marked].slides
-        assert set(record.media) == {LETTER_SHA1, sha1(RULE)}
-        assert record.container == "presentation"
+            assert int(slide) in record.sources[marked].slides
+        assert set(record.sources) == {LETTER_SHA1}
+        assert record.inventory.container == "presentation"
 
     def test_a_deck_with_no_image_to_read_starts_no_engine(self, tmp_path):
-        """A deck whose images are all decoration reads none: its text is
-        its slides', as slide_transcript gives it, and it has no
-        excerpt."""
+        """A deck with no original images reads only its native text."""
         corpus = tmp_path / "corpus"
         corpus.mkdir()
-        path = library_talk(corpus / "talk.pptx", letter=png_of(10, 400))
+        path = library_talk(corpus / "talk.pptx", letter=None)
         orchestrator = run(tmp_path, corpus, RefusingReader({}))
         doc = document(orchestrator, "talk.pptx")
         assert transcription_of(doc).text == slide_transcript(
@@ -616,9 +966,18 @@ class TestADeckSImages:
     def test_one_image_in_a_pdf_and_a_deck_is_one_excerpt(self, tmp_path):
         """The booklet places the letter's top and the deck embeds the
         same bytes: one excerpt, placed by both."""
-        corpus = talk_folder(tmp_path, **{"booklet.pdf": booklet()})
-        orchestrator = run(tmp_path, corpus, Reader({LETTER_SHA1: EXCERPT}))
-        excerpt = excerpt_of(orchestrator, LETTER_SHA1)
+        corpus = talk_folder(
+            tmp_path, **{"booklet.pdf": booklet(SHARED_LETTER_IMAGE)}
+        )
+        library_talk(
+            corpus / "library-talk-2018.pptx",
+            letter=SHARED_LETTER_IMAGE.data,
+            letter_name="image2.jpg",
+        )
+        orchestrator = run(
+            tmp_path, corpus, Reader({SHARED_LETTER_SHA1: EXCERPT})
+        )
+        excerpt = excerpt_of(orchestrator, SHARED_LETTER_SHA1)
         assert sorted(c.source.name for c in excerpt.containers) == [
             "booklet.pdf",
             "library-talk-2018.pptx",
@@ -646,7 +1005,7 @@ class TestADeckSImages:
         assert orchestrator._excerpts == {}
         assert reader.read == []
         assert transcription_of(doc).pages[1].images == []
-        assert LETTER_SHA1 in read_derived_media(doc.dir).media
+        assert LETTER_SHA1 not in saved_sources(doc.dir).sources
         second = run(
             tmp_path, corpus, RefusingReader({}), exclusions=exclusions
         )
@@ -679,8 +1038,8 @@ class TestADeckSImages:
         assert doc.state.status == AWAITING_CLAIMS, doc.state.error
         (aside,) = this_run(second, "set-aside")
         assert aside["reason"] == (
-            f"the never-ingest list names image {LETTER_SHA1[:12]}, which "
-            "it marks"
+            f"image {LETTER_SHA1[:12]} has no eligible, unambiguous "
+            "reading input"
         )
         assert transcription_of(doc).pages[1].images == []
         assert derived_transcription(doc.dir, LETTER_SHA1).exists()
@@ -718,7 +1077,7 @@ class TestADeckSImages:
         the deck reads no image and no engine is asked."""
         corpus = tmp_path / "corpus"
         corpus.mkdir()
-        path = library_talk(corpus / "talk.pptx", letter=png_of(10, 400))
+        path = library_talk(corpus / "talk.pptx", letter=None)
         doc = document(run(tmp_path, corpus, RefusingReader({})), "talk.pptx")
         old = Transcription(
             artifact=transcription_of(doc).artifact,
@@ -771,7 +1130,7 @@ class TestAGlobFollowsTheBytes:
     def test_the_gathered_sha1s_are_the_named_images(self, tmp_path):
         """Only the members a glob names, by their names in the archive,
         and none for a list with no glob."""
-        talk = library_talk(tmp_path / "talk.pptx")
+        talk = library_talk(tmp_path / "talk.pptx", include_rule=True)
         assert gather_embedded(self.LISTED, [talk]) == {LETTER_SHA1}
         assert gather_embedded(
             ExclusionList.parse("IMAGE1.PNG\n"), [talk]
@@ -816,7 +1175,7 @@ class TestAGlobFollowsTheBytes:
         later = document(orchestrator, "library-talk-2019.pptx")
         assert later.state.status == AWAITING_CLAIMS, later.state.error
         assert transcription_of(later).pages[0].images == []
-        assert LETTER_SHA1 in read_derived_media(later.dir).media
+        assert LETTER_SHA1 not in saved_sources(later.dir).sources
         wiki = FakeWiki()
         orchestrator._client = wiki
         for name in ("library-talk-2018.pptx", "library-talk-2019.pptx"):
@@ -940,45 +1299,59 @@ class TestAGlobFollowsTheBytes:
         self, tmp_path
     ):
         """A first run with no glob reads the letter's top from the booklet
-        and both decks and keeps its reading; a second lists `image2.png`.
+        and both decks and keeps its reading; a second lists `image2.jpg`.
         The views that mark it are set aside and made again without it,
         nothing is read, and the reading still on disk makes no excerpt:
-        the second deck's record names the image by `image7.png`, so only
+        the second deck's record names the image by `image7.jpg`, so only
         the gathered SHA-1 keeps it out. Nothing of it is registered or
         uploaded."""
-        corpus = talk_folder(tmp_path, **{"booklet.pdf": booklet()})
+        corpus = talk_folder(
+            tmp_path, **{"booklet.pdf": booklet(SHARED_LETTER_IMAGE)}
+        )
+        library_talk(
+            corpus / "library-talk-2018.pptx",
+            letter=SHARED_LETTER_IMAGE.data,
+            letter_name="image2.jpg",
+        )
         deck(
             corpus / "library-talk-2019.pptx",
-            [(LETTER_SLIDE, ["image7.png"], "")],
-            {"image7.png": LETTER_PNG},
+            [(LETTER_SLIDE, ["image7.jpg"], "")],
+            {"image7.jpg": SHARED_LETTER_IMAGE.data},
         )
         first = run(
             tmp_path,
             corpus,
-            Reader({LETTER_SHA1: EXCERPT}),
+            Reader({SHARED_LETTER_SHA1: EXCERPT}),
             exclusions=ExclusionList(),
         )
-        assert LETTER_SHA1 in first._excerpts
+        assert SHARED_LETTER_SHA1 in first._excerpts
         again = run(
-            tmp_path, corpus, reader := Reader({}), exclusions=self.LISTED
+            tmp_path,
+            corpus,
+            reader := Reader({}),
+            exclusions=ExclusionList.parse("image2.jpg"),
         )
         assert reader.read == []
         assert again._excerpts == {}
         reasons = {event["reason"] for event in this_run(again, "set-aside")}
         assert reasons == {
-            f"the never-ingest list names image {LETTER_SHA1[:12]}, which "
-            "it marks"
+            f"image {SHARED_LETTER_SHA1[:12]} has no eligible, unambiguous "
+            "reading input",
+            f"the never-ingest list names image {SHARED_LETTER_SHA1[:12]}, "
+            "which it marks",
         }
         later = document(again, "library-talk-2019.pptx")
-        assert derived_transcription(later.dir, LETTER_SHA1).exists()
+        assert derived_transcription(later.dir, SHARED_LETTER_SHA1).exists()
         wiki = FakeWiki()
         again._client = wiki
         for doc in again.documents():
             assert doc.state.status == AWAITING_CLAIMS, doc.state.error
             Orchestrator._step_register(again, doc)
         registered = again.registered_media()
-        assert not any(LETTER_SHA1 in media for media in registered.values())
-        assert LETTER_SHA1 not in wiki.files.values()
+        assert not any(
+            SHARED_LETTER_SHA1 in media for media in registered.values()
+        )
+        assert SHARED_LETTER_SHA1 not in wiki.files.values()
 
     def test_a_deck_this_user_cannot_read_refuses_the_run(self, tmp_path):
         """A deck whose file cannot be opened refuses the run, under a
@@ -1061,12 +1434,18 @@ class TestTheRunReport:
         page alone: never a deck's slides, a PDF read whole, a
         photograph's page or an excerpt's."""
         corpus = Corpus(tmp_path / "corpus")
-        path = library_talk(corpus.folder / "library-talk-2018.pptx")
+        path = library_talk(
+            corpus.folder / "library-talk-2018.pptx",
+            letter=SHARED_LETTER_IMAGE.data,
+            letter_name="image2.jpg",
+        )
         corpus.texts["library-talk-2018.pptx"] = slide_transcript(
             unpack_pptx(path)
         )
-        corpus.texts[f"{LETTER_SHA1}.png"] = EXCERPT
-        (corpus.folder / "booklet.pdf").write_bytes(booklet())
+        corpus.texts[f"{SHARED_LETTER_SHA1}.jpg"] = EXCERPT
+        (corpus.folder / "booklet.pdf").write_bytes(
+            booklet(SHARED_LETTER_IMAGE)
+        )
         corpus.texts["booklet.pdf"] = "\n".join(
             pdfs.lines(CAPTION, TRANSLATION, COMMENT)
         )

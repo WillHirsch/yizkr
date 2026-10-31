@@ -7,11 +7,12 @@ Engines implement `Transcriber`. Provided:
 * `PagedTranscriber` — a paged container read page by page by its
   format's reader (yizkr.pipeline.containers): each page from the text
   the file holds where it holds a usable one, deterministically and
-  without a model call, and by the vision engine otherwise; and each image
-  placed on such a page read by the vision engine on its own, as a witness
-  of its own (ADR-0008). `PdfPageTranscriber` reads a PDF so
-  (yizkr.pipeline.textlayer), only one with at least one text-layer page,
-  and leaves any other PDF to be read whole by `LlmVisionTranscriber`;
+  without a model call, and by the vision engine otherwise; and each
+  independent image source it places, on any page, read by the vision
+  engine on its own, as a witness of its own (ADR-0008).
+  `PdfPageTranscriber` reads a PDF so (yizkr.pipeline.textlayer), when
+  it has native text or independently readable image sources, and
+  otherwise leaves it to be read whole by `LlmVisionTranscriber`;
   `DeckTranscriber` reads a deck so, each slide from its XML
   (yizkr.pipeline.presentation.read_slides).
 * `TextFileTranscriber` — reads an existing transcription from a text
@@ -109,6 +110,7 @@ fast with the install command (`require_pdf_renderer`).
 
 from __future__ import annotations
 
+import hashlib
 import shutil
 import tempfile
 from collections.abc import Callable, Iterable, Sequence
@@ -126,7 +128,7 @@ from pydantic import (
     model_validator,
 )
 
-from yizkr.claims import ArtifactRef
+from yizkr.claims import ArtifactRef, SourceSupport
 from yizkr.core.corpus import DECK_SUFFIXES
 from yizkr.pipeline.language import (
     LanguageResolution,
@@ -141,6 +143,8 @@ from yizkr.pipeline.llm import (
     reject_response,
 )
 from yizkr.pipeline.prompts import load_prompt
+from yizkr.pipeline.source_context import SourceContext
+from yizkr.pipeline.stages import canonical_json
 from yizkr.pipeline.transcription_check import (
     TranscriptionCheck,
     TranscriptionCheckFailed,
@@ -166,6 +170,7 @@ from yizkr.pipeline.transcription_record import (
 
 if TYPE_CHECKING:
     from yizkr.pipeline.pdf_inventory import PdfInventory
+    from yizkr.pipeline.presentation import PresentationContent
 
 
 def _transcription_prompt(classes: Sequence[str]) -> str:
@@ -256,7 +261,9 @@ Sha1 = Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")]
 # (yizkr.pipeline.containers): a PDF's page from its text layer, a deck's
 # slide from its XML, or by vision; "none" reads a page with nothing to
 # read
-PageMethod = Literal["text-layer", "slide-xml", "vision", "none"]
+PageMethod = Literal[
+    "text-layer", "slide-xml", "vision", "none", "image-source"
+]
 
 
 class PageProvenance(BaseModel):
@@ -322,6 +329,8 @@ class Transcription(BaseModel):
     pages: list[TranscribedPage] | None = None
     flag: str | None = None
     input_representation: Literal["rendered-pdf-v1"] | None = None
+    source_context: SourceContext | None = None
+    reading_input: ArtifactRef | None = None
     # what a page-by-page reading made beside the transcription, for its
     # caller to keep (PagedReading); never part of the view
     _reading: Any = PrivateAttr(default=None)
@@ -352,6 +361,8 @@ class Transcription(BaseModel):
             "document_class",
             "flag",
             "input_representation",
+            "source_context",
+            "reading_input",
         ):
             if getattr(self, name) is None:
                 data.pop(name, None)
@@ -493,6 +504,23 @@ def check_vision_page(
     )
 
 
+def reading_digest(transcription: Transcription) -> str:
+    """Semantic reading identity, excluding context and process provenance."""
+    value = transcription.model_dump(
+        mode="json",
+        exclude={
+            "source_context",
+            "engine",
+            "flag",
+            "input_representation",
+            "reading_input",
+        },
+    )
+    for page in value.get("pages", []):
+        page.pop("provenance", None)
+    return hashlib.sha256(canonical_json(value).encode()).hexdigest()
+
+
 class Transcriber(Protocol):
     def transcribe(self, media_path: Path) -> Transcription: ...
 
@@ -609,13 +637,37 @@ class LlmVisionTranscriber(_CheckedTranscriber):
         from yizkr.pipeline.textlayer import is_pdf_input, prepare_pdf_vision
 
         prepared = self.excluded is not None and is_pdf_input(media_path)
+        sources = None
         if prepared:
+            from yizkr.pipeline.container_sources import (
+                prepare_sources,
+                project_sources,
+            )
+            from yizkr.pipeline.pdf_inventory import inventory_pdf
+
             with tempfile.TemporaryDirectory(prefix="yizkr-pdf-vision-") as d:
+                plan = self.pdf_inventory or inventory_pdf(
+                    media_path.read_bytes(), self.excluded
+                )
+                plan.replace_inventory(
+                    prepare_sources(
+                        plan.inventory,
+                        plan.data,
+                        Path(d),
+                        excluded=lambda sha1, _names: self.excluded(sha1),
+                    )
+                )
                 outbound = prepare_pdf_vision(
                     media_path,
                     Path(d),
                     self.excluded,
-                    inventory=self.pdf_inventory,
+                    inventory=plan,
+                )
+                sources = project_sources(
+                    plan.inventory,
+                    Path(d),
+                    data=plan.data,
+                    excluded=lambda sha1, _names: self.excluded(sha1),
                 )
                 text = self.client.complete(TRANSCRIPTION_PROMPT, [outbound])
         else:
@@ -638,6 +690,9 @@ class LlmVisionTranscriber(_CheckedTranscriber):
         )
         if prepared:
             result.input_representation = "rendered-pdf-v1"
+            from yizkr.pipeline.container_sources import source_context
+
+            result.source_context = source_context(result, sources)
         return result
 
     def transcribe(self, media_path: Path) -> Transcription:
@@ -728,7 +783,11 @@ def pdf_reading_failure(
     pages = transcription.pages or ()
     paged = transcription.engine.startswith(f"{PDF_PAGES}:")
     selected = (
-        {page.page for page in pages if page.provenance.method == "vision"}
+        {
+            page.page
+            for page in pages
+            if page.provenance.method in {"vision", "image-source"}
+        }
         if paged and pages
         else None
     )
@@ -738,7 +797,8 @@ def pdf_reading_failure(
     if paged and (
         [page.page for page in pages] != list(range(1, count + 1))
         or any(
-            page.provenance.method not in {"vision", "text-layer", "none"}
+            page.provenance.method
+            not in {"vision", "text-layer", "none", "image-source"}
             for page in pages
         )
     ):
@@ -777,6 +837,7 @@ class ImageReading:
     transcription: Transcription | None = None
     failure: str | None = None
     unit: str = "page"
+    source_supports: list[SourceSupport] = field(default_factory=list)
 
     @property
     def names(self) -> list[str]:
@@ -784,7 +845,7 @@ class ImageReading:
         order the container places it: "page 6, image 1" (ADR-0008)."""
         return [
             f"{self.unit} {page}, image {place}" for page, place in self.places
-        ]
+        ] or [f"image source {self.sha1[:12]}"]
 
     @property
     def pages(self) -> list[int]:
@@ -825,21 +886,22 @@ class PagedTranscriber:
     """A paged container (yizkr.pipeline.containers) read page by page by
     its format's reader (`_read`): each page from the text the file holds
     where it holds a usable one, by the vision engine where it does not,
-    and not at all where it holds nothing to read; and each image placed
-    within a page whose own text is read, read by the vision engine on its
-    own, as a witness of its own (ADR-0008).
+    and not at all where it holds nothing to read; and each independent
+    image source placed within any of its pages, read by the vision engine
+    on its own, as a witness of its own (ADR-0008).
 
     `transcribe` gives the container's transcription, with the page
     markers and the provenance the module docstring describes, and the
     images' readings as its `reading`, for the caller to keep and then
     close. It gives None when the reader gives nothing to read page by
-    page (a PDF none of whose pages reads from its text layer). `client`
-    gives the vision engine's client, and is called only once a page or
-    an image is to be read by vision, so a container read wholly from its
-    own text, with no image read on its own, starts no engine. `excluded`
-    says whether the never-ingest list names an image by the SHA-1 of its
-    bytes, or, for a deck's, by any of its names in the archive (given as
-    a second argument): such an image is never read, kept or marked.
+    page (a PDF none of whose pages reads from its text layer and that
+    reads no image on its own). `client` gives the vision engine's
+    client, and is called only once a page or an image is to be read by
+    vision, so a container read wholly from its own text, with no image
+    read on its own, starts no engine. `excluded` says whether the
+    never-ingest list names an image by the SHA-1 of its bytes, or, for a
+    deck's, by any of its names in the archive (given as a second
+    argument): such an image is never read, kept or marked.
 
     The reading of each vision page is checked, as any vision
     transcription is, and one that fails raises: the container's
@@ -913,6 +975,7 @@ class PagedTranscriber:
                         image.path,
                         image.places,
                         unit=self.unit.lower(),
+                        source_supports=image.source_supports,
                     )
                     for image in read.images.values()
                 ],
@@ -922,6 +985,22 @@ class PagedTranscriber:
             for image in reading.images:
                 try:
                     image.transcription = self._read_by_vision(image.path)
+                    if image.source_supports:
+                        from yizkr.pipeline.container_sources import (
+                            image_source_context,
+                        )
+
+                        image.transcription.reading_input = (
+                            image.transcription.artifact
+                        )
+                        image.transcription.artifact = ArtifactRef(
+                            sha1=image.sha1
+                        )
+                        image.transcription.source_context = (
+                            image_source_context(
+                                image.transcription, image.source_supports
+                            )
+                        )
                 except TranscriptionCheckFailed as failed:
                     image.failure = failed.check.failure
         except BaseException:
@@ -990,7 +1069,7 @@ class PagedTranscriber:
             self.language,
             fallback=self.fallback_language,
         )
-        return Transcription(
+        result = Transcription(
             artifact=artifact,
             text=text,
             language=self.last_resolution.code,
@@ -998,14 +1077,20 @@ class PagedTranscriber:
             pages=pages,
             flag=flag,
         )
+        if read.sources is not None:
+            from yizkr.pipeline.container_sources import source_context
+
+            result.source_context = source_context(result, read.sources)
+        return result
 
 
 class PdfPageTranscriber(PagedTranscriber):
     """A PDF read page by page (yizkr.pipeline.textlayer): each page from
     its text layer where it has a usable one, by the vision engine where
-    it does not; and each image placed within a text-layer page read on
-    its own. It gives None for a PDF none of whose pages reads from its
-    text layer; the caller reads a checked bitmap-only PDF in one vision
+    it does not; and independently bound image sources from the common
+    inventory read on their own, regardless of page route. It gives None
+    when there is no native text or independent image to read; the caller
+    reads a checked bitmap-only PDF in one vision
     call. Exclusion enforcement refuses unreadable or unsafe pages before
     any model input is produced; it never falls back around that refusal."""
 
@@ -1030,7 +1115,7 @@ class PdfPageTranscriber(PagedTranscriber):
             excluded=self.excluded,
             inventory=self.inventory,
         )
-        if read is None or not read.by_own_text:
+        if read is None or (not read.by_own_text and not read.images):
             return None
         return read
 
@@ -1052,9 +1137,31 @@ class DeckTranscriber(PagedTranscriber):
     unit = "Slide"
     separator = "\n"
 
-    def _read(self, media_path: Path, directory: Path) -> Any:
-        from yizkr.pipeline.presentation import read_slides
+    def __init__(
+        self,
+        client: Callable[[], LlmClient],
+        language: str = "en",
+        fallback_language: str = "en",
+        excluded: Callable[..., bool] | None = None,
+        *,
+        content: PresentationContent | None = None,
+    ) -> None:
+        super().__init__(client, language, fallback_language, excluded)
+        self.content = content
 
+    def _read(self, media_path: Path, directory: Path) -> Any:
+        from yizkr.pipeline.presentation import read_slides, slide_pages
+
+        if self.content is not None:
+            if (
+                self.content.inventory is None
+                or self.content.inventory.source
+                != ArtifactRef.from_path(media_path)
+            ):
+                raise ValueError(
+                    "prepared presentation belongs to another source"
+                )
+            return slide_pages(self.content, directory, excluded=self.excluded)
         return read_slides(media_path, directory, excluded=self.excluded)
 
     def _engines(self) -> tuple[str, str]:

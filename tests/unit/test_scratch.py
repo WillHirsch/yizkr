@@ -107,8 +107,9 @@ class Corpus:
         (self.folder / name).write_bytes(b"\x89PNG synthetic " + key.encode())
         self.texts[name] = SOURCES[key].text
 
-    def deck(self, name: str, firm: str) -> None:
-        path = build_deck(self.folder / name, firm=firm)
+    def deck(self, name: str, firm: str, *, media: bool = False) -> None:
+        """Native slide text by default; media-reading cases opt in."""
+        path = build_deck(self.folder / name, firm=firm, media=media)
         self.texts[name] = slide_transcript(unpack_pptx(path))
 
     def gedcom(self, name: str, note: str = "") -> None:
@@ -178,6 +179,29 @@ class Fakes:
         self.preflight = None
         # how many of the preflight's clients were closed
         self.preflight_closes = 0
+
+
+def scripted_source(corpus: Corpus, name: str, prompt: str) -> dict:
+    """The canned claim's source, located in its fictional input reading.
+
+    Conversation forks have already seen this text in their opening. These
+    fixtures exercise pipeline wiring, not interpretation of the birth claim.
+    """
+    from tests.unit.test_pdf_pages import reading_location
+
+    source = {"artifact": {"kind": "artifact", "sha1": corpus.sha1(name)}}
+    location = (
+        reading_location(prompt)
+        if Path(name).suffix.lower() in {".pdf", ".pptx"}
+        else None
+    )
+    if location is not None:
+        page, quote = location
+        source |= {
+            "page_number": page,
+            "transcription_excerpt": {"text": quote, "language": "en"},
+        }
+    return source
 
 
 # the clustering stage's adjudication prompt, and a pair it asks of
@@ -269,9 +293,7 @@ class Engine:
             "subject": {"kind": "local", "local_id": "e1", "label": "Eugen"},
             "property": "date_of_birth",
             "value": {"type": "time", "year": 1836},
-            "source": {
-                "artifact": {"kind": "artifact", "sha1": corpus.sha1(name)}
-            },
+            "source": scripted_source(corpus, name, prompt),
         }
         return json.dumps(claim) + '\n{"done": true, "claims_emitted": 1}'
 
@@ -540,7 +562,11 @@ class TestOrder:
         (deck,) = [
             doc for doc in driver.documents() if doc.kind == "presentation"
         ]
-        assert (deck.dir / "derived-media.json").is_file()
+        from yizkr.pipeline.container_inventory import read_inventory
+
+        inventory = read_inventory(deck.dir)
+        assert inventory is not None
+        assert inventory.source.sha1 == deck.sha1
 
     def test_until_stops_after_a_stage_and_the_same_command_goes_on(
         self, tmp_path, fakes

@@ -23,9 +23,15 @@ from contextlib import contextmanager
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-REQUIRED_CASE = (
-    "tests.fictional_integration.test_write_query",
-    "test_fictional_write_query_roundtrip",
+REQUIRED_CASES = (
+    (
+        "tests.fictional_integration.test_write_query",
+        "test_fictional_write_query_roundtrip",
+    ),
+    (
+        "tests.fictional_integration.test_container_sources",
+        "test_common_sources_preserve_owners_placements_and_citations",
+    ),
 )
 SOURCES = (
     "pyproject.toml",
@@ -140,10 +146,12 @@ def verify_results(path: Path) -> dict:
     ):
         raise LaneError("required integration checks failed or skipped")
     observed = [(case.get("classname"), case.get("name")) for case in cases]
-    if observed.count(REQUIRED_CASE) != 1:
-        raise LaneError(
-            "required writer/query roundtrip did not run exactly once"
-        )
+    for required in REQUIRED_CASES:
+        if observed.count(required) != 1:
+            raise LaneError(
+                f"required integration case {required[1]} "
+                "did not run exactly once"
+            )
     return {"passed": len(cases), "skipped": 0, "cases": observed}
 
 

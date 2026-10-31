@@ -40,8 +40,9 @@ Per batch, the writer:
    the media the caller gives as that source's placed media (`placed`),
    which must have an item. The pipeline gives the derived media it
    registers for the source in the same write; `yizkr ingest write` those
-   its `--placed` names, from a container's derived-media record or by
-   their SHA-1s. A document-subject claim whose subject is not its own
+   its `--placed` names, from a container's inventory (or an explicit
+   derived-media compatibility record) or by their SHA-1s. A
+   document-subject claim whose subject is not its own
    source carries the passage that conveys it as its excerpt (ADR-0039
    §10.4). A subject of any other form, an artifact subject on a property
    the manifest marks neither way, a placed subject that names no
@@ -193,7 +194,10 @@ Per batch, the writer:
    * stated in -> artifact, with page number / printed page number /
      region / excerpt qualifiers inside the reference, the printed page
      number only where the claim's source gives one (the extractor reads
-     it from the transcription's record, ADR-0037);
+     it from the transcription's record, ADR-0037), and, where the
+     claim's source carries the source part that supports it, a source
+     part locator for each of that part's records
+     (claims.source_support_locators), never cut;
    * inferred from extraction run -> the run item, with the claim's
      judgement note, where it gives one, beside it in this run block
      (ADR-0035 §4): `judgement`, the item of the note's category, and
@@ -478,6 +482,7 @@ from yizkr.claims import (
     document_subject_form,
     has_excerpt,
     load_vocabulary,
+    source_support_locators,
     vital_problems,
 )
 from yizkr.core.dates import UnsupportedDate
@@ -1569,7 +1574,10 @@ def pre_plan_refusals(
     * a claim whose source block's page number, printed page
       number, region or excerpt holds a character Python's Unicode
       tables do not know: the instance may keep the block in another
-      form, and a re-run would add it again beside the first;
+      form, and a re-run would add it again beside the first; or one
+      whose source part locator, its source's or its circumstance's,
+      has any fault _faults finds, as a locator is never cut or
+      cleaned up (claims.source_support_locators);
     * a claim that mentions an entity whose label keeps the writer
       from finding or minting its item (`unnamed`, from unnamed_entities).
 
@@ -1676,6 +1684,13 @@ def pre_plan_refusals(
             for where, text in locators
             if (unknown := unknown_characters(text or ""))
         )
+        for supported in (source, stated):
+            if supported is not None and supported.support is not None:
+                faults.extend(
+                    f"its source-part locator {fault}"
+                    for text in source_support_locators(supported.support)
+                    for fault in _faults(text)
+                )
         faults.extend(
             f"it mentions entity {local_id!r}, whose label "
             f"{_unknown_fault(unnamed[local_id])}, so that no item is "
@@ -2894,7 +2909,9 @@ class BatchWriter:
     ):
         """A statement's source block (ADR-0003): `stated in` the artifact
         with the page number, printed page number, region and excerpt
-        `source` gives, if any."""
+        `source` gives, if any, and a `source part locator` for each record
+        of its support (claims.source_support_locators), never cut: one
+        over TEXT_LIMIT raises ValueError."""
         from wikibaseintegrator.datatypes import Item, MonolingualText, String
         from wikibaseintegrator.models import Reference
 
@@ -2902,10 +2919,10 @@ class BatchWriter:
         source_ref.add(
             Item(prop_nr=self.properties["stated_in"], value=artifact_qid)
         )
-        # the locators and the excerpt only place the claim in its source
-        # and help a reader check it there: each goes in NFC, on one line,
-        # cleaned up as the instance gives it back and cut to what the
-        # instance holds, never failing the write (one holding a
+        # the page numbers, the region and the excerpt only place the claim
+        # in its source and help a reader check it there: each goes in NFC,
+        # on one line, cleaned up as the instance gives it back and cut to
+        # what the instance holds, never failing the write (one holding a
         # character Python's Unicode tables do not know has refused its
         # claim before: pre_plan_refusals), and one of whitespace alone is
         # left out (_locator_text)
@@ -2943,6 +2960,16 @@ class BatchWriter:
                     language=excerpt.language,
                 )
             )
+        if source is not None and source.support is not None:
+            for locator in source_support_locators(source.support):
+                if len(locator) > TEXT_LIMIT:
+                    raise ValueError("source-part locator cannot be truncated")
+                source_ref.add(
+                    String(
+                        prop_nr=self.properties["source_part_locator"],
+                        value=locator,
+                    )
+                )
         return source_ref
 
     def _note_snaks(self, note: JudgementNote | None) -> list:
@@ -3678,16 +3705,19 @@ class BatchWriter:
         UnsupportedDate, then too, when a claim holds an unsupported date
         (unsupported_dates), ValueError, then too, when the run item's
         label or description holds a character Python's Unicode tables do
-        not know (_run_terms), and UnmappedMention, then too, when the batch
+        not know (_run_terms), UnmappedMention, then too, when the batch
         names a local entity and `identity` is None or does not hold every
         mention of the batch (yizkr.pipeline.clustering.IdentityMap), read
         from `mapped_from`, the batch the map was made from, when it is
-        given (mapped_clusters). With `one_map`, it raises OtherIdentityMap
-        before anything is written, in a dry run too, when a run item on the
-        instance records another map than `identity` (_other_maps): an
-        instance holds the writes of one map. Without it, as on an instance
-        whose writers keep their labels apart, as the live tests' session
-        marks do, maps may mix. A
+        given (mapped_clusters), and ValueError, then too, when a claim's
+        source or circumstance source carries source support and the
+        instance's vocabulary has no `source part locator` property (one
+        bootstrapped before the current model). With `one_map`, it raises
+        OtherIdentityMap before anything is written, in a dry run too, when
+        a run item on the instance records another map than `identity`
+        (_other_maps): an instance holds the writes of one map. Without it,
+        as on an instance whose writers keep their labels apart, as the
+        live tests' session marks do, maps may mix. A
         claim whose own text the instance cannot hold raises nothing: it is
         refused alone, and the rest of the batch is written (the module
         docstring); so is a claim whose item value, its own or a
@@ -3699,13 +3729,22 @@ class BatchWriter:
         reviewed row by row or accepted whole. `placed` names, by the SHA-1
         of a source's media, the SHA-1s of the artifacts it places: the
         derived media registered for that source in this write, or those
-        a container's derived-media record names (`yizkr ingest write
-        --placed`), which a `caption` claim of that source may take as its
-        subject (step 0 of the module docstring). Without it a caption is
+        `yizkr ingest write --placed` names (from a container's inventory,
+        an explicit derived-media compatibility record or their SHA-1s),
+        which a `caption` claim of that source may take as its subject
+        (step 0 of the module docstring). Without it a caption is
         refused."""
         self._clusters, self._document, self._terms, self._identity_hash = (
             check_batch(batch, identity, mapped_from)
         )
+        if "source_part_locator" not in self.properties and any(
+            source is not None and source.support is not None
+            for claim in batch.claims
+            for source in (claim.source, claim.circumstance_source)
+        ):
+            raise ValueError(
+                "source-part provenance needs the current model bootstrap"
+            )
         # a bulk-accepted batch (whole-sheet accept-all, ADR-0023) gets a
         # distinct edit summary so MediaWiki history is the low-scrutiny
         # reappraisal queue — no graph flag, no staleness.

@@ -50,6 +50,7 @@ from yizkr.claims import (
 )
 from yizkr.core.verbatim import Transcript, words
 from yizkr.pipeline.extract import scan_json_objects
+from yizkr.pipeline.interpretation_context import InterpretationContext
 from yizkr.pipeline.llm import (
     CUT_OFF_AT_LIMIT,
     LlmClient,
@@ -316,11 +317,18 @@ def _value(claim: Claim) -> str:
 
 
 def artifact_places(transcription: Any) -> dict[str, str]:
-    """The place of each image the transcription places, by its SHA-1, as
-    the extraction prompts list it (extract.placed_lines): its first
-    place, "page 6, image 1" or "slide 2, image 1". None places none."""
+    """Located source occurrences shared with extraction, by media owner.
+
+    Readings without context retain their first legacy image marker.
+    """
     if transcription is None:
         return {}
+    if getattr(transcription, "source_context", None) is not None:
+        from yizkr.pipeline.source_context import (
+            artifact_places as source_places,
+        )
+
+        return source_places(transcription)
     unit = "slide" if transcription.engine == DECK_ENGINE else "page"
     places: dict[str, str] = {}
     for page in transcription.pages or ():
@@ -681,11 +689,13 @@ def critique_prompt(
     transcription: Any,
     properties: Iterable[str],
     kinds: Iterable[str],
+    *,
+    context: InterpretationContext | None = None,
 ) -> str:
     """The critique prompt for `batch`, the document's `transcription`
     (or None), the property keys it lists and the kind keys."""
     located = _Located(transcription)
-    return CRITIQUE_PROMPT.format(
+    prompt = CRITIQUE_PROMPT.format(
         categories_block=_categories_block(),
         kinds=", ".join(sorted(kinds)),
         properties=", ".join(sorted(properties)),
@@ -694,6 +704,11 @@ def critique_prompt(
         claims_block=_claims_block(batch, located) or "(none)",
         within_block=_within_block(batch, located) or "(none)",
     )
+    if context is not None:
+        context.validate_target(transcription)
+        if context.has_context:
+            prompt += context.prompt_block()
+    return prompt
 
 
 def run_critique(
@@ -704,6 +719,7 @@ def run_critique(
     attention: list[str] | None = None,
     incomplete_reasons: list[str] | None = None,
     vocabulary: tuple[Mapping[str, str], Iterable[str]] | None = None,
+    context: InterpretationContext | None = None,
 ) -> list[Finding | Invalid]:
     """Review the batch; return its findings (possibly none), each valid
     or kept verbatim as `Invalid`, in the order the critic gave them.
@@ -735,6 +751,8 @@ def run_critique(
     records why the final answer is unfinished, including an output-limit
     give-up; a rejected cached answer replaced by a complete one adds none.
     """
+    if context is not None:
+        context.validate_target(transcription)
     if not batch.entities and not batch.claims:
         return []
     if vocabulary is None:
@@ -744,7 +762,9 @@ def run_critique(
         properties, items = vocabulary
         listed = list(properties)
     vocabulary = (properties, frozenset(items))
-    prompt = critique_prompt(batch, transcription, listed, vocabulary[1])
+    prompt = critique_prompt(
+        batch, transcription, listed, vocabulary[1], context=context
+    )
     places = artifact_places(transcription)
     try:
         response = client.complete(prompt)

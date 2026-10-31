@@ -52,6 +52,7 @@ from yizkr.claims import (
     vital_problems,
 )
 from yizkr.model.schema import load_acceptance, load_manifest
+from yizkr.pipeline.interpretation_context import InterpretationContext
 from yizkr.pipeline.llm import (
     CUT_OFF_AT_LIMIT,
     ClassifierRefused,
@@ -61,6 +62,13 @@ from yizkr.pipeline.llm import (
     reject_response,
 )
 from yizkr.pipeline.prompts import load_prompt
+from yizkr.pipeline.source_context import (
+    bind_source_support,
+    placed_owners,
+    placement_lines,
+    primary_evidence_reject,
+    support_failure,
+)
 from yizkr.pipeline.transcribe import DECK_ENGINE, Transcription
 
 EXTRACTION_PROMPT = load_prompt("extraction.md")
@@ -82,10 +90,12 @@ NO_PLACED_ARTIFACTS = load_prompt("no-placed-artifacts.md").rstrip("\n")
 
 
 def placed_lines(transcription: Transcription) -> list[str]:
-    """Each image the transcription places, once for each place it has,
-    as the prompts list it: its artifact reference and its place ("page 6,
-    image 1", "slide 2, image 1"), in the order of the pages and of the
-    images on each page, as the transcription's markers give them."""
+    """Bound source owners and original occurrence locators for the prompt.
+
+    Standalone readings without source context retain their image markers.
+    """
+    if getattr(transcription, "source_context", None) is not None:
+        return placement_lines(transcription)
     unit = "slide" if transcription.engine == DECK_ENGINE else "page"
     return [
         f'  {{"kind": "artifact", "sha1": "{sha1}"}}: {unit} {page.page}, '
@@ -96,10 +106,11 @@ def placed_lines(transcription: Transcription) -> list[str]:
 
 
 def document_block(transcription: Transcription, artifact: ArtifactRef) -> str:
-    """The prompts' paragraphs on the document itself and on what it
-    places (DOCUMENT_ITSELF, PLACED_ARTIFACTS): the images listed are the
-    ones the transcription's pages mark, never named by a QID, and never
-    with anything another document says of them (ADR-0039 §5)."""
+    """The document and its placed sources, without other sources' claims.
+
+    Located context supplies original occurrences and canonical media owners;
+    standalone compatibility readings supply their existing page markers.
+    """
     lines = placed_lines(transcription)
     placed = (
         PLACED_ARTIFACTS.format(placed_lines="\n".join(lines))
@@ -112,10 +123,13 @@ def document_block(transcription: Transcription, artifact: ArtifactRef) -> str:
 def placed_by(
     transcription: Transcription, artifact: ArtifactRef
 ) -> dict[str, frozenset[str]]:
-    """What validation is handed of the artifacts the document places
-    (claims.validate_against_manifest's `placed`): by the document's
-    content key, the SHA-1s its transcription's pages mark."""
-    return {artifact.sha1: placed_artifacts(transcription.pages)}
+    """Owners the current source context permits as placed claim subjects."""
+    owners = (
+        placed_owners(transcription)
+        if getattr(transcription, "source_context", None) is not None
+        else placed_artifacts(transcription.pages)
+    )
+    return {artifact.sha1: owners}
 
 
 def run_metadata(model_identifier: str) -> ExtractionRunMetadata:
@@ -375,7 +389,9 @@ def cite_artifact(
     gives is an assertion of that document, and the extractor, handed the
     document's key, names the source itself: no claim cites another
     artifact through a key the model copied wrongly, or through a form of
-    reference the claim contract does not have. A claim whose source is
+    reference the claim contract does not have. Located source support is
+    assigned separately from verified reading context; supplied support is
+    discarded here. A claim whose source is
     not an object keeps it, for validation to reject, as a claim without
     its source is."""
     printed = printed_pages or {}
@@ -391,7 +407,7 @@ def cite_artifact(
                 source = {
                     key: value
                     for key, value in claim["source"].items()
-                    if key != "printed_page_number"
+                    if key not in {"printed_page_number", "support"}
                 }
                 source["artifact"] = artifact.model_dump(mode="json")
                 number = printed_page_number(
@@ -519,6 +535,7 @@ def salvage_valid_claims(
     entities: list[dict] | None = None,
     placed: Mapping[str, Collection[str]] | None = None,
     dropped: Mapping[str, str] | None = None,
+    primary_transcription: Transcription | None = None,
 ) -> tuple[ClaimBatch, list[dict]]:
     """Partition raw claim dicts into a valid ClaimBatch and rejects.
 
@@ -552,6 +569,11 @@ def salvage_valid_claims(
     Each reject carries its reason codes (`reasons`, claims.REJECT_REASONS),
     for a report to count without quoting it: `schema` for a claim that
     does not parse, else the manifest problems' codes (reject_reasons).
+
+    With interpretation context, `primary_transcription` requires primary
+    evidence only for otherwise valid proposals. A malformed placeholder is
+    an ordinary reject, not an unresolved attribution. Check the original
+    quotation before mechanical excerpt clipping changes its text.
     """
     vocabulary = load_vocabulary()
     acceptance = load_acceptance()
@@ -574,6 +596,7 @@ def salvage_valid_claims(
     rejects: list[dict] = []
     dropped = dropped or {}
     for claim in claims:
+        original = claim
         if isinstance(claim, dict):
             claim = _normalize_claim_shape(claim)
         named = sorted(
@@ -624,11 +647,11 @@ def salvage_valid_claims(
                 }
             )
         else:
-            valid.append((claim, batch.claims[0]))
+            valid.append((claim, batch.claims[0], original))
     passed = ClaimBatch.model_validate(
         {
             "extraction_run": extraction_run,
-            "claims": [parsed for _, parsed in valid],
+            "claims": [parsed for _, parsed, _ in valid],
             "entities": entities,
         }
     )
@@ -641,15 +664,24 @@ def salvage_valid_claims(
         }
         for index, problems in refused.items()
     ]
+    accepted = []
+    for index, (claim, _, original) in enumerate(valid):
+        if index in refused:
+            continue
+        rejection = (
+            primary_evidence_reject(original, primary_transcription)
+            if primary_transcription is not None
+            else None
+        )
+        if rejection is not None:
+            rejects.append(rejection)
+        else:
+            accepted.append(claim)
     return (
         ClaimBatch.model_validate(
             {
                 "extraction_run": extraction_run,
-                "claims": [
-                    claim
-                    for index, (claim, _) in enumerate(valid)
-                    if index not in refused
-                ],
+                "claims": accepted,
                 "entities": entities,
             }
         ),
@@ -772,7 +804,9 @@ class LlmClaimExtractor:
         client: LlmClient,
         raw_dump: Path | None = None,
         rejects_dump: Path | None = None,
+        context: InterpretationContext | None = None,
     ) -> None:
+        self.context = context
         self.client = client
         self.raw_dump = raw_dump
         self.rejects_dump = rejects_dump
@@ -781,13 +815,15 @@ class LlmClaimExtractor:
     def extract(
         self, transcription: Transcription, artifact: ArtifactRef
     ) -> ClaimBatch:
-        """The batch the transcription's document asserts. Every claim
-        cites `artifact`, the document's content key, by which the prompt
-        names the document too, and the page number printed on the page it
-        cites, where the transcription's record gives one (cite_artifact).
+        """Proposed claims with source identity and located support assigned
+        from the reading. The prompt names `artifact`; verified source context
+        resolves supporting parts and owners independently of model fields.
+        Printed page labels come from the reading record (cite_artifact).
         The prompt carries the transcription's text with each printed page
         number beside its page's marker (Transcription.prompt_text)."""
         self.incomplete_reasons = []
+        if self.context is not None:
+            self.context.validate_target(transcription)
         property_keys, item_keys = vocabulary_prompt_lines()
         prompt = EXTRACTION_PROMPT.format(
             schema=claim_schema_prompt_text(),
@@ -799,13 +835,26 @@ class LlmClaimExtractor:
             text=transcription.prompt_text(),
             document_block=document_block(transcription, artifact),
         )
+        if self.context is not None and self.context.has_context:
+            prompt += self.context.prompt_block()
         printed_pages = transcription.printed_pages()
         placed = placed_by(transcription, artifact)
         try:
-            return self._extract(prompt, artifact, printed_pages, placed)
+            return self._extract(
+                prompt,
+                artifact,
+                printed_pages,
+                placed,
+                transcription=transcription,
+            )
         except _KeptAnswerRejected:
             return self._extract(
-                prompt, artifact, printed_pages, placed, again=True
+                prompt,
+                artifact,
+                printed_pages,
+                placed,
+                again=True,
+                transcription=transcription,
             )
 
     def _extract(
@@ -815,6 +864,7 @@ class LlmClaimExtractor:
         printed_pages: Mapping[int, str],
         placed: Mapping[str, Collection[str]],
         again: bool = False,
+        transcription: Transcription | None = None,
     ) -> ClaimBatch:
         """The batch one answer gives, each claim citing `artifact` and
         the page number printed on its page, where `printed_pages` gives
@@ -850,18 +900,37 @@ class LlmClaimExtractor:
         finished = any(
             obj.get("done") is True for obj in scan_json_objects(response)
         )
-        batch, rejects = salvage_valid_claims(
+        attributed, attribution_rejects = bind_source_support(
             cite_artifact(payload.get("claims", []), artifact, printed_pages),
+            transcription,
+            allow_literal_quote=(
+                self.context is not None and self.context.has_context
+            ),
+        )
+        batch, rejects = salvage_valid_claims(
+            attributed,
             run_metadata(self.client.model_identifier).model_dump(mode="json"),
             placed=placed,
+            primary_transcription=(
+                transcription
+                if self.context is not None and self.context.has_context
+                else None
+            ),
         )
+        rejects = attribution_rejects + rejects
+        if reason := support_failure(rejects):
+            self.incomplete_reasons.append(reason)
         if self.rejects_dump is not None:
             if rejects:
                 self.rejects_dump.parent.mkdir(parents=True, exist_ok=True)
                 self.rejects_dump.write_text(json.dumps(rejects, indent=2))
             else:
                 self.rejects_dump.unlink(missing_ok=True)  # no stale rejects
-        if not batch.claims:
+        if not batch.claims and not (
+            self.context is not None
+            and self.context.has_context
+            and support_failure(rejects)
+        ):
             reject_answer(response, "extraction: no valid claim")
             if not rejects:
                 raise ExtractionFailed("the answer holds no claims")
@@ -904,14 +973,21 @@ class ClaimFileExtractor:
     """
 
     def __init__(
-        self, claims_file: Path, model_identifier: str = "manual"
+        self,
+        claims_file: Path,
+        model_identifier: str = "manual",
+        *,
+        context: InterpretationContext | None = None,
     ) -> None:
+        self.context = context
         self.claims_file = claims_file
         self.model_identifier = model_identifier
 
     def extract(
         self, transcription: Transcription, artifact: ArtifactRef
     ) -> ClaimBatch:
+        if self.context is not None:
+            self.context.validate_target(transcription)
         try:
             payload = json.loads(self.claims_file.read_text())
         except OSError as exc:
@@ -940,6 +1016,21 @@ class ClaimFileExtractor:
             raise ExtractionFailed(
                 f"claims file failed schema validation: {exc}"
             ) from exc
+        if getattr(transcription, "source_context", None) is not None or (
+            self.context is not None and self.context.has_context
+        ):
+            attributed, rejected = bind_source_support(
+                [claim.model_dump(mode="json") for claim in batch.claims],
+                transcription,
+                allow_literal_quote=(
+                    self.context is not None and self.context.has_context
+                ),
+            )
+            if rejected:
+                raise ExtractionFailed(support_failure(rejected))
+            batch = ClaimBatch.model_validate(
+                {**batch.model_dump(mode="json"), "claims": attributed}
+            )
         problems = validate_against_manifest(
             batch, placed=placed_by(transcription, transcription.artifact)
         )
@@ -948,4 +1039,17 @@ class ClaimFileExtractor:
                 "claims file failed manifest validation:\n  "
                 + "\n  ".join(problems)
             )
+        if self.context is not None and self.context.has_context:
+            rejected = [
+                rejection
+                for claim in batch.claims
+                if (
+                    rejection := primary_evidence_reject(
+                        claim.model_dump(mode="json"), transcription
+                    )
+                )
+                is not None
+            ]
+            if rejected:
+                raise ExtractionFailed(support_failure(rejected))
         return batch

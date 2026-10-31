@@ -387,9 +387,7 @@ Lean: (c4) if the owner wants the letter's claim recorded now, since it is the c
 - **The site.** `named_in_html` names a (c4) mention item, which has no artifact page, by its label, unlinked.
 - **Chunk ownership.** Under entity assignment a (c4) claim belongs to the chunk its mention entity is assigned to, so a mention the manifest marks `extract: false` is in no chunk and gets no (c4) claim.
 - **What is not built.** The manifest has no `machine_assisted` item yet (ADR-0008's follow-up B), so the booklet's translation claims carry no such qualifier in the pipeline; the fixture universe gives them with it, as planned vocabulary.  
-  Built by #666, 2026-10-24 (ADR-0008, the #666 amendment): the booklet's translation claims carry the marker in the pipeline, the translation's claims about the letter's image among them. The fixture corpus holds no booklet, and its deck's photograph is a decoration-sized stand-in that the deck's transcription does not mark, so no corpus document places an image and the corpus gives no claim about one.
-
-  Amended by #665, 2026-10-24: the deck's photograph is now a stand-in large enough to be read on its own, with a recorded reading (a photograph with no writing, so no excerpt), so the deck's transcription marks it and a corpus run gives slide 2's two captions and its `shows` → Wastl and `shows` → Hilde, each with its judgement note of category `relation` (§10.4). The corpus still holds no booklet.
+  The pipeline marks the booklet's translation claims with the preparation qualifier. The fictional corpus's deck has an independently read photograph with no writing, so it creates no excerpt. Its transcript marks the placement and its claims include the captions and `shows` judgments. The fixture corpus contains no booklet.
 
 #### 10.7 Amendments to other records (#626, 2026-10-24)
 

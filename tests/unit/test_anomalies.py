@@ -790,6 +790,57 @@ class TestLanguage:
 
 
 class TestExtraction:
+    @pytest.mark.parametrize("stored", [False, True])
+    def test_verified_marker_only_container_has_no_empty_extraction_alert(
+        self, tmp_path, stored
+    ):
+        from tests.unit.test_text_stages import empty_container_reading
+
+        run, checks = make_checks(
+            tmp_path,
+            {
+                "checks": {
+                    "zero-claims": {"min-chars": 1},
+                    "zero-entities": {"min-chars": 1},
+                }
+            },
+        )
+        doc = a_doc(tmp_path, "library-talk.pdf", kind="pdf")
+        transcription = empty_container_reading()
+        if stored:
+            doc.transcription.write_text(transcription.model_dump_json())
+        else:
+            checks.stored(doc, "transcription", transcription)
+        checks.stored(doc, "extraction", a_batch(entities=0))
+        assert not {"zero-claims", "zero-entities"} & set(checks_raised(run))
+
+    def test_container_authored_text_keeps_empty_extraction_alerts(
+        self, tmp_path
+    ):
+        from tests.unit.test_text_stages import empty_container_reading
+        from yizkr.pipeline.transcribe import reading_digest
+
+        run, checks = make_checks(
+            tmp_path,
+            {
+                "checks": {
+                    "zero-claims": {"min-chars": 1},
+                    "zero-entities": {"min-chars": 1},
+                }
+            },
+        )
+        doc = a_doc(tmp_path, "library-talk.pdf", kind="pdf")
+        transcription = empty_container_reading()
+        transcription.text += "\nLibrary Talk 2018"
+        transcription.pages[-1].end = len(transcription.text)
+        transcription.pages[-1].status = "transcribed"
+        transcription.source_context.readings[-1].end = len(transcription.text)
+        for span in transcription.source_context.readings:
+            span.support.reading_sha256 = reading_digest(transcription)
+        doc.transcription.write_text(transcription.model_dump_json())
+        checks.stored(doc, "extraction", a_batch(entities=0))
+        assert {"zero-claims", "zero-entities"} <= set(checks_raised(run))
+
     def test_no_entities_and_no_claims_from_a_full_transcription(
         self, tmp_path
     ):

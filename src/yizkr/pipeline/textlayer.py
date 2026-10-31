@@ -6,10 +6,11 @@ the file, deterministically and without a model call, is the page's text
 exactly as it was typed. A scanned page carries only a picture of its
 text, and the vision engine reads it. `read_pages` tells the two apart
 page by page, and the transcription reads a PDF page by page whenever one
-of its pages reads from its text layer
+of its pages reads from its text layer or its inventory identifies an
+independently readable image source
 (yizkr.pipeline.transcribe.PdfPageTranscriber, one of the paged
-containers of yizkr.pipeline.containers). A PDF none of whose pages
-does is read whole by the vision engine. With exclusion enforcement,
+containers of yizkr.pipeline.containers). Otherwise it is read whole by
+the vision engine. With exclusion enforcement,
 that call receives a deterministic PDF made only from checked page
 bitmaps, without the original package's unused resources. Its response
 cache key identifies those actual outbound bytes (ADR-0032).
@@ -51,6 +52,10 @@ opacity of 0.
 
 **How each page is read** (its method, which the transcription records):
 
+- ``image-source``: the inventory proves that the page shows only one
+  original image and its source has a usable reading input. The image is
+  read independently, once; the parent keeps a page marker without a
+  second transcription or extraction of that image;
 - ``none``: the page draws nothing and shows no annotation (a link shows
   nothing), so there is nothing to read and no call is made;
 - ``vision``, for a page that shows text in an annotation: a free-text
@@ -64,23 +69,25 @@ opacity of 0.
 - ``vision`` otherwise: its text layer is empty, garbage or garbled, so
   what it draws can only be read from a picture of it.
 
-**Images placed within a page** that reads from its text layer are read
-on their own, each as a witness of its own (ADR-0008): an original that a
+**Independent image sources** are selected from the common inventory before
+page route selection (ADR-0008): an original that a
 compilation embeds beside its translation is its writer's assertion, not
-the compiler's. An image under `MIN_IMAGE_SIDE` pixels on a side, or
-under `MIN_IMAGE_PIXELS` pixels in all (yizkr.pipeline.containers, the
-rule a deck's images are read by too), is taken for decoration: it could
-hold no more than a word of legible text, and it is not read. Each image
-is known by the SHA-1 of its bytes (ADR-0010), so one placed on several
-pages, or twice on one, is one image, read once. An image the
+the compiler's. Every original embedded image is source material,
+irrespective of its dimensions, position or page coverage. Each prepared
+image has a verified canonical media binding (ADR-0010), so repeated placements
+of that source are read once. Equal newly decoded pixels alone do not
+establish a shared witness. A page showing only one image represents that
+image's source; a generated page rendering never creates another owner.
+An image the
 never-ingest list names by its SHA-1 is neither read nor kept. Before
 any model input is produced, every vision page is checked for excluded
-images, including nested and decorative images. A prohibited image or
+images, including nested and small images. A prohibited image or
 an uninspectable representation refuses vision for the document. Opaque
 annotation appearances, widget drawings, pattern resources, masked images
 and Type3 fonts are refused because a partial object walk cannot
-establish their eligibility. The safe vision page remains a reading of
-the compilation's own page; it creates no independently read excerpt.
+establish their eligibility. A vision reading that combines the body with
+an inner source or annotation carries unsupported composite attribution;
+it cannot assign their assertions to the compiler.
 Annotations a text-layer page shows that cover none of its text (a stamp
 in a margin, a check box, a highlight) are not read, and the page counts
 them.
@@ -121,7 +128,6 @@ is closed before the lock is released.
 from __future__ import annotations
 
 import ctypes
-import hashlib
 import re
 import struct
 import threading
@@ -138,10 +144,9 @@ import pypdfium2.raw as pdfium_c
 from pypdf.generic import DictionaryObject
 
 from yizkr.pipeline.containers import (
+    IMAGE_SOURCE,
     ContainerPage,
     ContainerPages,
-    PlacedImage,
-    is_decoration,
 )
 
 if TYPE_CHECKING:
@@ -542,13 +547,15 @@ def read_pages(
     inventory: PdfInventory | None = None,
 ) -> ContainerPages | None:
     """Read the PDF at `path` page by page (the module docstring says
-    how): each page's method and text layer and, when any page reads from
-    its text layer, the files the vision engine is to read, written into
-    `directory`: each vision page's (``page-<n><suffix>``) and each image
-    read on its own (``<sha1><suffix>``). An image read on its own whose
-    SHA-1 the never-ingest list names (`excluded`) is neither written nor
-    listed. When no page reads from its text layer, nothing is written,
-    and the caller can prepare a checked whole-document representation.
+    how): each page's method and text layer, and the files the vision
+    engine is to read, written into `directory`: each image read on its
+    own (``<sha1><suffix>``) and, when any page reads from its text layer
+    or an image is read on its own, each vision page's
+    (``page-<n><suffix>``). An image read on its own whose SHA-1 the
+    never-ingest list names (`excluded`) is neither written nor listed.
+    When no page reads from its text layer and no image is read on its
+    own, no page file is written, and the caller can prepare a checked
+    whole-document representation.
     With an exclusion callback, all vision pages are checked before any
     output; unsafe or unreadable content raises PdfExclusionError. Without
     a callback, an unreadable PDF retains the legacy None result."""
@@ -571,6 +578,18 @@ def read_pages(
                 source_bytes, excluded or (lambda _: False), document=document
             )
             plan.verify(source_bytes)
+            from yizkr.pipeline.container_sources import prepare_sources
+
+            plan.replace_inventory(
+                prepare_sources(
+                    plan.inventory,
+                    plan.data,
+                    directory,
+                    excluded=lambda sha1, _names: bool(
+                        excluded and excluded(sha1)
+                    ),
+                )
+            )
             if excluded is not None:
                 plan.apply_exclusions(excluded)
             return _read(document, directory, excluded, plan)
@@ -598,15 +617,13 @@ def fresh_start() -> None:
 @dataclass
 class _Layout:
     """What one page holds, as `_layout` reads it: its method and text
-    layer, the images read on their own (their indexes among the page's
-    objects, in paint order), the index of the page's one image when it
-    draws nothing else and covers the page, and the annotations it shows
-    that its text layer leaves unread."""
+    layer, the index of the page's one image when it draws nothing else
+    and covers the page, and the annotations it shows that its text layer
+    leaves unread."""
 
     number: int
     method: str
     text: str
-    images: list[int]
     lone_image: int | None
     annotations: int
 
@@ -618,7 +635,9 @@ def _read(
     plan: PdfInventory,
 ) -> ContainerPages:
     """`read_pages` of an open document: every page's layout first, and
-    only then, when a page reads from its text layer, the files."""
+    only then the files: each image read on its own and, when a page
+    reads from its text layer or an image is read on its own, the vision
+    pages."""
     layouts = []
     for index in range(len(document)):
         page = document[index]
@@ -643,21 +662,38 @@ def _read(
         plan.guard(
             {layout.number for layout in layouts if layout.method == VISION}
         )
-    if not read.by_own_text:
+    from yizkr.pipeline.container_sources import (
+        image_page_source,
+        materialize_images,
+        project_sources,
+    )
+
+    read.sources = project_sources(
+        plan.inventory,
+        directory,
+        data=plan.data,
+        excluded=lambda sha1, _names: bool(excluded and excluded(sha1)),
+    )
+    materialize_images(read.sources, plan.data, directory, read)
+    for page in read.pages:
+        if page.method != VISION:
+            continue
+        image_source = image_page_source(
+            read.sources, plan.page_parts[page.number]
+        )
+        if (
+            image_source is not None
+            and image_source[0].owner.sha1 in read.images
+        ):
+            # The image excerpt is the sole reading/extraction. A page marker
+            # retains its place without manufacturing another witness from
+            # a rendered copy of the same source.
+            page.method = IMAGE_SOURCE
+    if not read.by_own_text and not read.images:
         return read
     for layout, page in zip(layouts, read.pages, strict=True):
         if page.method == VISION:
             page.vision = _write_vision(document, layout, directory, plan)
-        elif page.method == TEXT_LAYER:
-            _write_images(
-                document,
-                layout,
-                page,
-                read,
-                directory,
-                excluded or (lambda sha1: False),
-                plan if excluded is not None else None,
-            )
     return read
 
 
@@ -871,12 +907,6 @@ def _draws(obj: Any, on_page: bool, drawing: set[int]) -> bool:
     return kind in (pdfium_c.FPDF_PAGEOBJ_PATH, pdfium_c.FPDF_PAGEOBJ_SHADING)
 
 
-def _decoration(obj: Any) -> bool:
-    """Is an image too small to hold legible text (MIN_IMAGE_SIDE,
-    MIN_IMAGE_PIXELS)?"""
-    return is_decoration(*obj.get_px_size())
-
-
 def _upright(obj: Any) -> bool:
     """Is an object placed without rotation or mirroring?"""
     a, b, c, d, _e, _f = obj.get_matrix().get()
@@ -1024,9 +1054,6 @@ def _layout(page: Any, number: int, formenv: Any) -> _Layout:
         method = TEXT_LAYER
     else:
         method = VISION
-    placed = []
-    if method == TEXT_LAYER:
-        placed = [at for at in images if not _decoration(objects[at][0])]
     lone = None
     if method == VISION and not shows and len(drawn) == 1:
         at = drawn[0]
@@ -1044,7 +1071,6 @@ def _layout(page: Any, number: int, formenv: Any) -> _Layout:
         number,
         method,
         clean(visible) if reads_text else "",
-        placed,
         lone,
         others if reads_text else 0,
     )
@@ -1110,68 +1136,3 @@ def _write_vision(
     if part is not None:
         plan.representation(part, data, suffix, method)
     return path
-
-
-def _write_images(
-    document: Any,
-    layout: _Layout,
-    page: ContainerPage,
-    read: ContainerPages,
-    directory: Path,
-    excluded: Callable[[str], bool],
-    plan: PdfInventory | None = None,
-) -> None:
-    """Write each image placed within a text-layer page that is read on
-    its own, once per SHA-1, and note its place on the page."""
-    pdf_page = document[layout.number - 1]
-    try:
-        objects = _objects(pdf_page)
-        ordinals = _inventory_image_ordinals(pdf_page) if plan else {}
-        for place, at in enumerate(layout.images, start=1):
-            try:
-                if plan is None:
-                    data, suffix = image_bytes(objects[at][0])
-                else:
-                    ordinal = ordinals.get(_address(objects[at][0].raw))
-                    part = plan.image_parts.get((layout.number, ordinal))
-                    if (
-                        part is not None
-                        and part.eligibility.state == "excluded"
-                    ):
-                        continue
-                    if part is None or part.eligibility.state != "allowed":
-                        raise ValueError(
-                            "image has no eligible inventoried representation"
-                        )
-                    representation = plan.image_representations.get(
-                        (layout.number, ordinal)
-                    )
-                    if representation is None or representation.file is None:
-                        raise ValueError(
-                            "image occurrence has no prepared representation"
-                        )
-                    data = plan.data[representation.byte_object.sha1]
-                    suffix = (
-                        JPEG_SUFFIX
-                        if representation.media_type == "image/jpeg"
-                        else PNG_SUFFIX
-                    )
-            except (pdfium.PdfiumError, ValueError):
-                read.notes.append(
-                    f"image not read on its own: page {layout.number}, image "
-                    f"{place}: PDFium could not give its bytes, so it is not "
-                    "read"
-                )
-                continue
-            sha1 = hashlib.sha1(data).hexdigest()
-            if excluded(sha1):
-                continue
-            image = read.images.get(sha1)
-            if image is None:
-                path = directory / f"{sha1}{suffix}"
-                path.write_bytes(data)
-                image = read.images[sha1] = PlacedImage(sha1, suffix, path)
-            image.places.append((layout.number, place))
-            page.images.append((place, sha1))
-    finally:
-        pdf_page.close()

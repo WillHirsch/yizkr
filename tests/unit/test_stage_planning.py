@@ -39,6 +39,7 @@ def test_gedcom_keeps_its_deterministic_process_and_extract_refresh_role():
     assert STAGES["extraction"].input_artifacts == (
         "transcription.json",
         "preparation.pointer.txt",
+        "interpretation-context.json",
     )
 
 
@@ -226,6 +227,8 @@ def fingerprint(package, **configuration):
         "pipeline/prompts/entity-manifest.md",
         "model/manifest.yaml",
         "claims.py",
+        "source_structure.py",
+        "pipeline/source_context.py",
         "pipeline/writer.py",
         "pipeline/places.py",
     ],

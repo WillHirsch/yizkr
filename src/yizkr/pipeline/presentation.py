@@ -12,13 +12,13 @@ context). This module extracts:
 
 **A deck is a paged container** (yizkr.pipeline.containers):
 `read_slides` gives its slides as pages, each read from its XML, with its
-text (`slide_text`) and the images it embeds that are read on their own,
+text (`slide_text`) and the images it paints that are read on their own,
 in the order the slide paints them. Its transcription marks each such
-image below the slide's marker by its SHA-1 (``[Slide 2, image 1:
-sha1:…]``), reads it by the vision engine on its own and keeps that
-reading beside its bytes, so the image is an excerpt, a document of its
-own, as an image a PDF places is (yizkr.pipeline.transcribe.
-DeckTranscriber; ADR-0008).
+image below the slide's marker by its owner's SHA-1 (``[Slide 2, image
+1: sha1:…]``), reads it by the vision engine on its own and keeps that
+reading under that SHA-1 (`derived_transcription`), so the image is an
+excerpt, a document of its own, as an image a PDF places is
+(yizkr.pipeline.transcribe.DeckTranscriber; ADR-0008).
 
 Before reading filters, the same package parse records native slide/notes
 parts, original media and embedded-object bytes, structural occurrences and
@@ -27,22 +27,17 @@ retain their identity when eligibility or reading outcomes change. XML text
 order and raw transforms are preserved without inferring visual reading order
 or composed page geometry (yizkr.pipeline.pptx_inventory).
 
-`record_derived_media` persists this inventory and its original bytes, then
-projects the existing image-only `derived-media.json` for consumers still using
-that record. The compatibility projection deduplicates image bytes and retains
-relationship-only images; it does not establish visible placements. PDFs still
-produce their legacy records independently. Beside each independently read
-image's bytes, its transcription names the image by its SHA-1.
+Readers and registration use `container_sources` to project that inventory's
+verified owner bindings, current reading inputs and native paint occurrences.
+Canonical owner bytes are separate from a newly prepared reading input.
+Speaker notes and slide-body text have separate source-part support even when
+they cite the same container. Original images without a visible placement
+are independent sources too; their support does not invent a slide position.
 
-The write registers a container's derived media from that record
-(`Registrar.register_derived_media` in yizkr.pipeline.registrar), after
-the container itself: every statement a container contributes to a
-derived item is referenced ``stated in -> that container`` (MODELING.md;
-ADR-0003). Derived items are keyed on content (ADR-0010), so an image
-shared by several decks or PDFs is one item that is ``part of`` each of
-them. A PDF's or a deck's image with a transcription of its own is also a
-document of its own, whose claims cite the image
-(yizkr.pipeline.orchestrate, ExcerptRun; ADR-0008).
+`record_derived_media` and its reader remain compatibility adapters for an
+explicit old record; the current pipeline publishes `container-inventory.json`.
+Independently read images keep per-owner transcription files, whose claims cite
+that owner and carry the original source part and placement support.
 """
 
 from __future__ import annotations
@@ -72,9 +67,7 @@ from yizkr.pipeline.containers import (
     VISION_SUFFIXES,
     ContainerPage,
     ContainerPages,
-    PlacedImage,
     image_size,
-    is_decoration,
 )
 from yizkr.pipeline.pptx_inventory import PptxPackage, text_runs
 from yizkr.pipeline.stages import staging_path
@@ -85,12 +78,10 @@ P_NS = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
 REL_NS = "{http://schemas.openxmlformats.org/package/2006/relationships}"
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".tif", ".tiff", ".webp"}
-# why an image is not read on its own when it is too small to hold
-# legible text (unread_reason)
-DECORATION = "decoration"
-# the leading phrase of the note a deck's reading makes of an image it
-# does not read on its own; what the archive calls the image follows its
-# first colon, so that a reason's label never shows a file's name
+# the leading phrase of the note a container's reading makes of an image
+# it does not read on its own (container_sources.materialize_images); a
+# short identifier of its owner or source part follows its first colon,
+# so that a reason's label never shows a file's name
 UNREAD_IMAGE = "image not read on its own"
 
 
@@ -237,7 +228,7 @@ def slide_transcript(content: PresentationContent) -> str:
     """The deck's text slide by slide, each slide behind its `[Slide N]`
     marker (`slide_text`): its transcription's text when it reads no
     image on its own, which marks each image it reads below the marker of
-    the slide that embeds it (yizkr.pipeline.transcribe.DeckTranscriber)."""
+    each slide that paints it (yizkr.pipeline.transcribe.DeckTranscriber)."""
     _require_slide_bodies(content)
     blocks = []
     for slide in content.slides:
@@ -256,11 +247,10 @@ def record_suffix(names: Iterable[str]) -> str:
 
 
 def unread_reason(suffix: str, data: bytes) -> str | None:
-    """Why a deck's image is not read on its own, or None when it is
-    (yizkr.pipeline.containers): `DECORATION` for an image too small to
-    hold legible text; otherwise a note, for an image in a format the
+    """Why a container's image is not read on its own, or None when it is
+    (yizkr.pipeline.containers): a note for an image in a format the
     vision engine does not read, or whose size its header does not give.
-    `suffix` is the one its file in the record takes."""
+    `suffix` is that of the file the image is read from."""
     if suffix.lower() not in VISION_SUFFIXES:
         return (
             f"a {suffix.lower() or 'suffix-less'} image, a format the "
@@ -269,8 +259,8 @@ def unread_reason(suffix: str, data: bytes) -> str | None:
     size = image_size(data)
     if size is None:
         return "an image whose size its header does not give"
-    if is_decoration(*size):
-        return DECORATION
+    if min(size) <= 0:
+        return "an image whose header gives nonpositive dimensions"
     return None
 
 
@@ -286,15 +276,18 @@ def read_slides(
 ) -> ContainerPages:
     """Read the deck at `path` slide by slide, as a paged container
     (yizkr.pipeline.containers): each slide a page read from its XML
-    (`SLIDE_XML`), its text `slide_text`, with the images it embeds that
-    are read on their own, in the order it paints them, each written into
-    `directory` once, as ``<sha1><suffix>``. Each image is known by the
-    SHA-1 of its bytes and takes the suffix its file in the record of the
-    deck's derived media takes (`record_suffix`). An image the
-    never-ingest list names by its SHA-1 or by any of its names in the
-    archive (`excluded`, given both), or that `unread_reason` gives a
-    reason for, is not read; the reader notes each of the latter but
-    decoration, once, behind the phrase `UNREAD_IMAGE`."""
+    (`SLIDE_XML`), its text `slide_text`, with the images a slide
+    paints that are read on their own, in the order it paints them, each
+    written into `directory` once, as ``<sha1><suffix>``. Each image is
+    known by its bound owner's SHA-1 and takes the suffix of its current
+    reading input's file in the deck's inventory
+    (container_sources.materialize_images). Images without paint occurrences
+    are also read, without inventing a slide placement. An image the
+    never-ingest list names by its SHA-1
+    or by any of its names in the archive (`excluded`, given both), or
+    that `unread_reason` gives a reason for, is not read; the reader
+    notes each unsupported input once, behind the phrase
+    `UNREAD_IMAGE`."""
     return slide_pages(unpack_pptx(path), directory, excluded=excluded)
 
 
@@ -304,50 +297,54 @@ def slide_pages(
     *,
     excluded: Callable[[str, Sequence[str]], bool] = _never,
 ) -> ContainerPages:
-    """`read_slides` of a deck already unpacked. Its media are known by
-    their paths in the archive, as the slides' relationships name them."""
+    """`read_slides` of a deck already unpacked. Its images come from the
+    projection of its source inventory (yizkr.pipeline.container_sources):
+    all eligible original images, with separate actual paint occurrences."""
+    from yizkr.pipeline.container_sources import (
+        materialize_images,
+        prepare_sources,
+        project_sources,
+    )
+
     _require_slide_bodies(content)
-    media: dict[str, tuple[str, bytes]] = {}
-    names: dict[str, list[str]] = {}
-    for medium in content.media:
-        sha1 = hashlib.sha1(medium.data).hexdigest()
-        names.setdefault(sha1, []).append(medium.name)
-        media[medium.target] = (sha1, medium.data)
-    suffix = {sha1: record_suffix(found) for sha1, found in names.items()}
-    all_names = inventory_aliases(content.inventory)
-    read = ContainerPages([])
-    noted: set[str] = set()
-    for slide in content.slides:
-        page = ContainerPage(slide.number, SLIDE_XML, slide_text(slide))
-        read.pages.append(page)
-        for target in slide.media:
-            if target not in media:
-                continue
-            sha1, data = media[target]
-            if excluded(sha1, all_names.get(sha1, names[sha1])):
-                continue
-            reason = unread_reason(suffix[sha1], data)
-            if reason is not None:
-                if reason != DECORATION and sha1 not in noted:
-                    noted.add(sha1)
-                    read.notes.append(
-                        f"{UNREAD_IMAGE}: slide {slide.number}, "
-                        f"{PurePosixPath(target).name} (sha1 {sha1[:12]}): "
-                        f"{reason}, so it is not read"
+    if content.inventory is None:
+        raise ValueError(
+            "presentation source inventory is required; "
+            "unpack the original package"
+        )
+    content.inventory = prepare_sources(
+        content.inventory,
+        content.inventory_bytes,
+        directory,
+        excluded=excluded,
+    )
+    sources = project_sources(
+        content.inventory,
+        directory,
+        data=content.inventory_bytes,
+        excluded=excluded,
+    )
+    notes = {part.locator.position: part.text or "" for part in sources.notes}
+    read = ContainerPages(
+        [
+            ContainerPage(
+                part.locator.position,
+                SLIDE_XML,
+                slide_text(
+                    Slide(
+                        part.locator.position,
+                        part.text or "",
+                        notes.get(part.locator.position, ""),
                     )
-                continue
-            if any(known == sha1 for _place, known in page.images):
-                continue
-            image = read.images.get(sha1)
-            if image is None:
-                path = directory / f"{sha1}{suffix[sha1]}"
-                path.write_bytes(data)
-                image = read.images[sha1] = PlacedImage(
-                    sha1, suffix[sha1], path
-                )
-            place = len(page.images) + 1
-            image.places.append((slide.number, place))
-            page.images.append((place, sha1))
+                ),
+            )
+            for part in sources.bodies
+        ],
+        inventory=content.inventory,
+        inventory_bytes=content.inventory_bytes,
+        sources=sources,
+    )
+    materialize_images(sources, content.inventory_bytes, directory, read)
     return read
 
 
@@ -357,11 +354,11 @@ def read_on_their_own(
     *,
     excluded: Callable[[str, Sequence[str]], bool] = _never,
 ) -> set[str]:
-    """The SHA-1s of the images of a deck's record kept in `directory`
-    (`read_derived_media`) that its transcription reads on their own, as
-    `read_slides` chooses them: each the never-ingest list names neither
-    by its SHA-1 nor by any of its names, and `unread_reason` gives no
-    reason for."""
+    """The SHA-1s of the images of an older deck record kept in
+    `directory` (`read_derived_media`) that pass this compatibility
+    filter: each the never-ingest list names neither by its SHA-1 nor by
+    any of its names, and `unread_reason` gives no reason for. As with
+    current inventory projection, a paint occurrence is not required."""
     inventory = read_inventory(directory)
     aliases = (
         inventory_aliases(inventory)
@@ -381,8 +378,9 @@ def read_on_their_own(
     }
 
 
-# The record of a container's derived media in its document's directory,
-# and the folder beside it that keeps their bytes and, for the images a
+# The older record of a container's derived media in its document's
+# directory, which the pipeline reads but does not write, and the folder
+# beside it that keeps that record's media and, for the images a
 # container reads on their own, their transcriptions.
 DERIVED_MEDIA = "derived-media.json"
 DERIVED_MEDIA_DIR = "derived-media"
@@ -415,11 +413,14 @@ class DerivedMedium(BaseModel):
 
 
 class DerivedMediaRecord(BaseModel):
-    """A container's derived media, recorded before the write for
-    registration at write time: each distinct medium by the SHA-1 of its
-    bytes (ADR-0010), part of the container (a deck, or a PDF read page by
-    page) that the SHA-1 of the container's own bytes names. Nothing in it
-    depends on an instance."""
+    """An older record of a container's derived media, which the
+    pipeline reads but does not write: ``--placed`` takes one,
+    container_sources.prepare_sources binds owners from one left in the
+    document's directory, and Registrar.register_derived_media registers
+    from one (the pipeline registers from the container inventory): each
+    distinct medium by the SHA-1 of its bytes (ADR-0010), part of the
+    container (a deck, or a PDF read page by page) that the SHA-1 of the
+    container's own bytes names. Nothing in it depends on an instance."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -490,9 +491,7 @@ def record_derived_media(
             reason = unread_reason(PurePosixPath(part.file).suffix, original)
             if reason is not None and part.reading.state == "unattempted":
                 part.reading = ReadingOutcome(
-                    state="unattempted"
-                    if reason == DECORATION
-                    else "unsupported",
+                    state="unsupported",
                     reason=reason,
                 )
         keep_inventory(inventory, content.inventory_bytes, directory)
@@ -582,8 +581,10 @@ def keep_derived_media(
 
 
 def derived_transcription(directory: Path, sha1: str) -> Path:
-    """Where the transcription of a container's image is kept, beside its
-    bytes: ``derived-media/<sha1>.transcription.json``."""
+    """Where the transcription of an image a container reads on its own
+    is kept, by its owner's SHA-1: the compatibility path
+    ``derived-media/<sha1>.transcription.json``. The image's bytes are
+    kept with the container inventory."""
     return directory / DERIVED_MEDIA_DIR / f"{sha1}{DERIVED_TRANSCRIPTION}"
 
 
@@ -593,7 +594,7 @@ def read_derived_media(directory: Path) -> DerivedMediaRecord | None:
     every medium it names: a regular file, not a symlink, named for the
     medium's SHA-1 and holding the bytes that SHA-1 names. None
     otherwise, so a record whose files were lost, damaged, swapped or
-    replaced by a link is made again."""
+    replaced by a link binds no owners (container_sources.prepare_sources)."""
     try:
         record = DerivedMediaRecord.model_validate_json(
             (directory / DERIVED_MEDIA).read_bytes()

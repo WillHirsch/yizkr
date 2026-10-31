@@ -75,7 +75,7 @@ artifact subject to the artifact item as it resolves the source.
 CLI:
     python3 claims.py --json-schema  # print JSON Schema (for LLM prompts)
     python3 claims.py --validate batch.json  # parse + manifest-check a file
-    python3 claims.py --validate batch.json --placed derived-media.json
+    python3 claims.py --validate batch.json --placed container-inventory.json
         # ... with the artifacts a container places, for its claims
         # about them
 """
@@ -119,6 +119,7 @@ from yizkr.model.schema import (
     load_acceptance,
     load_manifest,
 )
+from yizkr.source_structure import StructuralLocator
 
 SCHEMA_VERSION = 1
 
@@ -457,6 +458,70 @@ class ArtifactRef(StrictModel):
         return f"sha1:{self.sha1}"
 
 
+class PlacementSupport(StrictModel):
+    """One verified occurrence of the cited part in its original container."""
+
+    id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    locator: StructuralLocator
+
+
+class SourceSupport(StrictModel):
+    """Structural citation supplied by the reader, never inferred by the model.
+
+    The container and native part identify the original evidence separately
+    from the claim's existing artifact owner. Repeated placements locate one
+    source; they do not create independent witnesses. ``reading_sha256`` hashes
+    canonical semantic reading content, excluding source context and process
+    provenance. The inventory separately records the exact saved-file digest.
+    This identifies the cited source part; it does not certify the model's
+    quotation, page selection or interpretation, which remain for critique.
+    """
+
+    container: ArtifactRef
+    part_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    locator: StructuralLocator
+    placements: list[PlacementSupport] = Field(default_factory=list)
+    reading_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def unique_placements(self) -> SourceSupport:
+        ids = [placement.id for placement in self.placements]
+        if len(ids) != len(set(ids)):
+            raise ValueError("source support repeats a placement identity")
+        return self
+
+
+def source_support_locators(support: SourceSupport) -> tuple[str, ...]:
+    """Compact graph reference records, resolved through the common inventory.
+
+    Full native paths and geometry remain in the typed support/inventory. Each
+    graph value retains exact container, part and occurrence identities; no
+    truncation is permitted. Multiple placements locate the same source, not
+    additional testimony. Reading digests exclude attached source context.
+    """
+    base = {
+        "container": support.container.sha1,
+        "part": support.part_id,
+        "kind": support.locator.kind,
+    }
+    if support.locator.position is not None:
+        base["position"] = support.locator.position
+    if support.reading_sha256 is not None:
+        base["reading"] = support.reading_sha256
+    records = []
+    for placement in support.placements:
+        record = base | {"placement": placement.id}
+        if placement.locator.position is not None:
+            record["placement_position"] = placement.locator.position
+        records.append(record)
+    return tuple(
+        sorted(
+            json.dumps(record, sort_keys=True, separators=(",", ":"))
+            for record in records or [base]
+        )
+    )
+
+
 class SourceReference(StrictModel):
     """Where the artifact asserts the claim (ADR-0003).
 
@@ -479,6 +544,9 @@ class SourceReference(StrictModel):
     # one serialises exactly as it would if the field did not exist, so
     # its content hashes are those of any other source.
     printed_page_number: SkipJsonSchema[str | None] = None
+    # Deterministic reading/inventory provenance. The extraction schema does
+    # not invite the model to invent native part or occurrence identities.
+    support: SkipJsonSchema[SourceSupport | None] = None
 
     @model_validator(mode="after")
     def _a_printed_page_beside_its_page(self) -> SourceReference:
@@ -499,8 +567,11 @@ class SourceReference(StrictModel):
         self, handler: SerializerFunctionWrapHandler
     ):
         data = handler(self)
-        if isinstance(data, dict) and self.printed_page_number is None:
-            data.pop("printed_page_number", None)
+        if isinstance(data, dict):
+            if self.printed_page_number is None:
+                data.pop("printed_page_number", None)
+            if self.support is None:
+                data.pop("support", None)
         return data
 
 
@@ -1166,9 +1237,9 @@ def placed_artifacts(pages: Iterable[object] | None) -> frozenset[str]:
 # How a command line gives the artifacts a source places (read_placed),
 # which a caption's refusal there names.
 PLACED_OPTION = (
-    "--placed <derived-media.json>, the record of the media a container "
-    "places that the pipeline keeps in the container's document directory "
-    "(or that directory), or --placed <source sha1>=<artifact sha1>"
+    "--placed <container-inventory.json> (or its document directory), "
+    "an explicit --placed <derived-media.json> compatibility record, or "
+    "--placed <source sha1>=<artifact sha1>"
     "[,<artifact sha1>...]"
 )
 _PLACED_PAIR = re.compile(
@@ -1180,14 +1251,21 @@ def read_placed(values: Iterable[str]) -> dict[str, frozenset[str]]:
     """The artifacts each source places, by the SHA-1 of its media, as a
     command line gives them (PLACED_OPTION), in the form
     validate_against_manifest and the writer take as `placed`. Each value
-    is a source's SHA-1 and the SHA-1s of the artifacts it places, or a
-    record of a container's derived media (presentation.DerivedMediaRecord,
-    the file or the directory that holds it), which names its container
-    and every medium it places; values for one source add up. Only the
-    record is read, not the media's bytes: the writer resolves each
-    artifact by an item that carries its media SHA-1. Raises ValueError,
-    naming the value, for a record that cannot be read or is no such
-    record, and for a source said to place itself."""
+    is a source's SHA-1 and the SHA-1s of the artifacts it places, or
+    a verified common inventory, or an explicit compatibility record of
+    derived media. Directories prefer their common inventory; an invalid
+    common record never falls back to older metadata. A directory holding
+    only an older record retains the compatibility adapter, which provides
+    owner keys but no structural provenance. Common records verify their
+    named bytes and project eligible bound owners; older records name
+    already registered owners without requiring their local media files.
+    Values for one source add up. Raises ValueError for invalid records or
+    a source said to place itself."""
+    from yizkr.pipeline.container_inventory import (
+        CONTAINER_INVENTORY,
+        read_inventory,
+    )
+    from yizkr.pipeline.container_sources import project_sources
     from yizkr.pipeline.presentation import DERIVED_MEDIA, DerivedMediaRecord
 
     placed: dict[str, set[str]] = {}
@@ -1199,7 +1277,30 @@ def read_placed(values: Iterable[str]) -> dict[str, frozenset[str]]:
         else:
             path = Path(value)
             if path.is_dir():
-                path = path / DERIVED_MEDIA
+                common = path / CONTAINER_INVENTORY
+                path = (
+                    common
+                    if common.exists() or common.is_symlink()
+                    else path / DERIVED_MEDIA
+                )
+            if path.name == CONTAINER_INVENTORY:
+                inventory = read_inventory(path.parent)
+                if inventory is None:
+                    raise ValueError(
+                        f"{path} is missing or invalid; reconstruct the "
+                        "container inventory from its original source"
+                    )
+                projection = project_sources(inventory, path.parent)
+                source, artifacts = (
+                    inventory.source.sha1,
+                    set(projection.sources),
+                )
+                if source in artifacts:
+                    raise ValueError(
+                        f"{value}: a source does not place itself"
+                    )
+                placed.setdefault(source, set()).update(artifacts)
+                continue
             try:
                 record = DerivedMediaRecord.model_validate_json(
                     path.read_bytes()
@@ -1468,7 +1569,13 @@ VITAL_REASONS = (
     LEFT_OUT_PERSON,
 )
 # the codes a problem ends in, so reject_reasons reads them back
-CODED_REASONS = (*SUBJECT_REASONS, ARTIFACT_KIND, *VITAL_REASONS)
+SOURCE_SUPPORT = "source_support"
+CODED_REASONS = (
+    *SUBJECT_REASONS,
+    ARTIFACT_KIND,
+    *VITAL_REASONS,
+    SOURCE_SUPPORT,
+)
 # a reject's other reasons: its JSON did not parse as a claim, or the
 # manifest refused it otherwise
 SCHEMA_REASON = "schema"
@@ -2364,8 +2471,9 @@ def main() -> int:
         metavar="RECORD|SOURCE=SHA1,...",
         help="the artifacts a source places, which its captions and "
         "document-subject claims may take as their subject (ADR-0039 §2.1, "
-        "§10.1): a container's derived-media "
-        "record, or a source's SHA-1 and theirs; repeatable",
+        "§10.1): container-inventory.json or its document directory, an "
+        "explicit derived-media.json compatibility record, or a source's "
+        "SHA-1 and theirs; repeatable",
     )
     args = parser.parse_args()
 

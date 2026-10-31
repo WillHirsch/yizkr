@@ -94,9 +94,8 @@ def _add_placed(parser) -> None:
         metavar="RECORD|SOURCE=SHA1,...",
         help="the artifacts a source places, which its caption and "
         "document-subject claims may take as their subject (ADR-0039 "
-        "§2.1, §10.1): the record of a "
-        "container's derived media the pipeline keeps in its document "
-        "directory (derived-media.json, or that directory), or a source's "
+        "§2.1, §10.1): container-inventory.json or its document directory, "
+        "an explicit derived-media.json compatibility record, or a source's "
         "SHA-1, '=', and the SHA-1s of what it places, comma-separated; "
         "repeatable. Without it every claim about an artifact a source "
         "places is refused",

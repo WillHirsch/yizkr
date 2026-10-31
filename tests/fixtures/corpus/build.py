@@ -240,16 +240,14 @@ def stand_in(text: str, title: str) -> bytes:
     return _png(PAGE_WIDTH, height, rows, title)
 
 
-# the size of the stand-in photograph: large enough to be read on its own
-# (yizkr.pipeline.containers, MIN_IMAGE_SIDE and MIN_IMAGE_PIXELS)
+# Dimensions of the stand-in photograph, independent of reading eligibility.
 PHOTOGRAPH_SIZE = (128, 96)
 
 
 def photograph(title: str, people: int = 2) -> bytes:
     """A grayscale PNG that stands in for a photograph of `people`
     figures: a light ground with a dark block for each, and no writing.
-    It is PHOTOGRAPH_SIZE, large enough to be read on its own, and the
-    recorded engine reads it by its bytes."""
+    It is PHOTOGRAPH_SIZE; the recorded engine reads it by its bytes."""
     width, height = PHOTOGRAPH_SIZE
     slot = width // people
     rows = []
@@ -313,11 +311,20 @@ def _escape(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def _slide_xml(paragraphs: tuple[str, ...], root: str = "sld") -> str:
+def _slide_xml(
+    paragraphs: tuple[str, ...], root: str = "sld", picture: str | None = None
+) -> str:
+    """A slide's (or its notes') XML: its text runs, and with `picture`
+    the relationship id of the image it paints, after them."""
     body = "".join(
         f"<a:p><a:r><a:t>{_escape(paragraph)}</a:t></a:r></a:p>"
         for paragraph in paragraphs
     )
+    if picture is not None:
+        body += (
+            f'<p:pic><p:blipFill><a:blip r:embed="{picture}"/>'
+            "</p:blipFill></p:pic>"
+        )
     return (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         f'<p:{root} xmlns:p="{_P}" xmlns:a="{_A}" xmlns:r="{_R}">'
@@ -339,7 +346,7 @@ def _rels_xml(entries: list[tuple[str, str, str]]) -> str:
 def deck() -> bytes:
     """The talk's three slides as a minimal .pptx: the presentation part
     and its slide list, each slide's text runs, the second slide's
-    speaker notes and its one picture."""
+    speaker notes and its one picture, which the slide paints."""
     numbers = range(1, len(SLIDES) + 1)
     overrides = [
         ("/ppt/presentation.xml", f"{_PML}.presentation.main+xml"),
@@ -382,7 +389,9 @@ def deck() -> bytes:
     for n, (paragraphs, notes, photograph) in zip(
         numbers, SLIDES, strict=True
     ):
-        parts[f"ppt/slides/slide{n}.xml"] = _slide_xml(paragraphs)
+        parts[f"ppt/slides/slide{n}.xml"] = _slide_xml(
+            paragraphs, picture="rId2" if photograph else None
+        )
         links = []
         if photograph:
             links.append(("rId2", _IMAGE, "../media/image1.png"))

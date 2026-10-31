@@ -22,6 +22,7 @@ from yizkr.pipeline.chunking import (
 )
 from yizkr.pipeline.critique import Finding, Invalid
 from yizkr.pipeline.extract import ExtractionFailed
+from yizkr.pipeline.interpretation_context import InterpretationContext
 from yizkr.pipeline.language import LanguageResolution, resolve_language
 from yizkr.pipeline.llm import LlmClient
 from yizkr.pipeline.stages import (
@@ -170,6 +171,7 @@ class ExtractionRequest:
     concurrency: int = 1
     read_preparation: bool = True
     pointer: str | None = None
+    context: InterpretationContext | None = None
 
     @property
     def resolved_strategy(self) -> str:
@@ -213,6 +215,123 @@ def _model(client: LlmClient) -> dict[str, Any]:
     }
 
 
+def _context_attention(context: InterpretationContext | None) -> list[str]:
+    if context is None or not context.gaps:
+        return []
+    reasons = "; ".join(dict.fromkeys(gap.reason for gap in context.gaps))
+    return [f"interpretation context is incomplete: {reasons}"]
+
+
+def empty_container_reading(transcription: Transcription) -> bool:
+    """Prove that a current container reading holds only generated markers.
+
+    Images have their own reading/extraction. Empty, attributed container
+    spans do not warrant asking a model to invent a separate interpretation.
+    Unknown, unsupported or nonempty material never takes this shortcut.
+    """
+    from yizkr.pipeline.containers import IMAGE_SOURCE, SLIDE_XML
+    from yizkr.pipeline.transcribe import DECK_ENGINE, is_paged, reading_digest
+
+    context = transcription.source_context
+    pages = transcription.pages
+    if (
+        not is_paged(transcription)
+        or not pages
+        or context is None
+        or context.container != transcription.artifact
+        or context.limitations
+        or len(context.readings) != len(pages)
+    ):
+        return False
+    slide = transcription.engine == DECK_ENGINE
+    unit, separator = ("Slide", "\n") if slide else ("Page", "\n\n")
+    digest = reading_digest(transcription)
+    expected = ""
+    for page, span in zip(pages, context.readings, strict=True):
+        marks = [f"[{unit} {page.page}]"] + [
+            f"[{unit} {page.page}, image {number}: sha1:{sha1}]"
+            for number, sha1 in enumerate(page.images, start=1)
+        ]
+        expected += (separator if expected else "") + "\n".join(marks)
+        if (
+            page.provenance.method
+            not in (
+                {SLIDE_XML} if slide else {"text-layer", "none", IMAGE_SOURCE}
+            )
+            or page.provenance.annotations
+            or page.status != "blank"
+            or page.start != page.end
+            or page.end != len(expected)
+            or span.start != page.start
+            or span.end != page.end
+            or span.state != "attributed"
+            or span.owner != transcription.artifact
+            or span.reason is not None
+            or span.support.container != transcription.artifact
+            or span.support.locator.kind != ("slide_body" if slide else "page")
+            or span.support.locator.position != page.page
+            or span.support.reading_sha256 != digest
+        ):
+            return False
+    return transcription.text == expected
+
+
+def _extract_empty_container(
+    request: ExtractionRequest, dependencies: dict[str, Any]
+) -> ExtractionResult:
+    """Publish deterministic diagnostics without manufacturing model output."""
+    from yizkr.pipeline.extract import run_metadata
+
+    dependencies["process"] = "deterministic:empty-container"
+    batch = ClaimBatch(
+        extraction_run=run_metadata("deterministic:empty-container"),
+        claims=[],
+        entities=[],
+    )
+    artifacts = []
+    if request.state_dir is not None:
+        coverage = {
+            "strategy": "empty-container",
+            "reason": "no container-authored text",
+            "entities_total": 0,
+            "entities_not_extracted": [],
+            "entities_without_claims": [],
+            "distinct_subject_ids": [],
+            "chunks": 0,
+            "claims": 0,
+            "failed_chunks": [],
+            "rejected_claims": 0,
+            "rejected_by_reason": {},
+            "unread_objects": 0,
+            "fallback": {},
+        }
+        for name in SIDE_OUTPUTS:
+            path = request.state_dir / name
+            if name == "coverage.json":
+                atomic_write_text(path, json.dumps(coverage, indent=2))
+                artifacts.append(path)
+            else:
+                path.unlink(missing_ok=True)
+    for path in (
+        request.raw_dump,
+        request.rejects_dump,
+        request.diagnostic_dump,
+    ):
+        if path is not None:
+            path.unlink(missing_ok=True)
+    return ExtractionResult(
+        status="complete",
+        batch=batch,
+        diagnostic_batch=None,
+        attention=_context_attention(request.context),
+        failed_chunks=[],
+        failure_reasons={},
+        gaps=[],
+        artifacts=tuple(artifacts),
+        dependencies=dependencies,
+    )
+
+
 def extract(
     request: ExtractionRequest,
     client: LlmClient | None = None,
@@ -224,15 +343,26 @@ def extract(
     Failure, resumable pause and interruption propagate with their original
     types. An incomplete result keeps usable claims only as diagnostics.
     The caller owns client cleanup, accepted outputs and review decisions.
+    Optional interpretation context is a separate, declared input: it never
+    changes the primary reading or supplies a claim's supporting quotation.
     """
     if request.transcription.artifact != request.artifact:
         raise ValueError("the transcription names a different source artifact")
+    if request.context is not None:
+        request.context.validate_target(request.transcription)
     strategy = request.resolved_strategy
+    empty_container = (
+        strategy in {"single", "chunked"}
+        and request.pointer is None
+        and empty_container_reading(request.transcription)
+    )
     outputs = [request.diagnostic_dump]
     workspaces = []
-    if strategy == "single":
+    if strategy == "single" or empty_container:
         outputs.extend((request.raw_dump, request.rejects_dump))
-    elif strategy == "chunked" and request.state_dir is not None:
+    if (
+        strategy == "chunked" or empty_container
+    ) and request.state_dir is not None:
         outputs.extend(request.state_dir / name for name in SIDE_OUTPUTS)
         workspaces.append(request.state_dir)
     validate_paths(
@@ -245,6 +375,17 @@ def extract(
         ),
         "configuration": {"strategy": strategy},
     }
+    if request.context is not None:
+        dependencies["interpretation_context_sha256"] = content_hash(
+            request.context.model_dump(mode="json")
+        )
+    if empty_container:
+        if log is not None:
+            log(
+                "  no container-authored text: "
+                "empty batch prepared without a model call"
+            )
+        return _extract_empty_container(request, dependencies)
     configuration = dependencies["configuration"]
     if strategy == "file":
         from yizkr.pipeline.extract import ClaimFileExtractor
@@ -260,7 +401,9 @@ def extract(
                 f"cannot read the claims file {request.claims_file}: "
                 f"{exc.strerror or exc}"
             ) from exc
-        extractor = ClaimFileExtractor(request.claims_file)
+        extractor = ClaimFileExtractor(
+            request.claims_file, context=request.context
+        )
     elif strategy in ("chunked", "single"):
         if client is None:
             raise ValueError("model extraction requires a borrowed client")
@@ -289,6 +432,7 @@ def extract(
                 log=log,
                 read_preparation=request.read_preparation,
                 pointer=request.pointer,
+                context=request.context,
             )
         else:
             from yizkr.pipeline.extract import LlmClaimExtractor
@@ -297,6 +441,7 @@ def extract(
                 client,
                 raw_dump=request.raw_dump,
                 rejects_dump=request.rejects_dump,
+                context=request.context,
             )
     else:
         raise ValueError(f"unknown extraction strategy {strategy!r}")
@@ -312,7 +457,10 @@ def extract(
             "re-run to retry them"
         )
     complete = not reasons
-    attention = list(getattr(extractor, "attention", ()))
+    attention = [
+        *getattr(extractor, "attention", ()),
+        *_context_attention(request.context),
+    ]
     if complete and not batch.claims and not attention:
         attention.append("no claims extracted: the supplied batch is empty")
     attention.extend(reason for reason in reasons if reason not in attention)
@@ -361,6 +509,7 @@ def extract(
 class CritiqueRequest:
     batch: ClaimBatch
     transcription: Transcription
+    context: InterpretationContext | None = None
 
 
 @dataclass(frozen=True)
@@ -377,7 +526,7 @@ def critique(request: CritiqueRequest, client: LlmClient) -> CritiqueResult:
     """Return advisory findings, preserving an unfinished critic's status."""
     from yizkr.pipeline.critique import run_critique
 
-    attention: list[str] = []
+    attention = _context_attention(request.context)
     incomplete: list[str] = []
     findings = run_critique(
         client,
@@ -385,6 +534,7 @@ def critique(request: CritiqueRequest, client: LlmClient) -> CritiqueResult:
         request.transcription,
         attention=attention,
         incomplete_reasons=incomplete,
+        context=request.context,
     )
     attention.extend(
         reason for reason in incomplete if reason not in attention
@@ -402,5 +552,14 @@ def critique(request: CritiqueRequest, client: LlmClient) -> CritiqueResult:
                 request.transcription.model_dump(mode="json")
             ),
             "model": _model(client),
+            **(
+                {
+                    "interpretation_context_sha256": content_hash(
+                        request.context.model_dump(mode="json")
+                    )
+                }
+                if request.context is not None
+                else {}
+            ),
         },
     )
