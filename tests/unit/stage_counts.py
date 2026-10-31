@@ -36,9 +36,10 @@ def disagreement(run: Path, summary=None) -> str | None:
     seen = {}
     for counts in summary.stages:
         row = {
-            PENDING: counts.pending - counts.interrupted,
+            PENDING: counts.pending - counts.interrupted - counts.cancelled,
             RUNNING: counts.running,
             INTERRUPTED: counts.interrupted,
+            "cancelled": counts.cancelled,
             DONE: counts.done + sum(counts.reused.values()),
             NEEDS_ATTENTION: counts.attention,
             FAILED: counts.failed,

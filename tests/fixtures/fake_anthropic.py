@@ -25,7 +25,7 @@ def api_engine(monkeypatch, *answers, by_prompt=None, resolved=RESOLVED):
     queue = list(answers)
 
     class Messages:
-        def create(self, **request):
+        async def create(self, **request):
             if isinstance(by_prompt, Mapping):
                 prompt = request["messages"][-1]["content"][-1]["text"]
                 answer = by_prompt[prompt]
@@ -40,7 +40,13 @@ def api_engine(monkeypatch, *answers, by_prompt=None, resolved=RESOLVED):
             )
 
     package = types.ModuleType("anthropic")
-    package.Anthropic = lambda: types.SimpleNamespace(messages=Messages())
+
+    async def close():
+        pass
+
+    package.AsyncAnthropic = lambda **kwargs: types.SimpleNamespace(
+        messages=Messages(), close=close
+    )
     monkeypatch.setitem(sys.modules, "anthropic", package)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "a-test-key")
     return llm.AnthropicClient(model=MODEL)

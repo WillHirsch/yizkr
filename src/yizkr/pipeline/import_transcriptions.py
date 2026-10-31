@@ -129,6 +129,7 @@ from yizkr.core.corpus import (
     follow_decks,
     is_excluded,
 )
+from yizkr.pipeline.cancellation import check_cancelled
 from yizkr.pipeline.stages import sha256_text
 
 # the files of an archive the import reads: a document folder's state and
@@ -823,6 +824,7 @@ def import_transcriptions(
     each media's transcriptions."""
     from yizkr.pipeline.orchestrate import Orchestrator
 
+    check_cancelled()
     if exclusions is None:
         raise ExclusionConfigError(MISSING_LIST)
     prefixes = _prefixes(leave_out)
@@ -851,6 +853,7 @@ def import_transcriptions(
 
     # second pass: the transcriptions the list leaves in
     for record in records:
+        check_cancelled()
         if record.problem is None and not out(record):
             read_transcription(record)
     matched = _match_prefixes(
@@ -864,6 +867,7 @@ def import_transcriptions(
     media: dict[str, _Media] = {}
     reported: set[str] = set()
     for record in records:
+        check_cancelled()
         if out(record):
             sha1 = min(record.sha1s) if record.sha1s else None
             if sha1 is None or sha1 not in reported:
@@ -923,6 +927,7 @@ def import_transcriptions(
         adopt: list[_Media] = []
         left: list[_Media] = []
         for sha1, found in sorted(media.items()):
+            check_cancelled()
             found.scan = scans.get(sha1)
             found.prefix = matched.get(sha1)
             if found.prefix is not None:
@@ -939,6 +944,7 @@ def import_transcriptions(
         if adopt or withdraw:
             _preflight(found.scan for found in adopt if found.scan)
             try:
+                check_cancelled()
                 client = orchestrator.role_client(ROLE)
             except RuntimeError as exc:
                 raise ImportRefused(
@@ -947,10 +953,13 @@ def import_transcriptions(
                 ) from None
             adopter = _Adopter(client, cache_dir)
             try:
-                outcomes += [adopter.adopt(found) for found in adopt]
-                withdrawn = {
-                    found.sha1 for found in withdraw if adopter.withdraw(found)
-                }
+                for found in adopt:
+                    check_cancelled()
+                    outcomes.append(adopter.adopt(found))
+                for found in withdraw:
+                    check_cancelled()
+                    if adopter.withdraw(found):
+                        withdrawn.add(found.sha1)
             finally:
                 adopter.close()
             keyed = adopter.keyed

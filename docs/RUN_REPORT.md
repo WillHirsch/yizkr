@@ -46,6 +46,7 @@ The logs are read a line at a time and folded as they are read, so a whole-corpu
 | held | pending, held by the control file |
 | running | started by the running invocation |
 | interrupted | started by an invocation that is over: the next starts it again |
+| cancelled | explicitly stopped while active; earlier completed products remain and a later invocation may retry |
 | computed | completed, and made in the run: the engine answered at least one of its calls, or it makes none (a text file's transcription, the GEDCOM adapter) |
 | reused | completed, and the LLM cache answered every call it made (by the answers' reasons: `key match`, `adopted`, or several joined by `+`), or its view came from before the run's events and stands (`view current`) |
 | needs attention | completed with attention reasons (a fallback tier, no claims), however it came about |

@@ -55,6 +55,13 @@ class Allowed:
 
 ALLOWED = (
     Allowed(
+        "test_llmcache.py",
+        "acquire( with a timeout",
+        "delegates the production lock timeout while recording each waiter;"
+        " assertions use arrivals and events, not elapsed time",
+        inside="WaitCountingLock.acquire",
+    ),
+    Allowed(
         "test_anomalies.py",
         "START_TIMER( with a wait",
         "its timer is made, never started: threading.Timer is patched, so"

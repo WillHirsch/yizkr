@@ -22,7 +22,7 @@ import json
 import threading
 from collections import Counter
 from collections.abc import Callable, Collection, Iterable, Mapping
-from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -49,6 +49,11 @@ from yizkr.claims import (
 from yizkr.core.verbatim import Transcript, words
 from yizkr.model.schema import load_acceptance
 from yizkr.pipeline import preparation
+from yizkr.pipeline.cancellation import (
+    Cancellation,
+    cancellation_scope,
+    check_cancelled,
+)
 from yizkr.pipeline.extract import (
     ExtractionFailed,
     _normalize_claim_shape,
@@ -81,6 +86,7 @@ from yizkr.pipeline.review import claim_id
 from yizkr.pipeline.source_context import bind_source_support, support_failure
 from yizkr.pipeline.stages import atomic_write_text
 from yizkr.pipeline.transcribe import Transcription
+from yizkr.pipeline.workers import map_workers
 
 # Transcriptions above this size use chunked extraction under
 # --strategy auto. Conservative on purpose: density (the real driver)
@@ -559,8 +565,10 @@ class ChunkedClaimExtractor:
         read_preparation: bool = False,
         pointer: str | None = None,
         context: InterpretationContext | None = None,
+        cancellation: Cancellation | None = None,
     ) -> None:
         self.context = context
+        self.cancellation = cancellation
         self.client = client
         self.read_preparation = read_preparation
         self.pointer = pointer
@@ -672,6 +680,7 @@ class ChunkedClaimExtractor:
         answered = False
         reasons: list[str] = []
         for attempt in range(2):
+            check_cancelled()
             client = for_attempt(self.client, attempt)
             try:
                 if isinstance(client, ConversationalLlmClient):
@@ -687,6 +696,7 @@ class ChunkedClaimExtractor:
                 reasons.append(f"{type(exc).__name__}: {exc}")
                 return None, None, reasons, False
             except Exception as exc:
+                check_cancelled()
                 reasons.append(f"{type(exc).__name__}: {exc}")
                 handle = None
                 continue
@@ -1094,6 +1104,7 @@ class ChunkedClaimExtractor:
         except (ConversationChanged, OutputLimitReached, ClassifierRefused):
             raise
         except Exception:
+            check_cancelled()
             return None
 
     def _run_chunk(
@@ -1125,6 +1136,7 @@ class ChunkedClaimExtractor:
         tries = 1 + self.retries
         kept_rejected = False
         while tries:
+            check_cancelled()
             tries -= 1
             try:
                 response = None
@@ -1133,6 +1145,7 @@ class ChunkedClaimExtractor:
                     if response is None:
                         handle = None
                 if response is None:
+                    check_cancelled()
                     response = self.client.complete(fallback_prompt)
             except (ConversationChanged, ClassifierRefused):
                 raise
@@ -1140,8 +1153,10 @@ class ChunkedClaimExtractor:
                 last_error = ChunkIncomplete(CUT_OFF_AT_LIMIT)
                 continue
             except Exception as exc:
+                check_cancelled()
                 last_error = exc
                 continue
+            check_cancelled()
             cut = at_output_limit(self.client, response)
             try:
                 claims = parse_chunk_response(response, cut_off=cut)
@@ -1192,6 +1207,7 @@ class ChunkedClaimExtractor:
         note = MISSING_FIELD_NOTE.format(count=len(claims), field=field)
         client = for_attempt(self.client, 1)
         for _ask in range(2):
+            check_cancelled()
             try:
                 again = None
                 if handle is not None:
@@ -1199,13 +1215,16 @@ class ChunkedClaimExtractor:
                     if again is None:
                         handle = None
                 if again is None:
+                    check_cancelled()
                     again = client.complete(fallback_prompt + note)
             except ConversationChanged:
                 raise
             except ClassifierRefused:
                 break
             except Exception:
+                check_cancelled()
                 break
+            check_cancelled()
             cut = at_output_limit(client, again)
             try:
                 return parse_chunk_response(again, cut_off=cut), again
@@ -1229,18 +1248,27 @@ class ChunkedClaimExtractor:
         opened again and answers differently (ConversationChanged), the
         pass is void and the extraction starts over from the new answer,
         at most twice."""
-        if self.context is not None:
-            self.context.validate_target(transcription)
-        for _pass in range(2):
-            try:
-                return self._extract(transcription, artifact)
-            except ConversationChanged as exc:
-                self._log(f"  {exc}: extracting again from the new answer")
-        return self._extract(transcription, artifact)
+        scope = (
+            cancellation_scope(self.cancellation)
+            if self.cancellation is not None
+            else nullcontext()
+        )
+        with scope:
+            if self.context is not None:
+                self.context.validate_target(transcription)
+            for _pass in range(2):
+                check_cancelled()
+                try:
+                    return self._extract(transcription, artifact)
+                except ConversationChanged as exc:
+                    self._log(f"  {exc}: extracting again from the new answer")
+            check_cancelled()
+            return self._extract(transcription, artifact)
 
     def _extract(
         self, transcription: Transcription, artifact: ArtifactRef
     ) -> ClaimBatch:
+        check_cancelled()
         text_lines = transcription.prompt_text().splitlines()
         self.failed_chunks = []
         self.incomplete_reasons = []
@@ -1346,6 +1374,7 @@ class ChunkedClaimExtractor:
             except ConversationChanged:
                 raise
             except Exception as exc:
+                check_cancelled()
                 with self._state_lock:
                     self.failed_chunks.append(chunk_id)
                     self.failure_reasons[chunk_id] = (
@@ -1361,11 +1390,13 @@ class ChunkedClaimExtractor:
                 scan_json_answer(response).trailing_commas,
             )
 
-        try:
-            with ThreadPoolExecutor(max_workers=self.concurrency) as pool:
-                outcomes = list(pool.map(run_one, chunk_ids, chunk_groups))
-        finally:
-            self._close_conversation(handle)
+        outcomes = map_workers(
+            lambda item: run_one(*item),
+            zip(chunk_ids, chunk_groups, strict=True),
+            concurrency=self.concurrency,
+            after_workers=lambda: self._close_conversation(handle),
+        )
+        check_cancelled()
         self.failed_chunks.sort()
 
         reading, read_reasons = self._reading(transcription)
@@ -1400,6 +1431,7 @@ class ChunkedClaimExtractor:
                 reading, read_reasons, self._marked
             )
         if not self.failed_chunks:
+            check_cancelled()
             self._write_side_outputs(extras)
         return batch
 
@@ -1484,6 +1516,7 @@ class ChunkedClaimExtractor:
         if self.state_dir is None:
             return
         for name in SIDE_OUTPUTS:
+            check_cancelled()
             path = self.state_dir / name
             if name in extras:
                 atomic_write_text(path, extras[name])

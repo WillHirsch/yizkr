@@ -177,7 +177,7 @@ Run ingestion explicitly selects entity-first chunked extraction because its ide
 
 The callers retain exclusion policy, scheduling, publication, view reuse and review invalidation. Operations enforce the supplied eligibility and identity checks before reading. Reviewed ingestion schedules critique after deriving a complete batch; scratch schedules it as its own stage. Excerpt discovery, deduplication, parent-reading prerequisites and corpus barriers remain driver decisions. Scratch's refresh decision consults the successful-refresh record without changing the invocation's settings. A refresh is recorded only after its output and document state are saved.
 
-Result dependency metadata describes the computation; `derivations.json` records persisted-view inputs and generation dependencies for every supported document kind. A fixed stage registry and shared freshness planner support execution and estimation, as described below. The registry declares GEDCOM's sole document stage as deterministic, producing `batch.json` without a transcription or critique dependency; it still shares the `extract` refresh role. This does not implement an atomic multi-file generation store or a general workflow engine. Worker cancellation and provider-session separation remain #724 and #726; model prompts and response-cache keys are unchanged.
+Result dependency metadata describes the computation; `derivations.json` records persisted-view inputs and generation dependencies for every supported document kind. A fixed stage registry and shared freshness planner support execution and estimation, as described below. The registry declares GEDCOM's sole document stage as deterministic, producing `batch.json` without a transcription or critique dependency; it still shares the `extract` refresh role. This does not implement an atomic multi-file generation store or a general workflow engine. [Cancellation and execution ownership](#cancellation-and-execution-ownership) apply across these operations. Provider-session separation remains #726; model prompts and response-cache keys are unchanged.
 
 Media preparation and reading return explicit products rather than publishing into a driver's directory. The same operations are available to estimation without writes; deterministic routes do not acquire a model client.
 
@@ -192,6 +192,32 @@ flowchart LR
     read --> result["Typed result + temporary products"]
     result --> publish["Caller publishes and closes resources"]
 ```
+
+## Cancellation and execution ownership
+
+An invocation owns a `Cancellation` signal. Each active stage and worker group borrows a child scope, so aborting one stage or document kind can stop its calls without stopping unrelated work. A pause holds future dispatch; an abort also signals active work. Ctrl-C stops the invocation. Subscription pauses retain their original reason and may resume through a fresh scope.
+
+```mermaid
+flowchart TD
+    operator["Abort request / Ctrl-C / Python caller"] --> invocation["Invocation cancellation"]
+    operator --> scope["Matching stage scope"]
+    invocation --> scope
+    scope --> workers["Bounded worker dispatch"]
+    workers --> calls["Provider call scope"]
+    scope --> calls
+    calls --> process["Owned CLI process group"]
+    calls --> api["Async API task and transport"]
+    scope --> publish["Publication and graph-effect checks"]
+    publish --> products[("Completed products and cached answers")]
+```
+
+The driver watches abort requests while calls are active. Context is copied into workers, and only available worker slots are submitted. An exception that ends a worker group stops siblings before shutdown; it retains the distinction between cancellation, subscription pause, interrupt and ordinary failure. `cancelled` stage/call events appear in the monitor and report. Completed products and cached responses survive; a response arriving after its scope was cancelled cannot be cached or published as a completed proposal.
+
+Claude calls and version probes run in owned process groups. Cancellation signals the group, escalates from TERM to KILL when needed, and bounds pipe draining and child reaping. Anthropic requests retain the synchronous Python API while owning an asynchronous request task and transport internally; cancellation awaits their cleanup. Neither local cancellation proves that a remote provider stopped processing nor that no usage was billed. Request text, effective model configuration and response-cache keys do not include lifecycle signals.
+
+Worker joining has a five-second bound after cancellation. Python cannot forcibly kill arbitrary custom worker threads: an uncooperative worker causes an explicit `WorkerShutdownTimeout`, prevents automatic pause/resume, and defers shared conversation cleanup until the worker exits. Such custom work is outside the supported bounded-shutdown guarantee and may keep the Python process alive. Normal cleanup never cancels a parent invocation merely because one borrowed child scope finishes.
+
+Registrar and writer checkpoints stop before their next graph mutation or upload. An already-dispatched graph request or destructive reset may still complete under its existing safeguards; cancellation is not rollback and does not prove that no effect occurred. Durable write-intent recovery remains [#85](https://github.com/WillHirsch/yizkr/issues/85). The response cache still owns conversation restoration/replay under its existing exclusive lock; separating that responsibility remains [#726](https://github.com/WillHirsch/yizkr/issues/726).
 
 ## Whole-corpus scratch runs
 
@@ -216,7 +242,7 @@ Independently read images from PDFs or slide decks can join as documents of thei
 
 Scratch writes have no human approval stop, mark their run items as unratified development output, and omit `depicts` claims. A kept instance refuses this write path. Resuming unchanged work can reuse the instance or continue a recorded write phase; it does not unconditionally reset on every invocation. The pipeline guide details the [write side](../src/yizkr/pipeline/README.md#the-scratch-runs-write-side-scratchwritepy-adr-0025-1-2).
 
-Reports and diffs are explicit commands and can also inspect partial runs. The default baseline is the latest completed run on main. Detailed corpus reports and diffs stay local; aggregate summaries supply development evidence. Use whole-corpus comparisons when cross-document risk warrants them, alongside focused evidence selected under [TESTING.md](TESTING.md). Retained readiness is a separate owner decision based on supported workflows, not convergence of extraction outputs. The [monitor](MONITOR.md) reads run events and writes pause/resume/abort requests that the driver observes between stages.
+Reports and diffs are explicit commands and can also inspect partial runs. The default baseline is the latest completed run on main. Detailed corpus reports and diffs stay local; aggregate summaries supply development evidence. Use whole-corpus comparisons when cross-document risk warrants them, alongside focused evidence selected under [TESTING.md](TESTING.md). Retained readiness is a separate owner decision based on supported workflows, not convergence of extraction outputs. The [monitor](MONITOR.md) reads run events and writes pause/resume/abort requests that the driver observes before dispatch; aborts also reach active work scopes.
 
 Implementation: [scratch driver](../src/yizkr/pipeline/scratch.py), [adjudication](../src/yizkr/pipeline/adjudication.py), [write stages](../src/yizkr/pipeline/scratchwrite.py), [runbook](runbooks/scratch-run.md), [reports](RUN_REPORT.md) and [diffs](RUN_DIFF.md).
 

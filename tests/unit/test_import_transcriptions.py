@@ -1554,3 +1554,43 @@ class TestTheEstimate:
         run = transcribe_only(tmp_path, corpus, engine)
         assert read_by_the_engine(engine) == {STONE}
         assert hits(run, "adopted") == {corpus.sha1(PHOTO)}
+
+
+def test_cancelled_import_keeps_completed_adoption_and_resumes(
+    tmp_path, engine, monkeypatch
+):
+    from yizkr.pipeline.cancellation import (
+        Cancellation,
+        RunCancelled,
+        cancellation_scope,
+    )
+
+    corpus = small(tmp_path)
+    archive = an_archive(tmp_path, corpus)
+    signal = Cancellation()
+    adopt = imports._Adopter.adopt
+    completed = []
+    closed = []
+    close = imports._Adopter.close
+
+    def first_only(adopter, media):
+        outcome = adopt(adopter, media)
+        completed.append(outcome)
+        signal.cancel("operator cancelled")
+        return outcome
+
+    def closing(adopter):
+        closed.append(True)
+        close(adopter)
+
+    monkeypatch.setattr(imports._Adopter, "adopt", first_only)
+    monkeypatch.setattr(imports._Adopter, "close", closing)
+    with cancellation_scope(signal), pytest.raises(RunCancelled):
+        import_(tmp_path, archive, corpus)
+    assert len(completed) == 1 and completed[0].outcome == IMPORTED
+    assert closed == [True]
+    (kept,) = live(tmp_path)
+    monkeypatch.setattr(imports._Adopter, "adopt", adopt)
+    report = import_(tmp_path, archive, corpus)
+    assert sum(outcome.outcome == IMPORTED for outcome in report.outcomes) == 2
+    assert kept in live(tmp_path)

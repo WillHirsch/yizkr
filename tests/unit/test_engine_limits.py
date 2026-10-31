@@ -49,7 +49,6 @@ from yizkr.pipeline.chunking import ChunkedClaimExtractor
 from yizkr.pipeline.llm import (
     BACKOFF,
     BACKOFF_CAP,
-    CLOSED,
     DEFAULT_MAX_WAIT,
     DEFAULT_RESERVE,
     ENGINE_CALL,
@@ -319,7 +318,7 @@ def cli(monkeypatch, tmp_path, clock) -> LimitedCli:
     other = subprocess.run
     plain = install_fake_cli(monkeypatch, tmp_path)
     limited = LimitedCli(plain.projects, other)
-    monkeypatch.setattr(llm.subprocess, "run", limited)
+    monkeypatch.setattr(llm, "_run_process", limited)
     return limited
 
 
@@ -892,12 +891,13 @@ class TestAskingAgain:
         assert client.last_pacing() == {}
 
     def test_a_closed_client_does_not_wait(self, cli, clock):
+        from yizkr.pipeline.cancellation import RunCancelled
+
         client = ClaudeCodeClient()
         client.close()
         cli.script = [RATE_LIMITED]
-        with pytest.raises(UsageLimitReached) as paused:
+        with pytest.raises(RunCancelled, match="client was closed"):
             client.complete("Read the letter.")
-        assert paused.value.reason == CLOSED
         assert clock.slept == []
 
     def test_closing_the_client_wakes_a_call_that_waits(
@@ -906,6 +906,8 @@ class TestAskingAgain:
         """A call waiting out a rate limit waits on the client's stop
         event: the fake sleep waits on nothing else, so only close() can
         wake it, and the hang guard fails a wait it never wakes."""
+        from yizkr.pipeline.cancellation import RunCancelled
+
         waiting = threading.Event()
         woken = []
 
@@ -924,8 +926,8 @@ class TestAskingAgain:
         def call():
             try:
                 client.complete("Read the letter.")
-            except UsageLimitReached as exc:
-                reasons.append(exc.reason)
+            except RunCancelled:
+                reasons.append("cancelled")
 
         # a daemon, so a call close() never wakes fails the test and does
         # not also keep the test process from exiting
@@ -936,7 +938,7 @@ class TestAskingAgain:
         thread.join(timeout=HANG_GUARD)
         assert not thread.is_alive()
         assert woken == [True]
-        assert reasons == [CLOSED]
+        assert reasons == ["cancelled"]
 
     def test_the_pacer_waits_by_default_on_the_stop_event(self):
         """The pacer's default sleep is the one close() wakes: it waits

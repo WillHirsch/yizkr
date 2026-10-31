@@ -167,6 +167,7 @@ from yizkr.pipeline.rundir import (
     ALERTS,
     CACHE_EVENTS,
     CALL,
+    CANCELLED,
     CONTROL,
     DOCUMENT_FAILED,
     DONE,
@@ -291,7 +292,16 @@ ENGINES = frozenset({"claude-code", "anthropic"})
 RUN_STATES = frozenset(OUTCOMES) | {"running", "ended", "not started"}
 INVOCATION_ENDS = frozenset(OUTCOMES) | {"running", KILLED}
 STATUSES = frozenset(
-    {PENDING, HELD, RUNNING, INTERRUPTED, DONE, NEEDS_ATTENTION, FAILED}
+    {
+        PENDING,
+        HELD,
+        RUNNING,
+        INTERRUPTED,
+        CANCELLED,
+        DONE,
+        NEEDS_ATTENTION,
+        FAILED,
+    }
 ) | {NOT_RUN}
 ROUTES = frozenset(
     {"llm-vision", "pdf-pages", "text-file", "pptx-adapter", "correction"}
@@ -308,7 +318,9 @@ HIT_REASONS = frozenset({KEY_MATCH, "adopted"})
 MISS_REASONS = frozenset({"absent", "rejected", "refresh"})
 FORCED = MISS_REASONS | {NO_CALL, NO_CACHE, REPLAY, REPLAY_CHANGED}
 REUSE_REASONS = HIT_REASONS | {VIEW_CURRENT}
-CALL_OUTCOMES = frozenset({"ok", "error", "paused", "interrupted"})
+CALL_OUTCOMES = frozenset(
+    {"ok", "error", "paused", "interrupted", "cancelled"}
+)
 HOLDS = frozenset(
     {
         "usage limit",
@@ -754,8 +766,9 @@ class _Fold:
             totals.seconds += seconds
             totals.timed += 1
         attempt.since = None
-        if name == "failed":
-            attempt.status, attempt.seconds = FAILED, seconds
+        if name in ("failed", "cancelled"):
+            attempt.status = FAILED if name == "failed" else CANCELLED
+            attempt.seconds = seconds
             attempt.reason, attempt.made = _text(event.get("reason")), False
             return
         if name == "reused" and not attempt.made:
@@ -2657,6 +2670,7 @@ STAGE_COLUMNS = (
     HELD,
     RUNNING,
     INTERRUPTED,
+    CANCELLED,
     COMPUTED,
     REUSED,
     NEEDS_ATTENTION,
@@ -3769,6 +3783,7 @@ def _stage_sections(
         "Held",
         "Running",
         "Interrupted",
+        "Cancelled",
         "Computed",
         "Reused",
         "Needs attention",
@@ -4625,6 +4640,7 @@ _STYLES = {
     NEEDS_ATTENTION: "warn",
     HELD: "warn",
     INTERRUPTED: "warn",
+    CANCELLED: "warn",
     FAILED: "bad",
 }
 

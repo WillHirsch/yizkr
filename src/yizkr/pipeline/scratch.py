@@ -54,8 +54,9 @@ an abort holds its slice for the rest of the invocation, and outranks a
 pause of another scope that also covers a stage, since no resume can let
 that stage through. The monitor, the anomaly checks and `yizkr scratch
 pause|resume|abort` write those requests. A stage in flight when a
-request arrives finishes. Ctrl-C stops the invocation at once, and the
-engine's calls in flight with it. Every completed call is in the cache
+pause arrives finishes. An abort signals matching active work as well as
+holding later dispatch. Ctrl-C cancels the invocation and its owned calls.
+Every completed call is in the cache
 and every completed view in its directory, so invoking the run again
 resumes it with nothing completed made again: a view that stands is
 reused, and so is one that a refresh of its role (`--refresh`) has made
@@ -142,6 +143,7 @@ from yizkr.core.exits import EXIT_FAILED as EXIT_FAILED
 from yizkr.core.exits import EXIT_INTERRUPTED as EXIT_INTERRUPTED
 from yizkr.core.exits import EXIT_OK as EXIT_OK
 from yizkr.core.exits import EXIT_STOPPED as EXIT_STOPPED
+from yizkr.pipeline.cancellation import RunCancelled, check_cancelled
 from yizkr.pipeline.orchestrate import (
     BATCHED,
     DUPLICATE,
@@ -184,6 +186,7 @@ from yizkr.pipeline.stage_planning import (
     stages_for,
 )
 from yizkr.pipeline.stages import read_jsonl
+from yizkr.pipeline.workers import WorkerShutdownTimeout
 
 # the run manifest's mode for a scratch run
 MODE = "scratch run"
@@ -1404,7 +1407,15 @@ class ScratchDriver(Orchestrator):
             )
             announced.clear()
             announced.update(stops)
-        self._sleep(self.poll)
+        self._wait(self.poll)
+
+    def _wait(self, seconds: float) -> None:
+        check_cancelled()
+        if self._sleep is time.sleep:
+            self.cancellation.wait(seconds)
+        else:
+            self._sleep(seconds)
+        check_cancelled()
 
     # -- one document -------------------------------------------------------
 
@@ -1520,6 +1531,16 @@ class ScratchDriver(Orchestrator):
         except DispatchStopped as exc:
             self.log(f"  {doc.source.name}: {exc}")
             return _HELD
+        except RunCancelled:
+            if stage == "transcription":
+                self._interpretation_readings.pop(doc.sha1, None)
+            doc.state.status = PAUSED
+            self._save(doc)
+            if self.cancellation.is_set():
+                raise
+            return _HELD
+        except WorkerShutdownTimeout:
+            raise
         except Exception as exc:
             if stage == "transcription":
                 self._interpretation_readings.pop(doc.sha1, None)
@@ -1681,6 +1702,7 @@ class ScratchDriver(Orchestrator):
         announced: set[str] = set()
         failed: set[int] = set()
         while True:
+            check_cancelled()
             pending = [item for item in pending if id(item[0]) not in failed]
             if not pending:
                 return None, []
@@ -1750,7 +1772,7 @@ class ScratchDriver(Orchestrator):
                     stage=stage, kind=doc.kind
                 )
                 noted[(doc.sha1, stage)] = stop or ""
-                self._sleep(self.poll)
+                self._wait(self.poll)
                 continue
             pending.remove(chosen)
             if outcome == _FAILED_HERE:
@@ -1777,6 +1799,7 @@ class ScratchDriver(Orchestrator):
         announced: set[str] = set()
         noted = None
         while True:
+            check_cancelled()
             control = self.rundir.control()
             stop = stop_of(control, stage=stage.name)
             if stop is None:
@@ -1831,7 +1854,15 @@ class ScratchDriver(Orchestrator):
             self.log(f"{stage.name}: over {len(completed)} documents")
             self.rundir.emit("started", stage=stage.name)
             try:
-                attention = list(stage.run(context) or ())
+                with self._stage_cancellation(stage.name):
+                    attention = list(stage.run(context) or ())
+            except RunCancelled as exc:
+                self.rundir.emit(
+                    "cancelled",
+                    stage=stage.name,
+                    reason=self._cancellation_reason(exc),
+                )
+                return self._cancellation_reason(exc), None
             except Exception as exc:
                 self.rundir.emit(
                     "failed", stage=stage.name, reason=_why(exc)[:500]
@@ -1879,6 +1910,8 @@ class ScratchDriver(Orchestrator):
         before the run is invoked again."""
         from yizkr.pipeline.llm import PassPaused, UsageLimitReached
 
+        self._control_active = False
+        check_cancelled()
         # fail closed: no never-ingest list, nothing read
         if self.exclusions is None:
             raise ExclusionConfigError(MISSING_LIST)
@@ -1944,6 +1977,7 @@ class ScratchDriver(Orchestrator):
         self.rundir.start(fixed_settings=True, **fields)
         if carry:
             self._carry()
+        self._control_active = True
         if canaries and not past:
             self.log(
                 "canaries: "
@@ -1971,7 +2005,15 @@ class ScratchDriver(Orchestrator):
                 stop, failed = self._corpus(
                     [*taken, *self._known_excerpts(taken)]
                 )
-        except KeyboardInterrupt:
+        except RunCancelled as exc:
+            found = [*found, *self._excerpts.values()]
+            reason = self._cancellation_reason(exc)
+            self._end_invocation(found, "stopped", reason=reason)
+            self._complete(False)
+            self._report("stopped", reason)
+            return EXIT_STOPPED
+        except KeyboardInterrupt as exc:
+            self.cancellation.cancel(exception=exc)
             found = [*found, *self._excerpts.values()]
             self._end_invocation(found, "interrupted")
             self._report("interrupted", None)
@@ -2051,7 +2093,7 @@ class ScratchDriver(Orchestrator):
                 self._await_resume({whole}, announced)
             else:
                 left = (resumes - self._clock()).total_seconds()
-                self._sleep(max(0.0, min(self.poll, left)))
+                self._wait(max(0.0, min(self.poll, left)))
 
     def _requests_since(self, since: int | None = None) -> list[dict]:
         """The control file's requests after the first `since` of them
@@ -2061,7 +2103,7 @@ class ScratchDriver(Orchestrator):
         since = self._asked_since if since is None else since
         return requests[since:] if len(requests) >= since else requests
 
-    def run(self) -> int:
+    def _run(self) -> int:
         """Run the scratch run: one invocation, and another after each
         subscription limit that paused it, with every request in force as
         it starts still in force. Returns the exit status (EXIT_*). Only
@@ -2074,7 +2116,10 @@ class ScratchDriver(Orchestrator):
             result = self._invocation(carry)
             if isinstance(result, int):
                 return result
-            if not self._await_subscription(result):
+            try:
+                if not self._await_subscription(result):
+                    return EXIT_STOPPED
+            except RunCancelled:
                 return EXIT_STOPPED
             carry = True
 

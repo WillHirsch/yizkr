@@ -105,6 +105,7 @@ from yizkr.pipeline.rundir import (
     ABORT,
     ALERTS,
     CACHE_EVENTS,
+    CANCELLED,
     CONTROL,
     CONTROL_ACTIONS,
     DOCUMENT_FAILED,
@@ -572,6 +573,7 @@ class StageCounts:
     # of the pending: held by the control file, and interrupted
     held: int = 0
     interrupted: int = 0
+    cancelled: int = 0
     failures: Counter = field(default_factory=Counter)
     attention_reasons: Counter = field(default_factory=Counter)
     # the stage's calls, as far as the cache's events show them
@@ -1190,6 +1192,10 @@ class RunMonitor:
             attempt.status, attempt.held = PENDING, True
             return
         attempt.held = False
+        if name == "cancelled":
+            attempt.status = CANCELLED
+            attempt.end()
+            return
         if name == "failed":
             attempt.status = FAILED
             attempt.failure = failure_label(event.get("reason"))
@@ -1235,6 +1241,8 @@ class RunMonitor:
         elif name == "held":
             corpus.status = HELD
             corpus.reason = _token(event.get("reason"), 60)
+        elif name == "cancelled":
+            corpus.status, corpus.ended = CANCELLED, at
         elif name == "failed":
             corpus.status, corpus.ended = FAILED, at
             corpus.failure = failure_label(event.get("reason"))
@@ -1498,6 +1506,10 @@ class RunMonitor:
                 counts.pending += 1
                 counts.held += attempt.held
                 remaining[(stage, kind)] += 1
+            elif status == CANCELLED:
+                counts.pending += 1
+                counts.cancelled += 1
+                remaining[(stage, kind)] += 1
             elif status == FAILED:
                 counts.failed += 1
                 counts.failures[attempt.failure or OTHER] += 1
@@ -1604,6 +1616,7 @@ class RunMonitor:
                 RUNNING: RUNNING,
                 HELD: HELD,
                 FAILED: FAILED,
+                CANCELLED: CANCELLED,
                 DONE: SKIPPED if corpus.phase == SKIPPED else DONE,
             }.get(corpus.status, PENDING)
             if state == HELD and ended:
@@ -2064,6 +2077,10 @@ def _stage_notes(summary: Summary) -> list[tuple[str, str]]:
                 f"{_n(stage.interrupted)} interrupted (the next invocation "
                 "starts them again)"
             )
+        if stage.cancelled:
+            held.append(
+                f"{_n(stage.cancelled)} cancelled (retry on a new invocation)"
+            )
         if held:
             notes.append((f"pending    {name}: {', '.join(held)}", "warn"))
     if summary.failed_documents:
@@ -2173,6 +2190,8 @@ def _corpus_state(stage: CorpusStageState, now: datetime) -> tuple[str, str]:
         return f"failed{took}: {stage.failure or OTHER}", "bad"
     if stage.state == HELD:
         return f"held: {stage.reason or '?'}", "warn"
+    if stage.state == CANCELLED:
+        return "cancelled (retry on a new invocation)", "warn"
     if stage.state == INTERRUPTED:
         return "interrupted (the next invocation runs it again)", "warn"
     return "pending", "dim"
@@ -2204,7 +2223,7 @@ def _corpus_rows(summary: Summary) -> list[tuple[str, str]]:
 
 # the corpus stages' states still to run in the latest invocation, or in
 # the next one
-_CORPUS_TO_GO = (PENDING, HELD, RUNNING, INTERRUPTED, FAILED)
+_CORPUS_TO_GO = (PENDING, HELD, RUNNING, INTERRUPTED, CANCELLED, FAILED)
 
 
 def _corpus_to_go(summary: Summary) -> str | None:
