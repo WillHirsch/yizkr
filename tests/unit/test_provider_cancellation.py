@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import ctypes
 import os
+import select
 import subprocess
 import sys
 import threading
@@ -76,6 +78,20 @@ def inactive(pid):
         return status.read_text().split(") ", 1)[1][0] == "Z"
     except FileNotFoundError:
         return True
+
+
+def pidfd_open(pid):
+    """Use Linux's exit notification even in Python builds without its shim."""
+    if hasattr(os, "pidfd_open"):
+        return os.pidfd_open(pid)
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.pidfd_open.argtypes = (ctypes.c_int, ctypes.c_uint)
+    libc.pidfd_open.restype = ctypes.c_int
+    descriptor = libc.pidfd_open(pid, 0)
+    if descriptor < 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
+    return descriptor
 
 
 @pytest.fixture
@@ -167,7 +183,9 @@ def test_shared_client_stops_only_the_cancelled_call(fictional_cli):
     assert inactive(second_pid)
 
 
-@pytest.mark.skipif(os.name != "posix", reason="POSIX owned process groups")
+@pytest.mark.skipif(
+    sys.platform != "linux", reason="Linux process exit notification"
+)
 @pytest.mark.parametrize("termination", ["cancel", "timeout", "interrupt"])
 def test_process_group_cleanup_includes_term_ignoring_descendant(
     tmp_path, monkeypatch, termination
@@ -218,21 +236,40 @@ def test_process_group_cleanup_includes_term_ignoring_descendant(
         token,
     )
     leader_pid, child_pid = leader_ready.get(), child_ready.get()
-    if termination == "cancel":
+    try:
+        child_exit = pidfd_open(child_pid)
+    except ProcessLookupError:
+        child_exit = None
+    except BaseException:
         token.cancel()
-    elif termination == "timeout":
-        assert awaiting_process.wait(HANG_GUARD)
-        clock["now"] = 31.0
-    joined(thread)
-    expected = {
-        "cancel": RunCancelled,
-        "timeout": subprocess.TimeoutExpired,
-        "interrupt": KeyboardInterrupt,
-    }[termination]
-    assert isinstance(result["error"], expected)
-    assert inactive(leader_pid) and inactive(child_pid)
-    with pytest.raises(ChildProcessError):
-        os.waitpid(leader_pid, os.WNOHANG)
+        joined(thread)
+        raise
+    try:
+        if termination == "cancel":
+            token.cancel()
+        elif termination == "timeout":
+            assert awaiting_process.wait(HANG_GUARD)
+            clock["now"] = 31.0
+        joined(thread)
+        expected = {
+            "cancel": RunCancelled,
+            "timeout": subprocess.TimeoutExpired,
+            "interrupt": KeyboardInterrupt,
+        }[termination]
+        assert isinstance(result["error"], expected)
+        # A killed descendant closes inherited pipes before Linux finishes
+        # exit bookkeeping. EOF and the reaped leader do not yet guarantee
+        # /proc reports Z. Observe this exact process's exit, without polling
+        # or treating the kill request itself as proof it stopped.
+        if child_exit is not None:
+            exited, _, _ = select.select([child_exit], [], [], HANG_GUARD)
+            assert exited, "owned descendant did not exit"
+        assert inactive(leader_pid) and inactive(child_pid)
+        with pytest.raises(ChildProcessError):
+            os.waitpid(leader_pid, os.WNOHANG)
+    finally:
+        if child_exit is not None:
+            os.close(child_exit)
 
 
 def test_already_cancelled_process_never_starts(monkeypatch):
