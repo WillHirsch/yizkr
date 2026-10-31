@@ -445,13 +445,14 @@ def _refuse_archive_for_vision(path: Path) -> None:
         )
 
 
-def _close_owned_client(client) -> None:
+def _close_owned_client(client) -> bool:
     """Release an invocation's client without masking its primary failure."""
     primary = sys.exception()
     try:
         close = getattr(client, "close", None)
         if callable(close):
             close()
+        return True
     except Exception as exc:
         if primary is None:
             raise
@@ -459,6 +460,7 @@ def _close_owned_client(client) -> None:
             f"warning: client cleanup failed: {type(exc).__name__}: {exc}",
             file=sys.stderr,
         )
+        return False
 
 
 def cmd_transcribe(args) -> int:
@@ -689,6 +691,7 @@ def cmd_extract(args) -> int:
     except ValueError as exc:
         sys.exit(f"{exc}; refusing")
     owned_client = None
+    owned_cache = None
     try:
         try:
             client = None
@@ -702,9 +705,8 @@ def cmd_extract(args) -> int:
                 owned_client = make_client(args.llm)
                 client = owned_client
                 if args.cache is not None:
-                    client = cached_client(
-                        client, open_cache(args.cache), role="extract"
-                    )
+                    owned_cache = open_cache(args.cache)
+                    client = cached_client(client, owned_cache, role="extract")
             result = extract(request, client)
             if request.diagnostic_dump in result.artifacts:
                 print(
@@ -715,7 +717,8 @@ def cmd_extract(args) -> int:
                 )
             batch = result.require_complete()
         finally:
-            _close_owned_client(owned_client)
+            if _close_owned_client(owned_client):
+                _close_owned_client(owned_cache)
         atomic_write_text(args.out, batch.model_dump_json(indent=2))
     except BaseException as exc:
         # whatever ends the extraction (a failure, a pause, Ctrl-C, a bug),

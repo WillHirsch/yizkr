@@ -44,6 +44,8 @@ from yizkr.pipeline.chunking import ChunkedClaimExtractor
 from yizkr.pipeline.critique import run_critique
 from yizkr.pipeline.extract import ExtractionFailed, LlmClaimExtractor
 from yizkr.pipeline.llm import (
+    FORK,
+    OPEN,
     ConversationalLlmClient,
     ConversationChanged,
     OutputLimitReached,
@@ -55,14 +57,11 @@ from yizkr.pipeline.llm import (
 )
 from yizkr.pipeline.llmcache import (
     COMPLETE,
-    FORK,
     LOCK_FILE,
-    OPEN,
     CachedResponse,
     CacheInUse,
     CacheRefused,
     CachingClient,
-    EngineCache,
     call_key,
     wrap,
 )
@@ -73,6 +72,7 @@ from yizkr.pipeline.orchestrate import (
     WRITTEN,
     Orchestrator,
 )
+from yizkr.pipeline.provider_sessions import SessionStore
 from yizkr.pipeline.rundir import RunDir, run_state
 from yizkr.pipeline.stages import content_hash
 from yizkr.pipeline.transcribe import (
@@ -296,7 +296,7 @@ def kinds(engine: Engine) -> list[str]:
 
 
 def client(tmp_path, engine, *, role="extract", run=None, **cache_options):
-    cache = EngineCache(tmp_path / "cache", **cache_options)
+    cache = open_cache(tmp_path / "cache", **cache_options)
     return wrap(
         engine, cache, role=role, events=run.emit if run is not None else None
     )
@@ -661,7 +661,7 @@ class TestStorage:
         """A newer entry under a key (a refresh's, a racing call's, one
         displacing a damaged entry) never overwrites the one there: that
         one is moved aside, as replaced."""
-        cache = EngineCache(tmp_path / "cache")
+        cache = open_cache(tmp_path / "cache")
         key = "ab" + "0" * 62
         cache.put(key, {"key": key, "response": "first"})
         cache.put(key, {"key": key, "response": "second"})
@@ -731,7 +731,7 @@ class TestStorage:
             in_flight.wait()
             return f"answer from {threading.current_thread().name}"
 
-        cache = EngineCache(tmp_path / "cache")
+        cache = open_cache(tmp_path / "cache")
         answers = []
 
         def call():
@@ -1031,7 +1031,9 @@ class TestTheCacheFolder:
             key = caching.complete("Read it.").key
             adopted = ("00" if key[:2] != "00" else "11") + "0" * 62
             assert cache.seed(adopted, "an archived answer", {"by": "test"})
-            cache.keep_session(key, "cd" + "1" * 62, {"p/q/s.jsonl": b"a"})
+            cache.sessions.store.keep_session(
+                key, "cd" + "1" * 62, {"p/q/s.jsonl": b"a"}
+            )
         folders = [made, *(path for path in made.rglob("*") if path.is_dir())]
         assert {folder.name for folder in folders} >= {
             "made",
@@ -1544,7 +1546,7 @@ class TestOneProcess:
         root = tmp_path / "cache"
         with another_process(root) as holder:
             with pytest.raises(CacheInUse) as refused:
-                EngineCache(root)
+                open_cache(root)
             message = str(refused.value)
             assert f"process {holder.pid} " in message
             assert str(root) in message
@@ -1556,13 +1558,13 @@ class TestOneProcess:
             assert lock_record(root)["pid"] == holder.pid
         # the holder ended cleanly: the cache opens, with nothing to report
         with caplog.at_level(logging.WARNING, logger=llmcache.__name__):
-            EngineCache(root)
+            open_cache(root)
         assert caplog.records == []
         assert lock_record(root)["pid"] == os.getpid()
 
     def test_a_process_is_refused_while_this_one_holds_it(self, tmp_path):
         root = tmp_path / "cache"
-        EngineCache(root)
+        open_cache(root)
         refused = opened_elsewhere(root)
         assert refused.returncode != 0
         assert "CacheInUse" in refused.stderr
@@ -1578,7 +1580,7 @@ class TestOneProcess:
             assert holder.wait(timeout=HANG_GUARD) is not None
             assert lock_record(root)["pid"] == holder.pid
             with caplog.at_level(logging.WARNING, logger=llmcache.__name__):
-                cache = EngineCache(root)
+                cache = open_cache(root)
         (warning,) = caplog.records
         assert f"process {holder.pid} " in warning.getMessage()
         assert "ended without clearing its record" in warning.getMessage()
@@ -1597,7 +1599,7 @@ class TestOneProcess:
         (root / LOCK_FILE).write_bytes(NESTED)
         assert llmcache.held_by(root) is None
         with caplog.at_level(logging.WARNING, logger=llmcache.__name__):
-            EngineCache(root)
+            open_cache(root)
         (warning,) = caplog.records
         assert "held by a process it cannot name" in warning.getMessage()
         assert lock_record(root)["pid"] == os.getpid()
@@ -1606,22 +1608,22 @@ class TestOneProcess:
         """A process opens its cache as often as it likes, under any
         spelling of the root, and holds it once."""
         root = tmp_path / "cache"
-        EngineCache(root)
+        open_cache(root)
         record = lock_record(root)
         (tmp_path / "link").symlink_to(root)
         with caplog.at_level(logging.WARNING, logger=llmcache.__name__):
             for spelling in (root, tmp_path / "link", root / ".." / "cache"):
-                EngineCache(spelling)
+                open_cache(spelling)
         assert caplog.records == []
         assert lock_record(root) == record
         assert opened_elsewhere(root).returncode != 0
 
     def test_a_removed_lock_file_is_locked_again(self, tmp_path, caplog):
         root = tmp_path / "cache"
-        EngineCache(root)
+        open_cache(root)
         (root / LOCK_FILE).unlink()
         with caplog.at_level(logging.WARNING, logger=llmcache.__name__):
-            EngineCache(root)
+            open_cache(root)
         assert "removed or replaced" in caplog.text
         assert lock_record(root)["pid"] == os.getpid()
         assert f"process {os.getpid()} " in opened_elsewhere(root).stderr
@@ -1899,11 +1901,15 @@ class TestForks:
         """A session's files are kept as privately as the entries, in
         folders made private on the way down from the root, and published
         whole."""
-        cache = EngineCache(tmp_path / "cache")
+        cache = open_cache(tmp_path / "cache")
         key, opening = "ab" + "0" * 62, "cd" + "1" * 62
-        cache.keep_session(key, opening, {"p/s.jsonl": b"a session"})
-        assert cache.kept_session(key, opening) == {"p/s.jsonl": b"a session"}
-        assert cache.kept_session(key, "cd" + "2" * 62) == {}
+        cache.sessions.store.keep_session(
+            key, opening, {"p/s.jsonl": b"a session"}
+        )
+        assert cache.sessions.store.kept_session(key, opening) == {
+            "p/s.jsonl": b"a session"
+        }
+        assert cache.sessions.store.kept_session(key, "cd" + "2" * 62) == {}
         folders = [p for p in (tmp_path / "cache").rglob("*") if p.is_dir()]
         assert {folder.name for folder in folders} == {
             "ab",
@@ -1913,7 +1919,7 @@ class TestForks:
         }
         assert {stat.S_IMODE(f.stat().st_mode) for f in folders} == {0o700}
         with pytest.raises(ValueError):
-            cache.kept_session(key, "not an answer's hash")
+            cache.sessions.store.kept_session(key, "not an answer's hash")
 
     def test_an_unusable_kept_session_falls_back_to_a_replay(self, tmp_path):
         self.run_conversation(
@@ -2007,7 +2013,7 @@ class TestForks:
         )
         # the session kept is the replay's, under the answer it gave, and
         # a later run resumes it for its forks
-        assert caching.cache.kept_session(
+        assert caching.sessions.store.kept_session(
             response.key, sha256("open again")
         ) == {"sessions/session-1.jsonl": b"the document"}
         later = ResumableEngine(answer)
@@ -2027,11 +2033,11 @@ class TestForks:
         that stays live is the later one, and a fork resumes the session
         kept under that answer, never the other's (#230)."""
         root = tmp_path / "cache"
-        first = wrap(AnswerKeepingEngine(), EngineCache(root), role="extract")
+        first = wrap(AnswerKeepingEngine(), open_cache(root), role="extract")
         second = wrap(
-            AnswerKeepingEngine(first=101), EngineCache(root), role="extract"
+            AnswerKeepingEngine(first=101), open_cache(root), role="extract"
         )
-        keep = EngineCache.keep_session
+        keep = SessionStore.keep_session
         raced = []
 
         def racing(cache, key, opening, files):
@@ -2044,13 +2050,15 @@ class TestForks:
                 second.open_conversation("the document")
             return keep(cache, key, opening, files)
 
-        monkeypatch.setattr(EngineCache, "keep_session", racing)
+        monkeypatch.setattr(SessionStore, "keep_session", racing)
         first.open_conversation("the document")
-        monkeypatch.setattr(EngineCache, "keep_session", keep)
+        monkeypatch.setattr(SessionStore, "keep_session", keep)
         (key,) = raced
-        assert EngineCache(root).get(key)["response"] == "opening answer #101"
+        assert open_cache(root).get(key)["response"] == "opening answer #101"
         for answer in ("opening answer #1", "opening answer #101"):
-            assert EngineCache(root).kept_session(key, sha256(answer)) == {
+            assert open_cache(root).sessions.store.kept_session(
+                key, sha256(answer)
+            ) == {
                 f"sessions/session-{answer.split('#')[1]}.jsonl": (
                     answer.encode()
                 )
@@ -2060,7 +2068,7 @@ class TestForks:
         engine = AnswerKeepingEngine(first=201)
         run = RunDir(tmp_path / "run")
         caching = wrap(
-            engine, EngineCache(root), role="extract", events=run.emit
+            engine, open_cache(root), role="extract", events=run.emit
         )
         response, handle = caching.open_conversation("the document")
         fork = caching.fork(handle, "c1")
@@ -2083,7 +2091,7 @@ class TestForks:
         opening turn instead (#230)."""
         root = tmp_path / "cache"
         wrap(
-            AnswerKeepingEngine(), EngineCache(root), role="extract"
+            AnswerKeepingEngine(), open_cache(root), role="extract"
         ).open_conversation("the document")
         # the next run cannot resume, so it replays, and the replay
         # answers differently; its session is not kept
@@ -2099,18 +2107,22 @@ class TestForks:
                 def full(cache, key, opening, files):
                     raise OSError("no space left on the device")
 
-                patch.setattr(EngineCache, "keep_session", full)
-            caching = wrap(engine, EngineCache(root), role="extract")
+                patch.setattr(SessionStore, "keep_session", full)
+            caching = wrap(engine, open_cache(root), role="extract")
             response, handle = caching.open_conversation("the document")
             assert response == "opening answer #1"
             with pytest.raises(ConversationChanged):
                 caching.fork(handle, "c1")
         key = response.key
-        assert EngineCache(root).get(key)["response"] == "opening answer #51"
+        assert open_cache(root).get(key)["response"] == "opening answer #51"
         # the old answer's session is kept aside from the new answer's
-        assert EngineCache(root).kept_session(key, sha256(response))
+        assert open_cache(root).sessions.store.kept_session(
+            key, sha256(response)
+        )
         assert (
-            EngineCache(root).kept_session(key, sha256("opening answer #51"))
+            open_cache(root).sessions.store.kept_session(
+                key, sha256("opening answer #51")
+            )
             == {}
         )
         # a later run: the new answer is served, and its fork is never
@@ -2118,7 +2130,7 @@ class TestForks:
         later = AnswerKeepingEngine(first=201)
         run = RunDir(tmp_path / "run")
         caching = wrap(
-            later, EngineCache(root), role="extract", events=run.emit
+            later, open_cache(root), role="extract", events=run.emit
         )
         served, handle = caching.open_conversation("the document")
         assert served == "opening answer #51"
@@ -2158,7 +2170,7 @@ class TestForks:
         root = tmp_path / "cache"
         wrap(
             AnswerKeepingEngine(keeps=kept == "unusable"),
-            EngineCache(root),
+            open_cache(root),
             role="extract",
         ).open_conversation("the document")
         first = AnswerKeepingEngine(first=51)
@@ -2172,8 +2184,8 @@ class TestForks:
                     raise ValueError("an engine that cannot resume it")
 
                 engine.resume_conversation = unusable
-        run1 = wrap(first, EngineCache(root), role="extract")
-        run2 = wrap(second, EngineCache(root), role="extract")
+        run1 = wrap(first, open_cache(root), role="extract")
+        run2 = wrap(second, open_cache(root), role="extract")
         _, handle1 = run1.open_conversation("the document")
         _, handle2 = run2.open_conversation("the document")
         with pytest.raises(ConversationChanged):
@@ -2181,7 +2193,7 @@ class TestForks:
         with pytest.raises(ConversationChanged):
             run2.fork(handle2, "c1")  # stores #81, holds session-81
         key = handle1.chain[0]
-        assert EngineCache(root).get(key)["response"] == "opening answer #81"
+        assert open_cache(root).get(key)["response"] == "opening answer #81"
 
         def start_over(caching):
             """Start over from the opening turn, as the extractor does."""
@@ -2326,31 +2338,37 @@ class TestForks:
     def test_a_held_session_is_taken_once(self, tmp_path):
         """A session held after a replay is handed out once, and only for
         the engine client that holds it."""
-        cache = EngineCache(tmp_path / "cache")
+        cache = open_cache(tmp_path / "cache")
         engine, other = Engine(), Engine()
         key, opening = "ab" + "0" * 62, sha256("opening answer #51")
-        cache.remember_session(key, engine, "session-51", opening)
-        assert cache.take_session(key, other) is None
-        assert cache.take_session(key, engine) == ("session-51", opening)
-        assert cache.take_session(key, engine) is None
+        lease = cache.sessions.own(engine, "session-51")
+        cache.sessions.remember_session(key, lease, opening)
+        assert cache.sessions.take_session(key, other) is None
+        assert cache.sessions.take_session(key, engine) == (lease, opening)
+        assert cache.sessions.take_session(key, engine) is None
 
     def test_a_displaced_held_session_is_released(self, tmp_path):
         """A session held for a key that a later replay's session
         displaces will never be taken: it is released through its
         engine's close_conversation (#236). The same session held again
         is not."""
-        cache = EngineCache(tmp_path / "cache")
+        cache = open_cache(tmp_path / "cache")
         released = {"first": [], "second": []}
         first, second = Engine(), Engine()
         first.close_conversation = released["first"].append
         second.close_conversation = released["second"].append
         key = "ab" + "0" * 62
-        cache.remember_session(key, first, "session-51", sha256("#51"))
-        cache.remember_session(key, first, "session-51", sha256("#51"))
+        first_lease = cache.sessions.own(first, "session-51")
+        second_lease = cache.sessions.own(second, "session-81")
+        cache.sessions.remember_session(key, first_lease, sha256("#51"))
+        cache.sessions.remember_session(key, first_lease, sha256("#51"))
         assert released == {"first": [], "second": []}
-        cache.remember_session(key, second, "session-81", sha256("#81"))
+        cache.sessions.remember_session(key, second_lease, sha256("#81"))
         assert released == {"first": ["session-51"], "second": []}
-        assert cache.take_session(key, second) == ("session-81", sha256("#81"))
+        assert cache.sessions.take_session(key, second) == (
+            second_lease,
+            sha256("#81"),
+        )
 
     def test_racing_replays_release_the_session_they_displace(self, tmp_path):
         """Two callers in one run fork the same conversation, opened from
@@ -2361,12 +2379,12 @@ class TestForks:
         session kept for it. Every fork is made on the answer served."""
         root = tmp_path / "cache"
         wrap(
-            AnswerKeepingEngine(keeps=False), EngineCache(root), role="extract"
+            AnswerKeepingEngine(keeps=False), open_cache(root), role="extract"
         ).open_conversation("the document")
         engine = AnswerKeepingEngine(first=51)
         released = []
         engine.close_conversation = released.append
-        caching = wrap(engine, EngineCache(root), role="extract")
+        caching = wrap(engine, open_cache(root), role="extract")
         _, one = caching.open_conversation("the document")
         _, two = caching.open_conversation("the document")
         with pytest.raises(ConversationChanged):
@@ -2422,7 +2440,7 @@ class TestRefresh:
     def test_a_refreshed_role_asks_once_per_key_in_a_run(self, tmp_path):
         client(tmp_path, Engine()).complete("Read it.")
         engine = Engine(lambda kind, prompt, opening: "fresh")
-        cache = EngineCache(tmp_path / "cache", refresh={"extract"})
+        cache = open_cache(tmp_path / "cache", refresh={"extract"})
         run = RunDir(tmp_path / "run")
         caching = wrap(engine, cache, role="extract", events=run.emit)
         assert caching.complete("Read it.") == "fresh"
@@ -2453,7 +2471,7 @@ class TestRefresh:
 
     def test_other_roles_are_still_served(self, tmp_path):
         client(tmp_path, Engine(), role="transcribe").complete("Read it.")
-        cache = EngineCache(tmp_path / "cache", refresh={"extract"})
+        cache = open_cache(tmp_path / "cache", refresh={"extract"})
         assert (
             wrap(Refusing(), cache, role="transcribe").complete("Read it.")
             == ("Read it."[::-1])
@@ -2474,7 +2492,7 @@ class TestRefresh:
 class TestEvents:
     def test_every_answer_and_rejection_is_an_event(self, tmp_path):
         run = RunDir(tmp_path / "run")
-        cache = EngineCache(tmp_path / "cache")
+        cache = open_cache(tmp_path / "cache")
 
         def emit(event, **fields):
             run.emit(event, subject="a" * 40, kind="media", **fields)
@@ -2540,7 +2558,7 @@ class TestSeeding:
 
     def test_a_seed_needs_a_key(self, tmp_path):
         with pytest.raises(ValueError):
-            EngineCache(tmp_path).seed("not-a-key", "text", {})
+            open_cache(tmp_path).seed("not-a-key", "text", {})
 
     def test_a_rejected_answer_is_never_adopted(self, tmp_path):
         caching = client(tmp_path, Engine())
@@ -2657,7 +2675,7 @@ class TestSeeding:
 
 class TestUnpinnedModel:
     def test_an_unpinned_role_is_named_once(self, tmp_path, caplog):
-        cache = EngineCache(tmp_path / "cache")
+        cache = open_cache(tmp_path / "cache")
         with caplog.at_level(logging.WARNING, logger=llmcache.__name__):
             for _ in range(2):
                 wrap(Engine(model=None), cache, role="transcribe")
@@ -2669,7 +2687,7 @@ class TestUnpinnedModel:
     def test_an_empty_model_name_is_no_model(self, tmp_path, caplog):
         """An empty $YIZKR_LLM_MODEL names no model either: the engine
         runs its own default, keyed as none, with the warning."""
-        cache = EngineCache(tmp_path / "cache")
+        cache = open_cache(tmp_path / "cache")
         with caplog.at_level(logging.WARNING, logger=llmcache.__name__):
             empty = wrap(Engine(model=""), cache, role="critique")
         assert "critique role" in caplog.text
@@ -4453,3 +4471,140 @@ class TestTheStopReasonKept:
         assert read({"provenance": {"stop_reason": ["max_tokens"]}}) is None
         assert read({"provenance": "max_tokens"}) is None
         assert read({}) is None
+
+
+class TestExecutionSessionOwnership:
+    def test_close_releases_idle_conversations_once_without_changing_responses(
+        self, tmp_path
+    ):
+        cache = open_cache(tmp_path / "cache")
+        engine = Engine()
+        released = []
+        engine.close_conversation = released.append
+        wrapped = cached_client(engine, cache, role="extract")
+        answer, handle = wrapped.open_conversation("the document")
+        fork = wrapped.fork(handle, "c1")
+        stored = cache.path(answer.key).read_bytes()
+        cache.close()
+        cache.close()
+        wrapped.close_conversation(handle)
+        assert released == [handle.session]
+        assert cache.path(answer.key).read_bytes() == stored
+        # No provider session is needed to reuse either saved response.
+        later = client(tmp_path, Refusing())
+        again, context = later.open_conversation("the document")
+        assert again == answer and later.fork(context, "c1") == fork
+
+    def test_close_defers_release_until_borrowed_fork_finishes(self, tmp_path):
+        from yizkr.pipeline.cancellation import RunCancelled
+
+        cache = open_cache(tmp_path / "cache")
+        started, finish = threading.Event(), threading.Event()
+        released, outcomes = [], []
+        engine = Engine()
+        engine.close_conversation = released.append
+        wrapped = cached_client(engine, cache, role="extract")
+        _, handle = wrapped.open_conversation("the document")
+
+        def fork(_handle, _prompt):
+            started.set()
+            assert finish.wait(HANG_GUARD)
+            assert released == []
+            return "a late answer"
+
+        engine.fork = fork
+
+        def work():
+            try:
+                wrapped.fork(handle, "c1")
+            except BaseException as exc:
+                outcomes.append(exc)
+
+        worker = threading.Thread(target=work)
+        worker.start()
+        try:
+            assert started.wait(HANG_GUARD)
+            cache.close()
+            assert released == []
+        finally:
+            finish.set()
+            worker.join(HANG_GUARD)
+        assert not worker.is_alive()
+        assert len(outcomes) == 1 and isinstance(outcomes[0], RunCancelled)
+        assert released == [handle.session]
+        key = call_key(
+            wrapped.components(
+                FORK, "c1", parent=handle.chain, opening=handle.opening_sha256
+            )
+        )
+        assert cache.get(key) is None
+
+    def test_late_open_after_service_close_is_released_without_publication(
+        self, tmp_path
+    ):
+        from yizkr.pipeline.cancellation import RunCancelled
+
+        cache = open_cache(tmp_path / "cache")
+        engine = Engine()
+        released = []
+        engine.close_conversation = released.append
+        original = engine.open_conversation
+
+        def open_then_close(prompt):
+            answer = original(prompt)
+            cache.close()
+            return answer
+
+        engine.open_conversation = open_then_close
+        wrapped = cached_client(engine, cache, role="extract")
+        with pytest.raises(RunCancelled):
+            wrapped.open_conversation("the document")
+        assert released == ["session-1"]
+        assert (
+            cache.get(call_key(wrapped.components(OPEN, "the document")))
+            is None
+        )
+
+    def test_deferred_cleanup_failure_preserves_the_forks_terminal_cause(
+        self, tmp_path
+    ):
+        cache = open_cache(tmp_path / "cache")
+        engine = Engine()
+        wrapped = cached_client(engine, cache, role="extract")
+        _, handle = wrapped.open_conversation("the document")
+        pause = PassPaused("operator action required")
+
+        def fork(_handle, _prompt):
+            cache.close()
+            raise pause
+
+        def failed_close(_handle):
+            raise OSError("fictional cleanup failure")
+
+        engine.fork = fork
+        engine.close_conversation = failed_close
+        with pytest.raises(PassPaused) as caught:
+            wrapped.fork(handle, "c1")
+        assert caught.value is pause
+        assert pause.__notes__ == [
+            "provider session cleanup also failed: OSError"
+        ]
+
+    def test_foreign_engine_cannot_replay_or_close_a_cached_opening(
+        self, tmp_path
+    ):
+        cache = open_cache(tmp_path / "cache")
+        seed = cached_client(Engine(model="model-a"), cache, role="extract")
+        seed.open_conversation("the document")
+        owner = cached_client(Refusing(model="model-a"), cache, role="extract")
+        _, handle = owner.open_conversation("the document")
+        assert handle.session is None
+        other_engine = Engine(model="model-b")
+        other = cached_client(other_engine, cache, role="extract")
+        before = live_entries(tmp_path)
+        with pytest.raises(ValueError, match="another engine"):
+            other.fork(handle, "c1")
+        with pytest.raises(ValueError, match="another engine"):
+            other.close_conversation(handle)
+        assert other_engine.calls == []
+        assert live_entries(tmp_path) == before

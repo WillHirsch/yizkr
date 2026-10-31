@@ -177,7 +177,7 @@ Run ingestion explicitly selects entity-first chunked extraction because its ide
 
 The callers retain exclusion policy, scheduling, publication, view reuse and review invalidation. Operations enforce the supplied eligibility and identity checks before reading. Reviewed ingestion schedules critique after deriving a complete batch; scratch schedules it as its own stage. Excerpt discovery, deduplication, parent-reading prerequisites and corpus barriers remain driver decisions. Scratch's refresh decision consults the successful-refresh record without changing the invocation's settings. A refresh is recorded only after its output and document state are saved.
 
-Result dependency metadata describes the computation; `derivations.json` records persisted-view inputs and generation dependencies for every supported document kind. A fixed stage registry and shared freshness planner support execution and estimation, as described below. The registry declares GEDCOM's sole document stage as deterministic, producing `batch.json` without a transcription or critique dependency; it still shares the `extract` refresh role. This does not implement an atomic multi-file generation store or a general workflow engine. [Cancellation and execution ownership](#cancellation-and-execution-ownership) apply across these operations. Provider-session separation remains #726; model prompts and response-cache keys are unchanged.
+Result dependency metadata describes the computation; `derivations.json` records persisted-view inputs and generation dependencies for every supported document kind. A fixed stage registry and shared freshness planner support execution and estimation, as described below. The registry declares GEDCOM's sole document stage as deterministic, producing `batch.json` without a transcription or critique dependency; it still shares the `extract` refresh role. This does not implement an atomic multi-file generation store or a general workflow engine. [Cancellation and execution ownership](#cancellation-and-execution-ownership) apply across these operations. [Provider conversations](#provider-conversation-ownership) have a separate execution owner; model prompts and response-cache keys are unchanged.
 
 Media preparation and reading return explicit products rather than publishing into a driver's directory. The same operations are available to estimation without writes; deterministic routes do not acquire a model client.
 
@@ -217,7 +217,7 @@ Claude calls and version probes run in owned process groups. Cancellation signal
 
 Worker joining has a five-second bound after cancellation. Python cannot forcibly kill arbitrary custom worker threads: an uncooperative worker causes an explicit `WorkerShutdownTimeout`, prevents automatic pause/resume, and defers shared conversation cleanup until the worker exits. Such custom work is outside the supported bounded-shutdown guarantee and may keep the Python process alive. Normal cleanup never cancels a parent invocation merely because one borrowed child scope finishes.
 
-Registrar and writer checkpoints stop before their next graph mutation or upload. An already-dispatched graph request or destructive reset may still complete under its existing safeguards; cancellation is not rollback and does not prove that no effect occurred. Durable write-intent recovery remains [#85](https://github.com/WillHirsch/yizkr/issues/85). The response cache still owns conversation restoration/replay under its existing exclusive lock; separating that responsibility remains [#726](https://github.com/WillHirsch/yizkr/issues/726).
+Registrar and writer checkpoints stop before their next graph mutation or upload. An already-dispatched graph request or destructive reset may still complete under its existing safeguards; cancellation is not rollback and does not prove that no effect occurred. Durable write-intent recovery remains [#85](https://github.com/WillHirsch/yizkr/issues/85). The [session service](#provider-conversation-ownership) owns restoration, replay and release. Engine shutdown precedes session-service cleanup; an active borrowed conversation is released only after its last borrower exits.
 
 ## Whole-corpus scratch runs
 
@@ -285,9 +285,32 @@ These comparisons use the implemented canonical hashes and CSV review bindings; 
 
 Call keys include prompt and file content hashes, engine/model/effort and configuration, call kind, conversation ancestry where applicable, attempt and role epoch. Input-file paths are replaced by content hashes in the key; sources are identified by media SHA-1 rather than artifact QID, and mtimes do not key calls. This allows reuse across fresh document directories and wiki resets while the engine configuration stays the same.
 
-Persisted views and review state are separate from the response cache; cache removal alone does not invalidate them. Conversation forks bind to the opening answer whose context they assume. The current cache also owns provider session restoration and holds a process-wide lock; separating those responsibilities is future work (#726), not a feature shown in this diagram.
+Persisted views and review state are separate from the response cache; cache removal alone does not invalidate them. Conversation forks bind to the opening answer whose context they assume. Provider restoration and replay belong to the execution-owned session service described below. Response storage retains its exclusive process-lifetime lock.
 
 `--refresh ROLE` rebuilds that role's views and bypasses cached answers once per key in the run. Changing `--epoch ROLE=N` also stales that role's text extraction or critique view; legacy adapters still need refresh or a fresh directory when their current views must be rebuilt. The [cache guide](LLM_CACHE.md) covers rejection, retries and resume semantics; implementation lives in [orchestration](../src/yizkr/pipeline/orchestrate.py) and [the LLM cache](../src/yizkr/pipeline/llmcache.py).
+
+## Provider conversation ownership
+
+The client factory returns an `ExecutionCache` that composes two services: `EngineCache` stores responses and their rejection history; `SessionPool` owns conversation leases and live replay handoffs. The conversational adapter owns restore/replay policy. `SessionStore` reads and writes the existing checkpoint sidecars under the same cache root. The conversational adapter uses both services, while a one-shot response lookup needs only the response store. Estimation uses an in-memory response overlay and names-only checkpoint listings.
+
+```mermaid
+flowchart LR
+    owner["Invocation owner"] --> execution["ExecutionCache"]
+    execution --> responses["EngineCache<br/>answers, ancestry, rejection history"]
+    execution --> sessions["Provider session service<br/>leases, restore, replay, release"]
+    caller["Conversational client adapter"] --> responses
+    caller --> sessions
+    sessions --> checkpoints["SessionStore<br/>compatible checkpoint sidecars"]
+    sessions --> provider["Provider client<br/>opaque handles and native operations"]
+    owner -->|cancel and close first| provider
+    owner -->|close second| execution
+```
+
+A cached fork requires no live session. A missing fork restores the checkpoint for its opening answer, or replays the opening and checks exact answer equality before using its context. A changed replay starts new answer ancestry and preserves the displaced response. Closing the session service refuses new provider work and releases its idle leases, including replay handoffs; an active borrower defers its own release until it exits. The provider client owns its subprocesses or SDK operations, and the invocation stops those before closing the session service. Neither close deletes stored responses or releases the process-lifetime cache lock.
+
+Claude checkpoint restoration uses a private temporary copy and resumes its transcript by path with `--fork-session`. Two copied caches therefore do not publish or release the same restored transcript UUID in the CLI's shared project directory. Checkpoints that cannot be restored safely fall back to replay with the same answer-equality guard. This does not enable concurrent writers to one cache: the exclusive lock remains because response publication, refresh state and checkpoint replacement have no validated cross-process transaction protocol.
+
+Implementation: [response storage](../src/yizkr/pipeline/llmcache.py), [session ownership](../src/yizkr/pipeline/provider_sessions.py), [provider clients and factory](../src/yizkr/pipeline/llm.py). The [cache guide](LLM_CACHE.md#conversations-and-forks) describes compatible persistence and fallback details.
 
 ## Human-confirmed face links
 

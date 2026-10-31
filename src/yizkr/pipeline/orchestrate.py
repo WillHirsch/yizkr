@@ -1152,15 +1152,42 @@ class Orchestrator:
     def _close_engines(self) -> None:
         """Release what the run's engines hold (the claude CLI's session
         transcripts), and forget them and the cache: the next run starts
-        its own."""
+        its own. A failed shutdown keeps its resources owned for retry;
+        session files cannot be released before every engine has stopped.
+        """
+        primary = sys.exception()
+        failures = []
         with self._engine_lock:
-            engines = list(self._engines.values())
+            engines = self._engines
             self._engines = {}
-            self._cache = None
-        for engine in engines:
-            close = getattr(engine, "close", None)
-            if callable(close):
-                close()
+            cache = self._cache
+        for role, engine in engines.items():
+            try:
+                close = getattr(engine, "close", None)
+                if callable(close):
+                    close()
+            except BaseException as exc:
+                failures.append(exc)
+                with self._engine_lock:
+                    self._engines[role] = engine
+        if not failures and cache is not None:
+            try:
+                cache.close()
+            except BaseException as exc:
+                failures.append(exc)
+            else:
+                with self._engine_lock:
+                    self._cache = None
+        if failures:
+            terminal = primary if primary is not None else failures[0]
+            for failure in failures:
+                if failure is not terminal:
+                    terminal.add_note(
+                        "execution cleanup also failed: "
+                        f"{type(failure).__name__}"
+                    )
+            if primary is None:
+                raise terminal
 
     # -- document discovery --------------------------------------------------
 

@@ -109,6 +109,7 @@ import contextlib
 import functools
 import json
 import math
+import sys
 import uuid
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
@@ -746,11 +747,36 @@ class Estimator(ScratchDriver):
         return conflicts
 
     def _close_clients(self) -> None:
-        for client in self._clients.values():
-            close = getattr(client, "close", None)
-            if callable(close):
-                close()
+        """Stop all clients before releasing their session resources."""
+        primary = sys.exception()
+        failures = []
+        clients = self._clients
         self._clients = {}
+        for role, client in clients.items():
+            try:
+                close = getattr(client, "close", None)
+                if callable(close):
+                    close()
+            except BaseException as exc:
+                failures.append(exc)
+                self._clients[role] = client
+        if not failures and self._as_is is not None:
+            try:
+                self._as_is.close()
+            except BaseException as exc:
+                failures.append(exc)
+            else:
+                self._as_is = None
+        if failures:
+            terminal = primary if primary is not None else failures[0]
+            for failure in failures:
+                if failure is not terminal:
+                    terminal.add_note(
+                        "estimate cleanup also failed: "
+                        f"{type(failure).__name__}"
+                    )
+            if primary is None:
+                raise terminal
 
     # -- one document ---------------------------------------------------------
 

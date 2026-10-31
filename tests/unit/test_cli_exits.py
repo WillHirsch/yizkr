@@ -684,6 +684,23 @@ class TestIngestExtract:
         self, tmp_path, monkeypatch, capsys, outcome, expected, cleanup_fails
     ):
         from tests.unit.test_pipeline import CLAIMS, FakeLlm
+        from yizkr.pipeline import llm
+
+        closed = []
+        open_cache = llm.open_cache
+
+        def owned_cache(*args, **kwargs):
+            cache = open_cache(*args, **kwargs)
+            close = cache.close
+
+            def release():
+                closed.append("sessions")
+                close()
+
+            cache.close = release
+            return cache
+
+        monkeypatch.setattr(llm, "open_cache", owned_cache)
 
         class OwnedClient(FakeLlm):
             closed = 0
@@ -695,6 +712,7 @@ class TestIngestExtract:
                 return super().complete(prompt, image_paths)
 
             def close(self):
+                closed.append("engine")
                 self.closed += 1
                 if cleanup_fails:
                     raise RuntimeError("fictional cleanup failure")
@@ -714,6 +732,7 @@ class TestIngestExtract:
 
         assert status == expected
         assert engine.closed == 1
+        assert closed == ["engine"] + ([] if cleanup_fails else ["sessions"])
         if cleanup_fails:
             assert "fictional cleanup failure" in capsys.readouterr().err
         if outcome is None:

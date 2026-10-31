@@ -1,119 +1,22 @@
-"""The LLM cache: model responses reused at the engine boundary (ADR-0032).
+"""Response storage and reuse at the engine boundary (ADR-0032).
 
-A run recomputes a document's views (its transcription, batch and
-critique) when their inputs change, when a scratch run starts from fresh
-state directories, or on `--refresh`. The costly, non-deterministic part
-of a recompute is the model call; everything after it (parsing, merging,
-validation, the transcription check) is code that runs in moments. So
-each response is kept under a key built from what its call sends, and a
-call made again with the same key is answered from the cache: an
-accelerator, which the pipeline runs the same without. A change to what a
-call sends changes its key by itself, so no change needs a version bump.
+EngineCache owns response entries, rejection/replacement provenance and the
+exclusive process-lifetime lock. CacheAsIs observes the same responses without
+locking or filesystem writes. Neither owns provider handles or transcripts:
+provider_sessions composes response storage with execution-owned conversations.
 
-A key is the SHA-256 of the canonical JSON of:
+Keys hash actual call inputs and configuration, including the opening answer
+and parent keys for conversation forks. Entries retain reported provider usage
+as provenance, not key material. Compatible persisted response entries and
+session sidecars need no migration. The session service owns those sidecars.
 
-* the engine, the model configuration names (None when the engine runs a
-  default of its own) and the effort;
-* the engine client's ``config_hash`` (yizkr.pipeline.llm);
-* the kind of call: one-shot, the opening turn of a conversation, or a
-  fork of one;
-* the SHA-256 of the system prompt the engine adds, and of the prompt text
-  the engine sends with every path of a file the call is given replaced
-  by that file's content SHA-256, so that no key depends on where the
-  corpus, a state directory or a temporary file lives;
-* the content SHA-256 of every file the call may read, which are the
-  files its caller passes;
-* for a fork, the keys of the conversation it forks and the SHA-256 of
-  the conversation's opening answer, which the fork's context holds;
-* the attempt: a caller that asks again after an answer it cannot use,
-  and then falls back, keys each attempt apart (llm.for_attempt);
-* the role's epoch: 0 until someone re-samples the role on purpose.
+Folders created here are private (mode 700); tracked or publicly accessible
+roots are refused. The lock is identified by device/inode, so aliases share
+ownership, replacements acquire a new lock, and forked children must acquire
+their own ownership. Closing execution resources never releases this lock.
 
-Nothing on the engine's server is keyed. The account data the claude CLI
-fetches can change its system prompt, its default model and its
-compaction, and the CLI fills in details of its own when it runs, such as
-the date (yizkr.pipeline.llm). Each entry records the model the engine
-reported, so a reuse across such a change can be seen.
-
-Layout under the cache root (runtime state, kept under var/):
-
-    <root>/.lock
-    <root>/<first two hex digits of the key>/<key>.json
-                                            /<key>.rejected-<stamp>.json
-                                            /<key>.replaced-<stamp>.json
-                                            /<key>.session/<opening>/...
-
-The entries hold corpus content, model answers and the transcriptions
-their prompts carry, which is never committed or shared
-(docs/AGENT_PROTOCOL.md §6). So opening a cache refuses a root that a
-git work tree would track, where `git add` would pick its entries up, and
-a root that exists and is open to other users, whose mode it leaves
-alone (CacheRefused, a pause of its pass, before its first call), as it
-refuses one it cannot make, write in or lock. Every folder the cache
-makes, the root and any missing folder above it included, is made
-private to its owner (mode 700, whatever the umask); a folder there
-already keeps its mode, so the cache changes the mode of no folder it did
-not make. A private root keeps the folders under it from other users,
-whatever their modes. A call that misses under a key whose folder is
-there but is no folder, or one this user cannot write in or pass
-through (a chmod made since, say), is refused too (CacheRefused), before
-the engine is asked, so that no answer is asked for that could not be
-stored; its mode is left alone, and a hit under it is still served.
-
-One process at a time uses a cache (ADR-0032 §3). Opening it locks
-``.lock`` exclusively (flock) for the rest of the process and records the
-process there: its id, host, command and start. A second process that
-opens the cache is refused at once (CacheInUse, a pause of its pass) with
-that record. The kernel releases the lock when its holder ends, however
-it ends, so a holder that crashed blocks nothing: the next process to open
-the cache finds the record it left, says so, and records itself in its
-place; a clean exit empties the record. Sessions are why: a resumed
-claude-code session's transcript sits under its original id in the CLI's
-projects folder, which every process shares, so one process's release
-would pull it from under another's forks.
-
-``<key>.json`` is the one entry a call is served. It holds the key's
-components, the response, its origin (``engine``, or the reason it was
-adopted) and its provenance: the role, the engine, the model the engine
-reported, the CLI version, the client's config hash and the time; a fork
-also records how its session was obtained and the opening answer it was
-made on. Only a response the engine returned with some text in it is
-stored: an error, a timeout, a pause (PassPaused) or an empty answer
-stores nothing. The one exception is an attempt asked through
-llm.for_attempt that the engine gave up on at its output limit
-(llm.OutputLimitReached): it is kept under the attempt's key as a give-up
-(``gave_up``, with an empty response), as a refused answer is kept, and a
-call served it raises OutputLimitReached again without asking the engine,
-so a later run takes the same fallback; a refresh asks it again. An
-entry is published whole, by a link that fails where the key already has
-one, so a reader sees an entry whole or not at all, and the cache
-deletes nothing: an entry a caller rejects, and any entry a newer one
-displaces (a refresh's, a racing call's, or one damaged), is
-moved aside under a name no lookup reads, and kept for inspection. An
-answer the engine did not give (an archived transcription) is adopted
-for the call it stands for (seed), with the provenance it is given, or,
-when a check fails it, recorded under the call's key as rejected
-(record_rejected), never served. ``<key>.session/<opening>/`` keeps the
-session files of a conversation's opening turn, for the engines that
-need them to resume it exactly, under the SHA-256 of the opening answer
-the session holds: a session, whether kept there or held in memory after
-a replay, serves a conversation only for the answer it was made on,
-whichever answer a racing call or a replay has since stored under the
-key. A session is published whole, by renaming its folder into place
-over the one kept for that answer before, which is moved aside first, to
-``<opening>.replaced-<stamp>/``, and kept: for the moment between the two
-renames the answer's own path holds no folder, and a reader without the
-lock reads the folder moved aside (CacheAsIs.kept_session).
-
-An entry of an answer the engine gave also keeps, in its provenance,
-what the call's stream reported of it, where the engine reports it: the
-session it ran in, the tokens it used, its turns, how it ended, its stop
-reason and any API error's class. None of it is keyed. An answer served
-from an entry carries the stop reason the entry keeps (CachedResponse),
-so one the engine cut off at its output limit is cut off when served
-again (llm.at_output_limit), and is rejected as a fresh one is.
-
-docs/LLM_CACHE.md describes the cache, its events and the run directory.
+Persisted document products and human decisions do not depend on this cache.
+See docs/LLM_CACHE.md for layout, keys, rejection and execution ownership.
 """
 
 from __future__ import annotations
@@ -121,13 +24,11 @@ from __future__ import annotations
 import atexit
 import contextlib
 import copy
-import errno
 import fcntl
 import json
 import logging
 import os
 import re
-import shutil
 import socket
 import stat
 import sys
@@ -142,11 +43,7 @@ from typing import Any
 from yizkr.pipeline.cancellation import current_cancellation
 from yizkr.pipeline.llm import (
     COMPLETE,
-    FORK,
-    OPEN,
-    ClassifierRefused,
     ConversationalLlmClient,
-    ConversationChanged,
     OutputLimitReached,
     PassPaused,
     engine_client,
@@ -406,11 +303,23 @@ class CacheInUse(PassPaused):
         )
 
 
-# the caches this process holds: the real path of each root -> (its lock
-# file, open and locked; the process that locked it, which a forked
-# process does not share)
-_held: dict[str, tuple[int, int]] = {}
+# Lock identity is the opened file, including aliases of the same inode.
+_held: dict[tuple[int, int], tuple[int, int]] = {}
+_held_paths: dict[str, tuple[int, int]] = {}
 _held_lock = threading.Lock()
+
+
+def _after_fork() -> None:
+    """Drop inherited descriptors without unlocking the parent's lock."""
+    global _held_lock
+    _held_lock = threading.Lock()
+    for fd, _pid in _held.values():
+        os.close(fd)
+    _held.clear()
+    _held_paths.clear()
+
+
+os.register_at_fork(after_in_child=_after_fork)
 
 
 def _hold(root: Path) -> None:
@@ -427,24 +336,22 @@ def _hold(root: Path) -> None:
     real = os.path.realpath(root)
     path = os.path.join(real, LOCK_FILE)
     with _held_lock:
-        held = _held.pop(real, None)
-        if held is not None:
-            fd, pid = held
-            if pid == os.getpid() and _same_file(fd, path):
-                _held[real] = held
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            info = os.fstat(fd)
+            identity = info.st_dev, info.st_ino
+            held = _held.get(identity)
+            if held is not None and held[1] == os.getpid():
+                os.close(fd)
+                _held_paths[real] = identity
                 return
-            # a lock a forked process inherited, which is its parent's; or
-            # one on a lock file removed or replaced since, which excludes
-            # no one
-            os.close(fd)
-            if pid == os.getpid():
+            previous = _held_paths.get(real)
+            if previous is not None and previous != identity:
                 logger.warning(
                     "the lock file of the LLM cache %s was removed or "
                     "replaced while this process held it; locking it again",
                     real,
                 )
-        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
-        try:
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
@@ -454,7 +361,9 @@ def _hold(root: Path) -> None:
         except BaseException:
             os.close(fd)
             raise
-        _held[real] = (fd, os.getpid())
+        # Retain older locked inodes too: another alias may still use one.
+        _held[identity] = (fd, os.getpid())
+        _held_paths[real] = identity
     if stale.strip():
         logger.warning(
             "the LLM cache %s was held by %s, which ended without clearing "
@@ -475,16 +384,6 @@ def _clear_records() -> None:
             if pid == os.getpid():
                 with contextlib.suppress(OSError):
                     os.ftruncate(fd, 0)
-
-
-def _same_file(fd: int, path: str) -> bool:
-    """Is the file open as `fd` the one at `path`?"""
-    try:
-        on_disk = os.stat(path)
-    except OSError:
-        return False
-    held = os.fstat(fd)
-    return (on_disk.st_dev, on_disk.st_ino) == (held.st_dev, held.st_ino)
 
 
 def _record_text(fd: int) -> str:
@@ -590,10 +489,6 @@ class EngineCache:
         self._refreshed: set[str] = set()
         # roles already warned about an unpinned model
         self._warned: set[str] = set()
-        # key -> (engine client, session, SHA-256 of the opening answer it
-        # was made on) for conversations whose opening turn was recomputed
-        # in this run, until one is opened again
-        self._sessions: dict[str, tuple[Any, Any, str]] = {}
         _open_root(self.root)
         try:
             _hold(self.root)
@@ -632,41 +527,6 @@ class EngineCache:
             "role on a model id.",
             role,
         )
-
-    def remember_session(
-        self, key: str, client: Any, session: Any, opening: str
-    ) -> None:
-        """Hold the live session of a conversation whose opening turn was
-        recomputed in this run, with the SHA-256 of the opening answer it
-        was made on, for the next time it is opened. A session held for
-        `key` before, which this one displaces and so nothing will take,
-        is released through its engine client's close_conversation."""
-        with self._lock:
-            displaced = self._sessions.get(key)
-            self._sessions[key] = (client, session, opening)
-        if displaced is None or (
-            displaced[0] is client and displaced[1] == session
-        ):
-            return
-        try:
-            _release(displaced[0], displaced[1])
-        except Exception as exc:  # a leftover, never the caller's failure
-            logger.warning(
-                "could not release the session displaced under %s: %s",
-                key,
-                exc,
-            )
-
-    def take_session(self, key: str, client: Any) -> tuple[Any, str] | None:
-        """The live session remembered for `key` with this engine client,
-        and the SHA-256 of the opening answer it was made on, once; None
-        when there is none."""
-        with self._lock:
-            held = self._sessions.get(key)
-            if held is None or held[0] is not client:
-                return None
-            del self._sessions[key]
-            return held[1], held[2]
 
     # -- entries -----------------------------------------------------------
 
@@ -897,109 +757,6 @@ class EngineCache:
 
     # -- kept sessions -------------------------------------------------------
 
-    def _session_dir(self, key: str, opening: str) -> Path:
-        if not _KEY.match(opening or ""):
-            raise ValueError(f"not an opening answer's SHA-256: {opening!r}")
-        return self.path(key).with_suffix(".session") / opening
-
-    def keep_session(
-        self, key: str, opening: str, files: Mapping[str, bytes]
-    ) -> None:
-        """Keep the session files of the conversation opened under `key`
-        whose opening answer has the SHA-256 `opening`, replacing (and
-        keeping aside) any kept before for that answer. The files are
-        published whole, by renaming their folder into place, so the
-        answer they are kept under names the session they hold. A folder
-        kept there before is first moved aside, so between the two renames
-        the answer's own path holds no folder: a reader finds the session
-        in the folder moved aside for as long as that lasts, whether it
-        reads under the lock (kept_session) or without it
-        (CacheAsIs.kept_session)."""
-        if not files:
-            return
-        target = self._session_dir(key, opening)
-        _make_private(target.parent)
-        staging = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
-        try:
-            _make_private(staging)
-            for name, content in files.items():
-                path = (staging / name).resolve()
-                if not path.is_relative_to(staging.resolve()):
-                    raise ValueError(
-                        f"a session file outside its folder: {name}"
-                    )
-                _make_private(path.parent)
-                path.write_bytes(content)
-            if target.exists():
-                self._move_session_aside(target)
-            os.rename(staging, target)
-        finally:
-            shutil.rmtree(staging, ignore_errors=True)
-
-    def _move_session_aside(self, target: Path) -> None:
-        """Move the session folder at `target` aside as replaced, under a
-        name of its own. A folder a stamp of the same second already names
-        is stamped again, since renaming a folder onto one that holds
-        files fails rather than replacing it, and the keep with it: a
-        folder moved aside is never displaced, whatever the stamp. A
-        folder another keep has moved aside meanwhile is left where that
-        one put it."""
-        for _ in range(_PUBLISH_TRIES):
-            try:
-                os.rename(target, self._aside_name(target, "replaced"))
-                return
-            except FileNotFoundError:
-                return
-            except OSError as exc:
-                if exc.errno not in (errno.ENOTEMPTY, errno.EEXIST):
-                    raise
-        raise FileExistsError(
-            errno.EEXIST,
-            "no name left to move the kept session aside under",
-            str(target),
-        )
-
-    def _replaced_sessions(self, folder: Path) -> list[Path]:
-        """The session folders kept aside as replaced where `folder` keeps
-        the session of an opening answer, newest first as far as their
-        stamps order them: those of one second, or from across a change of
-        the clock, come in an order of their own. Each holds a whole
-        session of the same opening answer."""
-        try:
-            return sorted(
-                folder.parent.glob(f"{folder.name}.replaced-*"), reverse=True
-            )
-        except OSError:
-            return []
-
-    def kept_session(self, key: str, opening: str) -> dict[str, bytes]:
-        """The session files kept for the conversation opened under `key`
-        with the opening answer whose SHA-256 is `opening`, by their
-        relative paths; empty when none are kept for that answer.
-
-        A keep moves the folder it finds at the answer's path aside before
-        it renames its own in, so one that ended between the two (killed,
-        or its rename in refused) leaves that path with no folder and the
-        session in the folder it moved aside. The newest of those holding
-        a file is read instead, so this reader and the lock-free one
-        (CacheAsIs.kept_session) answer alike, and a run resumes what the
-        estimate counted on."""
-        folder = self._session_dir(key, opening)
-        if not folder.is_dir():
-            kept = (
-                aside
-                for aside in self._replaced_sessions(folder)
-                if any(path.is_file() for path in aside.rglob("*"))
-            )
-            folder = next(kept, None)
-            if folder is None:
-                return {}
-        return {
-            path.relative_to(folder).as_posix(): path.read_bytes()
-            for path in sorted(folder.rglob("*"))
-            if path.is_file()
-        }
-
     # -- helpers -------------------------------------------------------------
 
     @staticmethod
@@ -1069,7 +826,6 @@ class CacheAsIs(EngineCache):
         self._lock = threading.Lock()
         self._refreshed: set[str] = set()
         self._warned: set[str] = set()
-        self._sessions: dict[str, tuple[Any, Any, str]] = {}
         # answers stored, and keys rejected, through this view
         self._stored: dict[str, dict] = {}
         self._rejected: set[str] = set()
@@ -1079,14 +835,6 @@ class CacheAsIs(EngineCache):
 
     def warn_unpinned(self, role: str) -> None:
         """Nothing is written, and nothing is said."""
-
-    def remember_session(
-        self, key: str, client: Any, session: Any, opening: str
-    ) -> None:
-        """No session is made through this view, so none is held."""
-
-    def take_session(self, key: str, client: Any) -> None:
-        return None
 
     def get(self, key: str) -> dict | None:
         if key in self._stored:
@@ -1119,65 +867,6 @@ class CacheAsIs(EngineCache):
     def record_rejected(self, *args: Any, **kwargs: Any) -> bool:
         return False
 
-    def keep_session(
-        self, key: str, opening: str, files: Mapping[str, bytes]
-    ) -> None:
-        """No session is made through this view, so none is kept."""
-
-    def kept_session(self, key: str, opening: str) -> dict[str, bytes]:
-        """The names of the files kept for the conversation opened under
-        `key` with the opening answer whose SHA-256 is `opening`, with no
-        bytes; empty only when no session is kept for that answer.
-
-        The folder is opened once and listed through it, so a keep that
-        replaces it meanwhile never tears the listing. A keep renames the
-        folder it finds aside before it renames its own in, so the
-        answer's path holds no folder for a moment: the session is then
-        read from a folder kept aside, the first whose listing is not empty
-        of those _replaced_sessions orders, which no keep touches again. So
-        a read never waits, never fails and never comes back empty while a
-        session is kept, however it falls against a keep."""
-        folder = self._session_dir(key, opening)
-        names = _listed(folder)
-        if names:
-            return names
-        for aside in self._replaced_sessions(folder):
-            names = _listed(aside)
-            if names:
-                return names
-        return {}
-
-
-def _listed(folder: Path) -> dict[str, bytes]:
-    """The files under `folder` as `_file_names` gives them; empty where
-    it cannot be opened or read, as a folder a keep has just renamed
-    cannot be."""
-    try:
-        return _file_names(folder)
-    except OSError:
-        return {}
-
-
-def _file_names(folder: Path) -> dict[str, bytes]:
-    """The files under `folder`, by their paths relative to it, with no
-    bytes, listed through the folder opened once. OSError when it cannot
-    be opened (missing, say) or read."""
-
-    def fail(error: OSError) -> None:
-        raise error
-
-    fd = os.open(folder, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        return {
-            Path(os.path.normpath(os.path.join(top, name))).as_posix(): b""
-            for top, _dirs, files, _fd in os.fwalk(
-                ".", dir_fd=fd, onerror=fail
-            )
-            for name in sorted(files)
-        }
-    finally:
-        os.close(fd)
-
 
 def held_by(root: str | os.PathLike[str]) -> str | None:
     """The process that holds the cache under `root` now, described, as
@@ -1193,14 +882,6 @@ def held_by(root: str | os.PathLike[str]) -> str | None:
     if record is None or not _running(record):
         return None
     return _describe(record)
-
-
-def _release(client: Any, session: Any) -> None:
-    """Release `session` through the engine client that holds it, when the
-    engine holds sessions."""
-    close = getattr(client, "close_conversation", None)
-    if callable(close):
-        close(session)
 
 
 def _link(source: Path, target: Path) -> bool:
@@ -1267,36 +948,6 @@ def _made_by(entry: Mapping[str, Any]) -> str:
         else None
     )
     return named if isinstance(named, str) and named else str(entry["origin"])
-
-
-class Conversation:
-    """A conversation opened through the cache.
-
-    It carries the keys of its turns (its forks' parent chain), the
-    opening turn's key components, prompt and answer with that answer's
-    SHA-256, how its session was, or will be, obtained, and the engine's
-    own handle once the engine holds the conversation. `changed` says a
-    replay answered differently, and `failed` why a replay failed: either
-    holds for the rest of the pass, whose forks then fail at once."""
-
-    def __init__(
-        self,
-        components: dict[str, Any],
-        prompt: str,
-        response: str,
-        session: Any = None,
-        origin: str | None = None,
-    ) -> None:
-        self.components = components
-        self.chain = (call_key(components),)
-        self.prompt = prompt
-        self.response = response
-        self.opening_sha256 = sha256_text(response)
-        self.session = session
-        self.origin = origin
-        self.changed = False
-        self.failed: str | None = None
-        self.lock = threading.Lock()
 
 
 def _file_forms(path: str | os.PathLike[str]) -> set[str]:
@@ -1643,278 +1294,30 @@ class CachingClient:
             self._events(event, role=self.role, **fields)
 
 
-class ConversationalCachingClient(CachingClient):
-    """A caching client for an engine that holds conversations (ADR-0006).
-
-    Opening a conversation is a call like any other. A fork is keyed on the
-    keys of the conversation it forks and on its opening answer, and a
-    fork the cache answers needs no session. A fork the cache cannot
-    answer, of a conversation whose opening turn it did answer, needs the
-    engine to hold that conversation exactly as the fork's context
-    assumes:
-
-    * the conversation is resumed exactly, without a call, from what the
-      cache kept when it was opened (llm.ResumableLlmClient): the session
-      files of an engine that stores sessions, kept under the opening
-      answer they hold and resumed only for that answer, or the turn
-      itself for an engine that needs nothing more;
-    * failing that, the opening turn is replayed. A replay that gives the
-      cached answer again serves the conversation's forks. One that
-      answers differently makes the whole conversation a miss: the
-      replay's answer becomes the opening turn's entry, the replay's
-      session is kept under that answer and held for the run with it,
-      and the fork raises ConversationChanged, so that its caller starts
-      over from the new answer, whose forks are keyed apart from the old
-      ones. The conversation opened again takes the held session only
-      when the cache serves it the answer the session was made on; when
-      a racing call or replay has stored another answer since, the held
-      session is released, and a fork resumes the session kept for the
-      served answer, or replays. A replay that fails (the engine raises, or
-      answers with no text) fails the fork, and every later fork of the
-      conversation in the pass, without asking the engine again.
-
-    A session, however obtained, serves every later fork of the
-    conversation in the run, and never a conversation opened on another
-    answer than the one it holds. A fork the cache cannot answer is a miss
-    once the engine holds its session, just before the fork is asked: a
-    fork that fails for want of a session is none."""
-
-    def open_conversation(self, prompt: str) -> tuple[str, Conversation]:
-        components = self.components(OPEN, prompt)
-        sessions: list[Any] = []
-
-        def ask(miss: Callable[[], None]) -> tuple[str, dict[str, Any]]:
-            miss()
-            response, session = self.client.open_conversation(prompt)
-            sessions.append(session)
-            return response, {}
-
-        try:
-            response, asked = self._serve(OPEN, components, ask)
-        except BaseException:
-            for session in sessions:
-                self._release(session)
-            raise
-        if asked:
-            conversation = Conversation(
-                components, prompt, str(response), sessions[0], LIVE
-            )
-            try:
-                self._keep(
-                    response.key, conversation.opening_sha256, sessions[0]
-                )
-            except BaseException:
-                self._release(sessions[0])
-                raise
-            return response, conversation
-        conversation = Conversation(components, prompt, str(response))
-        held = self.cache.take_session(response.key, self._engine)
-        if held is not None:
-            session, opening = held
-            if opening == conversation.opening_sha256:
-                conversation.session = session
-                conversation.origin = RECOMPUTED
-            else:
-                # made on another answer than the one served, which a
-                # racing call or replay has since stored under the key
-                self._release(session)
-        return response, conversation
-
-    def fork(self, handle: Any, prompt: str) -> str:
-        if not isinstance(handle, Conversation):
-            raise TypeError("fork takes a conversation this client opened")
-
-        def ask(miss: Callable[[], None]) -> tuple[str, dict[str, Any]]:
-            session = self._session(handle)
-            miss()
-            response = self.client.fork(session, prompt)
-            return response, {
-                "session": handle.origin,
-                "opening_sha256": handle.opening_sha256,
-            }
-
-        components = self.components(
-            FORK, prompt, parent=handle.chain, opening=handle.opening_sha256
-        )
-        return self._serve(FORK, components, ask)[0]
-
-    def _keep(self, key: str, opening: str, session: Any) -> None:
-        """Keep what the engine needs to resume the conversation opened
-        under `key` exactly, under the SHA-256 of the opening answer the
-        session holds (nothing, for an engine that cannot). A session that
-        cannot be kept is only a warning: no fork resumes it, and one that
-        misses replays the opening turn instead."""
-        keep = getattr(self.client, "keep_conversation", None)
-        if not callable(keep):
-            return
-        self._check_cancelled()
-        try:
-            files = keep(session)
-        except (OSError, ValueError) as exc:
-            self._check_cancelled()
-            logger.warning("could not keep the session of %s: %s", key, exc)
-            return
-        self._check_cancelled()
-        try:
-            self.cache.keep_session(key, opening, files)
-        except (OSError, ValueError) as exc:
-            self._check_cancelled()
-            logger.warning("could not keep the session of %s: %s", key, exc)
-
-    def _session(self, conversation: Conversation) -> Any:
-        """The engine's handle for `conversation` (see the class
-        docstring): resumed exactly, from the session kept for its opening
-        answer, or replayed and found the same; a replay that differs
-        raises ConversationChanged. A replay that fails raises, and the
-        failure is remembered: the conversation's later forks raise it
-        again at once, rather than asking the engine once per fork. A
-        replay the safety classifier refused (ClassifierRefused) raises a
-        RuntimeError that names the refusal, as every later fork's does:
-        it is a failure of the conversation's session, which a fork's
-        caller falls back from, never the refusal of the fork itself.
-
-        A replay is asked through the client's replay_conversation where
-        it has one (a client that reports its calls: the replay's call
-        event says it is one), else as an opening turn. One that matches
-        leaves the entry as it was, with what the original call's stream
-        reported; one that differs stores its own answer, with what its
-        own stream reported."""
-        with self._session_lock(conversation):
-            self._check_cancelled()
-            key = conversation.chain[-1]
-            if conversation.changed:
-                raise _changed(key)
-            if conversation.failed is not None:
-                raise RuntimeError(
-                    f"the replay of the conversation opened under {key} "
-                    f"failed earlier in this pass: {conversation.failed}"
-                )
-            if conversation.session is not None:
-                return conversation.session
-            resume = getattr(self.client, "resume_conversation", None)
-            if callable(resume):
-                try:
-                    session = resume(
-                        conversation.prompt,
-                        conversation.response,
-                        self.cache.kept_session(
-                            key, conversation.opening_sha256
-                        ),
-                    )
-                except Exception as exc:  # nothing kept, or unusable
-                    self._check_cancelled()
-                    logger.info("could not resume %s: %s", key, exc)
-                else:
-                    try:
-                        self._check_cancelled()
-                    except BaseException:
-                        self._release(session)
-                        raise
-                    conversation.session = session
-                    conversation.origin = RESUMED
-                    self._emit(RESUME, call=OPEN, key=key)
-                    return session
-            replay = getattr(self.client, "replay_conversation", None)
-            if not callable(replay):
-                replay = self.client.open_conversation
-            # a replay that answers differently is stored under the
-            # opening turn's key, whose folder may be another than the
-            # fork's
-            self.cache.check_storable(key)
-            try:
-                response, session = replay(conversation.prompt)
-            except ClassifierRefused as exc:
-                # the refusal is of the replay, not of the fork that needed
-                # it: every fork of the conversation sees the same failure
-                # of its session, which its caller can fall back from
-                conversation.failed = f"{type(exc).__name__}: {exc}"
-                raise RuntimeError(
-                    f"the replay of the conversation opened under {key} "
-                    f"was refused: {exc}"
-                ) from exc
-            except Exception as exc:
-                conversation.failed = f"{type(exc).__name__}: {exc}"
-                raise
-            try:
-                self._check_cancelled()
-            except BaseException:
-                self._release(session)
-                raise
-            if not str(response).strip():
-                conversation.failed = "it returned no text"
-                self._release(session)
-                raise RuntimeError(
-                    f"the replay of the conversation opened under {key} "
-                    "returned no text"
-                )
-            matches = response == conversation.response
-            self._emit(REPLAY, call=OPEN, key=key, matches=matches)
-            if matches:
-                conversation.session = session
-                conversation.origin = REPLAYED
-                self._keep(key, conversation.opening_sha256, session)
-                return session
-            try:
-                self.cache.put(
-                    key,
-                    self._entry(
-                        key,
-                        conversation.components,
-                        response,
-                        {"recomputed": True},
-                    ),
-                )
-                opening = sha256_text(response)
-                self._keep(key, opening, session)
-                self.cache.remember_session(
-                    key, self._engine, session, opening
-                )
-            except BaseException:
-                self._release(session)
-                raise
-            conversation.changed = True
-            raise _changed(key)
-
-    def close_conversation(self, handle: Any) -> None:
-        """Release the engine's session of a conversation, if it holds
-        one."""
-        if isinstance(handle, Conversation) and handle.session is not None:
-            self._release(handle.session)
-
-    @contextlib.contextmanager
-    def _session_lock(self, conversation: Conversation):
-        """Let a waiting fork stop while another fork restores its session."""
-        self._check_cancelled()
-        while not conversation.lock.acquire(timeout=0.05):
-            self._check_cancelled()
-        try:
-            self._check_cancelled()
-            yield
-        finally:
-            conversation.lock.release()
-
-    def _release(self, session: Any) -> None:
-        _release(self.client, session)
-
-
-def _changed(key: str) -> ConversationChanged:
-    return ConversationChanged(
-        f"the conversation opened under {key} answered differently when "
-        "it was replayed"
-    )
-
-
 def wrap(
     client: Any,
-    cache: EngineCache,
+    cache: Any,
     *,
     role: str,
     events: Callable[..., Any] | None = None,
+    sessions: Any = None,
 ) -> CachingClient:
-    """`client` behind `cache`, conversational exactly when it is."""
-    kind = (
-        ConversationalCachingClient
-        if isinstance(client, ConversationalLlmClient)
-        else CachingClient
+    """Compose response reuse with an explicitly supplied session service."""
+    from yizkr.pipeline.provider_sessions import (
+        ConversationalCachingClient,
+        ExecutionCache,
     )
-    return kind(client, cache, role=role, events=events)
+
+    if isinstance(cache, ExecutionCache):
+        sessions = cache.sessions if sessions is None else sessions
+        cache = cache.responses
+    if isinstance(client, ConversationalLlmClient):
+        if sessions is None:
+            raise TypeError(
+                "conversational caching requires execution-owned sessions; "
+                "use llm.open_cache or supply a SessionPool"
+            )
+        return ConversationalCachingClient(
+            client, cache, role=role, events=events, sessions=sessions
+        )
+    return CachingClient(client, cache, role=role, events=events)

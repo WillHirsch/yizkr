@@ -68,7 +68,7 @@ from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Protocol, runtime_checkable
 
 from yizkr.pipeline.cancellation import (
@@ -1029,16 +1029,86 @@ def release_transcripts(
     return released
 
 
+@dataclass(frozen=True)
+class _RestoredSession:
+    """An owned copy of an opaque provider checkpoint, outside shared state."""
+
+    directory: Path
+    transcript: Path
+
+
+def _release_restored(
+    handle: str, restored: _RestoredSession, destination: Path | None
+) -> None:
+    try:
+        if destination is None:
+            shutil.rmtree(restored.directory)
+        else:
+            destination.mkdir(mode=0o700, parents=True, exist_ok=True)
+            shutil.move(restored.directory, destination / handle)
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        logger.warning("could not release restored claude session: %s", exc)
+
+
+def _kept_transcript(files: Mapping[str, bytes]) -> PurePosixPath:
+    """Accept one transcript and its side files, without parsing their data."""
+    paths = [PurePosixPath(name) for name in files]
+    if any(
+        path.is_absolute()
+        or path.as_posix() != name
+        or ".." in path.parts
+        or "\\" in name
+        for name, path in zip(files, paths, strict=True)
+    ):
+        raise ValueError("a kept file is outside its session bundle")
+    transcripts = [
+        path
+        for path in paths
+        if len(path.parts) == 2 and path.suffix == ".jsonl"
+    ]
+    if len(transcripts) != 1:
+        raise ValueError("the kept files hold no single transcript")
+    transcript = transcripts[0]
+    session = str(uuid.UUID(transcript.stem))
+    if transcript.stem != session:
+        raise ValueError("the kept transcript has no canonical session id")
+    prefix = (transcript.parts[0], session)
+    if any(
+        path != transcript
+        and (len(path.parts) < 3 or path.parts[:2] != prefix)
+        for path in paths
+    ):
+        raise ValueError("a kept file belongs to another session")
+    if not all(isinstance(data, bytes) for data in files.values()):
+        raise ValueError("a kept session file has no byte content")
+    original = f"/projects/{transcript.parts[0]}/{session}".encode()
+    for content in files.values():
+        normalized = re.sub(rb"/+", b"/", content.replace(b"\\", b"/"))
+        if original + b"/" in normalized or original + b".jsonl" in normalized:
+            raise ValueError(
+                "the checkpoint references absolute original session files; "
+                "replay is required"
+            )
+    return transcript
+
+
 def _release_held(
     held: set[str],
     lock: threading.Lock,
     destination: Path | None,
     config_dir: Path | None,
+    restored: dict[str, _RestoredSession],
 ) -> None:
     with lock:
         session_ids = sorted(held)
         held.clear()
+        copies = list(restored.items())
+        restored.clear()
     release_transcripts(session_ids, destination, config_dir)
+    for handle, session in copies:
+        _release_restored(handle, session, destination)
 
 
 def _stream_events(stdout: str) -> list[dict]:
@@ -2545,11 +2615,13 @@ class ClaudeCodeClient:
     ``close_conversation`` or ``close`` is called, or at the latest when
     the client is garbage-collected or the process exits.
     ``keep_conversation`` gives an open conversation's session files, for
-    the LLM cache to keep beside the conversation's opening turn
-    (ADR-0032), and ``resume_conversation`` puts them back under the
-    projects directory, so that a later run forks the conversation
-    exactly as it was opened; a resumed conversation is released as one
-    opened here is.
+    the session service to keep beside the conversation's opening turn
+    (ADR-0032). ``resume_conversation`` copies them into an owned private
+    directory; forks resume its absolute transcript path. Original session
+    IDs and ancestry remain in the copied bytes but never select shared files
+    to overwrite or release. Closing releases only the private copy. A bundle
+    with explicit absolute references to its original session files requires
+    replay instead of relocation.
     """
 
     engine = "claude-code"
@@ -2659,6 +2731,7 @@ class ClaudeCodeClient:
         # open conversations: sessions that forks resume, so their
         # transcripts stay in place until the conversation is closed
         self._conversations: set[str] = set()
+        self._restored: dict[str, _RestoredSession] = {}
         self._conversations_lock = threading.Lock()
         weakref.finalize(
             self,
@@ -2667,6 +2740,7 @@ class ClaudeCodeClient:
             self._conversations_lock,
             self.transcripts,
             self.config_dir,
+            self._restored,
         )
 
     def _command(self) -> list[str]:
@@ -2824,18 +2898,40 @@ class ClaudeCodeClient:
         """One follow-up turn on a FORK of the session — the original
         session is never mutated, so every fork branches from the same
         prefix and forks never see each other's turns."""
+        with self._conversations_lock:
+            restored = self._restored.get(str(handle))
+            if restored is None and str(handle) not in self._conversations:
+                raise ValueError(
+                    "the conversation is not owned by this client"
+                )
+        target = str(restored.transcript) if restored else str(handle)
         return self._run(
-            lambda: ["--resume", str(handle), "--fork-session"], prompt
+            lambda: ["--resume", target, "--fork-session"], prompt
         )[0]
 
     def keep_conversation(self, handle: Any) -> dict[str, bytes]:
-        """The files of a conversation's session, by path under the CLI's
-        projects directory: its transcript, and the directory beside it
-        when there is one. Empty when the session is no longer stored."""
+        """An owned conversation's transcript and side files, byte-for-byte.
+
+        Relative paths retain the provider checkpoint layout for opened and
+        privately restored sessions. A handle this client does not own gives
+        no files.
+        """
         try:
             name = str(uuid.UUID(str(handle)))
         except ValueError:
             return {}
+        with self._conversations_lock:
+            restored = self._restored.get(name)
+            if restored is None and name not in self._conversations:
+                return {}
+        if restored is not None:
+            return {
+                path.relative_to(
+                    restored.directory
+                ).as_posix(): path.read_bytes()
+                for path in sorted(restored.directory.rglob("*"))
+                if path.is_file()
+            }
         projects = claude_projects_dir(self.config_dir)
         paths = sorted(projects.glob(f"*/{name}.jsonl"))
         for directory in sorted(projects.glob(f"*/{name}")):
@@ -2849,45 +2945,61 @@ class ClaudeCodeClient:
     def resume_conversation(
         self, prompt: str, response: str, files: Mapping[str, bytes]
     ) -> Any:
-        """Resume a kept conversation exactly: its session's files go back
-        under the CLI's projects directory, from which forks resume it, and
-        the session is held like one opened here, until
-        ``close_conversation`` or ``close`` releases its transcript. Raises
-        ValueError when the files hold no single session transcript, name
-        a path outside the projects directory, or belong to a session this
-        client holds open already (whose release would pull its transcript
-        from under the other holder)."""
-        transcripts = [name for name in files if name.endswith(".jsonl")]
-        if len(transcripts) != 1:
-            raise ValueError("the kept files hold no single transcript")
-        session_id = str(uuid.UUID(Path(transcripts[0]).stem))
-        projects = claude_projects_dir(self.config_dir).resolve()
-        targets = {}
-        for name in files:
-            target = (projects / name).resolve()
-            if not target.is_relative_to(projects) or target == projects:
-                raise ValueError(f"a kept file outside the projects: {name}")
-            targets[name] = target
-        with self._conversations_lock:
-            if session_id in self._conversations:
-                raise ValueError(f"the session {session_id} is open already")
-            self._conversations.add(session_id)
+        """Restore an exact checkpoint into a fresh, private runtime copy.
+
+        Forks resume its absolute transcript path. The provider's original
+        session IDs and ancestry stay unchanged inside the copied bytes;
+        they never select shared files to overwrite or release. An unfamiliar
+        bundle is refused so the caller can replay and compare the opening.
+        Explicit absolute references to the original projects/session files
+        are also refused: relocation cannot preserve those references without
+        rewriting conversation content or publishing shared files again.
+        """
+        directory = None
+        handle = str(uuid.uuid4())
         try:
-            for name, target in targets.items():
-                target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-                target.write_bytes(files[name])
+            with self._calls.call() as cancellation:
+                transcript = _kept_transcript(files)
+                directory = Path(
+                    tempfile.mkdtemp(prefix="yizkr-claude-session-")
+                )
+                for name, content in files.items():
+                    cancellation.check()
+                    target = directory / name
+                    for parent in reversed(target.parent.parents):
+                        if parent != directory and parent.is_relative_to(
+                            directory
+                        ):
+                            parent.mkdir(mode=0o700, exist_ok=True)
+                    target.parent.mkdir(mode=0o700, exist_ok=True)
+                    with target.open("xb") as stream:
+                        stream.write(content)
+                cancellation.check()
+                with self._conversations_lock:
+                    self._restored[handle] = _RestoredSession(
+                        directory, directory / transcript
+                    )
+                return handle
         except BaseException:
             with self._conversations_lock:
-                self._conversations.discard(session_id)
+                self._restored.pop(handle, None)
+            if directory is not None:
+                shutil.rmtree(directory, ignore_errors=True)
             raise
-        return session_id
 
     def close_conversation(self, handle: Any) -> None:
         """Release a conversation's transcript once it will not be forked
         again."""
         with self._conversations_lock:
+            restored = self._restored.pop(str(handle), None)
+            owned = str(handle) in self._conversations
             self._conversations.discard(str(handle))
-        release_transcripts([str(handle)], self.transcripts, self.config_dir)
+        if restored is not None:
+            _release_restored(str(handle), restored, self.transcripts)
+        elif owned:
+            release_transcripts(
+                [str(handle)], self.transcripts, self.config_dir
+            )
 
     def close(self) -> None:
         """Stop owned calls and waits before releasing their conversations."""
@@ -2897,6 +3009,7 @@ class ClaudeCodeClient:
             self._conversations_lock,
             self.transcripts,
             self.config_dir,
+            self._restored,
         )
 
     def __enter__(self) -> ClaudeCodeClient:
@@ -3098,6 +3211,14 @@ class ClaudeCodeClient:
             if stream is not None:
                 _add_report(stream, stream_report(reported))
             sessions = _session_ids(stdout, extra_args)
+            if "--resume" in extra_args:
+                parent = extra_args[extra_args.index("--resume") + 1]
+                # A restored path still names the original provider session
+                # in its basename. Its files are borrowed history, never a
+                # child operation's output to release from shared state.
+                sessions.discard(
+                    Path(parent).stem if Path(parent).is_absolute() else parent
+                )
             with self._conversations_lock:
                 if held:
                     self._conversations.update(sessions)
@@ -3487,10 +3608,16 @@ def open_cache(
     answered. Every command opens its cache here, before its first call,
     and the cache refuses (llmcache.CacheRefused, a pause) a ``root`` a
     git work tree would track and one there already that is open to other
-    users, whose mode it leaves alone: its entries hold corpus content."""
+    users, whose mode it leaves alone: its entries hold corpus content.
+    Opening creates the root and holds its exclusive response lock for the
+    process lifetime; another holder raises CacheInUse. The returned execution
+    resources compose response storage with separately owned sessions. Close
+    those resources after owned provider work stops; this releases session
+    leases, not the response lock or persisted answers."""
     from yizkr.pipeline.llmcache import EngineCache
+    from yizkr.pipeline.provider_sessions import ExecutionCache
 
-    return EngineCache(root, refresh=refresh, epochs=epochs)
+    return ExecutionCache(EngineCache(root, refresh=refresh, epochs=epochs))
 
 
 def read_cache(
@@ -3508,15 +3635,16 @@ def read_cache(
     as the names of its files only, with no bytes: whether they can
     resume a conversation is all a reader asks. It comes back whole
     however a run holding the cache keeps that session meanwhile, and
-    never empty while one is kept (llmcache.CacheAsIs.kept_session). A
+    never empty while one is kept (provider_sessions.SessionStore). A
     folder the cache would refuse to open, one a git work tree would
     track, one open to other users, or one this user cannot write in or
     make, is refused here too (llmcache.CacheRefused, a pause). The call
     estimate counts a planned run's calls through it
     (yizkr.pipeline.estimate)."""
     from yizkr.pipeline.llmcache import CacheAsIs
+    from yizkr.pipeline.provider_sessions import ExecutionCache
 
-    return CacheAsIs(root, refresh=refresh, epochs=epochs)
+    return ExecutionCache(CacheAsIs(root, refresh=refresh, epochs=epochs))
 
 
 def cache_holder(root: str | os.PathLike[str]) -> str | None:
