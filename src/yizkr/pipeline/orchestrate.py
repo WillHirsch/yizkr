@@ -1716,6 +1716,7 @@ class Orchestrator:
         `_step_register` registers a document that is not an excerpt. The
         derived media are kept by the document's SHA-1 too
         (registered_media), for the write of its claims."""
+        registrar.check_media_source(doc.source, sha1=doc.sha1)
         self._record_container_inventory(doc)
         artifact_type = self.artifact_type
         pages = 0

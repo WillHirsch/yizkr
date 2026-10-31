@@ -1,6 +1,6 @@
 # The run-to-run diff, and the reviewer checklist
 
-A change to a stage before write (its code, a prompt, the manifest, a model or its parameters) is checked by a whole-corpus scratch run and a diff against the latest completed run on main (ADR-0025 §4, docs/AGENT_PROTOCOL.md §5, `needs:scratch-diff`). The diff says what changed between the two runs, and why. This page says how to make it, what it holds, and how to read it: the reviewer checklist below is what the owner, or a reviewer agent, reads a scratch-diff by. It takes the place of the planned docs/EVAL.md: there is no gold set and no synthetic eval, and the whole corpus is the test set.
+A whole-corpus comparison is required when cross-document interactions or remaining uncertainty warrant it, as described in [TESTING](TESTING.md#verification-by-risk) and [AGENT_PROTOCOL §5](AGENT_PROTOCOL.md#5-integration-and-corpus-evidence). Record the risk, baseline and necessary stages with `needs:scratch-diff`; stop before graph writes when they are irrelevant. The diff says what changed between two runs and helps a reviewer assess whether the change matches the PR. It complements focused fictional tests and bounded model checks.
 
 Code: `yizkr.pipeline.rundiff`. It builds on the run report ([`docs/RUN_REPORT.md`](RUN_REPORT.md)) and the fingerprints of `yizkr.pipeline.fingerprints` (ADR-0025 §4, as amended by #197).
 
@@ -89,7 +89,7 @@ Coexisting assertions are a healthy state (ADR-0002): a new claim that contradic
 
 **1. Is the diff the one asked for?**
 
-- The baseline is a completed run on main (`complete: yes`, `differs from commit: no`), and the run is at the PR's head, or a local merge of the waiting PRs it batches. Both runs' reports are `stored` and current, or `built`.
+- The baseline is a clean run representing main, and the candidate is at the PR's head or a documented integration revision. Automatic baseline selection requires a completed run on main. For an explicit comparison stopped before writes, both invocations must have ended, the intended document cohort must be admitted, and all required stages must have finished; `scratch.complete: false` alone is expected. Record any squash-merge equivalence or later changes and why the evidence still applies. Both runs' reports must be current (`stored` or `built`).
 - `Same LLM cache: yes`. If not, every call was asked again, and the stages say nothing of reuse.
 - The settings that differ are the PR's, and only the PR's: a model, effort or epoch change the PR does not make, or a CLI version that moved, accounts for recomputes the PR does not cause. Where `diff.md` counts other settings that differ and does not show them, a cloud reviewer asks a local session which they are (`diff.json`'s `settings_not_shown`, and the two `run.json` files).
 

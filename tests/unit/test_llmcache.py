@@ -3047,7 +3047,12 @@ class TestThePipeline:
         assert len(completed) == len(answered) == 5
         engine = Engine(pipeline_answers)
         again = CachedRun(
-            folder, state, engine=engine, cache_dir=cache, log=quiet
+            folder,
+            state,
+            engine=engine,
+            cache_dir=cache,
+            log=quiet,
+            chunk_concurrency=1,
         )
         assert again.run() == 2
         # the scan's views were finished, and stand

@@ -531,7 +531,11 @@ class TestReuse:
         transcription is made again without it, the common projection no
         longer admits it, and it is no excerpt."""
         corpus = folder(tmp_path, booklet=booklet())
-        run(tmp_path, corpus, Reader({LETTER_SHA1: EXCERPT}))
+        first = run(tmp_path, corpus, Reader({LETTER_SHA1: EXCERPT}))
+        assert (
+            LETTER_SHA1
+            in transcription_of(document(first, "booklet.pdf")).text
+        )
         reader = Reader({})
         again = run(
             tmp_path,
@@ -540,10 +544,13 @@ class TestReuse:
             exclusions=ExclusionList.parse(f"{LETTER_SHA1}\n"),
         )
         doc = document(again, "booklet.pdf")
-        (aside,) = set_asides(again)
-        assert aside["reason"] == (
-            f"the never-ingest list names image {LETTER_SHA1[:12]}, which "
-            "it marks"
+        # Changed eligibility invalidates generation before the old reading
+        # needs a validity recheck. Require regeneration, not that particular
+        # set-aside branch, and verify no excluded image is read or dispatched.
+        assert any(
+            event.get("subject") == doc.sha1
+            and event.get("stage") == "transcription"
+            for event in this_run(again, "started")
         )
         assert reader.read == []
         assert LETTER_SHA1 not in transcription_of(doc).text
