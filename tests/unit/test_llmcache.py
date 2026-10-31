@@ -98,16 +98,30 @@ class WaitCountingLock:
         self._lock = threading.Lock()
         self._arrived = threading.Condition()
         self.arrivals = 0
+        self._waiting: set[int] = set()
+
+    def acquire(self, *, timeout=-1):
+        thread = threading.get_ident()
+        with self._arrived:
+            if thread not in self._waiting:
+                self.arrivals += 1
+                self._waiting.add(thread)
+            self._arrived.notify_all()
+        acquired = self._lock.acquire(timeout=timeout)
+        if acquired:
+            with self._arrived:
+                self._waiting.remove(thread)
+        return acquired
+
+    def release(self):
+        self._lock.release()
 
     def __enter__(self):
-        with self._arrived:
-            self.arrivals += 1
-            self._arrived.notify_all()
-        self._lock.acquire()
+        self.acquire()
         return self
 
     def __exit__(self, *exc) -> None:
-        self._lock.release()
+        self.release()
 
     def wait_for(self, count: int, timeout: float) -> bool:
         """Whether `count` threads came to the lock within `timeout`."""
@@ -471,7 +485,7 @@ class TestKeys:
         class Completed:
             stdout, stderr, returncode = "2.1.237\n", "", 0
 
-        monkeypatch.setattr(llm.subprocess, "run", lambda *a, **k: Completed)
+        monkeypatch.setattr(llm, "_run_process", lambda *a, **k: Completed)
         monkeypatch.setattr(llm, "_PIN", llm._CliPin())
         engine = llm.ClaudeCodeClient(model="claude-sonnet-5", effort="low")
         caching = client(tmp_path, engine)
@@ -494,7 +508,7 @@ class TestKeys:
         import types
 
         class Messages:
-            def create(self, **request):
+            async def create(self, **request):
                 assert request["max_tokens"] == 4096
                 block = types.SimpleNamespace(type="text", text="an answer")
                 return types.SimpleNamespace(
@@ -502,7 +516,13 @@ class TestKeys:
                 )
 
         package = types.ModuleType("anthropic")
-        package.Anthropic = lambda: types.SimpleNamespace(messages=Messages())
+
+        async def close():
+            pass
+
+        package.AsyncAnthropic = lambda **kwargs: types.SimpleNamespace(
+            messages=Messages(), close=close
+        )
         monkeypatch.setitem(sys.modules, "anthropic", package)
         monkeypatch.setenv("ANTHROPIC_API_KEY", "a-test-key")
         engine = llm.AnthropicClient(model="claude-sonnet-5")
@@ -597,7 +617,7 @@ class TestStorage:
         import types
 
         class Messages:
-            def create(self, **request):
+            async def create(self, **request):
                 content = [
                     types.SimpleNamespace(type="text", text=text)
                     for text in blocks
@@ -605,7 +625,13 @@ class TestStorage:
                 return types.SimpleNamespace(model="m", content=content)
 
         package = types.ModuleType("anthropic")
-        package.Anthropic = lambda: types.SimpleNamespace(messages=Messages())
+
+        async def close():
+            pass
+
+        package.AsyncAnthropic = lambda **kwargs: types.SimpleNamespace(
+            messages=Messages(), close=close
+        )
         monkeypatch.setitem(sys.modules, "anthropic", package)
         monkeypatch.setenv("ANTHROPIC_API_KEY", "a-test-key")
         engine = llm.AnthropicClient(model="claude-sonnet-5")

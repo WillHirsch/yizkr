@@ -4476,7 +4476,7 @@ class TestPrivacyDefaults:
         def missing(*args, **kwargs):
             raise FileNotFoundError("claude")
 
-        monkeypatch.setattr(llm.subprocess, "run", missing)
+        monkeypatch.setattr(llm, "_run_process", missing)
         with pytest.raises(RuntimeError, match="explicit\\s+opt-in"):
             llm.ClaudeCodeClient()
 
@@ -4501,7 +4501,7 @@ class TestClaudeCodeClient:
             calls.append((command, kwargs))
             return responses.pop(0)
 
-        monkeypatch.setattr(llm.subprocess, "run", fake_run)
+        monkeypatch.setattr(llm, "_run_process", fake_run)
         monkeypatch.delenv("YIZKR_LLM_MODEL", raising=False)
         monkeypatch.delenv("YIZKR_LLM_EFFORT", raising=False)
         return llm.ClaudeCodeClient(), calls
@@ -4511,8 +4511,8 @@ class TestClaudeCodeClient:
         from yizkr.pipeline import llm
 
         monkeypatch.setattr(
-            llm.subprocess,
-            "run",
+            llm,
+            "_run_process",
             lambda *a, **k: FakeCompleted(stdout="2.1.207\n"),
         )
         # no effort configured -> no flag (unchanged default behaviour)
@@ -4534,8 +4534,8 @@ class TestClaudeCodeClient:
         from yizkr.pipeline import llm
 
         monkeypatch.setattr(
-            llm.subprocess,
-            "run",
+            llm,
+            "_run_process",
             lambda *a, **k: FakeCompleted(stdout="2.1.207\n"),
         )
         overridden = llm.make_client("claude-code", model="claude-sonnet-5")
@@ -4559,8 +4559,8 @@ class TestClaudeCodeClient:
         from yizkr.pipeline import llm
 
         monkeypatch.setattr(
-            llm.subprocess,
-            "run",
+            llm,
+            "_run_process",
             lambda *a, **k: FakeCompleted(stdout="2.1.207\n"),
         )
         client = llm.ClaudeCodeClient()

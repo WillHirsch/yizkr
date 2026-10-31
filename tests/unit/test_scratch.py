@@ -3016,8 +3016,8 @@ class TestPreflightCalls:
             llm, "_PACER", llm._Pacer(clock=clock, sleep=clock.sleep)
         )
         plain = install_fake_cli(monkeypatch, tmp_path)
-        cli = LimitedCli(plain.projects, subprocess.run)
-        monkeypatch.setattr(llm.subprocess, "run", cli)
+        cli = LimitedCli(plain.projects, plain)
+        monkeypatch.setattr(llm, "_run_process", cli)
         monkeypatch.setattr(llm, "make_client", MAKE_CLIENT)
         monkeypatch.setenv("YIZKR_LLM_MODEL", MODEL)
         cli.script = [UNSUPPORTED]

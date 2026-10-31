@@ -110,7 +110,7 @@ SET_ASIDE = "set-aside"
 # a document failed, and only it: in a stage or outside its stages
 DOCUMENT_FAILED = "document-failed"
 # a stage's events: "reused" says its view was current and stands
-STAGE_EVENTS = ("started", "done", "reused", "failed", "held")
+STAGE_EVENTS = ("started", "done", "reused", "failed", "held", "cancelled")
 # how far a corpus stage of a scratch run has got: what it is doing and
 # counts, never a document's words (yizkr.pipeline.scratchwrite)
 PROGRESS = "progress"
@@ -138,6 +138,7 @@ CONTROL_ACTIONS = (PAUSE, RESUME, ABORT)
 PENDING = "pending"
 RUNNING = "running"
 INTERRUPTED = "interrupted"
+CANCELLED = "cancelled"
 DONE = "done"
 FAILED = "failed"
 NEEDS_ATTENTION = "needs attention"
@@ -750,8 +751,10 @@ def _state_from_event(event: dict) -> StageState:
         if event.get("attention"):
             return StageState(NEEDS_ATTENTION, "; ".join(event["attention"]))
         return StageState(DONE)
-    if kind == "failed":
-        return StageState(FAILED, event.get("reason"))
+    if kind in ("failed", "cancelled"):
+        return StageState(
+            FAILED if kind == "failed" else CANCELLED, event.get("reason")
+        )
     if kind == "held":
         return StageState(PENDING, event.get("reason"))
     return StageState(RUNNING)

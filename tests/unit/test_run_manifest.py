@@ -605,7 +605,7 @@ class TestTheRealClient:
             return Completed()
 
         monkeypatch.setattr(llm, "_PIN", llm._CliPin())
-        monkeypatch.setattr(llm.subprocess, "run", version_probe)
+        monkeypatch.setattr(llm, "_run_process", version_probe)
         monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
         monkeypatch.setenv("YIZKR_LLM_MODEL", FULL_MODEL)
         return version

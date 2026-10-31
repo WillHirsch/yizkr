@@ -46,6 +46,7 @@ cache.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import copy
 import hashlib
@@ -56,6 +57,7 @@ import mimetypes
 import os
 import re
 import shutil
+import signal
 import subprocess
 import tempfile
 import threading
@@ -63,14 +65,188 @@ import time
 import uuid
 import weakref
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
+from yizkr.pipeline.cancellation import (
+    Cancellation,
+    RunCancelled,
+    cancellation_scope,
+    current_cancellation,
+)
 from yizkr.pipeline.stage_planning import ROLE_STAGES
 
 logger = logging.getLogger(__name__)
+
+_STOP_GRACE = 1.0
+_POLL_INTERVAL = 0.05
+_PROCESS_OUTPUT = threading.local()
+
+
+def _signal_process_group(process: subprocess.Popen, sig: int) -> None:
+    """Signal only the new process group created for this owned operation."""
+    try:
+        if os.name == "posix":
+            os.killpg(process.pid, sig)
+        elif sig == signal.SIGTERM:
+            process.terminate()
+        else:
+            process.kill()
+    except ProcessLookupError:
+        pass
+
+
+def _stop_process(process: subprocess.Popen) -> tuple[str, str]:
+    """Terminate descendants too, even when their group leader has exited."""
+    _signal_process_group(process, signal.SIGTERM)
+    try:
+        result = process.communicate(timeout=_STOP_GRACE)
+    except subprocess.TimeoutExpired:
+        _signal_process_group(process, signal.SIGKILL)
+        try:
+            return process.communicate(timeout=_STOP_GRACE)
+        except subprocess.TimeoutExpired:
+            # A pipe inherited outside the owned group must not keep local
+            # shutdown waiting indefinitely. Reap the child and close our ends.
+            for stream in (process.stdin, process.stdout, process.stderr):
+                if stream is not None:
+                    stream.close()
+            process.wait(timeout=_STOP_GRACE)
+            return "", ""
+    else:
+        # An ordinary child can exit before a descendant that ignores TERM.
+        _signal_process_group(process, signal.SIGKILL)
+        return result
+
+
+def _run_process(
+    command,
+    *,
+    input: str | None = None,
+    capture_output: bool = True,
+    text: bool = True,
+    timeout: float,
+    cwd=None,
+    env=None,
+):
+    """Run one owned CLI operation with bounded cancellation and cleanup.
+
+    Keep the request argument shape independent of lifecycle controls: it is
+    also the seam for authored provider responses in offline tests.
+    """
+    cancellation = current_cancellation()
+    if cancellation is not None:
+        cancellation.check()
+    _PROCESS_OUTPUT.stdout = ""
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE if input is not None else None,
+        stdout=subprocess.PIPE if capture_output else None,
+        stderr=subprocess.PIPE if capture_output else None,
+        text=text,
+        cwd=cwd,
+        env=env,
+        start_new_session=os.name == "posix",
+    )
+    signalling = threading.Lock()
+    active = True
+
+    def stop() -> None:
+        with signalling:
+            if active:
+                _signal_process_group(process, signal.SIGTERM)
+
+    unregister = (
+        cancellation.add_callback(stop)
+        if cancellation is not None
+        else lambda: None
+    )
+    deadline = time.monotonic() + timeout
+    try:
+        first = True
+        while True:
+            if cancellation is not None:
+                cancellation.check()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(command, timeout)
+            try:
+                stdout, stderr = process.communicate(
+                    input=input if first else None,
+                    timeout=min(_POLL_INTERVAL, remaining),
+                )
+            except subprocess.TimeoutExpired:
+                first = False
+                continue
+            _PROCESS_OUTPUT.stdout = stdout or ""
+            if process.returncode and cancellation is not None:
+                cancellation.check()
+            return subprocess.CompletedProcess(
+                command, process.returncode, stdout, stderr
+            )
+    except BaseException as exc:
+        try:
+            stdout, stderr = _stop_process(process)
+        except BaseException as cleanup:
+            exc.add_note(
+                "provider process cleanup also failed: "
+                f"{type(cleanup).__name__}"
+            )
+            raise exc from cleanup
+        _PROCESS_OUTPUT.stdout = stdout or ""
+        if isinstance(exc, subprocess.TimeoutExpired):
+            exc.stdout, exc.stderr = stdout, stderr
+        raise
+    finally:
+        with signalling:
+            active = False
+        unregister()
+
+
+class _ProviderCalls:
+    """Track borrowed work scopes without owning their parent run."""
+
+    def __init__(self, cancellation: Cancellation | None) -> None:
+        self.fallback = cancellation
+        self.closed = Cancellation()
+        self.lock = threading.Lock()
+        self.active: dict[Cancellation, tuple[int, threading.Event]] = {}
+
+    @contextmanager
+    def call(self):
+        scope = Cancellation(current_cancellation() or self.fallback)
+        done = threading.Event()
+        unregister = self.closed.add_callback(
+            lambda: scope.cancel("the model client was closed")
+        )
+        with self.lock:
+            self.active[scope] = threading.get_ident(), done
+        try:
+            with cancellation_scope(scope):
+                scope.check()
+                yield scope
+                scope.check()
+        finally:
+            with self.lock:
+                self.active.pop(scope, None)
+            done.set()
+            unregister()
+            scope.close()
+
+    def close(self) -> None:
+        self.closed.cancel("the model client was closed")
+        with self.lock:
+            active = list(self.active.values())
+        deadline = time.monotonic() + 3 * _STOP_GRACE
+        for thread, done in active:
+            if thread != threading.get_ident() and not done.wait(
+                max(0.0, deadline - time.monotonic())
+            ):
+                raise RuntimeError("model operations did not stop in time")
+
 
 # the kinds of call a client makes: one-shot, the opening turn of a
 # conversation, and a fork of one
@@ -207,7 +383,12 @@ class AnthropicClient:
     system_prompt: str | None = None
     effort: str | None = None
 
-    def __init__(self, model: str | None = None) -> None:
+    def __init__(
+        self,
+        model: str | None = None,
+        *,
+        cancellation: Cancellation | None = None,
+    ) -> None:
         try:
             import anthropic
         except ImportError as exc:
@@ -222,7 +403,10 @@ class AnthropicClient:
                 "system (privacy first: nothing goes to third-party "
                 "services without explicit instruction)."
             )
-        self._client = anthropic.Anthropic()
+        self._client_factory = anthropic.AsyncAnthropic
+        self._api_key = os.environ["ANTHROPIC_API_KEY"]
+        self._calls = _ProviderCalls(cancellation)
+        self.cancellation = cancellation
         self.model_identifier = model or os.environ.get(
             "YIZKR_LLM_MODEL", "claude-sonnet-5"
         )
@@ -286,11 +470,8 @@ class AnthropicClient:
 
     def _create(self, messages: list[dict]) -> str:
         self._reports.value = {}
-        response = self._client.messages.create(
-            model=self.model_identifier,
-            max_tokens=self.MAX_TOKENS,
-            messages=messages,
-        )
+        with self._calls.call() as cancellation:
+            response = asyncio.run(self._request(messages, cancellation))
         text = "".join(
             block.text for block in response.content if block.type == "text"
         )
@@ -311,6 +492,55 @@ class AnthropicClient:
         }
         self._reports.value = report
         return text
+
+    async def _request(self, messages: list[dict], cancellation: Cancellation):
+        """Cancel the local HTTP task and await transport cleanup."""
+        cancellation.check()
+        client = self._client_factory(api_key=self._api_key)
+        loop = asyncio.get_running_loop()
+        task = asyncio.current_task()
+        requesting = True
+
+        def cancel_request() -> None:
+            if requesting:
+                task.cancel()
+
+        def stop() -> None:
+            if not loop.is_closed():
+                loop.call_soon_threadsafe(cancel_request)
+
+        unregister = cancellation.add_callback(stop)
+        failure = None
+        try:
+            try:
+                cancellation.check()
+                return await client.messages.create(
+                    model=self.model_identifier,
+                    max_tokens=self.MAX_TOKENS,
+                    messages=messages,
+                )
+            except asyncio.CancelledError:
+                cancellation.check()
+                raise
+        except BaseException as exc:
+            failure = exc
+            raise
+        finally:
+            requesting = False
+            unregister()
+            try:
+                await asyncio.wait_for(client.close(), timeout=_STOP_GRACE)
+            except BaseException as cleanup:
+                if failure is None:
+                    raise
+                failure.add_note(
+                    "provider transport cleanup also failed: "
+                    f"{type(cleanup).__name__}"
+                )
+
+    def close(self) -> None:
+        """Stop this client's local operations, without cancelling its run."""
+        self._calls.close()
 
     @staticmethod
     def _conversation(prompt: str, response: str) -> list[dict]:
@@ -1885,7 +2115,7 @@ class _Pacer:
         *,
         reserve: float,
         max_wait: float,
-        stop: threading.Event,
+        stop: threading.Event | Cancellation,
     ) -> None:
         """Wait until a call may be dispatched, and count it dispatched.
         `record` gathers what the call has waited (`waited`, in seconds)
@@ -1895,8 +2125,12 @@ class _Pacer:
         latches until the hold's own `until`, so every later call to
         admit raises the same pause at once (`raise_if_paused`), instead
         of computing a hold of its own, for as long as it lasts."""
+        if isinstance(stop, Cancellation):
+            stop.check()
         self.raise_if_paused()
         while True:
+            if isinstance(stop, Cancellation):
+                stop.check()
             with self._lock:
                 now = self._clock()
                 hold = self._hold(now, reserve)
@@ -1920,6 +2154,8 @@ class _Pacer:
             slept = self._sleep(delay, stop)
             record["waited"] += max(0.0, self._clock() - now)
             if not slept:
+                if isinstance(stop, Cancellation):
+                    stop.check()
                 raise self._latch(
                     UsageLimitReached(
                         "the claude-code client was closed while a call "
@@ -2262,9 +2498,10 @@ class ClaudeCodeClient:
     ``reserve`` of each usage window to development sessions. A call waits
     for the subscription at most ``max_wait`` seconds in all; a longer
     hold pauses the pass (``UsageLimitReached``), with the time it can go
-    on, and so does a wait that ``close`` ends. ``last_pacing`` gives what
-    the calling thread's last call waited, and why (see "Subscription
-    limits" above).
+    on. Cancellation interrupts active operations and subscription waits;
+    ``close`` stops this client's owned operations with ``RunCancelled``.
+    ``last_pacing`` gives what the calling thread's last call waited, and
+    why (see "Subscription limits" above).
 
     **Refusals.** A call the platform's safety classifier refuses is no
     limit: it raises ``ClassifierRefused``, naming the refusal and its
@@ -2348,6 +2585,7 @@ class ClaudeCodeClient:
         transcripts: str | os.PathLike[str] | None = None,
         reserve: float | None = None,
         max_wait: float | None = None,
+        cancellation: Cancellation | None = None,
     ) -> None:
         self.executable = executable
         self.model = (
@@ -2371,8 +2609,8 @@ class ClaudeCodeClient:
         self._pacer = _PACER
         # what the calling thread's last call waited, and why
         self._pacing = threading.local()
-        # set by close(): no call waits for the subscription any more
-        self._closed = threading.Event()
+        self._calls = _ProviderCalls(cancellation)
+        self.cancellation = cancellation
         self.workdir = Path(tempfile.gettempdir()) / self.WORKDIR_NAME
         self.transcripts = transcript_destination(transcripts)
         self._pin = _PIN
@@ -2393,13 +2631,14 @@ class ClaudeCodeClient:
         self.config_dir = claude_config_dir()
         check_global_config(self.config_dir)
         try:
-            installed = subprocess.run(
-                [self.executable, "--version"],
-                capture_output=True,
-                text=True,
-                timeout=30,
-                env=self._child_env(),
-            ).stdout.split()[0]
+            with self._calls.call():
+                installed = _run_process(
+                    [self.executable, "--version"],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    env=self._child_env(),
+                ).stdout.split()[0]
         except (OSError, IndexError) as exc:
             raise RuntimeError(
                 "the Claude Code CLI ('claude') is not installed or not on "
@@ -2651,10 +2890,8 @@ class ClaudeCodeClient:
         release_transcripts([str(handle)], self.transcripts, self.config_dir)
 
     def close(self) -> None:
-        """Release the transcripts of every conversation still open, and
-        end every wait for the subscription: a call that waits, or would,
-        pauses its pass instead (UsageLimitReached)."""
-        self._closed.set()
+        """Stop owned calls and waits before releasing their conversations."""
+        self._calls.close()
         _release_held(
             self._conversations,
             self._conversations_lock,
@@ -2681,20 +2918,39 @@ class ClaudeCodeClient:
         waits until the process's pacer admits it, and takes the arguments
         `arguments()` gives it. Returns the answer and the arguments of the
         attempt that gave it. A hold that would take the call's wait past
-        `max_wait`, or a wait that `close` ends, raises UsageLimitReached;
-        `last_pacing` then says what the call waited. However the call
+        `max_wait` raises UsageLimitReached; cancellation or `close` stops
+        the call separately. `last_pacing` says what it waited. However it
         ends, `last_stream` then says what its attempts' streams reported,
         and once it is answered, `last_report` too."""
+        with self._calls.call() as cancellation:
+            return self._run_call(
+                arguments,
+                prompt,
+                hold=hold,
+                inputs=inputs,
+                cancellation=cancellation,
+            )
+
+    def _run_call(
+        self,
+        arguments: Callable[[], list[str]],
+        prompt: str,
+        *,
+        hold: bool,
+        inputs: Sequence[Path],
+        cancellation: Cancellation,
+    ) -> tuple[str, list[str]]:
         record: dict[str, Any] = {"waited": 0.0, "refused": 0, "held": None}
         stream: dict[str, Any] = {}
         try:
             self._pin.raise_if_paused()
             while True:
+                cancellation.check()
                 self._pacer.admit(
                     record,
                     reserve=self.reserve,
                     max_wait=self.max_wait,
-                    stop=self._closed,
+                    stop=cancellation,
                 )
                 extra_args = arguments()
                 try:
@@ -2757,7 +3013,7 @@ class ClaudeCodeClient:
             check_global_config(self.config_dir)
             self.workdir.mkdir(mode=0o700, parents=True, exist_ok=True)
             try:
-                result = subprocess.run(
+                result = _run_process(
                     self._command() + extra_args,
                     input=prompt,  # stdin avoids ARG_MAX limits
                     capture_output=True,
@@ -2768,6 +3024,9 @@ class ClaudeCodeClient:
                 )
             except subprocess.TimeoutExpired as exc:
                 stdout = _as_text(exc.stdout)
+                raise
+            except BaseException:
+                stdout = _as_text(getattr(_PROCESS_OUTPUT, "stdout", ""))
                 raise
             stdout = result.stdout or ""
             events = _stream_events(stdout)
@@ -2926,6 +3185,7 @@ def make_client(
     cli_version: str | None = None,
     reserve: float | None = None,
     max_wait: float | None = None,
+    cancellation: Cancellation | None = None,
 ) -> LlmClient:
     """CLI engine name -> client. Extend here when adding providers.
 
@@ -2946,7 +3206,7 @@ def make_client(
     limits").
     """
     if engine == "anthropic":
-        return AnthropicClient(model=model)
+        return AnthropicClient(model=model, cancellation=cancellation)
     if engine == "claude-code":
         return ClaudeCodeClient(
             model=model,
@@ -2955,6 +3215,7 @@ def make_client(
             cli_version=cli_version,
             reserve=reserve,
             max_wait=max_wait,
+            cancellation=cancellation,
         )
     raise ValueError(
         f"unknown LLM engine {engine!r}; available: anthropic (API key, "
@@ -2997,7 +3258,7 @@ class ObservedClient:
     ``events("call", **fields)``, whether the call answers, fails or
     pauses its pass. The fields are the `role`, its `stage`
     (ROLE_STAGES), the kind of `call` (complete, open or fork), the
-    `outcome` (ok, error, paused or interrupted), how long the call took
+    `outcome` (ok, error, paused, cancelled or interrupted), how long it took
     end to end (`duration_s`, which includes any time it spent paced —
     `wait_s` is the part of it that was), the `error` it raised (the
     exception's name, never its message), and, from an engine that paces
@@ -3074,6 +3335,9 @@ class ObservedClient:
             return ask()
         except PassPaused as exc:
             outcome, error, pause = PAUSED, type(exc).__name__, exc
+            raise
+        except RunCancelled as exc:
+            outcome, error = "cancelled", type(exc).__name__
             raise
         except Exception as exc:
             outcome, error = ERROR, type(exc).__name__

@@ -2096,13 +2096,33 @@ class TestTheRunReport:
         assert rows["extraction"]["forced"] == {"absent": 5}
         assert rows["critique"]["forced"] == {"absent": 5}
         assert rows["gedcom"]["forced"] == {"no call": 1}
-        # and report.md's stage table is those rows
-        assert "| transcription | 5 | 0 | 0 | 0 | 0 | 5 | 0 | 0 | 0 |" in (
-            report.markdown
+        # The displayed counts must remain under their named columns.
+        table = next(
+            block
+            for block in report.markdown.split("\n\n")
+            if block.startswith("| Stage | Documents |")
         )
-        assert "| gedcom | 1 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 |" in (
-            report.markdown
-        )
+        lines = table.splitlines()
+        columns = [cell.strip() for cell in lines[0].strip("|").split("|")]
+        displayed = set()
+        for line in lines[2:]:
+            cells = [cell.strip() for cell in line.strip("|").split("|")]
+            shown = dict(zip(columns, cells, strict=True))
+            displayed.add(shown["Stage"])
+            assert shown["Documents"] == str(planned[shown["Stage"]])
+            assert shown["Computed"] == shown["Documents"]
+            for status in (
+                "Pending",
+                "Held",
+                "Running",
+                "Interrupted",
+                "Cancelled",
+                "Reused",
+                "Needs attention",
+                "Failed",
+            ):
+                assert shown[status] == "0", (shown["Stage"], status)
+        assert displayed == set(planned)
         assert (
             "| transcription | none | absent 4, no call 1 | none | none |"
         ) in report.markdown

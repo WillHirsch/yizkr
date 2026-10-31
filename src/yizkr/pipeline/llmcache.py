@@ -139,6 +139,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from yizkr.pipeline.cancellation import current_cancellation
 from yizkr.pipeline.llm import (
     COMPLETE,
     FORK,
@@ -1361,6 +1362,13 @@ class CachingClient:
         """The engine configuration fingerprint used in this client's keys."""
         return self._engine.config_hash
 
+    def _check_cancelled(self) -> None:
+        cancellation = current_cancellation() or getattr(
+            self._engine, "cancellation", None
+        )
+        if cancellation is not None:
+            cancellation.check()
+
     def attempt(self, number: int) -> CachingClient:
         """This client for attempt `number` of the same call: each attempt
         is keyed, and kept, apart (llm.for_attempt), a give-up at the
@@ -1468,6 +1476,7 @@ class CachingClient:
         under a key whose answer could not be stored is refused
         (EngineCache.check_storable) before `ask` is called, with no miss
         event; a hit is served however the key's folder is set."""
+        self._check_cancelled()
         key = call_key(components)
         refresh = self.cache.refreshing(self.role, key)
         if not refresh:
@@ -1503,11 +1512,13 @@ class CachingClient:
                 lambda: self._emit(MISS, call=call, key=key, reason=reason)
             )
         except OutputLimitReached:
+            self._check_cancelled()
             if self._attempted:
                 self.cache.put(key, self._gave_up_entry(key, components))
                 if refresh:
                     self.cache.refreshed(key)
             raise
+        self._check_cancelled()
         if str(response).strip():
             self.cache.put(
                 key, self._entry(key, components, response, provenance)
@@ -1678,12 +1689,23 @@ class ConversationalCachingClient(CachingClient):
             sessions.append(session)
             return response, {}
 
-        response, asked = self._serve(OPEN, components, ask)
+        try:
+            response, asked = self._serve(OPEN, components, ask)
+        except BaseException:
+            for session in sessions:
+                self._release(session)
+            raise
         if asked:
             conversation = Conversation(
                 components, prompt, str(response), sessions[0], LIVE
             )
-            self._keep(response.key, conversation.opening_sha256, sessions[0])
+            try:
+                self._keep(
+                    response.key, conversation.opening_sha256, sessions[0]
+                )
+            except BaseException:
+                self._release(sessions[0])
+                raise
             return response, conversation
         conversation = Conversation(components, prompt, str(response))
         held = self.cache.take_session(response.key, self._engine)
@@ -1725,9 +1747,18 @@ class ConversationalCachingClient(CachingClient):
         keep = getattr(self.client, "keep_conversation", None)
         if not callable(keep):
             return
+        self._check_cancelled()
         try:
-            self.cache.keep_session(key, opening, keep(session))
+            files = keep(session)
         except (OSError, ValueError) as exc:
+            self._check_cancelled()
+            logger.warning("could not keep the session of %s: %s", key, exc)
+            return
+        self._check_cancelled()
+        try:
+            self.cache.keep_session(key, opening, files)
+        except (OSError, ValueError) as exc:
+            self._check_cancelled()
             logger.warning("could not keep the session of %s: %s", key, exc)
 
     def _session(self, conversation: Conversation) -> Any:
@@ -1748,7 +1779,8 @@ class ConversationalCachingClient(CachingClient):
         leaves the entry as it was, with what the original call's stream
         reported; one that differs stores its own answer, with what its
         own stream reported."""
-        with conversation.lock:
+        with self._session_lock(conversation):
+            self._check_cancelled()
             key = conversation.chain[-1]
             if conversation.changed:
                 raise _changed(key)
@@ -1770,8 +1802,14 @@ class ConversationalCachingClient(CachingClient):
                         ),
                     )
                 except Exception as exc:  # nothing kept, or unusable
+                    self._check_cancelled()
                     logger.info("could not resume %s: %s", key, exc)
                 else:
+                    try:
+                        self._check_cancelled()
+                    except BaseException:
+                        self._release(session)
+                        raise
                     conversation.session = session
                     conversation.origin = RESUMED
                     self._emit(RESUME, call=OPEN, key=key)
@@ -1797,6 +1835,11 @@ class ConversationalCachingClient(CachingClient):
             except Exception as exc:
                 conversation.failed = f"{type(exc).__name__}: {exc}"
                 raise
+            try:
+                self._check_cancelled()
+            except BaseException:
+                self._release(session)
+                raise
             if not str(response).strip():
                 conversation.failed = "it returned no text"
                 self._release(session)
@@ -1811,18 +1854,24 @@ class ConversationalCachingClient(CachingClient):
                 conversation.origin = REPLAYED
                 self._keep(key, conversation.opening_sha256, session)
                 return session
-            self.cache.put(
-                key,
-                self._entry(
+            try:
+                self.cache.put(
                     key,
-                    conversation.components,
-                    response,
-                    {"recomputed": True},
-                ),
-            )
-            opening = sha256_text(response)
-            self._keep(key, opening, session)
-            self.cache.remember_session(key, self._engine, session, opening)
+                    self._entry(
+                        key,
+                        conversation.components,
+                        response,
+                        {"recomputed": True},
+                    ),
+                )
+                opening = sha256_text(response)
+                self._keep(key, opening, session)
+                self.cache.remember_session(
+                    key, self._engine, session, opening
+                )
+            except BaseException:
+                self._release(session)
+                raise
             conversation.changed = True
             raise _changed(key)
 
@@ -1831,6 +1880,18 @@ class ConversationalCachingClient(CachingClient):
         one."""
         if isinstance(handle, Conversation) and handle.session is not None:
             self._release(handle.session)
+
+    @contextlib.contextmanager
+    def _session_lock(self, conversation: Conversation):
+        """Let a waiting fork stop while another fork restores its session."""
+        self._check_cancelled()
+        while not conversation.lock.acquire(timeout=0.05):
+            self._check_cancelled()
+        try:
+            self._check_cancelled()
+            yield
+        finally:
+            conversation.lock.release()
 
     def _release(self, session: Any) -> None:
         _release(self.client, session)

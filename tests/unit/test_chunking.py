@@ -15,6 +15,7 @@ import pytest
 
 from yizkr.claims import ArtifactRef, ClaimBatch, EntityRecord
 from yizkr.pipeline.anomalies import batch_findings, load_config
+from yizkr.pipeline.cancellation import RunCancelled
 from yizkr.pipeline.chunking import (
     ENTITY_MANIFEST_PROMPT,
     ChunkedClaimExtractor,
@@ -32,7 +33,13 @@ from yizkr.pipeline.chunking import (
     unit_text,
 )
 from yizkr.pipeline.extract import LlmClaimExtractor
-from yizkr.pipeline.llm import ConversationChanged, OutputLimitReached
+from yizkr.pipeline.llm import (
+    ConversationChanged,
+    OutputLimitReached,
+    PassPaused,
+    cached_client,
+)
+from yizkr.pipeline.llmcache import EngineCache
 from yizkr.pipeline.orchestrate import FAILED
 from yizkr.pipeline.rundir import NEEDS_ATTENTION, StageState, run_state
 from yizkr.pipeline.transcribe import Transcription
@@ -1454,6 +1461,94 @@ class KeyedLlm:
 
 
 class TestParallelChunks:
+    def test_pause_prevents_queued_chunks_and_never_retries_inline(self):
+        pause = PassPaused("fictional provider pause")
+        calls, closed = [], []
+
+        class Pausing(KeyedLlm):
+            def fork(self, handle, prompt):
+                calls.append(prompt)
+                raise pause
+
+            def close_conversation(self, handle):
+                closed.append(handle)
+
+        client = Pausing(entity_manifest_json(), {})
+        extractor = ChunkedClaimExtractor(
+            client, budget=LINE_LENGTH, concurrency=1, retries=3
+        )
+        with pytest.raises(PassPaused) as caught:
+            extractor.extract(transcription(), DOC_REF)
+        assert caught.value is pause
+        assert len(calls) == 1
+        assert "- e1:" in calls[0]
+        assert closed == ["session-abc"]
+        assert extractor.failed_chunks == []
+
+    def test_cancelled_extraction_keeps_completed_calls_for_resume(
+        self, tmp_path
+    ):
+        class InlineClient:
+            model_identifier = "fictional-chunk-reader"
+            config_hash = "fictional-chunk-configuration"
+
+            def __init__(self, answers):
+                self.answers = iter(answers)
+                self.calls = []
+
+            def complete(self, prompt, image_paths=()):
+                self.calls.append(prompt)
+                answer = next(self.answers)
+                if isinstance(answer, BaseException):
+                    raise answer
+                return answer
+
+        cache = EngineCache(tmp_path / "cache")
+        state = tmp_path / "state"
+        state.mkdir()
+        prior = state / "coverage.json"
+        prior.write_text("previous complete diagnostics")
+        first_answer = ndjson([claim("e1", "Hildegard Löbig", 1876)])
+        second_answer = ndjson([claim("e2", "Sebastian Löbig", 1862)])
+        first = InlineClient(
+            [
+                entity_manifest_json(),
+                first_answer,
+                RunCancelled("operator abort"),
+            ]
+        )
+        interrupted = ChunkedClaimExtractor(
+            cached_client(first, cache, role="extract"),
+            state_dir=state,
+            budget=LINE_LENGTH,
+            concurrency=1,
+        )
+        with pytest.raises(RunCancelled):
+            interrupted.extract(transcription(), DOC_REF)
+        kept = {
+            path: path.read_bytes() for path in cache.root.glob("*/*.json")
+        }
+        assert len(kept) == 2
+        assert prior.read_text() == "previous complete diagnostics"
+        later = InlineClient([second_answer])
+        resumed = ChunkedClaimExtractor(
+            cached_client(later, cache, role="extract"),
+            state_dir=state,
+            budget=LINE_LENGTH,
+            concurrency=1,
+        )
+        batch = resumed.extract(transcription(), DOC_REF)
+        assert len(later.calls) == 1
+        assert "- e2:" in later.calls[0]
+        assert [claim.subject.local_id for claim in batch.claims] == [
+            "e1",
+            "e2",
+        ]
+        assert all(
+            path.read_bytes() == content for path, content in kept.items()
+        )
+        assert json.loads(prior.read_text())["failed_chunks"] == []
+
     def test_concurrent_chunks_merge_identically(self, tmp_path):
         # both chunk calls must be in flight at once to pass the barrier:
         # run one at a time, the first waits out the hang guard and fails
