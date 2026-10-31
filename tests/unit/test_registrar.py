@@ -41,6 +41,7 @@ from tests.unit.test_presentation import DECK_TIME
 from tests.unit.test_upload_warnings import FakeMediaWiki, FakeUploadClient
 from yizkr.core.corpus import ExclusionList
 from yizkr.core.wiki import WikiClient
+from yizkr.core.write_recovery import GENERATION_PAGE, CreationRefused
 from yizkr.pipeline import registrar, writer
 from yizkr.pipeline.presentation import (
     EmbeddedMedium,
@@ -1026,6 +1027,25 @@ class TestRegisterArtifact:
         with pytest.raises(RuntimeError, match="source bytes identity"):
             register(wiki, path)
         assert wiki.entities == before
+
+    @pytest.mark.parametrize("existing_source", [False, True])
+    def test_legacy_generation_refuses_before_upload_or_update(
+        self, tmp_path, existing_source
+    ):
+        wiki = FakeWiki()
+        if existing_source:
+            wiki.item(
+                "Studio portrait, existing source",
+                ("media_sha1", sha1(PORTRAIT), None),
+            )
+        else:
+            wiki.item("Gustav Löbig")
+        del wiki._recovery_pages[GENERATION_PAGE]
+        before = copy.deepcopy(wiki.entities)
+        with pytest.raises(CreationRefused, match="verified migration"):
+            register(wiki, scan(tmp_path, PORTRAIT))
+        assert wiki.entities == before
+        assert wiki.media.requests == []
 
 
 # -- terms in the form Wikibase stores them (#367 review) ---------------------

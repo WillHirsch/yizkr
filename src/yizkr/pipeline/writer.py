@@ -3934,6 +3934,10 @@ class BatchWriter:
         for placement in self._placements.values():
             self._cluster_item(placement)
         self._run_binding(batch, self._identity_hash)
+        if self.dry_run:
+            self._creation_registry.check_generation()
+        else:
+            self._creation_registry.ensure_generation()
         if not self.dry_run and one_map and self._identity_hash:
             self._creation_registry.claim_identity_map(self._identity_hash)
         # reviewed equivalences (ADR-0007): resolve replaced these

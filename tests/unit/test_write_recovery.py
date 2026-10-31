@@ -220,6 +220,37 @@ def test_vocabulary_only_graph_can_initialize_generation_once():
     assert wiki.wbi.item.writes == 0
 
 
+@pytest.mark.parametrize("vocabulary", [False, True])
+def test_generation_preflight_is_read_only_for_an_admissible_graph(vocabulary):
+    wiki = FakeWiki()
+    wiki._recovery_pages.clear()
+    if not vocabulary:
+        wiki.vocabulary = lambda: ({}, {})
+    registry = CreationRegistry(wiki)
+
+    assert registry.check_generation() is None
+    assert not wiki._recovery_pages
+    assert wiki.wbi.item.writes == 0
+    generation = registry.ensure_generation()
+    before = dict(wiki._recovery_pages)
+    assert registry.check_generation() == generation
+    assert registry.ensure_generation() == generation
+    assert wiki._recovery_pages == before
+
+
+def test_generation_preflight_refuses_legacy_without_mutating_it():
+    wiki = FakeWiki()
+    wiki._recovery_pages.clear()
+    person(wiki).write(summary="fictional legacy ingestion")
+    before = wiki.wbi.item.writes
+
+    with pytest.raises(CreationRefused, match="verified migration"):
+        CreationRegistry(wiki).check_generation()
+
+    assert not wiki._recovery_pages
+    assert wiki.wbi.item.writes == before
+
+
 def test_observed_generation_change_stops_existing_registry():
     wiki = FakeWiki()
     registry = CreationRegistry(wiki)

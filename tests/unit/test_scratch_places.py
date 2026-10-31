@@ -99,11 +99,6 @@ class PlaceWiki(Wiki):
         assert len(found) <= 1, f"two items are labelled {label!r}"
         return found[0] if found else None
 
-    def wiped(self) -> None:
-        fresh = PlaceWiki()
-        self.entities, self.media = fresh.entities, fresh.media
-        self.writes = 0
-
 
 def statements(wiki, qid: str, key: str) -> list[dict]:
     return wiki.entities[qid]["claims"].get(PlaceWiki.PROPERTIES[key], [])

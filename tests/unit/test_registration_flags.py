@@ -1242,8 +1242,11 @@ class TestFlagsReachTheRunsAlerts:
             registrar.register_derived_media(record, tmp_path / "state" / "a")
 
         orchestrator._register_document = register
-        with pytest.raises(WriteRefused):
+        from yizkr.core.write_recovery import AmbiguousCreation
+
+        with pytest.raises(AmbiguousCreation) as stopped:
             orchestrator._step_register(doc)
+        assert isinstance(stopped.value.__cause__, WriteRefused)
         alerts = orchestrator.rundir.alerts()
         assert [alert["check"] for alert in alerts] == [
             UNHASHED_TITLE,
@@ -2232,10 +2235,10 @@ class TestAGedcomsMediaObjectAndARegisteredArtifact:
     def test_a_reused_writer_reads_its_items_afresh_each_write(self):
         """The media object is an item of its own under the title of the
         portrait's item, registered before content hashing, which it never
-        joins (#109), and a curator then hashes that item: the same
-        writer's next write judges it registered, as a new writer's
-        would, so the media object takes its tagged label and the
-        portrait is flagged against it."""
+        joins, and a curator then hashes that item. The writer notices the
+        registration and flags the portrait against the same bound media
+        object, without renaming or replacing either established item.
+        """
         from yizkr.pipeline.writer import BatchWriter
 
         wiki = WritingWiki()
@@ -2251,8 +2254,9 @@ class TestAGedcomsMediaObjectAndARegisteredArtifact:
         again = write_mapped(writer, batch)
 
         media_object = again.created_items["md1"]
-        assert media_object not in (old, first.created_items["md1"])
-        assert label_of(wiki, media_object) == f"{TITLE} [media object]"
+        assert media_object == first.created_items["md1"] != old
+        assert label_of(wiki, media_object) == TITLE
+        assert again.minted == []
         assert flag_tuples(again.flags) == [
             (UNHASHED_TITLE, old, sha1(PORTRAIT), (media_object,))
         ]

@@ -648,7 +648,11 @@ def ensure_self_typed(
             missing.append(_string_claim(pid, value, stated_in, qid))
     if not missing:
         return False
+    registry = CreationRegistry(client)
+    if dry_run:
+        registry.check_generation()
     if not dry_run:
+        registry.ensure_generation()
         for claim in missing:
             _append(item, claim)
         check_cancelled()
@@ -1171,6 +1175,7 @@ class Registrar:
         )
         # upload before any item is made, and only when no file of the
         # item holds the bytes already
+        self._creations.ensure_generation()
         check_cancelled()
         file_page = (
             held[0]
@@ -1604,6 +1609,7 @@ class Registrar:
                 if changed
                 else None
             )
+            self._creations.ensure_generation()
             held = (
                 _files_holding(
                     self.client, _existing_claim_strings(item, media_file), key

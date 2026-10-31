@@ -178,7 +178,7 @@ def test_renaming_run_metadata_does_not_remove_the_one_map_guard(dry_run):
     for claim in changed["claims"]:
         claim["subject"]["label"] = "Eugen Löbig"
         if claim["value"]["type"] == "item":
-            claim["value"]["value"]["label"] = "Hildegard Langensheid"
+            claim["value"]["value"]["label"] = "Hildegard Laudler"
     other = type(original).model_validate(changed)
     before = target.wbi.item.writes
 
@@ -188,6 +188,46 @@ def test_renaming_run_metadata_does_not_remove_the_one_map_guard(dry_run):
         )
 
     assert target.wbi.item.writes == before
+
+
+@pytest.mark.parametrize("local_entity", [False, True], ids=["qids", "mixed"])
+@pytest.mark.parametrize("dry_run", [False, True], ids=["write", "plan"])
+def test_legacy_generation_refusal_precedes_equivalence_aliases(
+    local_entity, dry_run
+):
+    target = wiki()
+    person = target.wbi.item.new()
+    person.labels.set("en", "Eugen Löbig")
+    person.write(summary="legacy: fictional entity")
+    target._recovery_pages.clear()
+    data = batch().model_dump(mode="json")
+    data["entities"] = [
+        {
+            "id": "person-1",
+            "label": "Eugen the hatter",
+            "kind": "human",
+            "qid": person.id,
+        },
+    ]
+    if local_entity:
+        data["entities"].append(
+            {"id": "person-2", "label": "Person Two", "kind": "human"}
+        )
+    else:
+        data["claims"] = [data["claims"][1]]
+    for claim in data["claims"]:
+        claim["subject"] = {"kind": "qid", "qid": person.id}
+    given = type(batch()).model_validate(data)
+    before = target.wbi.item.writes
+
+    with pytest.raises(CreationRefused, match="migration"):
+        BatchWriter(target, dry_run=dry_run).write_batch(
+            given, identity=mapped(given), one_map=not local_entity
+        )
+
+    assert target.wbi.item.writes == before
+    assert not target.wbi.item.get(person.id).aliases.get("en")
+    assert target._recovery_pages == {}
 
 
 def test_place_run_recovers_a_lost_creation_reply_after_rename(monkeypatch):
@@ -214,7 +254,12 @@ def test_place_run_recovers_a_lost_creation_reply_after_rename(monkeypatch):
     assert target.wbi.item.get(qid).claims.get(PROPERTIES["instance_of"])
 
 
-def test_a_concurrent_curator_edit_is_not_overwritten(monkeypatch):
+def test_existing_updates_forward_revision_and_disable_automatic_retry(
+    monkeypatch,
+):
+    """The stricter fake refuses stale snapshots; real Wikibase can merge
+    nonconflicting changes. The real lane checks a same-field conflict.
+    """
     from wikibaseintegrator.wbi_exceptions import MWApiError
 
     target = wiki()
@@ -222,6 +267,7 @@ def test_a_concurrent_curator_edit_is_not_overwritten(monkeypatch):
     qid = original.created_items["person-1"]
     bound = target.wbi.item._bound
     raced = False
+    attempts = []
 
     def wrap(item):
         item = bound(item)
@@ -229,6 +275,8 @@ def test_a_concurrent_curator_edit_is_not_overwritten(monkeypatch):
 
         def concurrent(summary=None, **options):
             nonlocal raced
+            if item.id == qid and options.get("baserevid"):
+                attempts.append(dict(options))
             if item.id == qid and options.get("baserevid") and not raced:
                 raced = True
                 curator = target.wbi.item.get(qid)
@@ -246,12 +294,16 @@ def test_a_concurrent_curator_edit_is_not_overwritten(monkeypatch):
     person = target.wbi.item.get(qid)
     person.labels.set("en", "Eugen Löbig — corrected label")
     person.write(summary="curator: correct label")
+    expected_revision = person.lastrevid
     monkeypatch.setattr(target.wbi.item, "_bound", wrap)
 
     with pytest.raises(MWApiError, match="stale item"):
         write_mapped(BatchWriter(target), batch())
 
     assert raced
+    assert attempts == [
+        {"baserevid": expected_revision, "max_retries": 1, "retry_after": 0}
+    ]
     assert str(target.wbi.item.get(qid).descriptions.get("en")) == (
         "curator's concurrent correction"
     )

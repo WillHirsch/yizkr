@@ -28,6 +28,7 @@ from tests.unit.test_places import RunItemWiki
 from yizkr.claims import ClaimBatch
 from yizkr.core.config import Config
 from yizkr.core.wiki import ItemLabels, WikiClient
+from yizkr.core.write_recovery import CreationRefused
 from yizkr.model.bootstrap import bootstrap_instance
 from yizkr.model.schema import (
     DEFAULT_MANIFEST,
@@ -354,10 +355,12 @@ class TestTheWriter:
         wiki.labelled(label)
         wiki.labelled(label)
         writes = wiki.wbi.item.writes
+        records = dict(wiki._recovery_pages)
 
-        with pytest.raises(RuntimeError, match="share the English label"):
+        with pytest.raises(CreationRefused, match="verified migration"):
             BatchWriter(wiki).write_batch(batch, identity=identity)
         assert wiki.wbi.item.writes == writes
+        assert wiki._recovery_pages == records
 
 
 # -- the place-hierarchy pass's run item --------------------------------------

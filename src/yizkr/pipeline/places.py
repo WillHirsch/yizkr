@@ -67,6 +67,7 @@ import csv
 import hashlib
 import json
 import sys
+import unicodedata
 import urllib.parse
 import urllib.request
 from collections import Counter
@@ -1242,7 +1243,9 @@ def ensure_places_run_item(
     marks: dict[str, str] | None = None,
 ) -> str:
     """The pass's run item, recovered through its durable creation binding
-    for the full fingerprint, model and run marks. Its ``instance of
+    for the full fingerprint, NFC model identifier and run marks. Model
+    identity retains the full string, independently of display truncation.
+    Its ``instance of
     -> extraction run`` cites the item itself, so it is written in a
     second write, and a run item that a pass cut short between the two
     writes left without it gets it when the next pass finds it
@@ -1276,7 +1279,7 @@ def ensure_places_run_item(
     operation = {
         "kind": "place-hierarchy-run",
         "fingerprint": fingerprint,
-        "model": model,
+        "model": unicodedata.normalize("NFC", model),
         "marks": marks or {},
     }
     binding = registry.lookup(operation)

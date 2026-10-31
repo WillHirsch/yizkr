@@ -137,7 +137,8 @@ class CreationRegistry:
     """One server authority shared by independent clients and hosts.
 
     Construction and lookup are read-only, including recovery from a visible
-    creation revision. Only create and claim_identity_map publish records.
+    creation revision. Explicit ensure, claim, create and reconcile operations
+    publish records.
     An absent generation may initialize only on an empty or vocabulary-only
     graph; existing ingestion requires a separate verified migration.
     """
@@ -168,7 +169,8 @@ class CreationRegistry:
         self._observed = generation
         return generation
 
-    def _ensure_generation(self) -> Generation:
+    def check_generation(self) -> Generation | None:
+        """Check admission without publishing a generation or other effects."""
         generation = self.generation
         if generation is not None:
             return generation
@@ -181,6 +183,13 @@ class CreationRegistry:
                     "generation; "
                     "verified migration required"
                 )
+        return None
+
+    def ensure_generation(self) -> Generation:
+        """Establish admitted deployment authority before any mutation."""
+        generation = self.check_generation()
+        if generation is not None:
+            return generation
         proposed = Generation(
             deployment_id=uuid.uuid4().hex,
             generation=uuid.uuid4().hex,
@@ -200,7 +209,7 @@ class CreationRegistry:
     def claim_identity_map(self, map_hash: str) -> None:
         if not re.fullmatch(_HASH, map_hash):
             raise ValueError("identity-map hash must be SHA-256")
-        generation = self._ensure_generation()
+        generation = self.ensure_generation()
         record = _Map(
             deployment_id=generation.deployment_id,
             generation=generation.generation,
@@ -362,7 +371,7 @@ class CreationRegistry:
     def create(
         self, operation: Mapping | str, item, *, summary: str
     ) -> EntityBinding:
-        generation = self._ensure_generation()
+        generation = self.ensure_generation()
         key = self._key(generation, operation)
         intent = self._intent(generation, key)
         if intent is not None:
