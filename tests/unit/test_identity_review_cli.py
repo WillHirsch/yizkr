@@ -184,7 +184,7 @@ def test_new_source_needs_review_without_removing_old_approval(tmp_path):
     (request.parent / "later-reading.json").write_text(
         Transcription(
             artifact=new_artifact,
-            text="Ursula Löbig, daughter of Leopold.",
+            text="Ursula Löbig, daughter of Sebastian.",
             language="de",
             engine="fixture",
         ).model_dump_json()
