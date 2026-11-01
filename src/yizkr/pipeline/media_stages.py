@@ -255,6 +255,11 @@ def read_media(
             if is_pdf_input(request.source)
             else "media"
         ),
+        configuration={
+            "route": request.route,
+            "language": request.language,
+            "fallback_language": request.fallback_language,
+        },
     )
     prepared = request.prepared
     if prepared is not None and (

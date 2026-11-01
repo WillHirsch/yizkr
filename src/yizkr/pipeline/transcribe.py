@@ -712,6 +712,11 @@ class LlmVisionTranscriber(_CheckedTranscriber):
             "transcription",
             "model",
             document_kind=("pdf" if is_pdf_input(media_path) else "media"),
+            configuration={
+                "route": "vision",
+                "language": self.language,
+                "fallback_language": self.fallback_language,
+            },
         )
         result = super().transcribe(media_path)
         adopted = getattr(self._response, "made_by", None)

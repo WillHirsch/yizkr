@@ -1426,7 +1426,6 @@ def _counts(record: dict) -> dict:
 
 def run_places(context: Any) -> list[str]:
     """The place stage (the module docstring)."""
-    from yizkr.core.provenance import ProcessRecord
     from yizkr.pipeline import places as hierarchy
     from yizkr.pipeline.writer import BatchWriter
 
@@ -1462,9 +1461,15 @@ def run_places(context: Any) -> list[str]:
             )
             return ["the write is not complete: no place was reconciled"]
         record = _place_record(context, target, epoch)
+        producer = hierarchy.validate_place_producer(
+            record.get("producer_origin")
+        )
         record["run_id"] = run_id
         if "planned" not in record:
             _propose(context, target, epoch, written, record)
+            producer = hierarchy.validate_place_producer(
+                record.get("producer_origin")
+            )
         artifacts = registered.get("documents") or {}
         client = client_of(context)
         writer = BatchWriter(client)
@@ -1492,11 +1497,7 @@ def run_places(context: Any) -> list[str]:
                         MARK_MANIFEST: manifest_hash(context.run),
                         MARK_MAP: identity_map(context).hash,
                     },
-                    producer=(
-                        ProcessRecord.model_validate(record["producer_origin"])
-                        if record.get("producer_origin")
-                        else None
-                    ),
+                    producer=producer,
                     record_dir=context.run.path / "process-records",
                 )
                 state = save_state(client, run_id, key, epoch)

@@ -45,7 +45,12 @@ def derive_gedcom(request: GedcomRequest) -> GedcomResult:
     Source changes, decoding, parsing and validation errors propagate without
     producing an accepted result or publishing any file. No model is called.
     """
-    capture = Capture("gedcom", "deterministic", document_kind="gedcom")
+    capture = Capture(
+        "gedcom",
+        "deterministic",
+        document_kind="gedcom",
+        configuration={"adapter": ADAPTER_IDENTIFIER, "encoding": "utf-8"},
+    )
     contents = request.source.read_bytes()
     artifact = ArtifactRef.from_bytes(contents)
     if (

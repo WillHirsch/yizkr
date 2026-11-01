@@ -7,7 +7,11 @@ from pathlib import Path
 import pytest
 
 from tests.fixtures.semantic_acceptance import birth_batch, source_case
-from tests.unit.test_text_stages import ScriptedClient, birth_answer
+from tests.unit.test_text_stages import (
+    ScriptedClient,
+    birth_answer,
+    scripted_text_client,
+)
 from yizkr.claims import ExtractionRunMetadata
 from yizkr.core.provenance import (
     CodeProvenance,
@@ -224,23 +228,27 @@ def test_schema_and_semantic_reading_identity_exclude_provenance():
 def test_capture_records_observed_client_and_resource_facts(
     fixed_capture, monkeypatch
 ):
-    capture = provenance.Capture("places", "model")
-    monkeypatch.setattr(provenance, "now", lambda: END)
-    client = ScriptedClient()
-    client.model = "fictional-model"
-    client.effort = "high"
-    client.config_hash = "a" * 64
-    client.cli_version = "fixture-cli"
     prompt = sha256_text("fictional prompt")
-    record = capture.finish(
-        {"configuration": {"mode": "fixture"}},
-        client=client,
+    capture = provenance.Capture(
+        "places",
+        "model",
         processing={
             "resources": {
                 "pipeline/prompts/places.md": prompt,
                 "model/manifest.yaml": "b" * 64,
             }
         },
+        prompt_templates={"fixture.loaded_prompt": "fictional prompt"},
+    )
+    monkeypatch.setattr(provenance, "now", lambda: END)
+    client = ScriptedClient()
+    client.model = "fictional-model"
+    client.effort = "high"
+    client.config_hash = "a" * 64
+    client.cli_version = "fixture-cli"
+    record = capture.finish(
+        {"configuration": {"mode": "fixture"}},
+        client=client,
     )
     stage = record.stages[0]
     assert stage.model == client.model
@@ -249,10 +257,91 @@ def test_capture_records_observed_client_and_resource_facts(
         stage.config_hash == client.config_hash
         and stage.cli_version == "fixture-cli"
     )
-    assert stage.prompt_hashes == {"pipeline/prompts/places.md": prompt}
+    assert stage.prompt_hashes == {"fixture.loaded_prompt": prompt}
     assert stage.started_at == START and stage.ended_at == END
     assert record.manifest_hash == "b" * 64
     assert client.prompts == []
+
+
+@pytest.mark.parametrize("strategy", ["single", "chunked"])
+def test_resource_snapshot_precedes_a_scripted_call_that_changes_files(
+    tmp_path, fixed_capture, monkeypatch, strategy
+):
+    from yizkr.pipeline import chunking, stage_planning
+    from yizkr.pipeline import extract as execution
+
+    template_name, loaded = (
+        ("pipeline.chunking.CHUNK_PROMPT", chunking.CHUNK_PROMPT)
+        if strategy == "chunked"
+        else (
+            "pipeline.extract.EXTRACTION_PROMPT",
+            execution.EXTRACTION_PROMPT,
+        )
+    )
+    resource = tmp_path / "fictional-prompt.md"
+    resource.write_text(loaded)
+    # The process already imported its actual template. Its source resource
+    # now differs before dispatch, and will change again during the call.
+    resource.write_text("fictional resource changed before execution")
+    before = sha256_text(resource.read_text())
+    observe = stage_planning.processing_dependencies
+    snapshots = []
+
+    def processing(*args, **kwargs):
+        snapshot = observe(*args, **kwargs)
+        snapshot["resources"]["pipeline/prompts/extraction.md"] = sha256_text(
+            resource.read_text()
+        )
+        snapshots.append(snapshot)
+        return snapshot
+
+    monkeypatch.setattr(stage_planning, "processing_dependencies", processing)
+    client = (
+        scripted_text_client()
+        if strategy == "chunked"
+        else ScriptedClient(birth_answer())
+    )
+    complete = client.complete
+
+    def mutate(prompt, image_paths=()):
+        assert snapshots[0]["configuration"] == (
+            {
+                "strategy": "chunked",
+                "budget": 2000,
+                "retries": 3,
+                "concurrency": 1,
+                "read_preparation": False,
+            }
+            if strategy == "chunked"
+            else {"strategy": "single"}
+        )
+        resource.write_text("fictional resource changed during execution")
+        # Even a caller retaining the admitted descriptor cannot rewrite the
+        # stage's evidence by mutating its copy while the call is in flight.
+        for snapshot in snapshots:
+            snapshot["resources"]["pipeline/prompts/extraction.md"] = "f" * 64
+        return complete(prompt, image_paths)
+
+    client.complete = mutate
+    reading = source_case("naturalisation-1952").transcription()
+    result = extract(
+        ExtractionRequest(
+            reading,
+            reading.artifact,
+            strategy=strategy,
+            budget=2000,
+            retries=3,
+            concurrency=1,
+            read_preparation=False,
+        ),
+        client,
+    )
+    stage = result.require_complete().extraction_run.provenance.stages[-1]
+    assert len(snapshots) == 1
+    assert stage.prompt_hashes[template_name] == sha256_text(loaded)
+    assert stage.prompt_hashes[template_name] != before
+    assert stage.resource_hashes["pipeline/prompts/extraction.md"] == before
+    assert before != sha256_text(resource.read_text())
 
 
 def test_real_text_and_model_stages_carry_their_original_producers(

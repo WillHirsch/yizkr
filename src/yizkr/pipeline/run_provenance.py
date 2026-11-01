@@ -11,6 +11,7 @@ import json
 import os
 import tempfile
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -237,8 +238,70 @@ def application_record(
     )
 
 
+def _loaded_templates(stage: str, configuration: Mapping) -> dict[str, str]:
+    """The loaded template/fragment values, distinct from resource bytes.
+
+    A long-lived process can retain a template after its source file changes.
+    Names identify Python constants because some fragments are trimmed or
+    composed during import, and transcription already interpolates its kinds.
+    This is the operation's template dependency set, not a log of requests.
+    """
+    if stage == "transcription":
+        if configuration.get("route") not in {"vision", "paged"}:
+            return {}
+        from yizkr.pipeline.transcribe import TRANSCRIPTION_PROMPT
+
+        return {
+            "pipeline.transcribe.TRANSCRIPTION_PROMPT": TRANSCRIPTION_PROMPT
+        }
+    if stage == "critique":
+        from yizkr.pipeline.critique import CRITIQUE_PROMPT
+
+        return {"pipeline.critique.CRITIQUE_PROMPT": CRITIQUE_PROMPT}
+    if stage == "extraction":
+        from yizkr.pipeline import extract
+
+        templates = {
+            f"pipeline.extract.{name}": getattr(extract, name)
+            for name in (
+                "DOCUMENT_ITSELF",
+                "PLACED_ARTIFACTS",
+                "NO_PLACED_ARTIFACTS",
+            )
+        }
+        if configuration.get("strategy") != "chunked":
+            templates["pipeline.extract.EXTRACTION_PROMPT"] = (
+                extract.EXTRACTION_PROMPT
+            )
+            return templates
+        from yizkr.pipeline import chunking, preparation
+
+        templates.update(
+            {
+                f"pipeline.chunking.{name}": getattr(chunking, name)
+                for name in (
+                    "SEGMENTATION_PROMPT",
+                    "CHUNK_PROMPT",
+                    "LINE_ASSIGNMENT_BLOCK",
+                    "ENTITY_ASSIGNMENT_BLOCK",
+                    "ENTITY_MANIFEST_PROMPT",
+                    "MISSING_FIELD_NOTE",
+                )
+            }
+        )
+        if configuration.get("read_preparation"):
+            templates.update(
+                {
+                    f"pipeline.preparation.{name}": getattr(preparation, name)
+                    for name in ("MANIFEST_BLOCK", "POINTER_BLOCK")
+                }
+            )
+        return templates
+    return {}
+
+
 class Capture:
-    """A small stage-local clock/code snapshot; the caller owns execution."""
+    """Snapshot execution inputs before work; the caller owns execution."""
 
     def __init__(
         self,
@@ -247,52 +310,68 @@ class Capture:
         *,
         document_kind: str = "text",
         configuration: Mapping[str, Any] | None = None,
+        processing: Mapping[str, Any] | None = None,
+        prompt_templates: Mapping[str, str] | None = None,
     ):
+        from yizkr.pipeline.stage_planning import (
+            STAGES,
+            processing_dependencies,
+        )
+
         self.stage = stage
         self.process = process
         self.document_kind = document_kind
-        self.configuration = dict(configuration or {})
+        self.configuration = deepcopy(dict(configuration or {}))
         self.started_at = now()
         self.code = CodeProvenance.model_validate(code_version(fresh=True))
+        if processing is None and stage in STAGES:
+            processing = processing_dependencies(
+                stage,
+                configuration=self.configuration,
+                source_sha1="",
+                document_kind=document_kind,
+            )
+        self.processing = deepcopy(dict(processing or {}))
+        templates = (
+            _loaded_templates(stage, self.configuration)
+            if prompt_templates is None
+            else prompt_templates
+        )
+        self.prompt_hashes = {
+            name: hashlib.sha256(template.encode("utf-8")).hexdigest()
+            for name, template in templates.items()
+        }
 
     def finish(
         self,
         dependencies: Mapping[str, Any],
         *,
         client: Any = None,
-        processing: Mapping[str, Any] | None = None,
         semantic_version: str | int | None = None,
         parents: Sequence[ProcessRecord] = (),
         limitations: Sequence[str] = (),
     ) -> ProcessRecord:
-        from yizkr.pipeline.stage_planning import (
-            STAGES,
-            processing_dependencies,
-        )
-
         ended_at = now()
         configuration = (
             dict(dependencies.get("configuration") or {}) | self.configuration
         )
-        if processing is None and self.stage in STAGES:
-            processing = processing_dependencies(
-                self.stage,
-                configuration=configuration,
-                source_sha1=str(dependencies.get("source_sha1") or ""),
-                document_kind=self.document_kind,
+        processing = deepcopy(self.processing)
+        # Bind the source the operation actually read without observing any
+        # resource again: files may have changed during the provider call.
+        if "source_sha1" in processing:
+            processing["source_sha1"] = str(
+                dependencies.get("source_sha1") or ""
             )
-        processing = dict(processing or {})
         resources = dict(processing.get("resources") or {})
-        prompts = {
-            name: digest
-            for name, digest in resources.items()
-            if client is not None
-            and ("/prompts/" in name or name.startswith("prompts/"))
-        }
+        prompts = dict(self.prompt_hashes) if client is not None else {}
         observed = client_metadata(client) if client is not None else {}
         dependency_hash = hashlib.sha256(
             canonical_json(
-                {"operation": dict(dependencies), "processing": processing}
+                {
+                    "operation": dict(dependencies),
+                    "processing": processing,
+                    "prompt_templates": prompts,
+                }
             ).encode()
         ).hexdigest()
         version = semantic_version
@@ -302,6 +381,7 @@ class Capture:
                     {
                         "resources": resources,
                         "libraries": processing.get("libraries", {}),
+                        "prompt_templates": prompts,
                     }
                 ).encode()
             ).hexdigest()

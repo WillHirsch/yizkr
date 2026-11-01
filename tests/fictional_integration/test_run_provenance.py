@@ -12,8 +12,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from tests.fixtures.identity import mapped
 from tests.fixtures.semantic_acceptance import birth_batch, source_case
+from yizkr.claims import ArtifactRef, QidRef
 from yizkr.core import sparql
 from yizkr.core.provenance import (
     CodeProvenance,
@@ -22,6 +22,7 @@ from yizkr.core.provenance import (
     StageProvenance,
 )
 from yizkr.core.wiki import WikiClient
+from yizkr.core.write_recovery import CreationRegistry
 from yizkr.model.bootstrap import bootstrap_instance
 from yizkr.model.schema import load_manifest
 from yizkr.pipeline.places import ensure_places_run_item
@@ -182,10 +183,35 @@ def test_structured_run_records_roundtrip_without_rewriting(
     client = WikiClient(fictional_client.config)
     directory = tmp_path / "process-records"
     case = source_case("birth-extract-1938")
-    source = tmp_path / "fictional-birth.txt"
-    source.write_bytes(case.source_bytes)
-    register_artifact(client, source, "certificate", case.title, pages=1)
-    batch = birth_batch(case.key)
+    # This session shares its graph with the independent write/query case.
+    # Distinct fixture bytes keep that case's fresh-registration assertion
+    # meaningful; the added header makes no new historical assertion.
+    source = tmp_path / "fictional-provenance-birth.txt"
+    source.write_bytes(b"Fictional provenance fixture\n" + case.source_bytes)
+    artifact = ArtifactRef.from_path(source)
+    assert artifact.sha1 != case.sha1
+    registered = register_artifact(
+        client,
+        source,
+        "certificate",
+        "Provenance fixture: " + case.title,
+        pages=1,
+    )
+    assert registered.created
+    # The existing round-trip case owns the session's identity map. This
+    # authored person is supplied as an explicit QID, so provenance testing
+    # neither reserves another map nor publishes a conflicting map label.
+    person = client.wbi.item.new()
+    person.labels.set("en", "Provenance fixture: Gustav Löbig")
+    person = CreationRegistry(client).create(
+        {"kind": "fictional-provenance-subject", "source": artifact.sha1},
+        person,
+        summary="fictional provenance fixture person",
+    )
+    batch = birth_batch(case.key, subject=QidRef(qid=person.qid))
+    for claim in batch.claims:
+        claim.source = claim.source.model_copy(update={"artifact": artifact})
+        assert claim.source.transcription_excerpt.text in source.read_text()
     batch.extraction_run = batch.extraction_run.model_copy(
         update={
             "model_identifier": EXTRACTOR,
@@ -194,15 +220,13 @@ def test_structured_run_records_roundtrip_without_rewriting(
             "provenance": _producer("extraction", EXTRACTOR),
         }
     )
-    identity = mapped(batch)
     marks = {
         "scratch_run": "fictional-provenance",
         "run_manifest_hash": "e" * 64,
-        "identity_map_hash": identity.hash,
     }
     result = BatchWriter(
         client, run_marks=marks, record_dir=directory
-    ).write_batch(batch, identity=identity, one_map=False)
+    ).write_batch(batch)
     assert result.written == 1 and not result.refused
     fingerprint = hashlib.sha256(
         b"fictional place review provenance"
@@ -258,7 +282,7 @@ def test_structured_run_records_roundtrip_without_rewriting(
         client.forget_vocabulary()
     again = BatchWriter(
         client, run_marks=marks, record_dir=directory
-    ).write_batch(batch, identity=identity, one_map=False)
+    ).write_batch(batch)
     assert again.run_qid == result.run_qid
     assert again.written == again.referenced == 0
     assert again.minted == [] and not again.refused

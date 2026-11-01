@@ -891,7 +891,14 @@ def adjudicate(
     first, and after each."""
     from yizkr.pipeline.run_provenance import Capture
 
-    capture = Capture("places", "model")
+    capture = Capture(
+        "places",
+        "model",
+        processing=_place_processing(),
+        prompt_templates={
+            "pipeline.places.ADJUDICATION_PROMPT": ADJUDICATION_PROMPT
+        },
+    )
     names = place_names(places)
     found = Adjudication()
     request_hashes = []
@@ -943,7 +950,6 @@ def adjudicate(
         found.producer = capture.finish(
             {"request_hashes": request_hashes},
             client=client,
-            processing=_place_processing(),
         )
     return found
 
@@ -1270,6 +1276,21 @@ def _place_processing() -> dict:
     return {"resources": resources}
 
 
+def validate_place_producer(value) -> ProcessRecord | None:
+    """Accept absent legacy facts; refuse malformed or unrelated origins."""
+    if value is None:
+        return None
+    if isinstance(value, ProcessRecord):
+        value = value.model_dump(mode="json")
+    origin = ProcessRecord.model_validate(value)
+    if origin.kind != "producer" or not any(
+        stage.stage == "places" for stage in origin.stages
+    ):
+        raise ValueError("place origin does not describe its proposer")
+    _proposer_model(origin)
+    return origin
+
+
 def read_producer_origin(rows: list[dict]) -> ProcessRecord | None:
     """Read portable producer evidence; blank legacy sheets remain unknown."""
     origins = []
@@ -1277,17 +1298,9 @@ def read_producer_origin(rows: list[dict]) -> ProcessRecord | None:
         value = row.get("producer_origin", "")
         if not isinstance(value, str):
             raise ValueError("place review has malformed producer origin")
-        origin = (
+        origin = validate_place_producer(
             ProcessRecord.model_validate_json(value) if value.strip() else None
         )
-        if origin is not None and (
-            origin.kind != "producer"
-            or not any(stage.stage == "places" for stage in origin.stages)
-        ):
-            raise ValueError(
-                "place review origin does not describe its proposer"
-            )
-        _proposer_model(origin)
         origins.append(origin)
     if origins and any(origin != origins[0] for origin in origins[1:]):
         raise ValueError("place review mixes producer origins")
@@ -1322,6 +1335,7 @@ def place_write_context(
     """
     from yizkr.pipeline.run_provenance import application_record, record_digest
 
+    producer = validate_place_producer(producer)
     producers = [producer] if producer else []
     if not producer and model and model != "curator-reviewed":
         producers.append(
@@ -1413,6 +1427,7 @@ def ensure_places_run_item(
         unknown_characters,
     )
 
+    producer = validate_place_producer(producer)
     known_model = _proposer_model(producer) or (
         model if model != "curator-reviewed" else None
     )
@@ -1458,13 +1473,29 @@ def ensure_places_run_item(
         "marks": marks or {},
     }
     binding = registry.lookup(operation)
-    if binding is None and operation["model"] is None:
+    legacy_labels = {label}
+    if operation["model"] is not None:
+        legacy_labels.add(
+            _term_text(
+                f"place-hierarchy run {operation['model']} {fingerprint[:10]}"
+            )
+        )
+    if binding_model is None and model is None:
         legacy = dict(operation, model="curator-reviewed")
-        binding = registry.lookup(legacy)
-        if binding is not None:
-            operation = legacy
+        legacy_labels.add(
+            _term_text(
+                f"place-hierarchy run curator-reviewed {fingerprint[:10]}"
+            )
+        )
+        if binding is None:
+            binding = registry.lookup(legacy)
+            if binding is not None:
+                operation = legacy
     if binding is None:
-        if client.find_item_by_label(label) is not None:
+        if any(
+            client.find_item_by_label(candidate) is not None
+            for candidate in sorted(legacy_labels)
+        ):
             raise CreationRefused(
                 "a place run has matching display terms but no creation "
                 "binding; verified migration is required"
@@ -1510,6 +1541,7 @@ def apply_answers(
     nothing, and is counted among the approved rows passed over."""
     from yizkr.pipeline.writer import BatchWriter
 
+    producer = validate_place_producer(producer)
     with open(csv_path, newline="") as handle:
         rows = list(csv.DictReader(handle))
     stored = read_producer_origin(rows)

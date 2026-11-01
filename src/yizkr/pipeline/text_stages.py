@@ -128,7 +128,13 @@ def read_text(request: TextReadRequest) -> TextReadResult:
     from yizkr.pipeline.transcribe import TextFileTranscriber
 
     capture = Capture(
-        "transcription", "manual" if request.correction else "deterministic"
+        "transcription",
+        "manual" if request.correction else "deterministic",
+        configuration={
+            "language": request.language,
+            "fallback_language": request.fallback_language,
+            "correction": request.correction,
+        },
     )
     if request.correction:
         text = request.text_file.read_text()
@@ -371,8 +377,20 @@ def extract(
         and request.pointer is None
         and empty_container_reading(request.transcription)
     )
+    configuration = {"strategy": strategy}
+    if strategy == "chunked" and not empty_container:
+        configuration.update(
+            budget=request.budget,
+            retries=request.retries,
+            concurrency=max(1, request.concurrency),
+            read_preparation=request.read_preparation,
+        )
     capture = (
-        Capture("extraction", "deterministic" if empty_container else "model")
+        Capture(
+            "extraction",
+            "deterministic" if empty_container else "model",
+            configuration=configuration,
+        )
         if strategy != "file"
         else None
     )
@@ -393,7 +411,7 @@ def extract(
         "transcription_sha256": content_hash(
             request.transcription.model_dump(mode="json")
         ),
-        "configuration": {"strategy": strategy},
+        "configuration": configuration,
     }
     if request.context is not None:
         dependencies["interpretation_context_sha256"] = content_hash(
@@ -414,7 +432,6 @@ def extract(
             dependencies,
         )
         return result
-    configuration = dependencies["configuration"]
     if strategy == "file":
         from yizkr.pipeline.extract import ClaimFileExtractor
 
@@ -439,12 +456,6 @@ def extract(
         if strategy == "chunked":
             from yizkr.pipeline.chunking import ChunkedClaimExtractor
 
-            configuration.update(
-                budget=request.budget,
-                retries=request.retries,
-                concurrency=max(1, request.concurrency),
-                read_preparation=request.read_preparation,
-            )
             if request.read_preparation:
                 dependencies["pointer_sha256"] = (
                     sha256_text(request.pointer)

@@ -23,7 +23,7 @@ The shared transcription, extraction, critique and GEDCOM operations capture obs
 | `run_stage` statements | Stage names, with the associated facts as qualifiers rather than disconnected lists |
 | `process_kind` | Record purpose at run level; deterministic, model, mixed, manual or unknown at stage level |
 | `model_identifier`, `model_effort` | Actual recorded model identity and effort, when available |
-| `prompt_hash`, `cli_config_hash`, `stage_version` | Named prompt digests, client/configuration fingerprint and semantic stage version or dependency fingerprint |
+| `prompt_hash`, `cli_config_hash`, `stage_version` | Named loaded-template digests, client/configuration fingerprint and semantic stage version or dependency fingerprint |
 | `model_manifest_hash` | Manifest used by that producer, or the current application manifest at run level |
 | `pipeline_version`, `provider_cli_version`, `software_commit`, `software_dirty` | Package/provider version and observed code state |
 | `process_started_at`, `process_ended_at` | Recorded stage times as UTC ISO 8601 strings; native Wikibase date precision cannot preserve process clock times |
@@ -32,6 +32,8 @@ The shared transcription, extraction, critique and GEDCOM operations capture obs
 | `run_record_sha256` reference | Digest of the immutable record supporting each projected statement |
 
 The complete JSON retains dependency details, resource and configuration hashes, model/client fields and code observations. Values exceeding Wikibase string constraints remain in that record with a graph-visible limitation; they are not silently truncated into a different model or version. Missing facts remain absent or explicitly unknown. Old batches cannot supply a dirty flag, end time or prompt/configuration facts that they never recorded.
+
+Resource and configuration snapshots are taken before execution. Prompt hashes identify the loaded template components by module/constant name, separately from package-resource file hashes: a running process can retain a template after its file is edited. These are the operation's template dependencies, not a log of individual requests. Place reconciliation also records hashes of its actual assembled requests.
 
 Write preparation records its current code and configuration separately from the producer. It has no claimed completion time: publishing metadata before writes does not prove the whole write completed. Retrying identical metadata reuses the same run binding, record files, statements and references. Enriching a batch with provenance does not change its established creation operation.
 
