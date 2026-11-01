@@ -173,6 +173,11 @@ class Wiki(WritingWiki):
         """Empty the instance, as a reset does."""
         fresh = Wiki()
         self.entities, self.media = fresh.entities, fresh.media
+        self.wbi.item.store = self.entities
+        self.wbi.item.creation_history.clear()
+        self._recovery_pages.clear()
+        self._recovery_edited.clear()
+        self._recovery_revision = 0
         self.writes = 0
 
 
@@ -1397,7 +1402,16 @@ def test_items_found_again_are_not_counted_as_minted(run):
     identity = scratchwrite.identity_map(run.context("write"))
     letter = run.documents[1]
     extracted = scratchwrite.extracted_batch(letter)
-    again = BatchWriter(run.wiki).write_batch(
+    again = BatchWriter(
+        run.wiki,
+        run_marks={
+            scratchwrite.MARK_RUN: run.driver.run_id,
+            scratchwrite.MARK_MANIFEST: scratchwrite.manifest_hash(
+                run.driver.rundir
+            ),
+            scratchwrite.MARK_MAP: identity.hash,
+        },
+    ).write_batch(
         scratchwrite.batch_to_write(extracted)[0],
         identity=identity,
         mapped_from=extracted,

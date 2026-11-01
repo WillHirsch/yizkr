@@ -25,6 +25,7 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Iterable, Iterator, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
 import requests
@@ -32,6 +33,23 @@ import yaml
 
 from yizkr.core.config import USER_AGENT, Config
 from yizkr.model.schema import DEFAULT_MANIFEST, read_manifest_data
+
+
+class RecoveryEvidenceError(RuntimeError):
+    """The server cannot prove an immutable creation or binding record."""
+
+
+@dataclass(frozen=True)
+class WikiPage:
+    title: str
+    text: str
+    revision: int
+
+
+@dataclass(frozen=True)
+class EntityCreation:
+    qid: str
+    revision: int
 
 
 class ItemLabels(dict[str, str]):
@@ -432,6 +450,204 @@ class WikiClient:
         }
 
     # -- wiki pages ---------------------------------------------------------
+
+    def immutable_page(self, title: str) -> WikiPage | None:
+        """Read an immutable record; edited or unavailable evidence refuses."""
+        for log_type in ("delete", "move"):
+            log = self.api_get(
+                {
+                    "action": "query",
+                    "list": "logevents",
+                    "letitle": title,
+                    "letype": log_type,
+                    "lelimit": 1,
+                    "leprop": "ids|type",
+                }
+            )
+            if log.get("query", {}).get("logevents"):
+                raise RecoveryEvidenceError(
+                    "recovery page was deleted or moved; "
+                    "reconciliation required"
+                )
+        data = self.api_get(
+            {
+                "action": "query",
+                "prop": "revisions",
+                "titles": title,
+                "rvprop": "ids|content",
+                "rvslots": "main",
+                "formatversion": "2",
+            }
+        )
+        pages = data.get("query", {}).get("pages", [])
+        if len(pages) != 1:
+            raise RecoveryEvidenceError("missing recovery page response")
+        page = pages[0]
+        if "missing" in page:
+            return None
+        revisions = page.get("revisions", [])
+        if (
+            "invalid" in page
+            or "redirect" in page
+            or len(revisions) != 1
+            or revisions[0].get("parentid") != 0
+        ):
+            raise RecoveryEvidenceError(
+                "recovery page is not an immutable initial revision"
+            )
+        revision = revisions[0]
+        text = revision.get("slots", {}).get("main", {}).get("content")
+        if not isinstance(text, str) or not isinstance(
+            revision.get("revid"), int
+        ):
+            raise RecoveryEvidenceError(
+                "recovery page content or revision is unavailable"
+            )
+        return WikiPage(page["title"], text, revision["revid"])
+
+    def create_page_once(
+        self, title: str, text: str, summary: str
+    ) -> WikiPage:
+        """Reserve one title, then read it even if the response was lost.
+
+        The caller compares the stored content with its proposal. A competing
+        creator's content is returned unchanged; it is never overwritten.
+        """
+        from wikibaseintegrator import wbi_helpers
+
+        failure = None
+        try:
+            wbi_helpers.mediawiki_api_call_helper(
+                data={
+                    "action": "edit",
+                    "title": title,
+                    "text": text,
+                    "summary": summary,
+                    "createonly": "1",
+                    "bot": "1",
+                    "token": self.login.get_edit_token(),
+                },
+                login=self.login,
+                max_retries=1,
+                retry_after=0,
+            )
+        except Exception as exc:
+            failure = exc
+        page = self.immutable_page(title)
+        if page is None:
+            raise RecoveryEvidenceError(
+                "reservation outcome is unknown; no record is visible"
+            ) from failure
+        return page
+
+    def page_titles(self, prefix: str) -> list[str]:
+        """Enumerate project-namespace records without a search index."""
+        if not prefix.startswith("Project:"):
+            raise ValueError(
+                "recovery page prefix must use the project namespace"
+            )
+        params = {
+            "action": "query",
+            "list": "allpages",
+            "apnamespace": 4,
+            "apprefix": prefix.removeprefix("Project:"),
+            "aplimit": "500",
+        }
+        titles = []
+        while True:
+            data = self.api_get(params)
+            titles.extend(page["title"] for page in data["query"]["allpages"])
+            continuation = data.get("continue")
+            if not continuation:
+                return titles
+            params.update(continuation)
+
+    def creation_revisions(self, marker: str) -> list[EntityCreation]:
+        """Find every visible initial item revision with this exact marker.
+
+        This exceptional scan uses revision storage, not WDQS or search.
+        An unavailable initial comment prevents proving uniqueness. Deleted
+        evidence never authorizes another creation attempt.
+        """
+        params = {
+            "action": "query",
+            "list": "allrevisions",
+            "arvprop": "ids|comment",
+            "arvlimit": "500",
+            "formatversion": "2",
+        }
+        matches = []
+        while True:
+            data = self.api_get(params)
+            for page in data["query"]["allrevisions"]:
+                match = re.fullmatch(
+                    r"(?:Item:)?(Q[1-9][0-9]*)", page["title"]
+                )
+                if not match:
+                    continue
+                for revision in page["revisions"]:
+                    if revision.get("parentid") != 0:
+                        continue
+                    if (
+                        "comment" not in revision
+                        or "commenthidden" in revision
+                    ):
+                        raise RecoveryEvidenceError(
+                            "an initial item revision comment is unavailable"
+                        )
+                    if marker in revision["comment"].split():
+                        matches.append(
+                            EntityCreation(match[1], revision["revid"])
+                        )
+            continuation = data.get("continue")
+            if not continuation:
+                return matches
+            params.update(continuation)
+
+    def verify_creation(self, qid: str, revision: int, marker: str) -> None:
+        """Prove the initial revision and its still-live item target."""
+        data = self.api_get(
+            {
+                "action": "query",
+                "prop": "revisions",
+                "revids": revision,
+                "rvprop": "ids|comment",
+                "formatversion": "2",
+            }
+        )
+        pages = data.get("query", {}).get("pages", [])
+        if len(pages) != 1:
+            raise RecoveryEvidenceError("creation revision is missing")
+        page = pages[0]
+        revisions = page.get("revisions", [])
+        if (
+            page.get("title") not in (qid, f"Item:{qid}")
+            or len(revisions) != 1
+            or revisions[0].get("revid") != revision
+            or revisions[0].get("parentid") != 0
+            or marker not in revisions[0].get("comment", "").split()
+            or "commenthidden" in revisions[0]
+        ):
+            raise RecoveryEvidenceError(
+                "creation revision does not prove this binding"
+            )
+        data = self.api_get(
+            {
+                "action": "wbgetentities",
+                "ids": qid,
+                "props": "info",
+                "redirects": "no",
+            }
+        )
+        entity = data.get("entities", {}).get(qid, {})
+        if (
+            entity.get("id") != qid
+            or entity.get("type") != "item"
+            or "missing" in entity
+            or "redirects" in entity
+            or data.get("redirects")
+        ):
+            raise RecoveryEvidenceError("bound item is missing or redirected")
 
     def page_text(self, title: str) -> str | None:
         """The text of the page `title`'s latest revision, or None when

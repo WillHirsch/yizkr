@@ -1082,12 +1082,17 @@ class TestCuratedAndOtherStatements:
         from yizkr.pipeline.reconcile import apply_equivalences
 
         wiki = NotedWiki()
-        first = write_mapped(BatchWriter(wiki), self.court())
-        court = first.created_items["e6"]
-        later = apply_equivalences(
-            self.court(KIND_NOTE, sha1=BURIAL_SHA1), {"e6": court}
+        earlier = self.court()
+        proposed = self.court(KIND_NOTE, sha1=BURIAL_SHA1)
+        identity = joined(
+            mapped(earlier, proposed), COURT["label"], DIVORCE["label"]
         )
-        result = write_mapped(BatchWriter(wiki), later)
+        first = write_mapped(BatchWriter(wiki), earlier, identity=identity)
+        court = first.created_items["e6"]
+        later = apply_equivalences(proposed, {"e6": court})
+        result = write_mapped(
+            BatchWriter(wiki), later, identity=identity, mapped_from=proposed
+        )
         assert result.notes_written == 1
         (kind,) = statements(wiki, court, "instance_of")
         assert run_blocks(kind) == sorted(
@@ -1415,12 +1420,17 @@ class TestMoreKinds:
 
         wiki = NotedWiki()
         court_of = TestCuratedAndOtherStatements().court
-        first = write_mapped(BatchWriter(wiki), court_of())
-        court = first.created_items["e6"]
-        later = apply_equivalences(
-            court_of(UNKNOWN_NOTE, sha1=BURIAL_SHA1), {"e6": court}
+        earlier = court_of()
+        proposed = court_of(UNKNOWN_NOTE, sha1=BURIAL_SHA1)
+        identity = joined(
+            mapped(earlier, proposed), COURT["label"], DIVORCE["label"]
         )
-        result = write_mapped(BatchWriter(wiki), later)
+        first = write_mapped(BatchWriter(wiki), earlier, identity=identity)
+        court = first.created_items["e6"]
+        later = apply_equivalences(proposed, {"e6": court})
+        result = write_mapped(
+            BatchWriter(wiki), later, identity=identity, mapped_from=proposed
+        )
         (warning,) = note_warnings(result)
         assert warning.startswith("entity 'e6' has a judgement note")
         assert warning.endswith(": its kind is recorded without it")
@@ -1703,11 +1713,19 @@ class TestTheStateBeforeTheWrite:
 
         wiki = NotedWiki()
         court_of = TestCuratedAndOtherStatements().court
-        first = write_mapped(BatchWriter(wiki), court_of())
+        earlier = court_of()
+        proposed = court_of(KIND_NOTE, sha1=BURIAL_SHA1)
+        identity = joined(
+            mapped(earlier, proposed), COURT["label"], DIVORCE["label"]
+        )
+        first = write_mapped(BatchWriter(wiki), earlier, identity=identity)
         court = first.created_items["e6"]
         writes = wiki.wbi.item.writes
-        later = apply_equivalences(
-            court_of(KIND_NOTE, sha1=BURIAL_SHA1), {"e6": court}
+        later = apply_equivalences(proposed, {"e6": court})
+        write_mapped(
+            BatchWriter(wiki, dry_run=True),
+            later,
+            identity=identity,
+            mapped_from=proposed,
         )
-        write_mapped(BatchWriter(wiki, dry_run=True), later)
         assert wiki.wbi.item.writes == writes

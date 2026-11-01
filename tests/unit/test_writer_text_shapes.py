@@ -865,11 +865,16 @@ class TestTerms:
         ]
         assert min(map(len, aliases[3:])) > TERM_LIMIT
         wiki = FakeWiki({MEDIA_SHA1: "Q23", TREE_SHA1: "Q29"}, detached=True)
-        if found:
-            write_mapped(BatchWriter(wiki), _certificate_batch())
         tree = _with_aliases(_tree_batch(), aliases)
+        identity = corpus(
+            _certificate_batch(), tree, entities=("Sebastian Löbig",)
+        )
+        if found:
+            write_mapped(
+                BatchWriter(wiki), _certificate_batch(), identity=identity
+            )
 
-        written = write_mapped(BatchWriter(wiki), tree)
+        written = write_mapped(BatchWriter(wiki), tree, identity=identity)
 
         sebastian = written.created_items["e03"]
         assert sorted(_aliases(wiki, sebastian)) == sorted(
@@ -880,7 +885,7 @@ class TestTerms:
             ]
         )
         writes = wiki.wbi.item.writes
-        write_mapped(BatchWriter(wiki), tree)
+        write_mapped(BatchWriter(wiki), tree, identity=identity)
         assert wiki.wbi.item.writes == writes
 
     def test_a_run_label_over_the_limit_is_cut_and_found_again(self):

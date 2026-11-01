@@ -1,8 +1,9 @@
-"""Offline tests: the label lookups outside the writer compare text in the
-form the instance keeps a term in, as the writer does (stored_term,
-_term_text; #370); the resolve step looks up no label (#109). Each is
-checked over a label given in NFD, as a source transcribed on another
-system may give it.
+"""Unicode equivalence for place-run identity and displayed terms.
+
+The full model identifier identifies a place run in NFC, independently of
+its fitted display label. Alias comparison uses the stored term form. The
+resolve step looks up no label. NFD inputs represent text from systems that
+use decomposed characters.
 
 The universe's names with a precomposed letter serve: Gustav Löbig, Ida
 Sörne, Flörburg."""
@@ -65,6 +66,7 @@ class TestPlacesRunItem:
         )
         assert len(stored) <= TERM_LIMIT
         assert ensure_places_run_item(wiki, FINGERPRINT, model) == qid
+        assert ensure_places_run_item(wiki, FINGERPRINT, nfd(model)) == qid
         assert list(wiki.entities) == [qid]
 
     def test_an_unknown_character_past_the_cut_is_refused_unread(self):

@@ -8,6 +8,7 @@ import itertools
 import json
 import re
 import subprocess
+import threading
 import unicodedata
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,6 +18,7 @@ from pydantic import ValidationError
 
 from tests.fixtures.identity import corpus, mapped, write_mapped
 from tests.fixtures.records import record_answer
+from tests.fixtures.write_recovery import RecoveryWiki
 from yizkr.claims import (
     ArtifactRef,
     ClaimBatch,
@@ -1938,21 +1940,48 @@ class FakeItems:
         self.store: dict[str, object] = {}
         self.writes = 0
         self._next = 100
+        self.revisions: dict[str, int] = {}
+        self.creation_history: list[dict] = []
+        self._lock = threading.RLock()
+
+    def _record_write(self, item, summary, options) -> None:
+        """Keep authoritative revisions apart from a caller's item copy."""
+        from wikibaseintegrator.wbi_exceptions import MWApiError
+
+        if (
+            item.id in self.revisions
+            and options.get("baserevid") is not None
+            and options["baserevid"] != self.revisions[item.id]
+        ):
+            raise MWApiError({"code": "editconflict", "info": "stale item"})
+        _refuse_as_the_instance(item)
+        _refuse_a_taken_pair(item, self.store)
+        self.writes += 1
+        new = item.id is None
+        if new:
+            item.id = f"Q{self._next}"
+            self._next += 1
+        item.lastrevid = self.writes
+        self.revisions[item.id] = item.lastrevid
+        if new:
+            self.creation_history.append(
+                {
+                    "qid": item.id,
+                    "revision": item.lastrevid,
+                    "summary": summary or "",
+                }
+            )
 
     def new(self):
         from wikibaseintegrator import WikibaseIntegrator
 
         item = WikibaseIntegrator().item.new()
 
-        def write(summary=None, **_):
-            _refuse_as_the_instance(item)
-            _refuse_a_taken_pair(item, self.store)
-            self.writes += 1
-            if item.id is None:
-                item.id = f"Q{self._next}"
-                self._next += 1
-            self.store[item.id] = item
-            return item
+        def write(summary=None, **options):
+            with self._lock:
+                self._record_write(item, summary, options)
+                self.store[item.id] = item
+                return item
 
         item.write = write
         return item
@@ -2015,19 +2044,15 @@ class DetachedItems(FakeItems):
         self.sent: list[dict] = []
 
     def _bound(self, item):
-        def write(summary=None, **_):
-            _refuse_as_the_instance(item)
-            _refuse_a_taken_pair(item, self.store)
-            self.writes += 1
-            if item.id is None:
-                item.id = f"Q{self._next}"
-                self._next += 1
-            for statement in item.claims:
-                if statement.id is None:
-                    statement.id = f"{item.id}${next(self._statement_ids)}"
-            self.sent.append(item.get_json())
-            self.store[item.id] = self._copy(item, _as_stored)
-            return item
+        def write(summary=None, **options):
+            with self._lock:
+                self._record_write(item, summary, options)
+                for statement in item.claims:
+                    if statement.id is None:
+                        statement.id = f"{item.id}${next(self._statement_ids)}"
+                self.sent.append(item.get_json())
+                self.store[item.id] = self._copy(item, _as_stored)
+                return item
 
         item.write = write
         return item
@@ -2038,7 +2063,7 @@ class DetachedItems(FakeItems):
         from wikibaseintegrator import WikibaseIntegrator
 
         data = form(item.get_json())
-        data["lastrevid"] = self.writes
+        data["lastrevid"] = self.revisions.get(item.id, item.lastrevid or 0)
         for statements in data.get("claims", {}).values():
             for statement in statements:
                 # an instance hashes every reference block it stores
@@ -2103,7 +2128,7 @@ def _as_served(value):
     return value
 
 
-class FakeWiki:
+class FakeWiki(RecoveryWiki):
     """Just enough of WikiClient for BatchWriter: the vocabulary, the
     label lookup, the media SHA-1 index and in-memory items, `detached`
     as an instance serves them (DetachedItems)."""
@@ -2116,6 +2141,7 @@ class FakeWiki:
         self.wbi = SimpleNamespace(
             item=DetachedItems() if detached else FakeItems()
         )
+        self.initialize_recovery()
 
     def vocabulary(self):
         return dict(PROPERTIES), dict(ITEMS)
@@ -4440,14 +4466,16 @@ class TestWriterTextInNfc:
         wiki = FakeWiki(
             {INTERVIEW_SHA1: "Q25", DIRECTORY_SHA1: "Q26"}, detached=True
         )
-        if found:
-            write_mapped(BatchWriter(wiki), _firm_batch())
         directory = _directory_batch(
             "unclassified_entity",
             type_hint=unicodedata.normalize("NFD", "Hutgeschäft"),
         )
+        interview = _firm_batch()
+        identity = corpus(interview, directory, entities=(FIRM_LABEL,))
+        if found:
+            write_mapped(BatchWriter(wiki), interview, identity=identity)
 
-        written = write_mapped(BatchWriter(wiki), directory)
+        written = write_mapped(BatchWriter(wiki), directory, identity=identity)
 
         firm = written.created_items["firm"]
         hints = _by_value(_statements(wiki, firm, "type_hint"))

@@ -34,12 +34,14 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.fixtures.write_recovery import RecoveryWiki
 from tests.unit.test_no_wiki_before_write import DECK
 from tests.unit.test_no_wiki_before_write import build_deck as reference_deck
 from tests.unit.test_presentation import DECK_TIME
 from tests.unit.test_upload_warnings import FakeMediaWiki, FakeUploadClient
 from yizkr.core.corpus import ExclusionList
 from yizkr.core.wiki import WikiClient
+from yizkr.core.write_recovery import GENERATION_PAGE, CreationRefused
 from yizkr.pipeline import registrar, writer
 from yizkr.pipeline.presentation import (
     EmbeddedMedium,
@@ -254,7 +256,7 @@ class WriteRefused(RuntimeError):
     """The fake wiki refused a write, as a lost connection would."""
 
 
-class FakeWiki:
+class FakeWiki(RecoveryWiki):
     """In-memory stand-in for WikiClient: real WBI item objects over a
     JSON store that round-trips them as the API does, the lag-free
     enumeration registration reads the instance with, and the real
@@ -291,8 +293,26 @@ class FakeWiki:
         api = WikibaseIntegrator()
 
         class StoredItem(ItemEntity):
-            def write(self, **_):
-                return wiki.store(self)
+            def write(self, **kwargs):
+                creating = self.id is None
+                if (
+                    not creating
+                    and "baserevid" in kwargs
+                    and kwargs["baserevid"]
+                    != wiki.entities[self.id]["lastrevid"]
+                ):
+                    raise WriteRefused("edit conflict")
+                written = wiki.store(self)
+                self.from_json(copy.deepcopy(wiki.entities[written.id]))
+                if creating:
+                    wiki.wbi.item.creation_history.append(
+                        {
+                            "qid": self.id,
+                            "revision": self.lastrevid,
+                            "summary": kwargs.get("summary") or "",
+                        }
+                    )
+                return self
 
         class Items:
             def new(self):
@@ -304,12 +324,15 @@ class FakeWiki:
 
         self.wbi = SimpleNamespace(item=Items())
         self.entities: dict[str, dict] = {}
+        self.wbi.item.store = self.entities
+        self.wbi.item.creation_history = []
         self.media = FakeMediaWiki()
         self.writes = 0
         self.reads = 0
         self.refuse = lambda data: False
         self._next_qid = 100
         self._next_claim = 0
+        self.initialize_recovery()
 
     def store(self, entity):
         data = entity.get_json()
@@ -811,35 +834,20 @@ class TestRegisterArtifact:
         assert wiki.media.requests == []
         assert_labels_unique(wiki)
 
-    def test_of_two_items_with_the_bytes_the_earliest_is_the_artifact(
-        self, tmp_path
+    @pytest.mark.parametrize("first_qid", [99, 100])
+    def test_duplicate_source_identity_refuses_without_writes(
+        self, tmp_path, first_qid
     ):
-        """Two items that carry one media SHA-1 are the duplicate the key
-        exists to prevent: registration takes the numerically earliest,
-        as the writer's index does, and makes no third."""
         wiki = FakeWiki()
+        wiki._next_qid = first_qid
         hashed = ("media_sha1", sha1(PORTRAIT), None)
-        first = wiki.item("Studio portrait, first copy", hashed)
-        second = wiki.item("Studio portrait, second copy", hashed)
-        result = register(wiki, scan(tmp_path, PORTRAIT))
-        assert result.artifact_qid == first != second
-        assert not result.created
-        assert len(wiki.entities) == 2
-
-    def test_the_earliest_of_two_items_is_earliest_by_number(self, tmp_path):
-        """Of Q99 and Q100, which carry one media SHA-1, the earliest is
-        Q99: QIDs order by number, never as strings, where "Q100" sorts
-        before "Q99"."""
-        wiki = FakeWiki()
-        wiki._next_qid = 99
-        hashed = ("media_sha1", sha1(PORTRAIT), None)
-        first = wiki.item("Studio portrait, first copy", hashed)
-        second = wiki.item("Studio portrait, second copy", hashed)
-        assert (first, second) == ("Q99", "Q100")
-        result = register(wiki, scan(tmp_path, PORTRAIT))
-        assert result.artifact_qid == "Q99"
-        assert not result.created
-        assert len(wiki.entities) == 2
+        wiki.item("Studio portrait, first copy", hashed)
+        wiki.item("Studio portrait, second copy", hashed)
+        before = copy.deepcopy(wiki.entities)
+        with pytest.raises(RuntimeError, match="multiple source items"):
+            register(wiki, scan(tmp_path, PORTRAIT))
+        assert wiki.entities == before
+        assert wiki.media.requests == []
 
     @pytest.mark.parametrize("length", [250, 251])
     def test_a_label_of_250_characters_is_taken_and_251_cut(
@@ -954,24 +962,39 @@ class TestRegisterArtifact:
             )
         assert wiki.asked == []
 
-    def test_a_registration_cut_short_takes_no_label(self, tmp_path):
-        """The artifact's statements cite the item itself, so it is made in
-        two writes; a registration cut short between them leaves an item
-        with no label and no statement, and the next registration of the
-        bytes takes the plain title."""
+    def test_interrupted_registration_recovers_after_curator_rename(
+        self, tmp_path
+    ):
+        """Finish the self-referenced statements on the original item."""
         wiki = FakeWiki()
-        wiki.refuse = lambda data: bool(data.get("labels"))
+        wiki.refuse = lambda data: bool(data.get("claims"))
         with pytest.raises(RuntimeError, match="connection"):
             register(wiki, scan(tmp_path, PORTRAIT))
-        (stray,) = wiki.entities.values()
-        assert "en" not in stray["labels"] and not stray["claims"]
+        (pending,) = wiki.entities.values()
+        assert pending["labels"]["en"]["value"] == TITLE
+        assert not pending["claims"]
 
         wiki.refuse = lambda data: False
+        item = wiki.wbi.item.get(pending["id"])
+        item.labels.set("en", "A curator's source title")
+        item.descriptions.set("en", "Curated source description")
+        item.write()
         result = register(wiki, scan(tmp_path, PORTRAIT))
 
-        assert result.artifact_qid != stray["id"]
-        assert label_of(wiki, result.artifact_qid) == TITLE
+        assert result.artifact_qid == pending["id"]
+        assert not result.created
+        assert len(wiki.entities) == 1
+        assert (
+            label_of(wiki, result.artifact_qid) == "A curator's source title"
+        )
+        assert (
+            str(wiki.wbi.item.get(result.artifact_qid).descriptions.get("en"))
+            == "Curated source description"
+        )
         assert wiki.drift() == []
+        writes = wiki.writes
+        assert register(wiki, scan(tmp_path, PORTRAIT)) == result
+        assert wiki.writes == writes
 
     def test_one_registrar_reads_the_instance_once(self, tmp_path):
         wiki = FakeWiki()
@@ -991,6 +1014,38 @@ class TestRegisterArtifact:
         assert again.fragment_qids == first.fragment_qids
         assert changed.artifact_qid != first.artifact_qid
         assert_labels_unique(wiki)
+
+    def test_bound_source_with_changed_bytes_identity_refuses(self, tmp_path):
+        wiki = FakeWiki()
+        path = scan(tmp_path, PORTRAIT)
+        result = register(wiki, path)
+        claims = wiki.entities[result.artifact_qid]["claims"]
+        claims[wiki.PROPERTIES["media_sha1"]][0]["mainsnak"]["datavalue"][
+            "value"
+        ] = sha1(RESCAN)
+        before = copy.deepcopy(wiki.entities)
+        with pytest.raises(RuntimeError, match="source bytes identity"):
+            register(wiki, path)
+        assert wiki.entities == before
+
+    @pytest.mark.parametrize("existing_source", [False, True])
+    def test_legacy_generation_refuses_before_upload_or_update(
+        self, tmp_path, existing_source
+    ):
+        wiki = FakeWiki()
+        if existing_source:
+            wiki.item(
+                "Studio portrait, existing source",
+                ("media_sha1", sha1(PORTRAIT), None),
+            )
+        else:
+            wiki.item("Gustav Löbig")
+        del wiki._recovery_pages[GENERATION_PAGE]
+        before = copy.deepcopy(wiki.entities)
+        with pytest.raises(CreationRefused, match="verified migration"):
+            register(wiki, scan(tmp_path, PORTRAIT))
+        assert wiki.entities == before
+        assert wiki.media.requests == []
 
 
 # -- terms in the form Wikibase stores them (#367 review) ---------------------
@@ -2353,23 +2408,33 @@ class TestFragments:
         assert result.fragment_qids[2] == curated
         assert result.fragment_qids[1] != curated
 
-    def test_of_two_fragments_for_a_page_the_earliest_is_taken(self, tmp_path):
-        """Two fragments for one page of an artifact are a duplicate the
-        key exists to prevent: the numerically earliest is taken, and no
-        third is made."""
+    def test_duplicate_fragment_identity_refuses(self, tmp_path):
         wiki = FakeWiki()
         path = scan(tmp_path, EXTRACT, name="birth-extract-1938.pdf")
         qid = register(wiki, path, EXTRACT_TITLE, "certificate").artifact_qid
-        first, second = (
+        for n in (1, 2):
             wiki.item(
                 f"first page, copy {n}",
                 ("instance_of", ITEMS["artifact_fragment"], None),
                 ("part_of", qid, "1"),
             )
-            for n in (1, 2)
-        )
+        before = copy.deepcopy(wiki.entities)
+        with pytest.raises(RuntimeError, match="multiple fragments"):
+            register(wiki, path, EXTRACT_TITLE, "certificate", pages=1)
+        assert wiki.entities == before
+
+    def test_bound_fragment_with_changed_page_refuses(self, tmp_path):
+        wiki = FakeWiki()
+        path = scan(tmp_path, EXTRACT, name="birth-extract-1938.pdf")
         result = register(wiki, path, EXTRACT_TITLE, "certificate", pages=1)
-        assert result.fragment_qids == {1: first} and first != second
+        fragment = wiki.entities[result.fragment_qids[1]]
+        fragment["claims"][wiki.PROPERTIES["part_of"]][0]["qualifiers"][
+            wiki.PROPERTIES["page_number"]
+        ][0]["datavalue"]["value"] = "2"
+        before = copy.deepcopy(wiki.entities)
+        with pytest.raises(RuntimeError, match="fragment structure"):
+            register(wiki, path, EXTRACT_TITLE, "certificate", pages=1)
+        assert wiki.entities == before
 
     def test_a_leftover_with_a_fragments_label_is_not_taken(self, tmp_path):
         """An item with a fragment's label and no statements, as a

@@ -100,7 +100,10 @@ def real_runner(monkeypatch):
 
 
 @pytest.fixture
-def fictional_cli(tmp_path, real_runner):
+def fictional_cli(tmp_path, real_runner, monkeypatch):
+    # Each authored CLI models its own pass. Keep version pinning shared by
+    # this test's clients without inheriting or leaking another test's pin.
+    monkeypatch.setattr(llm, "_PIN", llm._CliPin())
     executable = tmp_path / "fictional-cli"
     executable.write_text(
         f"#!{sys.executable}\n"

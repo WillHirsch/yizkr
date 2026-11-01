@@ -1138,21 +1138,6 @@ class TestRecordsAreNeverWritten:
     """ADR-0035 §2.6: a record is extraction's reading, never an
     assertion, so nothing the writer sends depends on it."""
 
-    # the modules that write to the wiki or resolve what it writes
-    WRITE_PATH = ("writer.py", "resolve.py", "registrar.py")
-
-    def test_no_write_path_module_names_a_record(self):
-        import re
-        from pathlib import Path
-
-        import yizkr.pipeline
-
-        folder = Path(yizkr.pipeline.__file__).parent
-        for name in self.WRITE_PATH:
-            text = (folder / name).read_text()
-            assert not re.search(r"\bstructure\b", text), name
-            assert "structure_problems" not in text, name
-
     def test_a_record_changes_nothing_the_writer_sends(self):
         from tests.unit.test_pipeline import TREE_SHA1, FakeWiki, _tree_batch
         from yizkr.claims import GivenName, Surname

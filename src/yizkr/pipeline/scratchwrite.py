@@ -913,8 +913,8 @@ def run_register(context: Any) -> list[str]:
                 failed += 1
                 record["failed"][doc.sha1] = type(exc).__name__
                 context.log(
-                    f"{REGISTER}: {doc.sha1[:12]} not registered "
-                    f"({type(exc).__name__})"
+                    f"{REGISTER}: {doc.sha1[:12]} registration incomplete "
+                    f"({type(exc).__name__}); effects may remain"
                 )
             else:
                 record["documents"][doc.sha1] = qid
@@ -1099,8 +1099,8 @@ def run_write(context: Any) -> list[str]:
                 failed += 1
                 record["failed"][doc.sha1] = type(exc).__name__
                 context.log(
-                    f"{WRITE}: {doc.sha1[:12]} not written "
-                    f"({type(exc).__name__})"
+                    f"{WRITE}: {doc.sha1[:12]} write incomplete "
+                    f"({type(exc).__name__}); effects may remain"
                 )
             else:
                 # counted after the write reached the wiki, so a failure
@@ -1472,7 +1472,7 @@ def run_places(context: Any) -> list[str]:
             if record.get("run_qid") is None:
                 record["run_qid"] = hierarchy.ensure_places_run_item(
                     client,
-                    target[:10],
+                    target,
                     place_model(context)["model"] or "engine-default",
                     description=PLACE_RUN_DESCRIPTION,
                     marks={
