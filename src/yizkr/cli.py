@@ -51,6 +51,7 @@ import itertools
 import json
 import math
 import os
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -829,6 +830,29 @@ def cmd_gedcom(args) -> int:
             + format_unsupported_tags(result.outcomes),
             file=sys.stderr,
         )
+    return 0
+
+
+def cmd_identity_review(args) -> int:
+    """File-based human decisions; no model or graph connection is needed."""
+    from yizkr.pipeline.review_stages import (
+        prepare_review_file,
+        project_review_file,
+        record_review_file,
+    )
+
+    try:
+        if args.review_action == "prepare":
+            count = prepare_review_file(args.request, args.store, args.out)
+            print(f"wrote {args.out} ({count} identity proposals)")
+        elif args.review_action == "record":
+            count = record_review_file(args.store, args.csv, actor=args.actor)
+            print(f"recorded {count} identity decisions")
+        else:
+            project_review_file(args.request, args.store, args.out)
+            print(f"wrote {args.out}")
+    except (OSError, ValueError, sqlite3.Error) as exc:
+        sys.exit(str(exc))
     return 0
 
 
@@ -1701,6 +1725,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     ingest = sub.add_parser("ingest", help="pipeline steps")
     isub = ingest.add_subparsers(dest="step", required=True)
+
+    review = isub.add_parser(
+        "identity-review",
+        help="prepare, record and project durable identity decisions",
+    )
+    rsub = review.add_subparsers(dest="review_action", required=True)
+    for action in ("prepare", "record", "project"):
+        p = rsub.add_parser(action)
+        p.add_argument("--store", type=Path, required=True)
+        if action == "record":
+            p.add_argument("--csv", type=Path, required=True)
+            p.add_argument("--actor", required=True)
+        else:
+            p.add_argument("--request", type=Path, required=True)
+            p.add_argument("--out", type=Path, required=True)
+        p.set_defaults(func=cmd_identity_review)
 
     p = isub.add_parser(
         "register", help="upload media + artifact/fragment items"

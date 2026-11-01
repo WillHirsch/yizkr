@@ -1094,7 +1094,7 @@ def ratify_equivalence_verdicts(rows: list[dict]) -> dict[str, int]:
     decided, per row, so distinct-judged pairs are NOT merged.
 
         same      -> approve   (accept the proposed match)
-        distinct  -> reject    (accept the non-match; the entity mints fresh)
+        distinct  -> reject    (accept the non-match; no creation permission)
         uncertain -> ""        (the machine punted — nothing to ratify;
                                 left blank for the human, no merge)
 

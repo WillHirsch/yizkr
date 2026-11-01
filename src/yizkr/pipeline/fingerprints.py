@@ -1,4 +1,8 @@
-"""Mention fingerprints and cluster ids: identity keys that outlive a run.
+"""Mention fingerprints and cluster IDs for reproducible proposal snapshots.
+
+These hashes are correspondence hints, not durable mention IDs or authority
+for carrying human approval. Durable review uses verified source occurrences
+and explicit decision revisions (identity_review and review_mentions).
 
 A *mention* is one entity of one document's entity manifest (ADR-0007),
 the GEDCOM adapter's among them. Its fingerprint hashes what the document
