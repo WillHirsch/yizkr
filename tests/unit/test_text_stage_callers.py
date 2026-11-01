@@ -10,6 +10,7 @@ import json
 import pytest
 
 from tests.fixtures.semantic_acceptance import source_case
+from tests.unit.test_run_provenance import fixed_capture  # noqa: F401
 from tests.unit.test_text_stages import ScriptedClient, birth_answer
 from yizkr import cli
 from yizkr.claims import ArtifactRef, ClaimBatch
@@ -42,9 +43,12 @@ def extraction_client():
 
 @pytest.mark.parametrize("workflow", ["reviewed", "scratch"])
 @pytest.mark.parametrize("finished_critique", [True, False])
+@pytest.mark.usefixtures("fixed_capture")
 def test_text_callers_preserve_the_same_proposals_and_advisory_critique(
     tmp_path, monkeypatch, workflow, finished_critique
 ):
+    # Compare caller behavior with identical observed clock/code inputs;
+    # producer metadata remains in the complete reading equality below.
     case = source_case("naturalisation-1952")
     folder = tmp_path / "sources"
     folder.mkdir()

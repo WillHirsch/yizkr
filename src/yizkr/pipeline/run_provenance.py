@@ -22,6 +22,7 @@ from yizkr.core.provenance import (
     RecordRef,
     StageProvenance,
 )
+from yizkr.pipeline.llm import client_metadata
 from yizkr.pipeline.rundir import code_version
 from yizkr.pipeline.stages import canonical_json
 
@@ -87,27 +88,6 @@ def read_record(directory: Path, reference: RecordRef) -> ProcessRecord:
     if record_bytes(record) != payload:
         raise ValueError("process record is not canonically encoded")
     return record
-
-
-def client_metadata(client: Any) -> dict[str, str]:
-    """Read client identity without constructing or calling a client."""
-    from yizkr.pipeline.llm import engine_client
-    from yizkr.pipeline.llmcache import CachingClient
-
-    client = engine_client(client)
-    while isinstance(client, CachingClient):
-        client = engine_client(client.client)
-    return {
-        key: value
-        for key in (
-            "model",
-            "model_identifier",
-            "effort",
-            "config_hash",
-            "cli_version",
-        )
-        if isinstance(value := getattr(client, key, None), str) and value
-    }
 
 
 def legacy_record(metadata: Any) -> ProcessRecord:

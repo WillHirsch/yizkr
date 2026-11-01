@@ -3272,7 +3272,13 @@ class TestWriteTimeRegistration:
         mapped = []
 
         class Writer:
-            def __init__(self, client, dry_run=False, artifact_qids=None):
+            def __init__(
+                self,
+                client,
+                dry_run=False,
+                artifact_qids=None,
+                **_process_context,
+            ):
                 given.append(dict(artifact_qids or {}))
 
             def write_batch(
@@ -3331,7 +3337,13 @@ class TestWriteTimeRegistration:
         image = "1" * 40
 
         class Writer:
-            def __init__(self, client, dry_run=False, artifact_qids=None):
+            def __init__(
+                self,
+                client,
+                dry_run=False,
+                artifact_qids=None,
+                **_process_context,
+            ):
                 given.append(dict(artifact_qids or {}))
 
             def write_batch(self, batch, placed=None, **_options):

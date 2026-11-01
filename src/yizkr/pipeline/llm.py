@@ -3593,6 +3593,30 @@ def engine_client(client: Any) -> Any:
     return client
 
 
+def client_metadata(client: Any) -> dict[str, str]:
+    """Read known engine identity through our adapters, without a call.
+
+    Cache implementation details stay at the factory boundary; callers need
+    only the observed identity of the engine they already borrowed.
+    """
+    from yizkr.pipeline.llmcache import CachingClient
+
+    client = engine_client(client)
+    while isinstance(client, CachingClient):
+        client = engine_client(client.client)
+    return {
+        key: value
+        for key in (
+            "model",
+            "model_identifier",
+            "effort",
+            "config_hash",
+            "cli_version",
+        )
+        if isinstance(value := getattr(client, key, None), str) and value
+    }
+
+
 def open_cache(
     root: str | os.PathLike[str],
     *,
