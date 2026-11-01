@@ -436,6 +436,7 @@ class ReviewFileRequest(_Input):
 
 def _store_files(path: Path) -> tuple[Path, ...]:
     # SQLite sidecars are storage, never review output destinations.
+    path = path.resolve()
     return (
         path,
         *(Path(f"{path}{suffix}") for suffix in ("-journal", "-wal", "-shm")),

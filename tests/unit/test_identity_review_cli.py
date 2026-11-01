@@ -52,7 +52,8 @@ def request_files(tmp_path):
     reading = Transcription(
         artifact=artifact,
         text=(
-            "Ursula Löbig, daughter of Leopold.\nUrsula Löbig, widow of Felix."
+            "Ursula Löbig, daughter of Sebastian.\n"
+            "Ursula Löbig, an unrelated widow in Flörburg."
         ),
         language="de",
         engine="fixture",
@@ -350,3 +351,23 @@ def test_input_and_sqlite_errors_are_clean_refusals(tmp_path, capsys, failure):
     )
     assert not (tmp_path / "review.csv").exists()
     assert "Traceback" not in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("action", ["prepare", "project"])
+@pytest.mark.parametrize("suffix", ["-journal", "-wal", "-shm"])
+def test_symlinked_database_protects_real_sqlite_sidecars(
+    tmp_path,
+    action,
+    suffix,
+):
+    request, _ = request_files(tmp_path)
+    real = tmp_path / "actual.sqlite"
+    with ReviewStore(real):
+        pass
+    original = real.read_bytes()
+    alias = tmp_path / "alias.sqlite"
+    alias.symlink_to(real)
+    sidecar = tmp_path / f"actual.sqlite{suffix}"
+    assert invoke(action, alias, request=request, out=sidecar) == EXIT_REFUSED
+    assert not sidecar.exists()
+    assert real.read_bytes() == original
