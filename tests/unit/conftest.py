@@ -470,3 +470,17 @@ def _no_network(request, monkeypatch):
     guard.install(monkeypatch)
     yield guard
     guard.check()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _process_records_in_test_directory(tmp_path_factory):
+    """Keep direct writers' immutable records outside the workspace."""
+    from yizkr.pipeline import run_provenance
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(
+            run_provenance,
+            "DEFAULT_RECORD_DIR",
+            tmp_path_factory.getbasetemp() / "process-records",
+        )
+        yield

@@ -300,9 +300,10 @@ def cmd_reconcile_places(args) -> int:
                 "a question: give the --run the CSV was made with",
                 file=sys.stderr,
             )
-        summary = apply_answers(
-            client, config, args.apply, links, "curator-reviewed"
-        )
+        try:
+            summary = apply_answers(client, config, args.apply, links)
+        except (OSError, ValueError) as exc:
+            sys.exit(str(exc))
         for note in summary["notes"]:
             print(f"note: {note}", file=sys.stderr)
         print(
@@ -333,7 +334,11 @@ def cmd_reconcile_places(args) -> int:
     if not work.questions:
         print("nothing to ask: no stated link needs its container named")
         return 0
-    found = adjudicate(make_client(args.llm), work.questions, places)
+    engine = make_client(args.llm)
+    try:
+        found = adjudicate(engine, work.questions, places)
+    finally:
+        _close_owned_client(engine)
     rows = export_places_csv(found, places, args.out)
     if found.conflicts or found.rejected:
         print(
@@ -406,14 +411,17 @@ def cmd_register(args) -> int:
     from yizkr.pipeline.registrar import register_artifact
 
     _refuse_if_excluded(args, args.file)
-    result = register_artifact(
-        _client(args),
-        media_path=args.file,
-        artifact_type=args.type,
-        title=args.title,
-        description=args.description,
-        pages=args.pages,
-    )
+    try:
+        result = register_artifact(
+            _client(args),
+            media_path=args.file,
+            artifact_type=args.type,
+            title=args.title,
+            description=args.description,
+            pages=args.pages,
+        )
+    except (OSError, ValueError) as exc:
+        sys.exit(str(exc))
     print(json.dumps(dataclasses.asdict(result), indent=2))
     return 0
 
@@ -1017,13 +1025,18 @@ def cmd_write(args) -> int:
             sys.exit(str(exc))
     # the writer's refusals, each before its first write
     try:
-        result = BatchWriter(_client(args), dry_run=args.dry_run).write_batch(
-            batch, identity=identity, placed=placed
-        )
+        result = BatchWriter(
+            _client(args),
+            dry_run=args.dry_run,
+            record_dir=getattr(args, "process_records", None)
+            or args.batch.parent / "process-records",
+        ).write_batch(batch, identity=identity, placed=placed)
     except (
         UnapprovedDepictsError,
         UnregisteredArtifactError,
         OtherIdentityMap,
+        ValueError,
+        OSError,
     ) as exc:
         sys.exit(str(exc))
     print(json.dumps(dataclasses.asdict(result), indent=2))
@@ -1960,6 +1973,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_accept_all)
 
     p = isub.add_parser("write", help="write approved claims as statements")
+    p.add_argument(
+        "--process-records",
+        type=Path,
+        help="immutable provenance record directory; defaults to "
+        "process-records beside the supplied batch",
+    )
     p.add_argument("--batch", type=Path, required=True)
     p.add_argument(
         "--identity-map",

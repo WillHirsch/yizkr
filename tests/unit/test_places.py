@@ -1093,6 +1093,114 @@ def _graph_and_answers():
 
 
 class TestCsv:
+    def test_actual_proposer_survives_copying_and_review(self, tmp_path):
+        places, work, _ = _graph_and_answers()
+        engine = ScriptedLlm(line(1, 1) + "\n" + line(2, 1) + "\n" + DONE)
+        engine.model = "fictional-proposer-model"
+        engine.model_identifier = "fictional-proposer-client/model"
+        engine.effort = "low"
+        engine.config_hash = "a" * 64
+        engine.cli_version = "fictional-cli-version"
+        found = adjudicate(engine, work.questions, places)
+        original, reviewed = (
+            tmp_path / "original.csv",
+            tmp_path / "renamed.csv",
+        )
+        export_places_csv(found, places, original)
+        with original.open(newline="") as handle:
+            reader = csv.DictReader(handle)
+            fields, rows = reader.fieldnames, list(reader)
+        for row in rows:
+            row["decision"] = "approve"
+        with reviewed.open("w", newline="") as handle:
+            writer = csv.DictWriter(handle, fields)
+            writer.writeheader()
+            writer.writerows(rows)
+        with reviewed.open(newline="") as handle:
+            restored = hierarchy.read_producer_origin(
+                list(csv.DictReader(handle))
+            )
+        assert restored == found.producer
+        (stage,) = restored.stages
+        assert (stage.model, stage.model_identifier, stage.effort) == (
+            engine.model,
+            engine.model_identifier,
+            "low",
+        )
+        assert stage.config_hash == engine.config_hash
+        assert stage.cli_version == engine.cli_version
+        assert stage.prompt_hashes
+        assert stage.started_at <= stage.ended_at
+        assert restored.metadata["dependencies"]["request_hashes"] == [
+            hashlib.sha256(engine.prompts[0].encode()).hexdigest()
+        ]
+
+    @pytest.mark.parametrize(
+        "fault", ["malformed", "mixed", "missing", "wrong_stage"]
+    )
+    def test_bad_or_mixed_origin_refuses_before_graph_access(
+        self, tmp_path, monkeypatch, fault
+    ):
+        places, work, _ = _graph_and_answers()
+        engine = ScriptedLlm(line(1, 1) + "\n" + line(2, 1) + "\n" + DONE)
+        found = adjudicate(engine, work.questions, places)
+        path = tmp_path / "reviewed.csv"
+        export_places_csv(found, places, path)
+        with path.open(newline="") as handle:
+            rows = list(csv.DictReader(handle))
+        for row in rows:
+            row["decision"] = "approve"
+        if fault == "malformed":
+            rows[0]["producer_origin"] = "{not json"
+        elif fault == "missing":
+            rows[0]["producer_origin"] = ""
+        else:
+            changed = json.loads(rows[0]["producer_origin"])
+            if fault == "mixed":
+                changed["stages"][0]["model_identifier"] = "another-model"
+            else:
+                changed["stages"][0]["stage"] = "extract"
+            rows[0]["producer_origin"] = json.dumps(changed)
+        with path.open("w", newline="") as handle:
+            writer = csv.DictWriter(handle, hierarchy.CSV_FIELDS)
+            writer.writeheader()
+            writer.writerows(rows)
+
+        def refuse(*args):
+            pytest.fail("an invalid reviewed origin must not access the graph")
+
+        monkeypatch.setattr(hierarchy, "fetch_places", refuse)
+        with pytest.raises(ValueError):
+            hierarchy.apply_answers(object(), None, path, [])
+
+    def test_legacy_sheet_has_no_invented_proposer(self):
+        assert (
+            hierarchy.read_producer_origin([{"decision": "approve"}]) is None
+        )
+        context = hierarchy.place_write_context(
+            "a" * 64, None, model="curator-reviewed"
+        )
+        assert context.limitations
+        assert all(
+            stage.model is None and stage.model_identifier is None
+            for stage in context.stages
+        )
+        assert context.started_at is context.ended_at is None
+
+    def test_current_configuration_cannot_replace_the_recorded_proposer(self):
+        places, work, _ = _graph_and_answers()
+        engine = ScriptedLlm(line(1, 1) + "\n" + line(2, 1) + "\n" + DONE)
+        found = adjudicate(engine, work.questions, places)
+        with pytest.raises(
+            ValueError, match="differs from the recorded proposer"
+        ):
+            ensure_places_run_item(
+                object(),
+                "a" * 64,
+                "different-current-model",
+                producer=found.producer,
+            )
+
     def test_one_row_per_answer(self, tmp_path):
         places, _, found = _graph_and_answers()
         path = tmp_path / "places.csv"
@@ -1236,7 +1344,7 @@ class TestCommand:
         self._graph(monkeypatch, peiltal())
         given = []
 
-        def apply_answers(client, config, path, links, model):
+        def apply_answers(client, config, path, links, model=None):
             given.append((path, links, model))
             return {
                 "written": 2,
@@ -1254,7 +1362,7 @@ class TestCommand:
         args = self._args(tmp_path, apply=reviewed, run=[tmp_path / "run"])
         assert cli.cmd_reconcile_places(args) == 0
         ((path, links, model),) = given
-        assert (path, model) == (reviewed, "curator-reviewed")
+        assert (path, model) == (reviewed, None)
         assert [found.container for found in links] == list(PRISON)
         out = capsys.readouterr().out
         assert (
@@ -1478,7 +1586,12 @@ class TestPlacesRunItem:
 
         assert wiki.entities[qid]["labels"]["en"]["value"] == RUN_LABEL
         assert kinds(wiki, qid) == [(ITEMS["extraction_run"], "normal", [qid])]
-        assert wiki.writes == 2
+        assert any(
+            P["run_record_sha256"] in reference["snaks"]
+            for rows in wiki.entities[qid]["claims"].values()
+            for statement in rows
+            for reference in statement.get("references", [])
+        )
 
     def test_a_pass_cut_short_is_typed_by_the_next(self):
         """A pass cut short between the run item's two writes leaves it
@@ -1525,6 +1638,73 @@ class TestPlacesRunItem:
         assert kinds(wiki, qid) == [
             (ITEMS["extraction_run"], "deprecated", [qid])
         ]
+
+    def test_legacy_unknown_proposer_binding_is_recovered_without_fabrication(
+        self,
+    ):
+        wiki = RunItemWiki()
+        first = ensure_places_run_item(wiki, FINGERPRINT, "curator-reviewed")
+        before, writes = copy.deepcopy(wiki.entities), wiki.writes
+        assert ensure_places_run_item(wiki, FINGERPRINT) == first
+        assert wiki.entities == before
+        assert wiki.writes == writes
+        encoded = json.dumps(wiki.entities[first]["claims"])
+        assert "curator-reviewed" not in encoded
+
+    def test_producer_code_is_distinct_from_application_and_repeats_are_noops(
+        self, tmp_path, monkeypatch
+    ):
+        from yizkr.core.provenance import (
+            CodeProvenance,
+            ProcessRecord,
+            StageProvenance,
+        )
+        from yizkr.pipeline import run_provenance
+        from yizkr.pipeline.run_provenance import read_record
+
+        producer = ProcessRecord(
+            kind="producer",
+            code=CodeProvenance(commit="a" * 40, dirty=False),
+            stages=(
+                StageProvenance(
+                    stage="places",
+                    process="model",
+                    model_identifier="original-proposer",
+                    code=CodeProvenance(commit="a" * 40, dirty=False),
+                ),
+            ),
+        )
+        monkeypatch.setattr(
+            run_provenance,
+            "code_version",
+            lambda **kw: {"commit": "b" * 40, "dirty": False},
+        )
+        wiki = RunItemWiki()
+        qid = ensure_places_run_item(
+            wiki, FINGERPRINT, producer=producer, record_dir=tmp_path
+        )
+        records = [
+            ProcessRecord.model_validate_json(path.read_text())
+            for path in tmp_path.glob("*.json")
+        ]
+        (application,) = [
+            r for r in records if r.kind == "places-write-context"
+        ]
+        assert application.code.commit == "b" * 40
+        assert application.stages[0].code.commit == "a" * 40
+        assert application.stages[0].model_identifier == "original-proposer"
+        assert application.stages[-1].model_identifier is None
+        assert application.stages[-1].started_at is None
+        assert read_record(tmp_path, application.producer_refs[0]) == producer
+        before, writes = copy.deepcopy(wiki.entities), wiki.writes
+        assert (
+            ensure_places_run_item(
+                wiki, FINGERPRINT, producer=producer, record_dir=tmp_path
+            )
+            == qid
+        )
+        assert wiki.entities == before
+        assert wiki.writes == writes
 
 
 class TestTheGraphQuery:

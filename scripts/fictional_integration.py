@@ -44,6 +44,10 @@ REQUIRED_CASES = (
         "tests.fictional_integration.test_write_recovery",
         "test_concurrent_creation_reserves_one_dispatch",
     ),
+    (
+        "tests.fictional_integration.test_run_provenance",
+        "test_structured_run_records_roundtrip_without_rewriting",
+    ),
 )
 SOURCES = (
     "pyproject.toml",

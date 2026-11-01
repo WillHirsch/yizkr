@@ -206,7 +206,7 @@ Every step exchanges `ClaimBatch` JSON. The non-negotiable rules are structural 
 
 - `source` (artifact + fragment locators) is a **required** field — a referenceless claim cannot be represented (ADR-0003).
 - The source artifact is named by **content**, the SHA-1 of its media (`{"kind": "artifact", "sha1": ...}`), never by QID: the same batch holds on any instance and after a reset, and the writer resolves the key to the artifact item at write time (ADR-0010).
-- Batches carry `extraction_run` metadata for the second, process reference (ADR-0003).
+- Batches carry `extraction_run` metadata for the second, process reference (ADR-0003). [Run provenance](../../../docs/RUN_PROVENANCE.md) preserves recorded producing stages separately from write preparation, projects queryable metadata and stores immutable records outside the response cache.
 - There is **no rank field** — pipeline writes are always normal rank; preferring is a curator act on the wiki (ADR-0002).
 - Time values carry explicit precision and calendar; ranges and "circa" are qualifiers, and inconsistent precision is rejected rather than silently narrowed or padded (docs/MODELING.md). A century is given by its first year as Wikibase counts centuries (the 19th as 1801), and a century given by any other year is refused.
 

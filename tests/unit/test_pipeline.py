@@ -1680,6 +1680,7 @@ class TestCorrections:
 # -- writer: cited artifacts resolve by media SHA-1 at write time (#102) ----
 
 PROPERTIES = {
+    **RecoveryWiki.PROCESS_PROPERTIES,
     "instance_of": "P1",
     "stated_in": "P2",
     "page_number": "P3",

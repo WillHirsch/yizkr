@@ -719,7 +719,16 @@ class TestTheKeptStateMarker:
         with pytest.raises(ValueError, match="Missing configuration"):
             instance_is_kept(empty)
 
-    def test_keeper_mode_marks_the_host_and_the_instance(self, stack_):
+    def test_keeper_mode_marks_the_host_and_the_instance(
+        self, stack_, monkeypatch
+    ):
+        from yizkr.pipeline import rundir
+
+        monkeypatch.setattr(
+            rundir,
+            "code_version",
+            lambda **kw: {"commit": "a" * 40, "dirty": False},
+        )
         assert host_kept_marker(CONFIG, stack_.records) is None
         mark_kept(stack_.client(), "keeper mode", root=stack_.records)
         said = host_kept_marker(CONFIG, stack_.records)
@@ -729,8 +738,16 @@ class TestTheKeptStateMarker:
         directory = stack_.records / HOST
         assert stat.S_IMODE(directory.stat().st_mode) == 0o700
 
-    def test_the_host_side_marker_is_written_first(self, stack_):
+    def test_the_host_side_marker_is_written_first(self, stack_, monkeypatch):
         """So a write to the instance that fails still leaves it marked."""
+
+        from yizkr.pipeline import rundir
+
+        monkeypatch.setattr(
+            rundir,
+            "code_version",
+            lambda **kw: {"commit": "a" * 40, "dirty": False},
+        )
 
         class Refusing(FakeClient):
             def edit_page(self, title, text, summary):

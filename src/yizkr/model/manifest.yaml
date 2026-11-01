@@ -562,6 +562,90 @@ properties:
     description: version-control commit hash of the pipeline software that performed the run
     datatype: string
 
+  run_stage:
+    label: process stage
+    description: stage of a recorded computation or graph application; qualifiers describe that stage's actual configuration
+    datatype: string
+    offered: false
+
+  process_kind:
+    label: process kind
+    description: role of an immutable process record, or computation method of a qualified stage
+    datatype: string
+    offered: false
+
+  model_effort:
+    label: model reasoning effort
+    description: reasoning effort applied by the model for the qualified process stage
+    datatype: string
+    offered: false
+
+  prompt_hash:
+    label: named prompt hash
+    description: prompt resource name and SHA-256, separated by a colon, for the qualified process stage
+    datatype: string
+    offered: false
+
+  stage_version:
+    label: process stage version
+    description: semantic implementation version of the qualified process stage
+    datatype: string
+    offered: false
+
+  process_started_at:
+    label: process start timestamp
+    description: observed process start as an ISO 8601 UTC timestamp, including its recorded subsecond precision
+    datatype: string
+    offered: false
+
+  process_ended_at:
+    label: process end timestamp
+    description: observed process end as an ISO 8601 UTC timestamp, including its recorded subsecond precision; absent until known
+    datatype: string
+    offered: false
+
+  cli_config_hash:
+    label: process configuration hash
+    description: SHA-256 of the recorded client or deterministic configuration for the qualified process stage
+    datatype: string
+    offered: false
+
+  provider_cli_version:
+    label: provider CLI version
+    description: version of the provider command-line client used by the recorded computation
+    datatype: string
+    offered: false
+
+  model_manifest_hash:
+    label: model manifest hash
+    description: SHA-256 of the model vocabulary manifest used by the recorded process; distinct from a run's settings hash
+    datatype: string
+    offered: false
+
+  software_dirty:
+    label: software working tree dirty
+    description: whether the recorded software had tracked modifications or relevant untracked code and resources, as true, false or unknown
+    datatype: string
+    offered: false
+
+  unratified_run:
+    label: unratified process
+    description: whether the recorded process belongs to an unratified development run, as true, false or unknown
+    datatype: string
+    offered: false
+
+  provenance_limitation:
+    label: process provenance limitation
+    description: explicit unavailable or incomplete process metadata; never an inferred configuration or historical assertion
+    datatype: string
+    offered: false
+
+  run_record_sha256:
+    label: process record SHA-256
+    description: reference to the immutable off-graph process record stored as sha256.json in the configured process-record directory
+    datatype: string
+    reference: true
+
   # --- artifacts as wiki media (ADR-0004 W1) ---
 
   media_file:

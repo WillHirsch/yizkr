@@ -1084,10 +1084,16 @@ def run_write(context: Any) -> list[str]:
             batch, left_out = batch_to_write(extracted)
             media = placed.get(doc.sha1) or {}
             try:
+                from yizkr.pipeline.run_provenance import records_from_detail
+                from yizkr.pipeline.rundir import _fixed_settings
+
                 result = BatchWriter(
                     client_of(context),
                     artifact_qids={doc.sha1: qids[doc.sha1], **media},
                     run_marks=marks,
+                    record_dir=context.run.path / "process-records",
+                    process_records=records_from_detail(doc.state.detail),
+                    run_settings=_fixed_settings(context.run.manifest()),
                 ).write_batch(
                     batch,
                     identity=identity,
@@ -1340,6 +1346,9 @@ def _propose(
         + "\n",
     )
     record.update(
+        producer_origin=found.producer.model_dump(mode="json")
+        if found.producer
+        else None,
         questions=len(work.questions),
         unnamed=work.unnamed,
         calls=len(found.responses),
@@ -1417,6 +1426,7 @@ def _counts(record: dict) -> dict:
 
 def run_places(context: Any) -> list[str]:
     """The place stage (the module docstring)."""
+    from yizkr.core.provenance import ProcessRecord
     from yizkr.pipeline import places as hierarchy
     from yizkr.pipeline.writer import BatchWriter
 
@@ -1473,13 +1483,21 @@ def run_places(context: Any) -> list[str]:
                 record["run_qid"] = hierarchy.ensure_places_run_item(
                     client,
                     target,
-                    place_model(context)["model"] or "engine-default",
+                    None,
+                    binding_model=place_model(context)["model"]
+                    or "engine-default",
                     description=PLACE_RUN_DESCRIPTION,
                     marks={
                         MARK_RUN: run_id,
                         MARK_MANIFEST: manifest_hash(context.run),
                         MARK_MAP: identity_map(context).hash,
                     },
+                    producer=(
+                        ProcessRecord.model_validate(record["producer_origin"])
+                        if record.get("producer_origin")
+                        else None
+                    ),
+                    record_dir=context.run.path / "process-records",
                 )
                 state = save_state(client, run_id, key, epoch)
                 record["revision"] = state["watermark"]["revision"]

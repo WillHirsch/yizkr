@@ -240,9 +240,21 @@ def read_media(
 ) -> MediaReadResult:
     """Read eligible media, borrowing a client only when vision is required."""
     from yizkr.core.corpus import DECK_SUFFIXES
+    from yizkr.pipeline.run_provenance import Capture
 
     artifact = _source(
         request.source, request.expected_artifact, request.excluded
+    )
+    capture = Capture(
+        "transcription",
+        "mixed",
+        document_kind=(
+            "presentation"
+            if request.source.suffix.lower() in DECK_SUFFIXES
+            else "pdf"
+            if is_pdf_input(request.source)
+            else "media"
+        ),
     )
     prepared = request.prepared
     if prepared is not None and (
@@ -333,6 +345,12 @@ def read_media(
                 for key in ("model_identifier", "config_hash")
                 if isinstance(value := getattr(borrowed, key, None), str)
             }
+        if transcription.provenance is None:
+            if borrowed is None:
+                capture.process = "deterministic"
+            transcription.provenance = capture.finish(
+                dependencies, client=borrowed
+            )
         return MediaReadResult(
             transcription, resolution, dependencies, products, prepared
         )

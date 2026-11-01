@@ -185,6 +185,7 @@ The current code has byte-addressed media, located source references, derivation
 | Shared semantic subject validation | [#717](https://github.com/WillHirsch/yizkr/issues/717) |
 | Matching-policy detail/calibration | [#66](https://github.com/WillHirsch/yizkr/issues/66) |
 | Item creation intents, instance-qualified receipts and interrupted creation recovery | Implemented; [recovery boundaries](ARCHITECTURE.md#item-creation-and-interrupted-write-recovery) |
+| Structured run metadata, preserved producer identity and retained-code admission | Implemented; [record storage, graph projection and limits](RUN_PROVENANCE.md) |
 | Assignment revisions, assertion-level provenance and verified identity migration | [#130](https://github.com/WillHirsch/yizkr/issues/130) |
 | First incremental text addition; reviewed split/reassignment | [#723](https://github.com/WillHirsch/yizkr/issues/723), [#142](https://github.com/WillHirsch/yizkr/issues/142) |
 | Cancellation; response/session ownership | [Cancellation has explicit bounds](ARCHITECTURE.md#cancellation-and-execution-ownership); [provider sessions have execution ownership](ARCHITECTURE.md#provider-conversation-ownership) separate from response storage, with the exclusive cache lock retained |

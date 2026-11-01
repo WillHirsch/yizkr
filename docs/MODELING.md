@@ -37,7 +37,7 @@ People, places, artifacts, events and periods can have independent identity wher
 - occupation (values of the `occupation` property; labels keep the source's wording)
 - unclassified entity (the open-schema holding class — see ADR-0013)
 - artifact fragment (a page, crop, or region of an artifact)
-- extraction run (one pipeline execution: model name+version, date, prompt/pipeline version, software commit)
+- extraction run (a bound write operation with recorded producing stages and application context; see [run provenance](RUN_PROVENANCE.md) for model/configuration/version facts and immutable record references)
 
 **Manifest descriptions are extraction-prompt surface**, not only documentation. Every property and item in `src/yizkr/model/manifest.yaml` carries a description, and the extractor is shown it verbatim beside the key: a property's description is what tells the model which way a relation points (`employer` takes the organization, not the employee) and what kind of entity the value must be (`location` takes a place). Write them for that reader as well as for a human.
 

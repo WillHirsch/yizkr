@@ -3,8 +3,8 @@ kept (ADR-0025 §1, §2 and §6).
 
 **The kept-state marker** is kept twice: as the page KEPT_STATE_PAGE on
 the instance itself, and as the file KEPT_FILE in the instance's record
-on the host. Keeper mode writes both (mark_kept) once the keeper run's
-write completes; from then on `yizkr scratch reset` refuses on the
+on the host. An authorized transition can write both (mark_kept) after
+its write completes; from then on `yizkr scratch reset` refuses on the
 instance if either says it is kept, and so does a scratch run's stage
 that touches the wiki (ADR-0025 §6). The page goes wherever the
 instance's database goes, into its backups and through a restore. The
@@ -337,8 +337,10 @@ def host_kept_marker(config: Config, root: Path | None = None) -> str | None:
 def mark_kept(client, by: str, *, root: Path | None = None) -> None:
     """Mark the instance `client` writes to as kept (the module
     docstring), the host-side record first, so that a failed write to the
-    instance still leaves it marked. Keeper mode calls this once the
-    keeper run's write completes (ADR-0025 §6)."""
+    instance still leaves it marked. Fresh code admission precedes both
+    mutations. The caller remains responsible for the authorized transition;
+    this helper does not implement a keeper ingestion workflow."""
+    require_clean_code()
     config = client.config
     path = kept_path(config, root)
     private_dir(path.parent)
@@ -362,6 +364,44 @@ def mark_kept(client, by: str, *, root: Path | None = None) -> None:
         "there.",
         summary="kept-state marker",
     )
+
+
+def require_clean_code() -> dict[str, Any]:
+    """Refuse retained operation without freshly observed committed code.
+
+    A run manifest describes when an invocation started. Admission observes
+    again, so edits made since then cannot inherit that snapshot's clean flag.
+    This guard does not authorize a retained workflow or its human decisions.
+    """
+    from yizkr.pipeline.rundir import code_version
+
+    code = code_version(fresh=True)
+    commit = code.get("commit")
+    if not isinstance(commit, str) or not re.fullmatch(
+        r"[0-9a-f]{40}|[0-9a-f]{64}", commit
+    ):
+        raise ValueError(
+            "retained operation requires a known full software commit"
+        )
+    if code.get("dirty") is not False:
+        raise ValueError("retained operation requires verified clean software")
+    return code
+
+
+def require_retained_code(
+    client, *, root: Path | None = None
+) -> dict[str, Any] | None:
+    """Check current code before writing a retained target.
+
+    Both kept-state markers are authoritative. An unreadable server marker
+    refuses admission; an absent marker leaves disposable development code
+    unrestricted. Scratch retains its stronger refusal of any kept target.
+    """
+    if host_kept_marker(
+        client.config, root
+    ) is not None or carries_kept_marker(client):
+        return require_clean_code()
+    return None
 
 
 def instance_is_kept(
