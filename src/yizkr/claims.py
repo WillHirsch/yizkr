@@ -113,6 +113,7 @@ from yizkr.core.dates import (
     calendar_problem,
     year_problem,
 )
+from yizkr.core.provenance import ProcessRecord
 from yizkr.model.schema import (
     DEFAULT_MANIFEST,
     Acceptance,
@@ -711,6 +712,14 @@ class ExtractionRunMetadata(StrictModel):
     pipeline_version: str = Field(min_length=1)
     software_commit: str | None = Field(default=None, min_length=4)
     started_at: datetime
+    provenance: SkipJsonSchema[ProcessRecord | None] = None
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_provenance(self, handler):
+        data = handler(self)
+        if self.provenance is None:
+            data.pop("provenance", None)
+        return data
 
     @field_validator("started_at")
     @classmethod

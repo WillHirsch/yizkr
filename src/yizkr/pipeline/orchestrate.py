@@ -262,6 +262,7 @@ BATCH_VOLATILE = (
     "extraction_run.software_commit",
     "extraction_run.model_identifier",
     "extraction_run.pipeline_version",
+    "extraction_run.provenance",
 )
 # the fields of a transcription that say what made it (the route and the
 # engine build, and each page's provenance), and the transcription
@@ -271,6 +272,7 @@ BATCH_VOLATILE = (
 # are content, as its text and its document class are (ADR-0037)
 TRANSCRIPTION_VOLATILE = (
     "engine",
+    "provenance",
     "pages.provenance",
     "flag",
     "input_representation",
@@ -2983,6 +2985,8 @@ class Orchestrator:
         its reviewed sheet approves (`approved`, made here when not given;
         _approved), through the run's identity map (_mapped)."""
         from yizkr.pipeline.review import is_bulk_accepted
+        from yizkr.pipeline.run_provenance import records_from_detail
+        from yizkr.pipeline.rundir import _fixed_settings
         from yizkr.pipeline.writer import BatchWriter
 
         if approved is None:
@@ -2998,6 +3002,9 @@ class Orchestrator:
             artifact_qids={doc.sha1: registered, **media}
             if registered
             else None,
+            record_dir=self.state_dir / "process-records",
+            process_records=records_from_detail(doc.state.detail),
+            run_settings=_fixed_settings(self.rundir.manifest()),
         ).write_batch(
             approved,
             bulk_accepted=is_bulk_accepted(doc.review_reviewed),

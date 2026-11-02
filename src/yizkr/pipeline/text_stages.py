@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from yizkr.claims import ArtifactRef, ClaimBatch
+from yizkr.core.provenance import ProcessRecord
 from yizkr.pipeline.chunking import (
     AUTO_CHUNK_THRESHOLD,
     DEFAULT_CHUNK_BUDGET,
@@ -25,6 +26,7 @@ from yizkr.pipeline.extract import ExtractionFailed
 from yizkr.pipeline.interpretation_context import InterpretationContext
 from yizkr.pipeline.language import LanguageResolution, resolve_language
 from yizkr.pipeline.llm import LlmClient
+from yizkr.pipeline.run_provenance import Capture
 from yizkr.pipeline.stages import (
     atomic_write_text,
     content_hash,
@@ -112,6 +114,10 @@ class TextReadResult:
     resolution: LanguageResolution
     dependencies: dict[str, Any]
 
+    @property
+    def provenance(self) -> ProcessRecord | None:
+        return self.transcription.provenance
+
 
 def read_text(request: TextReadRequest) -> TextReadResult:
     """Read supplied text, retaining the media's separate source identity.
@@ -121,6 +127,15 @@ def read_text(request: TextReadRequest) -> TextReadResult:
     """
     from yizkr.pipeline.transcribe import TextFileTranscriber
 
+    capture = Capture(
+        "transcription",
+        "manual" if request.correction else "deterministic",
+        configuration={
+            "language": request.language,
+            "fallback_language": request.fallback_language,
+            "correction": request.correction,
+        },
+    )
     if request.correction:
         text = request.text_file.read_text()
         resolution = resolve_language(
@@ -141,7 +156,7 @@ def read_text(request: TextReadRequest) -> TextReadResult:
         transcription = reader.transcribe(request.source)
         resolution = reader.last_resolution
         assert resolution is not None
-    return TextReadResult(
+    result = TextReadResult(
         transcription,
         resolution,
         {
@@ -154,6 +169,8 @@ def read_text(request: TextReadRequest) -> TextReadResult:
             },
         },
     )
+    transcription.provenance = capture.finish(result.dependencies)
+    return result
 
 
 @dataclass(frozen=True)
@@ -196,6 +213,10 @@ class ExtractionResult:
     artifacts: tuple[Path, ...]
     dependencies: dict[str, Any]
     incomplete_reasons: list[str] = field(default_factory=list)
+
+    @property
+    def provenance(self) -> ProcessRecord | None:
+        return self.batch.extraction_run.provenance if self.batch else None
 
     def require_complete(self) -> ClaimBatch:
         """Return an admissible proposal, never a diagnostic partial batch."""
@@ -356,6 +377,23 @@ def extract(
         and request.pointer is None
         and empty_container_reading(request.transcription)
     )
+    configuration = {"strategy": strategy}
+    if strategy == "chunked" and not empty_container:
+        configuration.update(
+            budget=request.budget,
+            retries=request.retries,
+            concurrency=max(1, request.concurrency),
+            read_preparation=request.read_preparation,
+        )
+    capture = (
+        Capture(
+            "extraction",
+            "deterministic" if empty_container else "model",
+            configuration=configuration,
+        )
+        if strategy != "file"
+        else None
+    )
     outputs = [request.diagnostic_dump]
     workspaces = []
     if strategy == "single" or empty_container:
@@ -373,7 +411,7 @@ def extract(
         "transcription_sha256": content_hash(
             request.transcription.model_dump(mode="json")
         ),
-        "configuration": {"strategy": strategy},
+        "configuration": configuration,
     }
     if request.context is not None:
         dependencies["interpretation_context_sha256"] = content_hash(
@@ -385,8 +423,15 @@ def extract(
                 "  no container-authored text: "
                 "empty batch prepared without a model call"
             )
-        return _extract_empty_container(request, dependencies)
-    configuration = dependencies["configuration"]
+        result = _extract_empty_container(request, dependencies)
+        assert capture is not None
+        _record_batch_producer(
+            result.require_complete(),
+            request.transcription,
+            capture,
+            dependencies,
+        )
+        return result
     if strategy == "file":
         from yizkr.pipeline.extract import ClaimFileExtractor
 
@@ -411,12 +456,6 @@ def extract(
         if strategy == "chunked":
             from yizkr.pipeline.chunking import ChunkedClaimExtractor
 
-            configuration.update(
-                budget=request.budget,
-                retries=request.retries,
-                concurrency=max(1, request.concurrency),
-                read_preparation=request.read_preparation,
-            )
             if request.read_preparation:
                 dependencies["pointer_sha256"] = (
                     sha256_text(request.pointer)
@@ -457,6 +496,10 @@ def extract(
             "re-run to retry them"
         )
     complete = not reasons
+    if complete and capture is not None:
+        _record_batch_producer(
+            batch, request.transcription, capture, dependencies, client=client
+        )
     attention = [
         *getattr(extractor, "attention", ()),
         *_context_attention(request.context),
@@ -505,6 +548,22 @@ def extract(
     )
 
 
+def _record_batch_producer(
+    batch, transcription, capture, dependencies, *, client=None
+):
+    """Record new production; imported products keep their producer."""
+    parents = (transcription.provenance,) if transcription.provenance else ()
+    record = capture.finish(
+        dependencies,
+        client=client,
+        parents=parents,
+        limitations=() if parents else ("input reading producer unavailable",),
+    )
+    batch.extraction_run = batch.extraction_run.model_copy(
+        update={"provenance": record}
+    )
+
+
 @dataclass(frozen=True)
 class CritiqueRequest:
     batch: ClaimBatch
@@ -520,12 +579,14 @@ class CritiqueResult:
     incomplete_reasons: list[str]
     dependencies: dict[str, Any]
     artifacts: tuple[Path, ...] = ()
+    provenance: ProcessRecord | None = None
 
 
 def critique(request: CritiqueRequest, client: LlmClient) -> CritiqueResult:
     """Return advisory findings, preserving an unfinished critic's status."""
     from yizkr.pipeline.critique import run_critique
 
+    capture = Capture("critique", "model")
     attention = _context_attention(request.context)
     incomplete: list[str] = []
     findings = run_critique(
@@ -539,7 +600,7 @@ def critique(request: CritiqueRequest, client: LlmClient) -> CritiqueResult:
     attention.extend(
         reason for reason in incomplete if reason not in attention
     )
-    return CritiqueResult(
+    result = CritiqueResult(
         findings=findings,
         status="incomplete" if incomplete else "complete",
         attention=attention,
@@ -563,3 +624,16 @@ def critique(request: CritiqueRequest, client: LlmClient) -> CritiqueResult:
             ),
         },
     )
+    if result.status != "complete":
+        return result
+    from dataclasses import replace
+
+    parent = request.batch.extraction_run.provenance
+    record = capture.finish(
+        result.dependencies,
+        client=client,
+        parents=(parent,) if parent else (),
+        limitations=() if parent else ("batch producer unavailable",),
+    )
+    result.dependencies["provenance"] = record.model_dump(mode="json")
+    return replace(result, provenance=record)

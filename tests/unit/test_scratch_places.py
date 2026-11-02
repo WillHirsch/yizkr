@@ -1277,6 +1277,108 @@ class TestGuard:
 
 
 class TestPauses:
+    @pytest.mark.parametrize("has_producer", [True, False])
+    def test_old_creation_binding_survives_missing_local_run_item_receipt(
+        self, run, monkeypatch, has_producer
+    ):
+        from yizkr.core.write_recovery import CreationRegistry
+        from yizkr.pipeline.registrar import ensure_self_typed
+
+        run.past_the_barrier(until="write")
+        run.engine.model_identifier = f"fictional-client/{MODEL}"
+        assert (
+            run.engine.model_identifier
+            != scratchwrite.place_model(run.context("places"))["model"]
+        )
+        ensure = places.ensure_places_run_item
+        save = scratchwrite.save_record
+
+        def legacy_create(client, fingerprint, _model, **options):
+            # The prior writer keyed creation by configured model, while its
+            # run item carried only kind and scratch marks. This is the real
+            # registry API and creation evidence, not a term-based fixture.
+            configured = (
+                scratchwrite.place_model(run.context("places"))["model"]
+                or "engine-default"
+            )
+            operation = {
+                "kind": "place-hierarchy-run",
+                "fingerprint": fingerprint,
+                "model": configured,
+                "marks": options["marks"],
+            }
+            registry = CreationRegistry(client)
+            item = client.wbi.item.new()
+            item.labels.set(
+                "en", f"place-hierarchy run {configured} {fingerprint[:10]}"
+            )
+            item.descriptions.set("en", options["description"])
+            binding = registry.create(
+                operation, item, summary="reconcile-places: run item"
+            )
+            ensure_self_typed(
+                client,
+                binding.qid,
+                "extraction_run",
+                summary="reconcile-places: run item statements",
+                marks=options["marks"],
+            )
+            return binding.qid
+
+        def interrupt_receipt(directory, record):
+            if directory.name == "places":
+                if record.get("run_qid"):
+                    # The driver already recorded the current instance
+                    # watermark. Preserve that guard while losing only the
+                    # local run-item receipt, as an interrupted publication.
+                    raise RuntimeError("fictional local receipt interruption")
+                if not has_producer:
+                    record = {
+                        key: value
+                        for key, value in record.items()
+                        if key != "producer_origin"
+                    }
+            return save(directory, record)
+
+        monkeypatch.setattr(places, "ensure_places_run_item", legacy_create)
+        monkeypatch.setattr(scratchwrite, "save_record", interrupt_receipt)
+        with pytest.raises(RuntimeError, match="local receipt interruption"):
+            run.stage("places")
+        (original,) = place_run_items(run.wiki)
+        pending = run.record("places")
+        assert "run_qid" not in pending
+        assert bool(pending.get("producer_origin")) is has_producer
+        assert pending["outcomes"] == {}
+
+        monkeypatch.setattr(places, "ensure_places_run_item", ensure)
+        monkeypatch.setattr(scratchwrite, "save_record", save)
+        monkeypatch.setattr(
+            scratchwrite,
+            "place_client",
+            lambda *_: pytest.fail(
+                "the saved proposal must not borrow another model"
+            ),
+        )
+        run.stage("places")
+        completed = run.record("places")
+        assert completed["run_qid"] == original
+        assert place_run_items(run.wiki) == [original]
+        assert completed["counts"]["written"] == 3
+        assert len(run.engine.prompts) == 1
+        properties, _ = run.wiki.vocabulary()
+        models = [
+            qualifier["datavalue"]["value"]
+            for statement in run.wiki.entities[original]["claims"][
+                properties["run_stage"]
+            ]
+            for qualifier in statement.get("qualifiers", {}).get(
+                properties["model_identifier"], []
+            )
+        ]
+        assert models == (
+            [run.engine.model_identifier] if has_producer else []
+        )
+
     def test_a_subscription_limit_pauses_it_with_nothing_written(self, run):
         run.past_the_barrier(until="write")
         writes = run.wiki.writes

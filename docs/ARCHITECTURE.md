@@ -70,6 +70,8 @@ Extraction and GEDCOM record births and deaths as statements on the person, incl
 
 Implementation: [claim contract](../src/yizkr/claims.py), [writer](../src/yizkr/pipeline/writer.py) and [modeling conventions](MODELING.md).
 
+[Run provenance](RUN_PROVENANCE.md) describes the structured stage metadata on run items and their immutable off-graph records. Recorded producer identity survives saved-product and place-review reuse; current write preparation and human review remain distinct. The run's existing creation binding is preserved when metadata is enriched.
+
 ## Reviewed ingestion
 
 The [ingestion overview and preparation detail](../src/yizkr/pipeline/README.md#the-ingest-loop-one-command-two-gates-repeat) show how `yizkr ingest run` advances documents through transcription, extraction, identity review where proposals exist, claim review and writing. Saving a reviewed CSV and rerunning the same command advances the workflow. Registration occurs at write time; the current document stages before write do not access the wiki.

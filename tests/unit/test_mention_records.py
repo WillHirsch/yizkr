@@ -613,6 +613,7 @@ class TestReferenceProperties:
         "judgement_note",
         "printed_page_number",
         "source_part_locator",
+        "run_record_sha256",
     }
 
     def test_the_manifest_marks_them(self, manifest):
@@ -1135,26 +1136,39 @@ class TestMoreParts:
 
 
 class TestRecordsAreNeverWritten:
-    """ADR-0035 §2.6: a record is extraction's reading, never an
-    assertion, so nothing the writer sends depends on it."""
+    """A mention record is an interpretation, not a historical assertion.
 
-    def test_a_record_changes_nothing_the_writer_sends(self):
+    Process provenance identifies the input batch, including its records.
+    """
+
+    def test_a_record_changes_no_historical_entity_writes(self, tmp_path):
         from tests.unit.test_pipeline import TREE_SHA1, FakeWiki, _tree_batch
         from yizkr.claims import GivenName, Surname
         from yizkr.pipeline.writer import BatchWriter
 
-        def sent(batch):
-            """What the writer sends, but the run item's label, which ends
-            in a fingerprint of the whole batch, the record included."""
+        def sent(batch, directory):
+            """Complete historical writes, alongside their input provenance."""
             wiki = FakeWiki({TREE_SHA1: "Q29"}, detached=True)
-            write_mapped(BatchWriter(wiki), batch)
-            items = []
-            for item in wiki.wbi.item.sent:
-                label = item["labels"]["en"]["value"]
-                if label.startswith("extraction run "):
-                    label = label.rsplit(" ", 1)[0]
-                items.append(dict(item, labels={"en": label}))
-            return items
+            result = write_mapped(
+                BatchWriter(wiki, record_dir=directory), batch
+            )
+            assert result.written == len(batch.claims) == 1
+            items = [
+                item
+                for item in wiki.wbi.item.sent
+                if item["id"] != result.run_qid
+            ]
+            assert items
+            process = [
+                json.loads(path.read_text())
+                for path in directory.glob("*.json")
+            ]
+            (application,) = [
+                record
+                for record in process
+                if record["kind"] == "batch-write-context"
+            ]
+            return items, application["metadata"]["batch_sha256"]
 
         plain = _tree_batch()
         sebastian = PersonStructure(
@@ -1171,7 +1185,10 @@ class TestRecordsAreNeverWritten:
             }
         )
         assert recorded.entities[0].structure is not None
-        assert sent(recorded) == sent(plain)
+        recorded_writes, recorded_input = sent(recorded, tmp_path / "recorded")
+        plain_writes, plain_input = sent(plain, tmp_path / "plain")
+        assert recorded_writes == plain_writes
+        assert recorded_input != plain_input
 
 
 class TestSettingAside:

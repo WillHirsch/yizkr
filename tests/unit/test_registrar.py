@@ -267,6 +267,7 @@ class FakeWiki(RecoveryWiki):
     fails before anything is stored; `reads` counts the enumerations."""
 
     PROPERTIES = {
+        **RecoveryWiki.PROCESS_PROPERTIES,
         "instance_of": "P1",
         "stated_in": "P2",
         "part_of": "P3",
@@ -398,6 +399,8 @@ class FakeWiki(RecoveryWiki):
         return page
 
     def api_get(self, params):
+        if params.get("prop") == "info":
+            return super().api_get(params)
         current = self.media.current()
         if params.get("list") == "allimages":
             # every file whose current bytes have the SHA-1 asked for

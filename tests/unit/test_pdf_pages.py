@@ -31,6 +31,7 @@ from tests.unit.test_llmcache import (
     pipeline_answers,
 )
 from tests.unit.test_orchestrate import ScriptedOrchestrator, quiet, this_run
+from tests.unit.test_run_provenance import fixed_capture  # noqa: F401
 from tests.unit.test_scratch import TEXT, Corpus, a_run, fakes  # noqa: F401
 from tests.unit.test_scratch_estimate import (  # noqa: F401
     Quiet,
@@ -2346,9 +2347,13 @@ class TestKeys:
             tmp_path, **{name: make() for name, make in self.CORPUS.items()}
         )
 
+    @pytest.mark.usefixtures("fixed_capture")
     def test_only_pdfs_read_page_by_page_are_made_again(
         self, tmp_path, monkeypatch
     ):
+        # Independent stage executions have separate timings even when the
+        # provider response is cached. Hold clock/code observations fixed so
+        # full serialized provenance remains part of the equality check.
         corpus = self.corpus(tmp_path)
         cache = tmp_path / "cache"
         with monkeypatch.context() as patch:

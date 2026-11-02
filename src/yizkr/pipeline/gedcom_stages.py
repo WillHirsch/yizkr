@@ -13,6 +13,7 @@ from typing import Any, Literal
 
 from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.pipeline.gedcom import ADAPTER_IDENTIFIER, adapt_gedcom
+from yizkr.pipeline.run_provenance import Capture
 from yizkr.pipeline.stages import sha256_text
 
 
@@ -44,6 +45,12 @@ def derive_gedcom(request: GedcomRequest) -> GedcomResult:
     Source changes, decoding, parsing and validation errors propagate without
     producing an accepted result or publishing any file. No model is called.
     """
+    capture = Capture(
+        "gedcom",
+        "deterministic",
+        document_kind="gedcom",
+        configuration={"adapter": ADAPTER_IDENTIFIER, "encoding": "utf-8"},
+    )
     contents = request.source.read_bytes()
     artifact = ArtifactRef.from_bytes(contents)
     if (
@@ -53,7 +60,7 @@ def derive_gedcom(request: GedcomRequest) -> GedcomResult:
         raise ValueError("the GEDCOM source no longer matches its artifact")
     text = contents.decode("utf-8")
     adapted = adapt_gedcom(text, artifact)
-    return GedcomResult(
+    result = GedcomResult(
         batch=adapted.batch,
         warnings=adapted.warnings,
         unsupported_tags=adapted.unsupported_tags,
@@ -67,3 +74,10 @@ def derive_gedcom(request: GedcomRequest) -> GedcomResult:
             },
         },
     )
+    record = capture.finish(
+        result.dependencies, semantic_version=ADAPTER_IDENTIFIER
+    )
+    result.batch.extraction_run = result.batch.extraction_run.model_copy(
+        update={"provenance": record}
+    )
+    return result

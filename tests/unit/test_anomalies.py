@@ -37,6 +37,7 @@ from tests.fixtures import example_universe as u
 from tests.fixtures.real_time import real_time_uses
 from tests.fixtures.records import record_answer
 from tests.unit.conftest import RecordedTimer
+from tests.unit.test_run_provenance import fixed_capture  # noqa: F401
 from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.core.corpus import ExclusionList
 from yizkr.pipeline import anomalies, rundir, transcription_check
@@ -3672,9 +3673,12 @@ class TestTheOrchestrator:
         assert done == ["transcription", "extraction", "critique"]
         assert len(timers.started) == 1
 
+    @pytest.mark.usefixtures("fixed_capture")
     def test_no_alert_changes_what_the_stages_make(
         self, tmp_path, monkeypatch
     ):
+        # Both executions observe the same producer clock and code. The
+        # comparison below still includes every byte of their provenance.
         everything = tmp_path / "everything.yaml"
         everything.write_text(
             yaml.safe_dump(

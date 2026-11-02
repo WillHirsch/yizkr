@@ -14,6 +14,7 @@ Start here:
 - [Ingestion and identity contracts](docs/INGESTION_CONTRACT.md) – source ownership, durable assignments, review, stage products and recovery boundaries for implementation
 - [Architecture and workflow diagrams](docs/ARCHITECTURE.md) – Mermaid overviews of the implemented services, provenance, ingestion, scratch runs, cache, face review and exploration, with subsystem details
 - [Scratch-run stages and data products](docs/SCRATCH_WORKFLOW.md) – detailed input/output contracts and process types for every stage
+- [Run provenance](docs/RUN_PROVENANCE.md) – structured stage metadata, immutable producer records and retained-code admission
 - `docs/adr/` – focused design guidance and rationale; remaining historical material is marked with open removal tasks and is not an authority for new policy
 - `docs/MODELING.md` – Wikibase modeling conventions
 - `docs/EXAMPLES.md` – the one fictional example universe every example comes from

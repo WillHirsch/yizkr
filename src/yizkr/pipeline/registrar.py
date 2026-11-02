@@ -652,6 +652,9 @@ def ensure_self_typed(
     if dry_run:
         registry.check_generation()
     if not dry_run:
+        from yizkr.core.instance import require_retained_code
+
+        require_retained_code(client)
         registry.ensure_generation()
         for claim in missing:
             _append(item, claim)
@@ -1141,6 +1144,9 @@ class Registrar:
                 f"unknown artifact type {artifact_type!r}; expected a "
                 f"manifest item key such as photograph or certificate"
             )
+        from yizkr.core.instance import require_retained_code
+
+        require_retained_code(self.client)
         instance_of = properties["instance_of"]
         stated_in = properties["stated_in"]
         media_file = properties["media_file"]
@@ -1537,6 +1543,9 @@ class Registrar:
         """
         if not record.media:
             return {}
+        from yizkr.core.instance import require_retained_code
+
+        require_retained_code(self.client)
         instance = self._read()
         container = instance.source(record.source_sha1)
         if container is None:

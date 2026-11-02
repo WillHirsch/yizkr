@@ -454,8 +454,9 @@ import json
 import re
 import unicodedata
 from collections import Counter
-from collections.abc import Callable, Collection, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from yizkr.claims import (
@@ -487,6 +488,7 @@ from yizkr.claims import (
     vital_problems,
 )
 from yizkr.core.dates import UnsupportedDate
+from yizkr.core.provenance import ProcessRecord
 from yizkr.core.wiki import ItemLabels, WikiClient
 from yizkr.core.write_recovery import (
     CreationRefused,
@@ -854,8 +856,18 @@ class WriteResult:
 
 
 def batch_fingerprint(batch: ClaimBatch) -> str:
-    canonical = json.dumps(batch.model_dump(mode="json"), sort_keys=True)
+    canonical = _run_batch_json(batch)
     return hashlib.sha256(canonical.encode()).hexdigest()[:10]
+
+
+def _run_batch_json(batch: ClaimBatch) -> str:
+    """The existing run binding key, independent of provenance enrichment."""
+    return json.dumps(
+        batch.model_dump(
+            mode="json", exclude={"extraction_run": {"provenance"}}
+        ),
+        sort_keys=True,
+    )
 
 
 def normalized_type_hint(text: str) -> str:
@@ -2011,17 +2023,31 @@ class BatchWriter:
         dry_run: bool = False,
         artifact_qids: Mapping[str, str] | None = None,
         run_marks: Mapping[str, str] | None = None,
+        *,
+        record_dir: Path | None = None,
+        process_records: Sequence[ProcessRecord] = (),
+        run_settings: Mapping | None = None,
     ) -> None:
         """`artifact_qids` maps media SHA-1 to artifact QID for artifacts
         the caller has just registered. A cited SHA-1 it does not hold is
         looked up in the instance's `media SHA-1` index. `run_marks` gives
         string statements, by property key, that each run item the writer
         makes or finds states of itself (step 1 of the module
-        docstring)."""
+        docstring). `record_dir` stores immutable process records;
+        `process_records` supplies completed stages without a batch product,
+        such as critique. `run_settings` records the caller's fixed run
+        configuration without changing its creation binding."""
         self.client = client
         self.dry_run = dry_run
         self._creation_registry = CreationRegistry(client)
         self.run_marks = dict(run_marks or {})
+        from yizkr.pipeline.run_provenance import DEFAULT_RECORD_DIR
+
+        self.record_dir = (
+            record_dir if record_dir is not None else DEFAULT_RECORD_DIR
+        )
+        self.process_records = tuple(process_records)
+        self.run_settings = dict(run_settings or {})
         self.properties, self.items = client.vocabulary()
         self._entity_cache: dict[str, object] = {}
         # entity manifest of the batch being written (ADR-0007):
@@ -3088,7 +3114,13 @@ class BatchWriter:
         self, batch: ClaimBatch, identity_hash: str = ""
     ) -> str:
         label, description = _run_terms(batch, identity_hash)
+        from yizkr.core.instance import require_retained_code
         from yizkr.pipeline.registrar import ensure_self_typed
+        from yizkr.pipeline.run_statements import ensure_run_statements
+
+        if not self.dry_run:
+            require_retained_code(self.client)
+        record, reference = self._prepare_run_provenance(batch, identity_hash)
 
         operation = self._run_operation(batch, identity_hash)
         binding = self._run_binding(batch, identity_hash)
@@ -3106,6 +3138,13 @@ class BatchWriter:
                 summary="ingest: run item statements",
                 dry_run=self.dry_run,
                 marks=self.run_marks,
+            )
+            ensure_run_statements(
+                self.client,
+                existing,
+                record,
+                reference.sha256,
+                dry_run=self.dry_run,
             )
             return existing
         if self.dry_run:
@@ -3127,10 +3166,82 @@ class BatchWriter:
             summary="ingest: run item statements",
             marks=self.run_marks,
         )
+        ensure_run_statements(
+            self.client, binding.qid, record, reference.sha256
+        )
         return binding.qid
 
+    def _prepare_run_provenance(self, batch: ClaimBatch, identity_hash: str):
+        from yizkr.core.provenance import RecordRef
+        from yizkr.pipeline.run_provenance import (
+            application_record,
+            freeze_record,
+            legacy_record,
+            record_digest,
+        )
+        from yizkr.pipeline.run_statements import validate_run_statements
+
+        producer = batch.extraction_run.provenance or legacy_record(
+            batch.extraction_run
+        )
+        producers = (producer, *self.process_records)
+        producer_refs = tuple(
+            dict.fromkeys(
+                RecordRef(sha256=record_digest(origin)) for origin in producers
+            )
+        )
+        record = application_record(
+            producers,
+            kind="batch-write-context",
+            stage="write-preparation",
+            metadata={
+                "batch_sha256": hashlib.sha256(
+                    _run_batch_json(batch).encode()
+                ).hexdigest(),
+                "identity_map_hash": identity_hash
+                or self.run_marks.get("identity_map_hash"),
+                "run_marks": self.run_marks,
+                "run_settings": self.run_settings,
+            },
+            configuration={
+                "run_marks": self.run_marks,
+                "run_settings": self.run_settings,
+            },
+        ).model_copy(
+            update={
+                "producer_refs": producer_refs,
+                "scratch_id": self.run_marks.get("scratch_run"),
+                "run_manifest_hash": self.run_marks.get("run_manifest_hash")
+                or (
+                    hashlib.sha256(
+                        json.dumps(
+                            self.run_settings,
+                            sort_keys=True,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ).encode()
+                    ).hexdigest()
+                    if self.run_settings
+                    else None
+                ),
+                "unratified": True
+                if self.run_marks.get("scratch_run")
+                else None,
+            }
+        )
+        validate_run_statements(self.client, record)
+        if not self.dry_run:
+            for origin in producers:
+                freeze_record(self.record_dir, origin)
+        reference = (
+            RecordRef(sha256=record_digest(record))
+            if self.dry_run
+            else freeze_record(self.record_dir, record)
+        )
+        return record, reference
+
     def _run_operation(self, batch: ClaimBatch, identity_hash: str) -> dict:
-        canonical = json.dumps(batch.model_dump(mode="json"), sort_keys=True)
+        canonical = _run_batch_json(batch)
         return {
             "kind": "extraction-run",
             "map": identity_hash,
@@ -3934,6 +4045,11 @@ class BatchWriter:
         for placement in self._placements.values():
             self._cluster_item(placement)
         self._run_binding(batch, self._identity_hash)
+        if not self.dry_run:
+            from yizkr.core.instance import require_retained_code
+
+            require_retained_code(self.client)
+        self._prepare_run_provenance(batch, self._identity_hash)
         if self.dry_run:
             self._creation_registry.check_generation()
         else:

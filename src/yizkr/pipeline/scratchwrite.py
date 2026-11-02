@@ -1084,10 +1084,16 @@ def run_write(context: Any) -> list[str]:
             batch, left_out = batch_to_write(extracted)
             media = placed.get(doc.sha1) or {}
             try:
+                from yizkr.pipeline.run_provenance import records_from_detail
+                from yizkr.pipeline.rundir import _fixed_settings
+
                 result = BatchWriter(
                     client_of(context),
                     artifact_qids={doc.sha1: qids[doc.sha1], **media},
                     run_marks=marks,
+                    record_dir=context.run.path / "process-records",
+                    process_records=records_from_detail(doc.state.detail),
+                    run_settings=_fixed_settings(context.run.manifest()),
                 ).write_batch(
                     batch,
                     identity=identity,
@@ -1340,6 +1346,9 @@ def _propose(
         + "\n",
     )
     record.update(
+        producer_origin=found.producer.model_dump(mode="json")
+        if found.producer
+        else None,
         questions=len(work.questions),
         unnamed=work.unnamed,
         calls=len(found.responses),
@@ -1452,9 +1461,15 @@ def run_places(context: Any) -> list[str]:
             )
             return ["the write is not complete: no place was reconciled"]
         record = _place_record(context, target, epoch)
+        producer = hierarchy.validate_place_producer(
+            record.get("producer_origin")
+        )
         record["run_id"] = run_id
         if "planned" not in record:
             _propose(context, target, epoch, written, record)
+            producer = hierarchy.validate_place_producer(
+                record.get("producer_origin")
+            )
         artifacts = registered.get("documents") or {}
         client = client_of(context)
         writer = BatchWriter(client)
@@ -1473,13 +1488,17 @@ def run_places(context: Any) -> list[str]:
                 record["run_qid"] = hierarchy.ensure_places_run_item(
                     client,
                     target,
-                    place_model(context)["model"] or "engine-default",
+                    None,
+                    binding_model=place_model(context)["model"]
+                    or "engine-default",
                     description=PLACE_RUN_DESCRIPTION,
                     marks={
                         MARK_RUN: run_id,
                         MARK_MANIFEST: manifest_hash(context.run),
                         MARK_MAP: identity_map(context).hash,
                     },
+                    producer=producer,
+                    record_dir=context.run.path / "process-records",
                 )
                 state = save_state(client, run_id, key, epoch)
                 record["revision"] = state["watermark"]["revision"]

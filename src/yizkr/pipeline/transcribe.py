@@ -127,9 +127,11 @@ from pydantic import (
     model_serializer,
     model_validator,
 )
+from pydantic.json_schema import SkipJsonSchema
 
 from yizkr.claims import ArtifactRef, SourceSupport
 from yizkr.core.corpus import DECK_SUFFIXES
+from yizkr.core.provenance import ProcessRecord
 from yizkr.pipeline.language import (
     LanguageResolution,
     record_language,
@@ -331,6 +333,7 @@ class Transcription(BaseModel):
     input_representation: Literal["rendered-pdf-v1"] | None = None
     source_context: SourceContext | None = None
     reading_input: ArtifactRef | None = None
+    provenance: SkipJsonSchema[ProcessRecord | None] = None
     # what a page-by-page reading made beside the transcription, for its
     # caller to keep (PagedReading); never part of the view
     _reading: Any = PrivateAttr(default=None)
@@ -363,6 +366,7 @@ class Transcription(BaseModel):
             "input_representation",
             "source_context",
             "reading_input",
+            "provenance",
         ):
             if getattr(self, name) is None:
                 data.pop(name, None)
@@ -514,6 +518,7 @@ def reading_digest(transcription: Transcription) -> str:
             "flag",
             "input_representation",
             "reading_input",
+            "provenance",
         },
     )
     for page in value.get("pages", []):
@@ -700,7 +705,42 @@ class LlmVisionTranscriber(_CheckedTranscriber):
         refusing an archive (`refuse_archive`) before its pages are
         counted."""
         refuse_archive(media_path)
-        return super().transcribe(media_path)
+        from yizkr.pipeline.run_provenance import Capture
+        from yizkr.pipeline.textlayer import is_pdf_input
+
+        capture = Capture(
+            "transcription",
+            "model",
+            document_kind=("pdf" if is_pdf_input(media_path) else "media"),
+            configuration={
+                "route": "vision",
+                "language": self.language,
+                "fallback_language": self.fallback_language,
+            },
+        )
+        result = super().transcribe(media_path)
+        adopted = getattr(self._response, "made_by", None)
+        dependencies = {
+            "source_sha1": result.artifact.sha1,
+            "configuration": {
+                "route": "vision",
+                "language": self.language,
+                "fallback_language": self.fallback_language,
+            },
+        }
+        if adopted:
+            capture.process = "deterministic"
+            dependencies["adopted_producer_identifier"] = adopted
+        result.provenance = capture.finish(
+            dependencies,
+            client=None if adopted else self.client,
+            limitations=(
+                "archived response has no complete producer metadata",
+            )
+            if adopted
+            else (),
+        )
+        return result
 
     def _reject(self, failed: TranscriptionCheckFailed) -> bool:
         """Reject the answer through the client, so that a client that

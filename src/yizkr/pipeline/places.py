@@ -89,6 +89,11 @@ from yizkr.claims import (
 )
 from yizkr.core import verbatim
 from yizkr.core.config import Config
+from yizkr.core.provenance import (
+    ProcessRecord,
+    RecordRef,
+    StageProvenance,
+)
 from yizkr.core.wiki import WikiClient
 from yizkr.core.write_recovery import (
     CreationRefused,
@@ -127,6 +132,7 @@ CSV_FIELDS = [
     "decision",
     "chain",
     "container",
+    "producer_origin",
 ]
 # the verdict of a row whose answer names a candidate: the container is
 # that place
@@ -869,6 +875,7 @@ class Adjudication:
     rejected: int = 0
     conflicts: list[Question] = field(default_factory=list)
     responses: list[str] = field(default_factory=list)
+    producer: ProcessRecord | None = None
 
 
 def adjudicate(
@@ -882,8 +889,19 @@ def adjudicate(
     each batch one call (adjudication_prompt). `progress`, when given, is
     told the batches answered and the batches there are: before the
     first, and after each."""
+    from yizkr.pipeline.run_provenance import Capture
+
+    capture = Capture(
+        "places",
+        "model",
+        processing=_place_processing(),
+        prompt_templates={
+            "pipeline.places.ADJUDICATION_PROMPT": ADJUDICATION_PROMPT
+        },
+    )
     names = place_names(places)
     found = Adjudication()
+    request_hashes = []
     batches = [
         questions[start : start + batch_questions]
         for start in range(0, len(questions), batch_questions)
@@ -897,6 +915,7 @@ def adjudicate(
         progress(0, len(batches))
     for index, chunk in enumerate(batches, start=1):
         prompt = adjudication_prompt(chunk, names)
+        request_hashes.append(hashlib.sha256(prompt.encode()).hexdigest())
         response = client.complete(prompt)
         try:
             parsed = parse_answers(
@@ -927,6 +946,11 @@ def adjudicate(
         found.conflicts.extend(parsed.conflicts)
         if progress is not None:
             progress(index, len(batches))
+    if batches:
+        found.producer = capture.finish(
+            {"request_hashes": request_hashes},
+            client=client,
+        )
     return found
 
 
@@ -1198,6 +1222,11 @@ def export_places_csv(
                         list(question.chain), ensure_ascii=False
                     ),
                     "container": question.index + 1,
+                    "producer_origin": (
+                        adjudication.producer.model_dump_json()
+                        if adjudication.producer
+                        else ""
+                    ),
                 }
             )
     return len(adjudication.answers)
@@ -1234,13 +1263,135 @@ RUN_DESCRIPTION = (
 )
 
 
+def _place_processing() -> dict:
+    root = Path(__file__).resolve().parent.parent
+    resources = {
+        name: hashlib.sha256((root / name).read_bytes()).hexdigest()
+        for name in (
+            "pipeline/places.py",
+            "pipeline/prompts/place-adjudication.md",
+            "model/manifest.yaml",
+        )
+    }
+    return {"resources": resources}
+
+
+def validate_place_producer(value) -> ProcessRecord | None:
+    """Accept absent legacy facts; refuse malformed or unrelated origins."""
+    if value is None:
+        return None
+    if isinstance(value, ProcessRecord):
+        value = value.model_dump(mode="json")
+    origin = ProcessRecord.model_validate(value)
+    if origin.kind != "producer" or not any(
+        stage.stage == "places" for stage in origin.stages
+    ):
+        raise ValueError("place origin does not describe its proposer")
+    _proposer_model(origin)
+    return origin
+
+
+def read_producer_origin(rows: list[dict]) -> ProcessRecord | None:
+    """Read portable producer evidence; blank legacy sheets remain unknown."""
+    origins = []
+    for row in rows:
+        value = row.get("producer_origin", "")
+        if not isinstance(value, str):
+            raise ValueError("place review has malformed producer origin")
+        origin = validate_place_producer(
+            ProcessRecord.model_validate_json(value) if value.strip() else None
+        )
+        origins.append(origin)
+    if origins and any(origin != origins[0] for origin in origins[1:]):
+        raise ValueError("place review mixes producer origins")
+    return origins[0] if origins else None
+
+
+def _proposer_model(producer: ProcessRecord | None) -> str | None:
+    if producer is None:
+        return None
+    models = {
+        stage.model_identifier or stage.model
+        for stage in producer.stages
+        if stage.stage == "places"
+    } - {None}
+    if len(models) > 1:
+        raise ValueError("place review names multiple proposing models")
+    return next(iter(models), None)
+
+
+def place_write_context(
+    fingerprint: str,
+    producer: ProcessRecord | None,
+    *,
+    model: str | None = None,
+    marks: dict[str, str] | None = None,
+) -> ProcessRecord:
+    """An idempotent application snapshot, distinct from proposal production.
+
+    No completion time is asserted for graph effects that have not happened.
+    Legacy model strings carry only their stated identity, never inferred code,
+    effort, configuration or dates. Human review is not a model identity.
+    """
+    from yizkr.pipeline.run_provenance import application_record, record_digest
+
+    producer = validate_place_producer(producer)
+    producers = [producer] if producer else []
+    if not producer and model and model != "curator-reviewed":
+        producers.append(
+            ProcessRecord(
+                kind="legacy-producer",
+                stages=(
+                    StageProvenance(
+                        stage="places",
+                        process="model",
+                        model_identifier=model,
+                    ),
+                ),
+                limitations=(
+                    "legacy caller supplied only a model identifier",
+                ),
+            )
+        )
+    context = application_record(
+        producers,
+        kind="places-write-context",
+        stage="places-write-preparation",
+        metadata={
+            "reviewed_product_sha256": fingerprint,
+            "marks": marks or {},
+            "identity_map_hash": (marks or {}).get("identity_map_hash"),
+        },
+        configuration={"reviewed_product_sha256": fingerprint},
+    )
+    if producer:
+        context = context.model_copy(
+            update={
+                "producer_refs": (RecordRef(sha256=record_digest(producer)),)
+            }
+        )
+    if marks:
+        context = context.model_copy(
+            update={
+                "scratch_id": marks.get("scratch_run"),
+                "unratified": True if marks.get("scratch_run") else None,
+                "run_manifest_hash": marks.get("run_manifest_hash"),
+            }
+        )
+    return context
+
+
 def ensure_places_run_item(
     client: WikiClient,
     fingerprint: str,
-    model: str,
+    model: str | None = None,
     *,
     description: str = RUN_DESCRIPTION,
     marks: dict[str, str] | None = None,
+    binding_model: str | None = None,
+    producer: ProcessRecord | None = None,
+    application: ProcessRecord | None = None,
+    record_dir: Path | None = None,
 ) -> str:
     """The pass's run item, recovered through its durable creation binding
     for the full fingerprint, NFC model identifier and run marks. Model
@@ -1259,15 +1410,41 @@ def ensure_places_run_item(
     no binding requires verified migration rather than term-based adoption.
     `description` is the description a new item takes, and `marks` the
     string statements it states of itself (registrar.ensure_self_typed),
-    as a scratch run's place stage marks its run item."""
+    as a scratch run's place stage marks its run item. `binding_model` keeps
+    an existing creation-operation key; it never supplies producer facts.
+    """
+    from yizkr.core.instance import require_retained_code
+    from yizkr.pipeline import run_provenance
     from yizkr.pipeline.registrar import ensure_self_typed
+    from yizkr.pipeline.run_provenance import freeze_record
+    from yizkr.pipeline.run_statements import (
+        ensure_run_statements,
+        validate_run_statements,
+    )
     from yizkr.pipeline.writer import (
         _term_text,
         _unknown_fault,
         unknown_characters,
     )
 
-    label = f"place-hierarchy run {model} {fingerprint[:10]}"
+    producer = validate_place_producer(producer)
+    known_model = _proposer_model(producer) or (
+        model if model != "curator-reviewed" else None
+    )
+    if producer is not None and model and model != "curator-reviewed":
+        recorded = {
+            value
+            for stage in producer.stages
+            if stage.stage == "places"
+            for value in (stage.model, stage.model_identifier)
+            if value
+        }
+        if recorded and model not in recorded:
+            raise ValueError("place model differs from the recorded proposer")
+    label = (
+        f"place-hierarchy run {known_model or 'unknown proposer'} "
+        f"{fingerprint[:10]}"
+    )
     unknown = unknown_characters(label)
     if unknown:
         raise ValueError(
@@ -1275,16 +1452,50 @@ def ensure_places_run_item(
             f"give the model identifier without it. Nothing was written"
         )
     label = _term_text(label)
+    require_retained_code(client)
+    context = application or place_write_context(
+        fingerprint, producer, model=model, marks=marks
+    )
+    validate_run_statements(client, context)
+    directory = record_dir or run_provenance.DEFAULT_RECORD_DIR
+    if producer is not None:
+        freeze_record(directory, producer)
+    reference = freeze_record(directory, context)
     registry = CreationRegistry(client)
     operation = {
         "kind": "place-hierarchy-run",
         "fingerprint": fingerprint,
-        "model": unicodedata.normalize("NFC", model),
+        "model": unicodedata.normalize("NFC", binding_model or model)
+        if binding_model or model
+        else (
+            unicodedata.normalize("NFC", known_model) if known_model else None
+        ),
         "marks": marks or {},
     }
     binding = registry.lookup(operation)
+    legacy_labels = {label}
+    if operation["model"] is not None:
+        legacy_labels.add(
+            _term_text(
+                f"place-hierarchy run {operation['model']} {fingerprint[:10]}"
+            )
+        )
+    if binding_model is None and model is None:
+        legacy = dict(operation, model="curator-reviewed")
+        legacy_labels.add(
+            _term_text(
+                f"place-hierarchy run curator-reviewed {fingerprint[:10]}"
+            )
+        )
+        if binding is None:
+            binding = registry.lookup(legacy)
+            if binding is not None:
+                operation = legacy
     if binding is None:
-        if client.find_item_by_label(label) is not None:
+        if any(
+            client.find_item_by_label(candidate) is not None
+            for candidate in sorted(legacy_labels)
+        ):
             raise CreationRefused(
                 "a place run has matching display terms but no creation "
                 "binding; verified migration is required"
@@ -1309,6 +1520,7 @@ def ensure_places_run_item(
         summary="reconcile-places: run item statements",
         marks=marks,
     )
+    ensure_run_statements(client, qid, context, reference.sha256)
     return qid
 
 
@@ -1317,7 +1529,10 @@ def apply_answers(
     config: Config,
     csv_path: Path,
     links: list[StatedLink],
-    model: str,
+    model: str | None = None,
+    *,
+    producer: ProcessRecord | None = None,
+    record_dir: Path | None = None,
 ) -> dict:
     """Write the links a reviewed CSV's approved answers decide, cited as
     write_link cites them, through the cycle guard against the graph's
@@ -1326,8 +1541,15 @@ def apply_answers(
     nothing, and is counted among the approved rows passed over."""
     from yizkr.pipeline.writer import BatchWriter
 
+    producer = validate_place_producer(producer)
     with open(csv_path, newline="") as handle:
         rows = list(csv.DictReader(handle))
+    stored = read_producer_origin(rows)
+    if producer is not None and stored is not None and producer != stored:
+        raise ValueError(
+            "supplied place producer differs from reviewed origin"
+        )
+    producer = stored or producer
     places = fetch_places(client, config)
     attach_chains(places, links)
     work = build_worklist(places, links)
@@ -1355,7 +1577,13 @@ def apply_answers(
     def run_item() -> str:
         nonlocal run_qid
         if run_qid is None:
-            run_qid = ensure_places_run_item(client, fingerprint, model)
+            run_qid = ensure_places_run_item(
+                client,
+                fingerprint,
+                model,
+                producer=producer,
+                record_dir=record_dir,
+            )
         return run_qid
 
     for child, parent, link in kept:

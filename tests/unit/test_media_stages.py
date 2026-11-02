@@ -143,17 +143,20 @@ def test_shared_reading_matches_adapter_inputs_and_products(tmp_path, kind):
             MediaReadRequest(path, "paged", language="en", excluded=allowed),
             lambda: client,
         ) as result:
-            assert result.transcription.model_dump() == direct.model_dump()
+            assert result.transcription.model_dump(
+                exclude={"provenance"}
+            ) == direct.model_dump(exclude={"provenance"})
+            assert result.transcription.provenance is not None
             assert client.inputs == direct_client.inputs
             assert result.products is not None
             assert [image.sha1 for image in result.products.images] == [
                 LETTER_SHA1
             ]
             assert [
-                image.transcription.model_dump()
+                image.transcription.model_dump(exclude={"provenance"})
                 for image in result.products.images
             ] == [
-                image.transcription.model_dump()
+                image.transcription.model_dump(exclude={"provenance"})
                 for image in direct.reading.images
             ]
             assert result.transcription.reading is None

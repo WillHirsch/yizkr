@@ -700,12 +700,15 @@ def minimal_pdf(pages: int) -> bytes:
 
 class FakeRun:
     def __init__(self, stdout="", returncode=0, error=None):
+        self._run = subprocess.run
         self.stdout = stdout
         self.returncode = returncode
         self.error = error
         self.calls = []
 
     def __call__(self, command, **kwargs):
+        if command[0] != "pdfinfo":
+            return self._run(command, **kwargs)
         self.calls.append(command)
         if self.error is not None:
             raise self.error
@@ -912,7 +915,7 @@ class TestTranscribers:
         assert len(image.pages) == 2
 
     def test_passing_output_is_the_unchecked_output(self, tmp_path):
-        # the check adds a verdict and changes nothing in the transcription
+        # Completed producer metadata is separate from the checked content.
         text = a_page()
         checked = LlmVisionTranscriber(FakeLlm(text)).transcribe(
             scan_file(tmp_path)
@@ -920,7 +923,11 @@ class TestTranscribers:
         unchecked = LlmVisionTranscriber(FakeLlm(text)).transcribe_unchecked(
             scan_file(tmp_path)
         )
-        assert checked == unchecked
+        assert checked.model_dump(
+            exclude={"provenance"}
+        ) == unchecked.model_dump(exclude={"provenance"})
+        assert checked.provenance.stages[-1].stage == "transcription"
+        assert unchecked.provenance is None
 
     def test_unchecked_step_returns_a_failing_output(self, tmp_path):
         # for a caller that runs the check as a step of its own

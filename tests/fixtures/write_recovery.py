@@ -16,6 +16,55 @@ from yizkr.core.write_recovery import GENERATION_PAGE, Generation
 
 
 class RecoveryWiki:
+    PROCESS_PROPERTIES = {
+        key: f"P{9000 + index}"
+        for index, key in enumerate(
+            (
+                "run_stage",
+                "process_kind",
+                "model_identifier",
+                "model_effort",
+                "prompt_hash",
+                "stage_version",
+                "process_started_at",
+                "process_ended_at",
+                "cli_config_hash",
+                "provider_cli_version",
+                "model_manifest_hash",
+                "software_dirty",
+                "unratified_run",
+                "provenance_limitation",
+                "run_record_sha256",
+                "pipeline_version",
+                "software_commit",
+                "scratch_run",
+                "run_manifest_hash",
+                "identity_map_hash",
+            ),
+            1,
+        )
+    }
+
+    def api_get(self, params):
+        from yizkr.core.instance import KEPT_STATE_PAGE
+
+        assert params == {
+            "action": "query",
+            "titles": KEPT_STATE_PAGE,
+            "prop": "info",
+        }
+        exists = KEPT_STATE_PAGE in self._recovery_pages
+        return {
+            "query": {
+                "pages": {
+                    "1": {
+                        "title": KEPT_STATE_PAGE,
+                        **({} if exists else {"missing": ""}),
+                    }
+                }
+            }
+        }
+
     def initialize_recovery(self) -> None:
         self._recovery_pages: dict[str, WikiPage] = {}
         self._recovery_edited: set[str] = set()
