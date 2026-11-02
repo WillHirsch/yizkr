@@ -18,7 +18,14 @@ from wikibaseintegrator.wbi_enums import WikibaseRank
 
 from tests.fixtures.identity import joined, mapped
 from tests.fixtures.semantic_acceptance import birth_batch, source_case
-from yizkr.claims import ArtifactRef, QidRef
+from yizkr.claims import (
+    ArtifactRef,
+    GivenName,
+    PersonStructure,
+    QidRef,
+    Surname,
+    structure_problems,
+)
 from yizkr.core import sparql
 from yizkr.core.identity_migration import MigrationRefused
 from yizkr.core.provenance import RecordRef
@@ -26,6 +33,7 @@ from yizkr.core.write_recovery import CreationRegistry, write_existing
 from yizkr.pipeline.clustering import ADJUDICATED, IdentityMap, identity_hash
 from yizkr.pipeline.identity_review import ReviewRefused, ReviewStore
 from yizkr.pipeline.registrar import register_artifact
+from yizkr.pipeline.review_mentions import observe_mentions
 from yizkr.pipeline.review_stages import (
     MentionKey,
     ReviewRequest,
@@ -91,6 +99,16 @@ def _seed(client, directory):
         batch.entities[0].label = name
         batch.entities[0].aliases = [name]
         batch.entities[0].mention_lines = [1]
+        # This occurrence selects the literal current name. Other attested
+        # forms stay in the source reading; they are not extra name tokens in
+        # this selected mention's structure.
+        batch.entities[0].structure = PersonStructure(
+            given=[GivenName(written=name.split()[0])],
+            surnames=[Surname(written="LOBIG")]
+            if key == "naturalisation-1952"
+            else [],
+        )
+        assert not structure_problems(batch.entities[0])
         batch.claims[0].source = batch.claims[0].source.model_copy(
             update={"artifact": artifact}
         )
@@ -100,6 +118,8 @@ def _seed(client, directory):
             language=case.language,
             engine="authored-fictional-text",
         )
+        (observation,) = observe_mentions(artifact.sha1, batch, reading)
+        assert observation.anchor is not None and not observation.limitations
         sources.append(ReviewSource(artifact.sha1, batch, reading))
         registered.append(
             register_artifact(
@@ -268,7 +288,24 @@ def test_verified_migration_preserves_evidence_and_publishes_graph_origins(
         prepared = prepare_map_migration(
             store, request, registry, identity, selections=selections
         )
+        assert all(
+            app.status == "needs_review"
+            for app in prepared.review.projection.applications
+        ), [
+            (app.status, app.reasons)
+            for app in prepared.review.projection.applications
+        ]
         _approve(store, prepared)
+        current = prepare_map_migration(
+            store, prepared.request, registry, identity, selections=selections
+        )
+        assert all(
+            app.status == "applied"
+            for app in current.review.projection.applications
+        ), [
+            (app.status, app.reasons)
+            for app in current.review.projection.applications
+        ]
         receipt = accept_map_migration(
             store, prepared, registry, record_dir=directory
         )
