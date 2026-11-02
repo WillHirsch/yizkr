@@ -668,6 +668,60 @@ class ReviewStore:
         finally:
             self._db.rollback()
 
+    @contextmanager
+    def pin_projection(
+        self,
+        projection: Projection,
+        mentions: Sequence[MentionRevision],
+    ) -> Iterator[None]:
+        """Hold freshly projected review revisions while a caller accepts them.
+
+        Observation/preparation must finish before entering: references sent to
+        another authority must already be durable locally. The transaction
+        excludes concurrent review imports until the caller's acceptance ends.
+        It does not make the external effect part of the SQLite transaction.
+        """
+        with self._transaction():
+            expected = {
+                (reference["id"], reference["revision"])
+                for reference in projection.mention_revisions
+            }
+            if expected != {(item.id, item.revision) for item in mentions}:
+                raise ReviewRefused("projection mention revisions differ")
+            for mention in mentions:
+                self._verified(mention)
+            present = {mention.id for mention in mentions}
+            relevant = {
+                proposal.id
+                for proposal in self.list_proposals()
+                if present.intersection(proposal.mentions)
+            }
+            if relevant != {
+                application.proposal_id
+                for application in projection.applications
+            }:
+                raise ReviewRefused(
+                    "identity review scope changed before acceptance"
+                )
+            for application in projection.applications:
+                proposal = self.get_proposal(application.proposal_id)
+                decision = self.get_decision(application.proposal_id)
+                if (
+                    proposal.revision != application.proposal_revision
+                    or decision != application.decision
+                    or (
+                        application.status == "applied"
+                        and (
+                            decision is None
+                            or decision.proposal.digest != proposal.digest
+                        )
+                    )
+                ):
+                    raise ReviewRefused(
+                        "identity review changed before acceptance"
+                    )
+            yield
+
     def _project(
         self,
         current: Sequence[MentionRevision],

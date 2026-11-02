@@ -90,6 +90,29 @@ The semantic basis retains source occurrence/scope, entity interpretation, relev
 
 A new source gets its own mentions and unapproved proposals; it does not revoke unchanged decisions about earlier sources or inherit their consent. Only materially changed scopes need review. Unknown correspondence keeps the previous decision attached to its original evidence.
 
+## Accept assignments to existing entities
+
+`yizkr.pipeline.assignment_stages.accept_reviewed_assignments` accepts a `ReviewStore`, current `ReviewRequest` and explicitly supplied `CreationRegistry`. It prepares current evidence again, verifies target creation bindings against the server, and pins the observed mention, proposal and decision revisions while publishing. A saved projection is an inspection product, not authorization to import assignments. Relevant stale or blocked review refuses the entire request; callers can submit separately scoped requests for unrelated sources.
+
+The registry is the same server authority used for item creation. Its entity-ID index points to the original verified creation receipt, preserving its bytes and QID. The receipt's item-creation revision and the index's binding revision are distinct. A label or description edit changes neither identity. A missing index can be created from verified receipt evidence; matching terms cannot supply that evidence.
+
+```mermaid
+flowchart LR
+    request["Current products + review request"] --> prepare["Refresh current source evidence"]
+    decisions["Durable human decisions"] --> prepare
+    prepare --> pin["Pin current review revisions"]
+    bindings["Verified entity index"] --> validate["Check assignments and durable negatives"]
+    pin --> validate
+    prior["Assignment head + prior constraints"] --> validate
+    validate --> append["Create-only successor<br/>whole delta atomically"]
+    append --> accepted["Assignment revisions + exact review evidence"]
+    append --> conflict["Conflict: reread and replan"]
+```
+
+A successful append records the exact mention revisions, proposals, material bases, decision origins and human confirmations together with assignment revisions and negative constraints. One immutable successor page accepts the complete delta. Independent clients competing at the same head cannot both publish different successors; a lost acknowledgement can recover an identical accepted delta. Repeating an unchanged assignment preserves its revision. Persisted different-mention and rejected-target constraints remain effective on later imports, including imports that omit the original proposal.
+
+Approved `new_entity` components are returned as awaiting creation. This operation allocates no items and changes no historical graph statements. It refuses reassignment and established-entity merge/split. The server records are operational metadata backed up with the database; they do not yet provide graph-readable identity-method statements or applied-assertion lineage.
+
 ## Integration boundary
 
-This store and its projection are the durable review boundary. The existing scratch clustering map remains a proposal snapshot, and the one-batch `reconcile`/`resolve --equivalences` CSV path has no automatic migration into human decisions here. Its local IDs and QIDs cannot prove historical consent or source correspondence. Retained assignment revisions, verified migration and consumption by graph writers remain under [#130](https://github.com/WillHirsch/yizkr/issues/130); incremental application remains under [#723](https://github.com/WillHirsch/yizkr/issues/723). Current map/retained-state guards remain in force.
+The existing scratch clustering map remains a proposal snapshot, and the one-batch `reconcile`/`resolve --equivalences` CSV path has no automatic migration into human decisions here. Its local IDs and QIDs cannot prove historical consent or source correspondence. Verified migration, assignment-aware graph writing and graph-readable identity provenance remain under [#755](https://github.com/WillHirsch/yizkr/issues/755); later-cohort matching and protected candidate-absence checks remain under [#756](https://github.com/WillHirsch/yizkr/issues/756). These complete the remaining [#130](https://github.com/WillHirsch/yizkr/issues/130) scope. Incremental document application remains under [#723](https://github.com/WillHirsch/yizkr/issues/723). Current one-map and retained-state guards remain in force; assignment acceptance alone does not establish a supported keeper workflow.
