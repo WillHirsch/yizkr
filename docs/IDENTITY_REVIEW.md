@@ -111,8 +111,36 @@ flowchart LR
 
 A successful append records the exact mention revisions, proposals, material bases, decision origins and human confirmations together with assignment revisions and negative constraints. One immutable successor page accepts the complete delta. Independent clients competing at the same head cannot both publish different successors; a lost acknowledgement can recover an identical accepted delta. Repeating an unchanged assignment preserves its revision. Persisted different-mention and rejected-target constraints remain effective on later imports, including imports that omit the original proposal.
 
-Approved `new_entity` components are returned as awaiting creation. This operation allocates no items and changes no historical graph statements. It refuses reassignment and established-entity merge/split. The server records are operational metadata backed up with the database; they do not yet provide graph-readable identity-method statements or applied-assertion lineage.
+Approved `new_entity` components are returned as awaiting creation. This operation allocates no items and changes no historical graph statements. It refuses reassignment and established-entity merge/split. The server records are operational metadata backed up with the database. Assignment acceptance alone publishes neither graph identity-method statements nor applied-assertion lineage; the separate projection below publishes methods.
+
+## Migrate an existing map and expose its provenance
+
+`prepare_map_migration` and `accept_map_migration` in `yizkr.pipeline.identity_migration` provide a bounded migration for existing creation-registry bindings. Supply the review store, current review request and readings, original identity map, registry, and explicitly selected source mentions. Preparation validates supported map format/version, fingerprints, membership and methods; each selected occurrence must have an unambiguous located correspondence independent of occurrence order. Missing locations, indistinguishable homonyms, incompatible maps and absent creation receipts refuse. Changed graph labels and model-local IDs do not choose the target.
+
+The map supplies a candidate cluster and original method. Its opaque `inputs` digest cannot reconstruct or prove the original batches/readings. Preparation resolves the cluster's original creation operation and proposes its verified binding through ordinary identity review. Inspect and approve the explicit assignments through the existing review store; migration never imports a scratch verdict or legacy CSV as human consent. Acceptance checks current evidence again and publishes only the selected assignments, while retaining relevant same/different and rejected-target constraints.
+
+```mermaid
+flowchart LR
+    map["Validated original map"] --> prepare["Verify correspondence + original creation binding"]
+    products["Current located products + selected mentions"] --> prepare
+    prepare --> review["Explicit assignment review"]
+    review --> accept["Accept selected durable assignments"]
+    accept --> evidence["Immutable process record + migration receipt"]
+    evidence --> publish["Append identity metadata to existing kind statements"]
+    publish --> graph["Graph-only methods, decisions and confirmation query"]
+```
+
+| Product | What it establishes |
+| --- | --- |
+| Prepared migration | Selected map-to-current-mention correspondence, verified target bindings and review proposals. It grants no approval. |
+| Immutable process record | Supplied map, current product digests, correspondence, accepted assignments, exact human decisions, available producer evidence and explicit historical limitations. |
+| Registry migration receipt | The selected assignments were accepted in the shared authority. It does not mean graph projection or historical claim application completed. |
+| Graph identity projection | Existing source-backed kind statements carry original methods and assignment/decision revisions, with human confirmation in separate references. |
+
+`publish_identity_provenance(client, migration_id, record_dir=...)` reads the verified receipt and immutable record, checks current vocabulary, unique source items carrying a current nondeprecated media hash, and uniquely identified source-backed kind statements, and publishes their identity metadata. Bootstrap the current model first. The operation preserves QIDs, display terms, statement ranks and existing historical source/run references. Missing or ambiguous source/kind matches refuse before publication. Metadata item creation uses the shared recovery authority; interrupted publication can be retried using the same migration ID. Successful return requires authoritative rereading of the expected references; individual item updates use revision checks, and the multi-item operation is not an atomic historical-claim write.
+
+The production [identity-provenance query](../src/yizkr/queries/identity-provenance.rq) reads methods, assignment/decision revisions, record digests, human actors/times and available producer facts entirely from the graph. When an original producer record exists, it also exposes that record’s exact digest/file and recorded run identity, separately from migration metadata. Its `<digest>.json` record name resolves in the explicitly managed `record_dir`; keep that directory with backups. Confident, adjudicated, confident-component and singleton methods remain distinct. Ambiguous, conflicting and unclustered origins remain visible as such even after an assignment is approved. Confirmation is not automatically an owner override. Owner-override vocabulary is available, but the current migration refuses that method because no supported legacy evidence format establishes it. Explicit override origins remain part of #758’s assignment-aware application work. Unsupported historical origin facts remain unknown rather than being inferred from current configuration.
 
 ## Integration boundary
 
-The existing scratch clustering map remains a proposal snapshot, and the one-batch `reconcile`/`resolve --equivalences` CSV path has no automatic migration into human decisions here. Its local IDs and QIDs cannot prove historical consent or source correspondence. Verified migration, assignment-aware graph writing and graph-readable identity provenance remain under [#755](https://github.com/WillHirsch/yizkr/issues/755); later-cohort matching and protected candidate-absence checks remain under [#756](https://github.com/WillHirsch/yizkr/issues/756). These complete the remaining [#130](https://github.com/WillHirsch/yizkr/issues/130) scope. Incremental document application remains under [#723](https://github.com/WillHirsch/yizkr/issues/723). Current one-map and retained-state guards remain in force; assignment acceptance alone does not establish a supported keeper workflow.
+The existing scratch clustering map remains a proposal snapshot, and the one-batch `reconcile`/`resolve --equivalences` CSV path has no automatic migration into human decisions here. Its local IDs and QIDs cannot prove historical consent or source correspondence. Assignment-aware historical writes, applicable claim approval and exact per-source application receipts remain under [#758](https://github.com/WillHirsch/yizkr/issues/758); later-cohort matching and protected candidate-absence checks remain under [#756](https://github.com/WillHirsch/yizkr/issues/756). These complete the remaining [#130](https://github.com/WillHirsch/yizkr/issues/130) scope. Incremental document application remains under [#723](https://github.com/WillHirsch/yizkr/issues/723). Current one-map and retained-state guards remain in force; assignment acceptance alone does not establish a supported keeper workflow.

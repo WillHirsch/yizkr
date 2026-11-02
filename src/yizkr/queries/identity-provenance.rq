@@ -1,0 +1,42 @@
+# Accepted identity origins and separate human confirmations, read entirely
+# from graph references. recordFile resolves in the configured process-record
+# directory; its SHA-256 verifies the immutable complete record. These rows
+# describe accepted identities, not statistics of an unratified proposal map.
+SELECT DISTINCT ?entity ?entityLabel ?kind ?statement ?method ?methodLabel
+       ?record ?recordSha256 ?recordFile ?originRecordSha256 ?originRecordFile
+       ?originRun ?migration ?assignmentRevision
+       ?originDecisionRevision ?decisionRevision ?actor ?confirmedAt ?stage ?model ?prompt ?limitation
+WHERE {
+  ?entity p:{P:instance_of} ?statement .
+  ?statement ps:{P:instance_of} ?kind ; prov:wasDerivedFrom ?origin .
+  ?origin pr:{P:identity_record} ?record ;
+          pr:{P:identity_method} ?method ;
+          pr:{P:identity_assignment_revision} ?assignmentRevision ;
+          pr:{P:identity_migration_id} ?migration ;
+          pr:{P:run_record_sha256} ?recordSha256 .
+  OPTIONAL { ?origin pr:{P:identity_decision_revision} ?originDecisionRevision . }
+  OPTIONAL {
+    ?origin pr:{P:identity_origin_record_sha256} ?originRecordSha256 .
+    BIND(CONCAT(STR(?originRecordSha256), ".json") AS ?originRecordFile)
+  }
+  OPTIONAL { ?origin pr:{P:identity_origin_run} ?originRun . }
+  ?record wdt:{P:instance_of} wd:{Q:identity_decision_record} .
+  BIND(CONCAT(STR(?recordSha256), ".json") AS ?recordFile)
+  OPTIONAL {
+    ?statement prov:wasDerivedFrom ?confirmation .
+    ?confirmation pr:{P:identity_record} ?record ;
+                  pr:{P:identity_assignment_revision} ?assignmentRevision ;
+                  pr:{P:identity_decision_revision} ?decisionRevision ;
+                  pr:{P:identity_confirmation_actor} ?actor ;
+                  pr:{P:identity_confirmation_at} ?confirmedAt .
+  }
+  OPTIONAL {
+    ?record p:{P:run_stage} ?stageStatement .
+    ?stageStatement ps:{P:run_stage} ?stage .
+    OPTIONAL { ?stageStatement pq:{P:model_identifier} ?model . }
+    OPTIONAL { ?stageStatement pq:{P:prompt_hash} ?prompt . }
+  }
+  OPTIONAL { ?record wdt:{P:provenance_limitation} ?limitation . }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "en" . }
+}
+ORDER BY ?entity ?statement ?assignmentRevision ?decisionRevision ?stage

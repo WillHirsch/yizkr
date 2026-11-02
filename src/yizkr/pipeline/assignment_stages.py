@@ -8,6 +8,7 @@ as awaiting creation, rather than treated as a binding.
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import dataclass
 
 from yizkr.core.identity_assignments import (
@@ -21,7 +22,11 @@ from yizkr.core.identity_assignments import (
 )
 from yizkr.core.write_recovery import CreationRegistry
 from yizkr.pipeline.identity_review import ReviewRefused, ReviewStore
-from yizkr.pipeline.review_stages import ReviewRequest, prepare_review
+from yizkr.pipeline.review_stages import (
+    PreparedReview,
+    ReviewRequest,
+    prepare_review,
+)
 
 _CURRENT_HEAD = object()
 
@@ -33,36 +38,81 @@ class AssignmentAcceptance:
     unassigned: tuple[str, ...]
 
 
+def assignment_review_scope(
+    prepared: PreparedReview,
+    snapshot: AssignmentSnapshot,
+    scope: Collection[str] | None,
+) -> frozenset[str]:
+    """The decision context of selected mentions, including durable negatives.
+
+    Context is not publication scope: a related occurrence may be necessary to
+    validate a decision without authorizing an assignment for that occurrence.
+    """
+    present = {mention.id for mention in prepared.mentions.values()}
+    selected = present if scope is None else set(scope)
+    if (scope is not None and not selected) or not selected <= present:
+        raise AssignmentRefused(
+            "assignment scope lacks current source mentions"
+        )
+    relevant = set(selected)
+    pairs = [set(p.mentions) for p in prepared.proposals]
+    pairs += [set(c.mentions) for c in snapshot.constraints]
+    while True:
+        expanded = relevant | set().union(
+            *(pair for pair in pairs if pair & relevant)
+        )
+        if expanded == relevant:
+            return frozenset(relevant)
+        relevant = expanded
+
+
 def accept_reviewed_assignments(
     store: ReviewStore,
     request: ReviewRequest,
     registry: CreationRegistry,
     *,
     expected_head: str | None | object = _CURRENT_HEAD,
+    scope: Collection[str] | None = None,
 ) -> AssignmentAcceptance:
     """Atomically accept a fully current review scope, or refuse that scope.
 
     Omit expected_head to use the authority read by this call; explicit None
     names an empty predecessor, including exact lost-ack recovery.
-    Callers can separate unrelated sources, but stale or blocked proposals in
-    this request are never skipped.
+    An optional durable-mention scope limits new positive assignments, while
+    related decisions and retained negatives still participate in validation.
+    Without it every supplied occurrence remains in scope.
     The durable preparation precedes the pinned transaction, so even a lost
     server response cannot leave a server reference to an uncommitted review.
     """
     prepared = prepare_review(store, request)
     projection = prepared.projection
-    if any(app.status != "applied" for app in projection.applications):
-        raise ReviewRefused(
-            "assignment acceptance requires current, unblocked review"
-        )
-    mentions = {mention.id: mention for mention in prepared.mentions.values()}
-    decisions = {
-        app.decision.id: app.decision
-        for app in projection.applications
-        if app.decision is not None
+    all_mentions = {
+        mention.id: mention for mention in prepared.mentions.values()
     }
-    with store.pin_projection(projection, list(mentions.values())):
+    with store.pin_projection(projection, list(all_mentions.values())):
         snapshot = registry.assignment_snapshot()
+        selected = set(all_mentions) if scope is None else set(scope)
+        relevant = assignment_review_scope(prepared, snapshot, scope)
+        proposals = {p.id: p for p in prepared.proposals}
+        applications = [
+            app
+            for app in projection.applications
+            if relevant.intersection(proposals[app.proposal_id].mentions)
+        ]
+        if any(app.status != "applied" for app in applications):
+            raise ReviewRefused(
+                "assignment acceptance requires current, unblocked review"
+            )
+        mentions = {
+            key: value
+            for key, value in all_mentions.items()
+            if key in relevant
+        }
+        decisions = {
+            app.decision.id: app.decision
+            for app in applications
+            if app.decision is not None
+        }
         head = (
             snapshot.head if expected_head is _CURRENT_HEAD else expected_head
         )
@@ -84,7 +134,8 @@ def accept_reviewed_assignments(
             return mention
 
         for first, second in projection.same:
-            parents[component(first)] = component(second)
+            if first in parents and second in parents:
+                parents[component(first)] = component(second)
         groups: dict[str, list[str]] = {}
         for mention in mentions:
             groups.setdefault(component(mention), []).append(mention)
@@ -98,7 +149,9 @@ def accept_reviewed_assignments(
         assignments = []
         awaiting = []
         for group in groups.values():
-            if not active.intersection(group):
+            if not active.intersection(group) or not selected.intersection(
+                group
+            ):
                 continue
             chosen = {
                 projection.assignments[mention].entity_id
@@ -124,7 +177,9 @@ def accept_reviewed_assignments(
                 )
             if not chosen:
                 if authorizations:
-                    awaiting.append(tuple(sorted(group)))
+                    awaiting.append(
+                        tuple(sorted(selected.intersection(group)))
+                    )
                 continue
             (entity_id,) = chosen
             if entity_id not in targets:
@@ -132,6 +187,8 @@ def accept_reviewed_assignments(
                     "accepted target needs a current verified binding"
                 )
             for mention in group:
+                if mention not in selected:
+                    continue
                 assignments.append(
                     AssignmentTarget(
                         mention_id=mention,
@@ -207,7 +264,7 @@ def accept_reviewed_assignments(
         accepted = registry.append_assignments(delta, expected_head=head)
         waiting = tuple(sorted(awaiting))
         unresolved = (
-            set(mentions)
+            selected
             - accepted.assignments.keys()
             - {mention for group in waiting for mention in group}
         )

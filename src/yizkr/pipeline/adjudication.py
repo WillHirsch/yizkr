@@ -878,7 +878,8 @@ def ensure_adjudicated(
     manifests = read_manifests(context.documents)
     places = document_places(context.documents)
     merge = merges_on_verdicts(context.run)
-    key = stage_key(manifests, config, model_of(context.driver), merge, places)
+    model = model_of(context.driver)
+    key = stage_key(manifests, config, model, merge, places)
     directory: Path = context.directory
     path = directory / IDENTITY_MAP
     record = read_record(directory)
@@ -891,14 +892,53 @@ def ensure_adjudicated(
         and not (record.get("counts") or {}).get("refused_calls")
     ):
         return StageOutput(stored, record, True)
+    from yizkr.pipeline.run_provenance import Capture, producer_run_context
+
+    run_origin = producer_run_context(context.run.manifest())
+    capture = Capture(
+        NAME,
+        "deterministic",
+        configuration={
+            "clustering": config.model_dump(mode="json"),
+            "clustering_version": clustering.VERSION,
+            "configured_client": model,
+            "merge": merge,
+        },
+        processing={
+            "algorithm_sha256": code_digest(),
+            "clustering_sha256": clustering.code_digest(),
+        },
+        prompt_templates={"pipeline.adjudication.PROMPT": PROMPT},
+    )
+    engine = None
+
+    def observed_client():
+        nonlocal engine
+        engine = client_of(context)
+        capture.process = "mixed"
+        return engine
+
     made = adjudicate(
         manifests,
-        lambda: client_of(context),
+        observed_client,
         merge=merge,
         config=config,
         log=context.log,
         places=places,
     )
+    provenance = capture.finish(
+        {"stage_key": key, "inputs": made.identity["inputs"]},
+        client=engine,
+        semantic_version=VERSION,
+    )
+    provenance = provenance.model_copy(
+        update={
+            "metadata": provenance.metadata
+            | run_origin
+            | {"identity_map_hash": made.identity["hash"]}
+        }
+    )
+    made.identity["provenance"] = provenance.model_dump(mode="json")
     record = {
         "format": FORMAT,
         "version": VERSION,
@@ -910,6 +950,7 @@ def ensure_adjudicated(
             for pair, (verdict, reason) in sorted(made.verdicts.items())
         ],
         "calls": made.calls,
+        "provenance": provenance.model_dump(mode="json"),
     }
     directory.mkdir(parents=True, exist_ok=True)
     atomic_write_text(

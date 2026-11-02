@@ -1078,12 +1078,18 @@ class TestStage:
         engine = Engine(truths(docs))
         context = context_of(docs, tmp_path, engine)
         adjudication.run_stage(context)
-        made = (context.directory / IDENTITY_MAP).read_text()
+        made = json.loads((context.directory / IDENTITY_MAP).read_text())
         (context.directory / RECORD).unlink()
         output = ensure_adjudicated(context)
         assert not output.reused
         assert len(engine.prompts) == 1
-        assert (context.directory / IDENTITY_MAP).read_text() == made
+        recreated = json.loads((context.directory / IDENTITY_MAP).read_text())
+        # A repeated process has its own execution evidence, even when the
+        # response cache gives it the same decisions.
+        assert {k: v for k, v in recreated.items() if k != "provenance"} == {
+            k: v for k, v in made.items() if k != "provenance"
+        }
+        assert recreated["provenance"] != made["provenance"]
         events = [e for e, _f in context.run.events]
         assert events.count("cache-hit") == 1
         assert read_cache(tmp_path / "cache") is not None

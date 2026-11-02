@@ -603,8 +603,7 @@ class TestRetiredProperty:
 
 
 class TestReferenceProperties:
-    """ADR-0035 §4: a judgement note goes only in the extraction-run
-    reference, as `stated in` goes only in a reference (ADR-0003)."""
+    """Source, process and identity evidence are reference-only metadata."""
 
     REFERENCES = {
         "stated_in",
@@ -614,6 +613,15 @@ class TestReferenceProperties:
         "printed_page_number",
         "source_part_locator",
         "run_record_sha256",
+        "identity_record",
+        "identity_origin_record_sha256",
+        "identity_origin_run",
+        "identity_method",
+        "identity_assignment_revision",
+        "identity_decision_revision",
+        "identity_confirmation_actor",
+        "identity_confirmation_at",
+        "identity_migration_id",
     }
 
     def test_the_manifest_marks_them(self, manifest):
@@ -626,24 +634,46 @@ class TestReferenceProperties:
         keys = {line.split(":")[0].strip() for line in properties.splitlines()}
         assert not keys & self.REFERENCES
 
-    def test_a_note_is_refused_as_a_claim(self):
-        (problem,) = problems(
-            claim("leopold", "judgement", vocab("judgement_date_reading"))
-        )
-        assert "'judgement' is a reference property" in problem
+    @pytest.mark.parametrize(
+        ("key", "value"),
+        [
+            ("judgement", vocab("judgement_date_reading")),
+            ("identity_method", vocab("identity_confident")),
+            (
+                "identity_confirmation_actor",
+                {"type": "string", "value": "fictional curator"},
+            ),
+        ],
+    )
+    def test_metadata_is_refused_as_a_claim(self, key, value):
+        (problem,) = problems(claim("leopold", key, value))
+        assert f"'{key}' is a reference property" in problem
 
-    def test_and_as_a_qualifier(self):
-        note = {"type": "string", "value": "the postmark read as 1938"}
+    @pytest.mark.parametrize(
+        ("key", "value"),
+        [
+            (
+                "judgement_note",
+                {"type": "string", "value": "the postmark read as 1938"},
+            ),
+            ("identity_method", vocab("identity_confident")),
+            (
+                "identity_confirmation_actor",
+                {"type": "string", "value": "fictional curator"},
+            ),
+        ],
+    )
+    def test_metadata_is_refused_as_a_qualifier(self, key, value):
         (problem,) = problems(
             claim(
                 "leopold",
                 "residence",
                 item("prison"),
-                qualifier("judgement_note", note),
+                qualifier(key, value),
             )
         )
         assert "qualifiers[0]" in problem
-        assert "'judgement_note' is a reference property" in problem
+        assert f"'{key}' is a reference property" in problem
 
     def test_and_salvage_counts_it(self):
         valid, rejects = salvage_valid_claims(
