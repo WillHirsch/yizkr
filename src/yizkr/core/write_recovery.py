@@ -18,12 +18,19 @@ import json
 import re
 import uuid
 from collections.abc import Mapping
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from yizkr.core.wiki import RecoveryEvidenceError
 from yizkr.pipeline.cancellation import check_cancelled
+
+if TYPE_CHECKING:
+    from yizkr.core.identity_assignments import (
+        AssignmentDelta,
+        AssignmentSnapshot,
+        RegistryBinding,
+    )
 
 PREFIX = "Project:Yizkr write recovery/"
 GENERATION_PAGE = PREFIX + "generation"
@@ -252,6 +259,256 @@ class CreationRegistry:
     def _assert_generation(self, generation: Generation) -> None:
         if self.generation != generation:
             raise CreationRefused("deployment generation changed")
+
+    def verify_binding(self, binding: EntityBinding) -> RegistryBinding:
+        """Read and verify an existing creation receipt without indexing it.
+
+        Creation revision keeps its original meaning. Registry binding
+        revisions are separate records, and never modify the creation receipt.
+        A creation whose receipt was lost first needs ordinary reconciliation.
+        """
+        from yizkr.core.identity_assignments import RegistryBinding
+
+        binding = EntityBinding.model_validate(binding.model_dump(mode="json"))
+        generation = self.generation
+        if generation is None or (
+            generation.deployment_id != binding.deployment_id
+            or generation.generation != binding.generation
+        ):
+            raise CreationRefused(
+                "binding belongs to another deployment generation"
+            )
+        intent = self._intent(generation, binding.intent_key)
+        verified = self._binding(generation, intent) if intent else None
+        if verified is None or verified.model_dump(
+            mode="json"
+        ) != binding.model_dump(mode="json"):
+            raise CreationRefused(
+                "binding is not proved by its creation authority"
+            )
+        title = self._title(generation, binding.intent_key, "receipt")
+        page = self.client.immutable_page(title)
+        if page is None:
+            raise CreationRefused(
+                "creation receipt needs reconciliation before indexing"
+            )
+        if _parse(EntityBinding, page).model_dump(
+            mode="json"
+        ) != binding.model_dump(mode="json"):
+            raise CreationRefused("creation receipt differs from its binding")
+        self._assert_generation(generation)
+        return RegistryBinding(
+            binding=binding,
+            receipt_locator=title,
+            receipt_sha256=hashlib.sha256(page.text.encode()).hexdigest(),
+        )
+
+    def _binding_title(self, generation: Generation, entity_id: str) -> str:
+        if not re.fullmatch(_HEX, entity_id):
+            raise ValueError("entity ID must be an opaque archive identifier")
+        return (
+            PREFIX
+            + generation.generation
+            + "/entities/"
+            + entity_id
+            + "/binding/1"
+        )
+
+    def binding(self, entity_id: str) -> RegistryBinding | None:
+        """Read the stable entity index and verify its original receipt."""
+        from yizkr.core.identity_assignments import RegistryBinding
+
+        generation = self.generation
+        if generation is None:
+            return None
+        page = self.client.immutable_page(
+            self._binding_title(generation, entity_id)
+        )
+        if page is None:
+            return None
+        registered = _parse(RegistryBinding, page)
+        if (
+            registered.binding.entity_id != entity_id
+            or self.verify_binding(registered.binding) != registered
+        ):
+            raise CreationRefused(
+                "entity index differs from its verified creation binding"
+            )
+        self._assert_generation(generation)
+        return registered
+
+    def index_binding(self, binding: EntityBinding) -> RegistryBinding:
+        """Index a verified creation; never adopt an item through its terms."""
+        from yizkr.core.identity_assignments import RegistryBinding
+        from yizkr.core.instance import require_retained_code
+
+        registered = self.verify_binding(binding)
+        generation = self.generation
+        assert generation is not None
+        require_retained_code(self.client)
+        title = self._binding_title(generation, binding.entity_id)
+        page = self.client.immutable_page(title)
+        if page is None:
+            self._assert_generation(generation)
+            check_cancelled()
+            page = self.client.create_page_once(
+                title,
+                _dump(registered),
+                "ingest: index verified entity binding",
+            )
+        if _parse(RegistryBinding, page) != registered:
+            raise CreationRefused(
+                "entity index already records another binding"
+            )
+        self._assert_generation(generation)
+        return registered
+
+    def _assignment_title(
+        self, generation: Generation, head: str | None
+    ) -> str:
+        if head is not None and not re.fullmatch(_HASH, head):
+            raise ValueError("assignment head must be SHA-256")
+        return (
+            PREFIX
+            + generation.generation
+            + "/assignments/"
+            + (head or "root")
+            + "/next"
+        )
+
+    def assignment_snapshot(self) -> AssignmentSnapshot:
+        """Read the immutable successor chain; no missing state is created."""
+        from yizkr.core.identity_assignments import (
+            AssignmentCommit,
+            AssignmentRefused,
+            AssignmentSnapshot,
+            advance,
+            canonical_delta,
+            validated_revisions,
+        )
+
+        generation = self.generation
+        snapshot = AssignmentSnapshot(generation=generation)
+        if generation is None:
+            return snapshot
+        seen = set()
+        bindings = {}
+
+        def bound(entity_id):
+            if entity_id not in bindings:
+                bindings[entity_id] = self.binding(entity_id)
+            return bindings[entity_id]
+
+        while True:
+            page = self.client.immutable_page(
+                self._assignment_title(generation, snapshot.head)
+            )
+            if page is None:
+                self._assert_generation(generation)
+                return snapshot
+            commit = _parse(AssignmentCommit, page)
+            if (
+                commit.deployment_id != generation.deployment_id
+                or commit.generation != generation.generation
+                or commit.previous != snapshot.head
+                or commit.delta != canonical_delta(commit.delta)
+            ):
+                raise AssignmentRefused(
+                    "assignment chain does not match its generation "
+                    "or predecessor"
+                )
+            revisions = validated_revisions(snapshot, commit.delta, bound)
+            if revisions != commit.revisions:
+                raise AssignmentRefused(
+                    "assignment revisions differ from their authority"
+                )
+            updated = advance(snapshot, commit)
+            if updated.head in seen or (
+                not revisions and updated.constraints == snapshot.constraints
+            ):
+                raise AssignmentRefused(
+                    "assignment chain has an empty or repeated commit"
+                )
+            seen.add(updated.head)
+            snapshot = updated
+
+    def append_assignments(
+        self, delta: AssignmentDelta, *, expected_head: str | None
+    ) -> AssignmentSnapshot:
+        """Publish a reviewed delta at its expected immutable successor.
+
+        A winner owns that successor permanently. Different contenders must
+        replan from current authority; an identical acknowledged or uncertain
+        publication is recoverable without another assignment revision.
+        """
+        from yizkr.core.identity_assignments import (
+            AssignmentCommit,
+            AssignmentRefused,
+            StaleAssignments,
+            advance,
+            canonical_delta,
+            record_json,
+            validated_revisions,
+        )
+        from yizkr.core.instance import require_retained_code
+
+        delta = canonical_delta(delta)
+        snapshot = self.assignment_snapshot()
+        generation = snapshot.generation
+        if generation is None:
+            raise AssignmentRefused(
+                "assignments require an established deployment generation"
+            )
+        self._assignment_title(generation, expected_head)
+        if snapshot.head != expected_head:
+            # A request lost after publication may be retried even after a
+            # compatible later append. Its original complete delta is the
+            # idempotency proof, not a fresh timestamp or current local IDs.
+            prior = next(
+                (c for c in snapshot.history if c.previous == expected_head),
+                None,
+            )
+            if prior is not None and prior.delta == delta:
+                require_retained_code(self.client)
+                return snapshot
+            raise StaleAssignments(
+                "assignment head changed; replan before publication"
+            )
+        revisions = validated_revisions(snapshot, delta, self.binding)
+        commit = AssignmentCommit(
+            deployment_id=generation.deployment_id,
+            generation=generation.generation,
+            previous=expected_head,
+            delta=delta,
+            revisions=revisions,
+        )
+        updated = advance(snapshot, commit)
+        require_retained_code(self.client)
+        if not revisions and updated.constraints == snapshot.constraints:
+            self._assert_generation(generation)
+            return snapshot
+        title = self._assignment_title(generation, expected_head)
+        self._assert_generation(generation)
+        check_cancelled()
+        try:
+            page = self.client.create_page_once(
+                title,
+                record_json(commit),
+                "ingest: accept reviewed mention assignments",
+            )
+        except Exception:
+            # A custom transport may surface an exception after the durable
+            # create succeeded. Read authority rather than issue another edit.
+            page = self.client.immutable_page(title)
+            if page is None:
+                raise
+        stored = _parse(AssignmentCommit, page)
+        if stored != commit:
+            raise StaleAssignments(
+                "another writer accepted a different assignment delta"
+            )
+        self._assert_generation(generation)
+        return self.assignment_snapshot()
 
     def _key(self, generation: Generation, operation: Mapping | str) -> str:
         if not isinstance(operation, (Mapping, str)) or not operation:
