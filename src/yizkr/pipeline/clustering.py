@@ -3295,6 +3295,8 @@ def ensure_identity_map(
     directory: Path,
     documents: Iterable[_Document],
     config: ClusteringConfig | None = None,
+    *,
+    run_manifest: Mapping[str, Any] | None = None,
 ) -> StageOutput:
     """The identity map of the documents, in `directory`: the one there
     when it was made from the same inputs (inputs_key), or one made now and
@@ -3307,7 +3309,26 @@ def ensure_identity_map(
         manifests, config
     ):
         return StageOutput(stored, path, True)
+    from yizkr.pipeline.run_provenance import Capture, producer_run_context
+
+    run_origin = producer_run_context(run_manifest)
+    capture = Capture(
+        STAGE,
+        "deterministic",
+        configuration={"clustering": config.model_dump(mode="json")},
+        processing={"algorithm_sha256": code_digest()},
+    )
     identity = cluster_corpus(manifests, config)
+    provenance = capture.finish(
+        {"inputs": identity["inputs"]}, semantic_version=VERSION
+    )
+    identity["provenance"] = provenance.model_copy(
+        update={
+            "metadata": provenance.metadata
+            | run_origin
+            | {"identity_map_hash": identity["hash"]}
+        }
+    ).model_dump(mode="json")
     atomic_write_text(
         path, json.dumps(identity, ensure_ascii=False, indent=1) + "\n"
     )
@@ -3362,7 +3383,12 @@ def run_stage(context: Any) -> list[str]:
     """The corpus stage: the identity map of the context's documents in
     its directory, made or reused (ensure_identity_map). Returns the
     reasons it needs attention."""
-    output = ensure_identity_map(context.directory, context.documents)
+    run = getattr(context, "run", None)
+    output = ensure_identity_map(
+        context.directory,
+        context.documents,
+        run_manifest=run.manifest() if run is not None else None,
+    )
     summary = output.identity_map["summary"]
     adjudication = summary["adjudication"]
     context.log(

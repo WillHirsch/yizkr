@@ -646,6 +646,62 @@ properties:
     datatype: string
     reference: true
 
+  identity_record:
+    label: identity decision record
+    description: reference to the graph record of the verified origin and acceptance of an identity assignment
+    datatype: wikibase-item
+    reference: true
+    accepts: [identity_decision_record]
+
+  identity_origin_record_sha256:
+    label: identity origin process record SHA-256
+    description: reference to the exact original producer record, stored as sha256.json in the configured process-record directory
+    datatype: string
+    reference: true
+
+  identity_origin_run:
+    label: identity origin run identifier
+    description: original run identifier explicitly recorded by the identity producer; absent when unavailable
+    datatype: string
+    reference: true
+
+  identity_method:
+    label: identity origin method
+    description: original method establishing the recorded identity proposal; separate from subsequent human confirmation or migration
+    datatype: wikibase-item
+    reference: true
+    accepts: [identity_confident, identity_adjudicated, identity_confident_component, identity_owner_override, identity_singleton, identity_ambiguous, identity_conflicting, identity_unclustered]
+
+  identity_assignment_revision:
+    label: identity assignment revision
+    description: immutable SHA-256 revision of the accepted mention-to-entity assignment
+    datatype: string
+    reference: true
+
+  identity_decision_revision:
+    label: identity review decision revision
+    description: durable review decision identifier and integer revision, separated by a colon
+    datatype: string
+    reference: true
+
+  identity_confirmation_actor:
+    label: identity confirmation actor
+    description: recorded actor affirmatively confirming the referenced identity decision; not the algorithmic origin
+    datatype: string
+    reference: true
+
+  identity_confirmation_at:
+    label: identity confirmation timestamp
+    description: recorded timezone-aware timestamp of affirmative identity confirmation
+    datatype: string
+    reference: true
+
+  identity_migration_id:
+    label: identity migration identifier
+    description: stable identifier of the immutable server receipt verifying the migration and its accepted assignments
+    datatype: string
+    reference: true
+
   # --- artifacts as wiki media (ADR-0004 W1) ---
 
   media_file:
@@ -1056,6 +1112,11 @@ items:
     description: one execution of the ingestion pipeline; process-provenance target for machine-written statements
     entity_class: true
 
+  identity_decision_record:
+    label: identity decision record
+    description: verified identity origin, accepted assignment revisions and human confirmations with immutable off-graph evidence
+    entity_class: true
+
   occupation_class:
     label: occupation
     description: occupation or profession named by sources; the value class for the occupation property, with labels kept in the source's wording
@@ -1390,6 +1451,38 @@ items:
   combined_from_sources:
     label: combined from sources
     description: determination method; a curator combined the values of the statement's references, none of which states the value alone
+
+  identity_confident:
+    label: confident identity origin
+    description: identity proposal produced by confident deterministic clustering
+
+  identity_adjudicated:
+    label: adjudicated identity origin
+    description: identity proposal established through recorded model adjudication
+
+  identity_confident_component:
+    label: confident component identity origin
+    description: identity proposal established by confident links within a larger candidate component
+
+  identity_owner_override:
+    label: owner override identity origin
+    description: identity origin established by an explicitly recorded owner override, separate from confirmation of a machine proposal
+
+  identity_singleton:
+    label: singleton identity origin
+    description: identity proposal containing one source mention without a clustering merge
+
+  identity_ambiguous:
+    label: ambiguous identity origin
+    description: original clustering left this mention unresolved among ambiguous candidates; later confirmation does not rewrite that origin
+
+  identity_conflicting:
+    label: conflicting identity origin
+    description: original clustering left this mention separate because candidate identity evidence conflicted
+
+  identity_unclustered:
+    label: unclustered identity origin
+    description: original map retained this mention without including it in the clustering computation
 
   # --- kinds of parenthood (parentage values, ADR-0040 §4) ---
 

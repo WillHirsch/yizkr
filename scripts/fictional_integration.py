@@ -25,6 +25,10 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 REQUIRED_CASES = (
     (
+        "tests.fictional_integration.test_identity_migration",
+        "test_verified_migration_preserves_evidence_and_publishes_graph_origins",
+    ),
+    (
         "tests.fictional_integration.test_assignment_authority",
         "test_reviewed_assignments_are_atomic_recoverable_and_graph_preserving",
     ),
