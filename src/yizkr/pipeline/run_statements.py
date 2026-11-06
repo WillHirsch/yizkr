@@ -43,7 +43,9 @@ def _at(value: datetime) -> str:
     return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
-def _statements(properties: dict, items: dict, record: ProcessRecord):
+def _statements(
+    properties: dict, items: dict, record: ProcessRecord, record_kind: str
+):
     # Reuse the writer's actual Wikibase string constraints. Import at call
     # time: the writer also calls this projection after its own validation.
     from yizkr.pipeline.writer import _faults
@@ -77,7 +79,7 @@ def _statements(properties: dict, items: dict, record: ProcessRecord):
 
     omitted: set[str] = set()
     found = [
-        Item(prop_nr=properties["instance_of"], value=items["extraction_run"]),
+        Item(prop_nr=properties["instance_of"], value=items[record_kind]),
         string("process_kind", record.kind, omitted),
         *code_values(record.code, omitted),
         string("unratified_run", _boolean(record.unratified), omitted),
@@ -170,10 +172,12 @@ def _has_record(statement, property_id: str, digest: str) -> bool:
     )
 
 
-def _planned(properties: dict, items: dict, record: ProcessRecord):
+def _planned(
+    properties: dict, items: dict, record: ProcessRecord, record_kind: str
+):
     try:
         record_property = properties[RECORD_PROPERTY]
-        statements = list(_statements(properties, items, record))
+        statements = list(_statements(properties, items, record, record_kind))
     except KeyError as exc:
         raise ValueError(
             "process provenance needs the current model bootstrap: "
@@ -182,10 +186,15 @@ def _planned(properties: dict, items: dict, record: ProcessRecord):
     return record_property, statements
 
 
-def validate_run_statements(client: WikiClient, record: ProcessRecord) -> None:
+def validate_run_statements(
+    client: WikiClient,
+    record: ProcessRecord,
+    *,
+    record_kind: str = "extraction_run",
+) -> None:
     """Check the projection vocabulary before creation or other mutations."""
     record = ProcessRecord.model_validate(record.model_dump(mode="json"))
-    _planned(*client.vocabulary(), record)
+    _planned(*client.vocabulary(), record, record_kind)
 
 
 def ensure_run_statements(
@@ -195,6 +204,7 @@ def ensure_run_statements(
     record_sha256: str,
     *,
     dry_run: bool = False,
+    record_kind: str = "extraction_run",
 ) -> bool:
     """Add missing process statements/references in one guarded update.
 
@@ -207,7 +217,9 @@ def ensure_run_statements(
     record = ProcessRecord.model_validate(record.model_dump(mode="json"))
     if record_digest(record) != record_sha256:
         raise ValueError("process record does not match its reference digest")
-    record_property, statements = _planned(*client.vocabulary(), record)
+    record_property, statements = _planned(
+        *client.vocabulary(), record, record_kind
+    )
     item = client.wbi.item.get(qid)
     changed = False
     for statement in statements:

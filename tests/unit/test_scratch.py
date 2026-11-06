@@ -36,10 +36,12 @@ from yizkr import cli
 from yizkr.claims import ClaimBatch
 from yizkr.core.corpus import ExclusionConfigError, ExclusionList
 from yizkr.pipeline import clustering, llm, monitor, orchestrate, scratch
+from yizkr.pipeline.cancellation import current_cancellation
 from yizkr.pipeline.llm import CliVersionMismatch, UsageLimitReached
 from yizkr.pipeline.orchestrate import directory_names
 from yizkr.pipeline.presentation import slide_transcript, unpack_pptx
 from yizkr.pipeline.rundir import (
+    CANCELLED,
     CONTROL,
     DONE,
     INTERRUPTED,
@@ -74,6 +76,7 @@ CLI_RUN = CLI
 PROBE = "probe"
 DOCUMENT_STAGES = {"transcription", "extraction", "critique", "gedcom"}
 THREE = ("transcription", "extraction", "critique")
+HANG_GUARD = 30
 
 
 def quiet(*args, **kwargs) -> None:
@@ -839,6 +842,11 @@ class TestControl:
             if what == "vision" and name == PHOTO:
                 (run,) = scratch.runs_in(runs)
                 request(run, "abort", reason="the photographs look wrong")
+                signal = current_cancellation()
+                assert signal is not None
+                assert signal.wait(HANG_GUARD), (
+                    "abort did not reach active reading"
+                )
 
         fakes.hook = hook
         log = lambda *args, **kwargs: said.append(" ".join(map(str, args)))  # noqa: E731
@@ -848,9 +856,18 @@ class TestControl:
         assert not scratch.is_complete(run)
         first = started(run)
         photo = corpus.sha1(PHOTO)
-        # the stage in flight finished, and nothing was dispatched after it
+        # Abort reaches the stage in flight; its late fake response cannot
+        # publish a reading, and nothing is dispatched after it.
         assert first[-1] == (photo, "transcription")
-        assert run_state(RunDir(run))[(photo, "transcription")].status == DONE
+        assert (
+            run_state(RunDir(run))[(photo, "transcription")].status
+            == CANCELLED
+        )
+        completed = set(stages_of(run, "done"))
+        assert completed == set(first) - {(photo, "transcription")}
+        photo_source = corpus.folder / PHOTO
+        photo_dir = run / directory_names([photo_source], run)[photo_source]
+        assert not (photo_dir / orchestrate.VIEWS["transcription"]).exists()
         assert events(run)[-1]["event"] == "run-end"
         # it says how to read the run, and how to resume it
         assert f"report: yizkr stages state {run}" in said
@@ -863,9 +880,14 @@ class TestControl:
         assert scratch.runs_in(runs) == [run]
         # nothing the first invocation completed is made again: its views
         # stand, and none of its calls reaches the engine again
-        assert not set(first) & set(started(run, invocation=-1))
-        assert set(stages_of(run, "reused", invocation=-1)) == set(first)
-        assert not set(fakes.calls[len(asked) :]) & set(asked)
+        assert set(first) & set(started(run, invocation=-1)) == {
+            (photo, "transcription")
+        }
+        assert set(stages_of(run, "reused", invocation=-1)) == completed
+        assert set(fakes.calls[len(asked) :]) & set(asked) == {
+            ("vision", PHOTO)
+        }
+        assert (photo_dir / orchestrate.VIEWS["transcription"]).is_file()
         assert statuses(run) == {DONE}
 
     def test_a_paused_slice_waits_while_the_other_slices_go_on(
@@ -1002,11 +1024,26 @@ class TestControl:
             if what == "vision" and name == PHOTO:
                 request(driver.state_dir, "abort", kind="media")
                 request(driver.state_dir, "pause", **paused)
+                signal = current_cancellation()
+                assert signal is not None
+                assert signal.wait(HANG_GUARD), (
+                    "abort did not reach active reading"
+                )
 
         fakes.hook = hook
-        driver = a_run(tmp_path, corpus, fakes)
+        # The interrupted dispatch takes one anti-spin poll before it
+        # observes the abort. No operator resume is scheduled or needed.
+        waits = Waits(None)
+        driver = a_run(tmp_path, corpus, fakes, waits=waits)
         assert driver.run() == EXIT_STOPPED
         assert outcome(driver.state_dir) == ("stopped", "kind:media aborted")
+        photo = corpus.sha1(PHOTO)
+        assert started(driver.state_dir) == [(photo, "transcription")]
+        assert stages_of(driver.state_dir, "cancelled") == [
+            (photo, "transcription")
+        ]
+        assert not stages_of(driver.state_dir, "done")
+        assert waits.waited == [driver.poll]
 
     def test_a_paused_run_waits_for_a_resume(self, tmp_path, fakes):
         corpus = small(tmp_path)

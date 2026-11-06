@@ -31,6 +31,7 @@ if TYPE_CHECKING:
         AssignmentSnapshot,
         RegistryBinding,
     )
+    from yizkr.core.identity_migration import MigrationReceipt
 
 PREFIX = "Project:Yizkr write recovery/"
 GENERATION_PAGE = PREFIX + "generation"
@@ -119,6 +120,13 @@ def _identity(intent: _Identity) -> dict:
 
 def _marker(intent: _Identity) -> str:
     return f"[yizkr-create:{intent.intent_key}:{intent.entity_id}]"
+
+
+def cluster_creation_operation(
+    map_hash: str, cluster_id: str
+) -> dict[str, str]:
+    """The original map-bound creation key, shared with verified migration."""
+    return {"kind": "cluster", "map": map_hash, "cluster": cluster_id}
 
 
 def write_existing(item, *, summary: str):
@@ -509,6 +517,125 @@ class CreationRegistry:
             )
         self._assert_generation(generation)
         return self.assignment_snapshot()
+
+    def _migration_title(
+        self, generation: Generation, migration_id: str
+    ) -> str:
+        if not re.fullmatch(_HASH, migration_id):
+            raise ValueError("migration ID must be SHA-256")
+        return (
+            PREFIX
+            + generation.generation
+            + "/migrations/"
+            + migration_id
+            + "/receipt"
+        )
+
+    def _verify_migration(self, receipt: MigrationReceipt) -> None:
+        from yizkr.core.identity_assignments import record_digest
+        from yizkr.core.identity_migration import MigrationRefused
+
+        snapshot = self.assignment_snapshot()
+        generation = snapshot.generation
+        if generation is None or (
+            receipt.deployment_id != generation.deployment_id
+            or receipt.generation != generation.generation
+        ):
+            raise MigrationRefused("migration belongs to another generation")
+        prefix = {}
+        for commit in snapshot.history:
+            prefix.update({r.mention_id: r for r in commit.revisions})
+            if record_digest(commit) == receipt.assignment_head:
+                break
+        else:
+            raise MigrationRefused(
+                "migration assignment prefix is unavailable"
+            )
+        assignments = {r.mention_id: r for r in receipt.assignments}
+        for correspondence in receipt.correspondences:
+            expected = assignments[correspondence.mention_id]
+            if (
+                prefix.get(expected.mention_id) != expected
+                or snapshot.assignments.get(expected.mention_id) != expected
+                or expected.entity_id
+                != correspondence.binding.binding.entity_id
+            ):
+                raise MigrationRefused(
+                    "migration assignment is not accepted unchanged"
+                )
+            binding = self.lookup(
+                cluster_creation_operation(
+                    receipt.map_hash, correspondence.cluster_id
+                )
+            )
+            if (
+                binding is None
+                or self.verify_binding(binding) != correspondence.binding
+                or self.binding(binding.entity_id) != correspondence.binding
+            ):
+                raise MigrationRefused(
+                    "migration target differs from its original creation"
+                )
+        self._assert_generation(generation)
+
+    def migration_receipt(self, migration_id: str) -> MigrationReceipt | None:
+        """Read accepted migration evidence; never claim graph publication."""
+        from yizkr.core.identity_migration import (
+            MigrationReceipt,
+            MigrationRefused,
+        )
+
+        generation = self.generation
+        if generation is None:
+            return None
+        page = self.client.immutable_page(
+            self._migration_title(generation, migration_id)
+        )
+        if page is None:
+            return None
+        receipt = _parse(MigrationReceipt, page)
+        if receipt.migration_id != migration_id:
+            raise MigrationRefused(
+                "migration receipt has another operation ID"
+            )
+        self._verify_migration(receipt)
+        return receipt
+
+    def record_migration(self, receipt: MigrationReceipt) -> MigrationReceipt:
+        """Record assignment acceptance, separately from graph projection."""
+        from yizkr.core.identity_migration import (
+            MigrationReceipt,
+            MigrationRefused,
+        )
+        from yizkr.core.instance import require_retained_code
+
+        receipt = MigrationReceipt.model_validate(
+            receipt.model_dump(mode="json")
+        )
+        self._verify_migration(receipt)
+        generation = self.generation
+        assert generation is not None
+        require_retained_code(self.client)
+        title = self._migration_title(generation, receipt.migration_id)
+        self._assert_generation(generation)
+        check_cancelled()
+        try:
+            page = self.client.create_page_once(
+                title,
+                _dump(receipt),
+                "ingest: record accepted identity migration",
+            )
+        except Exception:
+            page = self.client.immutable_page(title)
+            if page is None:
+                raise
+        stored = _parse(MigrationReceipt, page)
+        if stored != receipt:
+            raise MigrationRefused(
+                "another migration receipt has different evidence"
+            )
+        self._verify_migration(stored)
+        return stored
 
     def _key(self, generation: Generation, operation: Mapping | str) -> str:
         if not isinstance(operation, (Mapping, str)) or not operation:

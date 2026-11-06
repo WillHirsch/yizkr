@@ -16,7 +16,11 @@ from yizkr.core.identity_assignments import AssignmentRefused, StaleAssignments
 from yizkr.core.write_recovery import CreationRefused, CreationRegistry
 from yizkr.pipeline.assignment_stages import accept_reviewed_assignments
 from yizkr.pipeline.identity_review import ReviewRefused, ReviewStore
-from yizkr.pipeline.review_stages import ReviewProposal, prepare_review
+from yizkr.pipeline.review_stages import (
+    ReviewProposal,
+    ReviewRequest,
+    prepare_review,
+)
 
 WHEN = "2026-01-01T12:00:00+00:00"
 
@@ -66,6 +70,55 @@ def graph_contents(wiki):
     return copy.deepcopy(
         {qid: item.get_json() for qid, item in wiki.wbi.item.store.items()}
     )
+
+
+def test_explicit_scope_keeps_same_connected_occurrence_contextual(tmp_path):
+    wiki = FakeWiki()
+    target = binding(wiki)
+    request = assigned_request(target)
+    with ReviewStore(tmp_path / "review.sqlite") as store:
+        prepared = approve(store, request)
+        selected, contextual = list(prepared.mentions.values())
+        accepted = accept_reviewed_assignments(
+            store, request, CreationRegistry(wiki), scope={selected.id}
+        )
+        assert set(accepted.snapshot.assignments) == {selected.id}
+        assert contextual.id not in accepted.snapshot.assignments
+        evidence = accepted.snapshot.history[0].delta.evidence
+        assert set(evidence.mentions) == {selected.id, contextual.id}
+        assert {
+            d["proposal"]["operation"] for d in evidence.decisions.values()
+        } == {"assign", "same"}
+        continued = accept_reviewed_assignments(
+            store, request, CreationRegistry(wiki), scope={contextual.id}
+        )
+        assert set(continued.snapshot.assignments) == {
+            selected.id,
+            contextual.id,
+        }
+        assert (
+            continued.snapshot.assignments[selected.id]
+            == accepted.snapshot.assignments[selected.id]
+        )
+
+
+def test_default_empty_request_retains_noop_but_empty_selection_refuses(
+    tmp_path,
+):
+    wiki = FakeWiki()
+    registry = CreationRegistry(wiki)
+    before = dict(wiki._recovery_pages)
+    with ReviewStore(tmp_path / "review.sqlite") as store:
+        result = accept_reviewed_assignments(
+            store, ReviewRequest(sources=()), registry
+        )
+        assert result.snapshot == registry.assignment_snapshot()
+        assert not result.awaiting_creation and not result.unassigned
+        with pytest.raises(AssignmentRefused, match="scope"):
+            accept_reviewed_assignments(
+                store, ReviewRequest(sources=()), registry, scope=set()
+            )
+    assert wiki._recovery_pages == before
 
 
 def test_reviewed_same_component_survives_reopen_and_harmless_observation(

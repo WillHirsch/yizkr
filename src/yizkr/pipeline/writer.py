@@ -493,6 +493,7 @@ from yizkr.core.wiki import ItemLabels, WikiClient
 from yizkr.core.write_recovery import (
     CreationRefused,
     CreationRegistry,
+    cluster_creation_operation,
     write_existing,
 )
 from yizkr.model.schema import load_acceptance
@@ -2418,11 +2419,7 @@ class BatchWriter:
         return None
 
     def _cluster_operation(self, cluster: str) -> dict[str, str]:
-        return {
-            "kind": "cluster",
-            "map": self._identity_hash,
-            "cluster": cluster,
-        }
+        return cluster_creation_operation(self._identity_hash, cluster)
 
     def _artifact_kind(self, qid: str) -> str | None:
         """The artifact kind of the artifact `qid`, as a source descriptor

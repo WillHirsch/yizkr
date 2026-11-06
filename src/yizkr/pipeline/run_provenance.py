@@ -29,6 +29,21 @@ from yizkr.pipeline.stages import canonical_json
 DEFAULT_RECORD_DIR = Path("var/process-records")
 
 
+def producer_run_context(manifest: Mapping[str, Any] | None) -> dict:
+    """Snapshot a supplied run identity without discovering one."""
+    if manifest is None:
+        return {}
+    run_id = manifest.get("run_id")
+    if run_id is not None and (not isinstance(run_id, str) or not run_id):
+        raise ValueError("producer run identity must be a nonempty string")
+    return {
+        "producer_run_id": run_id,
+        "producer_run_manifest_sha256": hashlib.sha256(
+            canonical_json(dict(manifest)).encode()
+        ).hexdigest(),
+    }
+
+
 def now() -> datetime:
     return datetime.now(UTC)
 

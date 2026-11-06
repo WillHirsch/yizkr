@@ -5659,17 +5659,18 @@ class TestTheStage:
         assert not again.reused
         assert again.identity_map["hash"] == made.identity_map["hash"]
 
-    def test_every_module_it_imports_reaches_its_key(self):
-        """Every yizkr module clustering.py and fingerprints.py import is
-        in CODE, whose source is in the key, or reaches the key through
-        the batches' hashes: claims parses the batches, orchestrate says
-        what a hash leaves out, and stages makes it. A module outside both
-        could change the map and leave its key standing."""
+    def test_matching_dependencies_reach_the_reuse_key(self):
+        """Matching dependencies must invalidate reused decisions.
+
+        Provenance describes the execution that made a map; changing its
+        serializer need not regenerate otherwise unchanged decisions.
+        """
         through_the_batches = {
             "yizkr.claims",
             "yizkr.pipeline.orchestrate",
             "yizkr.pipeline.stages",
         }
+        metadata_only = {"yizkr.pipeline.run_provenance"}
         in_code = {
             f"yizkr.pipeline.{name.removesuffix('.py')}"
             for name in clustering.CODE
@@ -5690,7 +5691,10 @@ class TestTheStage:
                     imported.update(alias.name for alias in node.names)
             ours = {m for m in imported if m.split(".")[0] == "yizkr"}
             assert ours, name
-            assert ours <= in_code | through_the_batches, (name, ours)
+            assert ours <= in_code | through_the_batches | metadata_only, (
+                name,
+                ours,
+            )
 
     def test_other_thresholds_or_version_make_it_again(
         self, tmp_path, monkeypatch
@@ -5730,7 +5734,12 @@ class TestTheStage:
         made.path.write_text(json.dumps(data))
         again = ensure_identity_map(directory_, documents)
         assert not again.reused
-        assert again.identity_map == made.identity_map
+        assert {
+            k: v for k, v in again.identity_map.items() if k != "provenance"
+        } == {k: v for k, v in made.identity_map.items() if k != "provenance"}
+        assert (
+            again.identity_map["provenance"] != made.identity_map["provenance"]
+        )
         made.path.write_text('{"format": 1, "mentions": ')
         assert not ensure_identity_map(directory_, documents).reused
         # a whole map, its decisions hashing to its hash, without the
