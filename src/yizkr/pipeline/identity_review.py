@@ -1,9 +1,10 @@
-"""Durable, local identity decisions over verified source occurrences.
+"""Durable local identity and historical-claim review.
 
 The SQLite store owns mention and decision identities, never graph entities.
-Generated observations and proposals are immutable revisions. A projection
-checks their current semantic basis and reports authority without writing a
-graph, changing a clustering map, or treating a rejected match as a new entity.
+Identity observations and proposals retain immutable revisions. Historical
+claim proposals bind exact meaning and support separately from identity
+consent. Current decisions can be pinned together while an external writer
+applies their scope; this store performs no graph mutation or entity creation.
 """
 
 from __future__ import annotations
@@ -89,6 +90,42 @@ class DecisionInput(_Record):
     time: str
     expected_decision_revision: int | None = None
     review_sheet_id: str | None = None
+
+
+class ClaimProposal(_Record):
+    """An immutable historical meaning and support, separate from identity."""
+
+    id: str
+    revision: Literal[1] = 1
+    basis_version: Literal[1] = 1
+    basis: dict[str, Any]
+    digest: str
+    origin: dict[str, Any]
+
+
+class ClaimDecision(_Record):
+    id: str
+    revision: int = Field(gt=0)
+    proposal: ClaimProposal
+    outcome: Outcome
+    actor: str
+    time: str
+    depicts_confirmed: bool = False
+    predecessor: dict[str, Any] | None = None
+
+    @property
+    def reference(self) -> dict[str, Any]:
+        return {"id": self.id, "revision": self.revision}
+
+
+class ClaimDecisionInput(_Record):
+    proposal_id: str
+    expected_digest: str
+    outcome: Outcome
+    actor: str
+    time: str
+    expected_decision_revision: int | None = None
+    depicts_confirmed: bool = False
 
 
 class Application(_Record):
@@ -190,6 +227,17 @@ class ReviewStore:
                 self._db.execute(
                     "CREATE TABLE IF NOT EXISTS review_sheets "
                     "(id TEXT PRIMARY KEY, data TEXT NOT NULL)"
+                )
+                self._db.execute(
+                    "CREATE TABLE IF NOT EXISTS claim_proposals "
+                    "(id TEXT PRIMARY KEY, digest TEXT UNIQUE NOT NULL, "
+                    "data TEXT NOT NULL)"
+                )
+                self._db.execute(
+                    "CREATE TABLE IF NOT EXISTS claim_decisions "
+                    "(id TEXT NOT NULL, revision INTEGER NOT NULL, "
+                    "proposal TEXT NOT NULL, data TEXT NOT NULL, "
+                    "PRIMARY KEY(id, revision), UNIQUE(proposal, revision))"
                 )
         except BaseException:
             self.close()
@@ -682,45 +730,190 @@ class ReviewStore:
         It does not make the external effect part of the SQLite transaction.
         """
         with self._transaction():
-            expected = {
-                (reference["id"], reference["revision"])
-                for reference in projection.mention_revisions
-            }
-            if expected != {(item.id, item.revision) for item in mentions}:
-                raise ReviewRefused("projection mention revisions differ")
-            for mention in mentions:
-                self._verified(mention)
-            present = {mention.id for mention in mentions}
-            relevant = {
-                proposal.id
-                for proposal in self.list_proposals()
-                if present.intersection(proposal.mentions)
-            }
-            if relevant != {
-                application.proposal_id
-                for application in projection.applications
-            }:
-                raise ReviewRefused(
-                    "identity review scope changed before acceptance"
+            self._check_projection(projection, mentions)
+            yield
+
+    def propose_claim(
+        self, basis: dict[str, Any], *, origin: dict[str, Any]
+    ) -> ClaimProposal:
+        """Persist the exact reviewed claim meaning; no fuzzy claim alignment.
+
+        A changed meaning has a new proposal. The old proposal and its decision
+        remain attached to evidence; no occurrence lineage is invented.
+        """
+        digest = sha256_text(_json({"basis_version": 1, "basis": basis}))
+        with self._transaction():
+            row = self._db.execute(
+                "SELECT data FROM claim_proposals WHERE digest=?", (digest,)
+            ).fetchone()
+            if row is not None:
+                return ClaimProposal.model_validate_json(row[0])
+            proposal = ClaimProposal(
+                id=uuid.uuid4().hex, basis=basis, digest=digest, origin=origin
+            )
+            self._db.execute(
+                "INSERT INTO claim_proposals VALUES (?,?,?)",
+                (proposal.id, digest, _dump(proposal)),
+            )
+            return proposal
+
+    def get_claim_proposal(self, proposal_id: str) -> ClaimProposal:
+        row = self._db.execute(
+            "SELECT data FROM claim_proposals WHERE id=?", (proposal_id,)
+        ).fetchone()
+        if row is None:
+            raise ReviewRefused("unknown claim proposal")
+        return ClaimProposal.model_validate_json(row[0])
+
+    def get_claim_decision(self, proposal_id: str) -> ClaimDecision | None:
+        row = self._db.execute(
+            "SELECT data FROM claim_decisions WHERE proposal=? "
+            "ORDER BY revision DESC LIMIT 1",
+            (proposal_id,),
+        ).fetchone()
+        return ClaimDecision.model_validate_json(row[0]) if row else None
+
+    def decide_claims(
+        self,
+        requests: Sequence[ClaimDecisionInput],
+        *,
+        projection: Projection,
+        mentions: Sequence[MentionRevision],
+    ) -> tuple[ClaimDecision, ...]:
+        """Record a packet under current identity and decision CAS."""
+        if len({r.proposal_id for r in requests}) != len(requests):
+            raise ReviewRefused("claim decision packet repeats a proposal")
+        results = []
+        with self._transaction():
+            self._check_projection(projection, mentions)
+            for request in requests:
+                _actor_time(request.actor, request.time)
+                proposal = self.get_claim_proposal(request.proposal_id)
+                if request.expected_digest != proposal.digest:
+                    raise ReviewRefused("altered claim review proposal")
+                depicts = (
+                    proposal.basis.get("claim", {}).get("property")
+                    == "depicts"
                 )
-            for application in projection.applications:
-                proposal = self.get_proposal(application.proposal_id)
-                decision = self.get_decision(application.proposal_id)
-                if (
-                    proposal.revision != application.proposal_revision
-                    or decision != application.decision
-                    or (
-                        application.status == "applied"
-                        and (
-                            decision is None
-                            or decision.proposal.digest != proposal.digest
-                        )
-                    )
+                if request.depicts_confirmed and (
+                    not depicts or request.outcome != "approve"
                 ):
                     raise ReviewRefused(
-                        "identity review changed before acceptance"
+                        "depicts confirmation requires its explicit approval"
+                    )
+                if (
+                    depicts
+                    and request.outcome == "approve"
+                    and not request.depicts_confirmed
+                ):
+                    raise ReviewRefused(
+                        "depicts requires explicit association confirmation"
+                    )
+                prior = self.get_claim_decision(proposal.id)
+                if prior is not None and (
+                    prior.outcome == request.outcome
+                    and prior.actor == request.actor
+                    and prior.depicts_confirmed == request.depicts_confirmed
+                ):
+                    results.append(prior)
+                    continue
+                if request.expected_decision_revision != (
+                    prior.revision if prior else None
+                ):
+                    raise ReviewRefused("claim decision changed since review")
+                decision = ClaimDecision(
+                    id=prior.id if prior else uuid.uuid4().hex,
+                    revision=prior.revision + 1 if prior else 1,
+                    proposal=proposal,
+                    outcome=request.outcome,
+                    actor=request.actor,
+                    time=request.time,
+                    depicts_confirmed=request.depicts_confirmed,
+                    predecessor=prior.reference if prior else None,
+                )
+                self._db.execute(
+                    "INSERT INTO claim_decisions VALUES (?,?,?,?)",
+                    (
+                        decision.id,
+                        decision.revision,
+                        proposal.id,
+                        _dump(decision),
+                    ),
+                )
+                results.append(decision)
+        return tuple(results)
+
+    @contextmanager
+    def pin_application(
+        self,
+        projection: Projection,
+        mentions: Sequence[MentionRevision],
+        claims: Sequence[tuple[ClaimProposal, ClaimDecision | None]],
+    ) -> Iterator[None]:
+        """Pin identity and claim decisions through external effects."""
+        with self._transaction():
+            self._check_projection(projection, mentions)
+            for proposal, expected in claims:
+                stored = self.get_claim_proposal(proposal.id)
+                decision = self.get_claim_decision(proposal.id)
+                if stored != proposal or decision != expected:
+                    raise ReviewRefused(
+                        "claim review changed before application"
+                    )
+                if decision is None or decision.outcome != "approve":
+                    raise ReviewRefused(
+                        "claim has no applicable affirmative approval"
+                    )
+                if (
+                    proposal.basis.get("claim", {}).get("property")
+                    == "depicts"
+                    and not decision.depicts_confirmed
+                ):
+                    raise ReviewRefused(
+                        "depicts requires explicit association confirmation"
                     )
             yield
+
+    def _check_projection(
+        self, projection: Projection, mentions: Sequence[MentionRevision]
+    ) -> None:
+        expected = {
+            (reference["id"], reference["revision"])
+            for reference in projection.mention_revisions
+        }
+        if expected != {(item.id, item.revision) for item in mentions}:
+            raise ReviewRefused("projection mention revisions differ")
+        for mention in mentions:
+            self._verified(mention)
+        present = {mention.id for mention in mentions}
+        relevant = {
+            proposal.id
+            for proposal in self.list_proposals()
+            if present.intersection(proposal.mentions)
+        }
+        if relevant != {
+            application.proposal_id for application in projection.applications
+        }:
+            raise ReviewRefused(
+                "identity review scope changed before acceptance"
+            )
+        for application in projection.applications:
+            proposal = self.get_proposal(application.proposal_id)
+            decision = self.get_decision(application.proposal_id)
+            if (
+                proposal.revision != application.proposal_revision
+                or decision != application.decision
+                or (
+                    application.status == "applied"
+                    and (
+                        decision is None
+                        or decision.proposal.digest != proposal.digest
+                    )
+                )
+            ):
+                raise ReviewRefused(
+                    "identity review changed before acceptance"
+                )
 
     def _project(
         self,

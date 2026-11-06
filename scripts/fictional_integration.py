@@ -25,6 +25,22 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 REQUIRED_CASES = (
     (
+        "tests.fictional_integration.test_owner_override_provenance",
+        "test_verified_owner_override_preserves_evidence_and_has_graph_provenance",
+    ),
+    (
+        "tests.fictional_integration.test_assignment_writes",
+        "test_competing_reviewed_plans_dispatch_one_historical_write",
+    ),
+    (
+        "tests.fictional_integration.test_assignment_writes",
+        "test_reviewed_writes_keep_exact_shared_support_and_assignment_roles",
+    ),
+    (
+        "tests.fictional_integration.test_assignment_writes",
+        "test_partial_writes_recover_and_ambiguous_support_refuses",
+    ),
+    (
         "tests.fictional_integration.test_identity_migration",
         "test_verified_migration_preserves_evidence_and_publishes_graph_origins",
     ),

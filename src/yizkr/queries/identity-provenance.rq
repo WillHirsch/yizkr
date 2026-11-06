@@ -12,8 +12,8 @@ WHERE {
   ?origin pr:{P:identity_record} ?record ;
           pr:{P:identity_method} ?method ;
           pr:{P:identity_assignment_revision} ?assignmentRevision ;
-          pr:{P:identity_migration_id} ?migration ;
           pr:{P:run_record_sha256} ?recordSha256 .
+  OPTIONAL { ?origin pr:{P:identity_migration_id} ?migration . }
   OPTIONAL { ?origin pr:{P:identity_decision_revision} ?originDecisionRevision . }
   OPTIONAL {
     ?origin pr:{P:identity_origin_record_sha256} ?originRecordSha256 .

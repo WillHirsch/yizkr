@@ -637,6 +637,238 @@ class CreationRegistry:
         self._verify_migration(stored)
         return stored
 
+    def _application_title(self, plan_id, claim_id=None, suffix="plan"):
+        if not re.fullmatch(_HASH, plan_id) or (
+            claim_id is not None and not re.fullmatch(_HASH, claim_id)
+        ):
+            raise ValueError("application identifiers must be SHA-256")
+        generation = self.generation
+        if generation is None:
+            raise CreationRefused(
+                "application needs an established generation"
+            )
+        scope = f"/{claim_id}" if claim_id is not None else ""
+        return (
+            f"{PREFIX}{generation.generation}/applications/"
+            f"{plan_id}{scope}/{suffix}"
+        )
+
+    def _application_record(self, title, cls, proposed=None):
+        """Read or publish an immutable record in this server authority."""
+        from yizkr.core.instance import require_retained_code
+
+        generation = self.generation
+        if proposed is not None and (
+            generation is None
+            or proposed.deployment_id != generation.deployment_id
+            or proposed.generation != generation.generation
+        ):
+            raise CreationRefused("application belongs to another generation")
+        page = self.client.immutable_page(title)
+        if page is None and proposed is not None:
+            require_retained_code(self.client)
+            self._assert_generation(generation)
+            check_cancelled()
+            try:
+                page = self.client.create_page_once(
+                    title, _dump(proposed), "ingest: reviewed application"
+                )
+            except Exception:
+                page = self.client.immutable_page(title)
+                if page is None:
+                    raise
+        if page is None:
+            return None
+        record = _parse(cls, page)
+        if generation is None or (
+            record.deployment_id != generation.deployment_id
+            or record.generation != generation.generation
+        ):
+            raise CreationRefused("application belongs to another generation")
+        self._assert_generation(generation)
+        return record
+
+    def application_plan(self, plan_id):
+        from yizkr.core.claim_applications import ApplicationPlan
+
+        record = self._application_record(
+            self._application_title(plan_id), ApplicationPlan
+        )
+        if record is not None and record.plan_id != plan_id:
+            raise CreationRefused("application plan differs from its locator")
+        return record
+
+    def record_application_plan(self, plan):
+        """Reserve a reviewed scope, retaining its first process record."""
+        from yizkr.core.claim_applications import (
+            ApplicationPlan,
+            same_reviewed_scope,
+        )
+
+        plan = ApplicationPlan.model_validate(plan.model_dump(mode="json"))
+        self._assert_generation(self.generation)
+        stored = self._application_record(
+            self._application_title(plan.plan_id), ApplicationPlan, plan
+        )
+        # Execution times/configuration are evidence of the first attempt.
+        # A concurrent or restarted attempt retains that original evidence.
+        if not same_reviewed_scope(stored, plan):
+            raise CreationRefused("application scope changed at its intent")
+        return stored
+
+    def application_intent(self, plan_id, claim_id):
+        from yizkr.core.claim_applications import (
+            SupportIntent,
+            assert_plan_claim,
+        )
+
+        plan = self.application_plan(plan_id)
+        if plan is None:
+            return None
+        claim = assert_plan_claim(plan, claim_id)
+        record = self._application_record(
+            self._application_title(plan_id, claim_id, "intent"), SupportIntent
+        )
+        if record is not None and (
+            record.plan_id != plan_id
+            or record.claim_id != claim_id
+            or {**record.support, "process": None} != claim.support
+        ):
+            raise CreationRefused("support intent differs from reviewed plan")
+        return record
+
+    def record_application_intent(self, intent):
+        """Keep the first base revision; never rebase an uncertain update."""
+        from yizkr.core.claim_applications import (
+            SupportIntent,
+            assert_plan_claim,
+        )
+
+        intent = SupportIntent.model_validate(intent.model_dump(mode="json"))
+        plan = self.application_plan(intent.plan_id)
+        if plan is None:
+            raise CreationRefused("support intent has no reviewed plan")
+        claim = assert_plan_claim(plan, intent.claim_id)
+        if {**intent.support, "process": None} != claim.support:
+            raise CreationRefused("support intent differs from approved value")
+        stored = self._application_record(
+            self._application_title(intent.plan_id, intent.claim_id, "intent"),
+            SupportIntent,
+            intent,
+        )
+        if (
+            stored.plan_id != intent.plan_id
+            or stored.claim_id != intent.claim_id
+            or stored.support != intent.support
+        ):
+            raise CreationRefused("support intent has incompatible evidence")
+        return stored
+
+    def application_receipt(self, plan_id, claim_id):
+        from yizkr.core.claim_applications import SupportReceipt
+        from yizkr.core.identity_assignments import record_digest
+
+        intent = self.application_intent(plan_id, claim_id)
+        if intent is None:
+            return None
+        record = self._application_record(
+            self._application_title(plan_id, claim_id, "receipt"),
+            SupportReceipt,
+        )
+        if record is not None and (
+            record.plan_id != plan_id
+            or record.claim_id != claim_id
+            or record.intent_sha256 != record_digest(intent)
+            or record.qid != intent.support["qid"]
+        ):
+            raise CreationRefused(
+                "application receipt differs from its intent"
+            )
+        return record
+
+    def reserve_support_dispatch(self, intent):
+        """Only one caller can dispatch at a target revision, across plans.
+
+        A missing effect after reservation is uncertain, including a stopped
+        caller that may not have sent the request. Recovery observes support;
+        it never grants another send because a query currently sees nothing.
+        """
+        from yizkr.core.claim_applications import SupportDispatch
+        from yizkr.core.identity_assignments import record_digest
+
+        stored = self.application_intent(intent.plan_id, intent.claim_id)
+        if stored != intent:
+            raise CreationRefused("dispatch lacks its exact durable intent")
+        dispatch = SupportDispatch(
+            deployment_id=intent.deployment_id,
+            generation=intent.generation,
+            qid=intent.support["qid"],
+            base_revision=intent.base_revision,
+            plan_id=intent.plan_id,
+            claim_id=intent.claim_id,
+            intent_sha256=record_digest(intent),
+            attempt=uuid.uuid4().hex,
+        )
+        title = (
+            f"{PREFIX}{intent.generation}/support-dispatch/"
+            f"{dispatch.qid}/{dispatch.base_revision}"
+        )
+        winner = self._application_record(title, SupportDispatch, dispatch)
+        if winner != dispatch:
+            raise CreationRefused(
+                "another dispatch reserved this item revision; "
+                "reconcile its visible effect before any further write"
+            )
+
+    def record_application_receipt(self, receipt):
+        """Publish exact support observed through an authoritative reread."""
+        from yizkr.core.claim_applications import SupportReceipt
+        from yizkr.core.identity_assignments import record_digest
+        from yizkr.pipeline.assigned_support import (
+            SupportPayload,
+            inspect_support,
+        )
+
+        receipt = SupportReceipt.model_validate(
+            receipt.model_dump(mode="json")
+        )
+        intent = self.application_intent(receipt.plan_id, receipt.claim_id)
+        if intent is None or receipt.intent_sha256 != record_digest(intent):
+            raise CreationRefused("support receipt lacks its exact intent")
+        state = inspect_support(
+            self.client, SupportPayload.model_validate(intent.support)
+        )
+        if not state.complete or (
+            receipt.qid != state.qid
+            or receipt.revision != state.revision
+            or receipt.statement_guid != state.guid
+            or receipt.primary_hash != state.primary_hash
+            or receipt.circumstance_hash != state.circumstance_hash
+            or receipt.primary != state.primary
+            or receipt.circumstance != state.circumstance
+            or receipt.observed_process != state.observed_process
+        ):
+            raise CreationRefused(
+                "receipt does not match current exact support"
+            )
+        stored = self._application_record(
+            self._application_title(
+                receipt.plan_id, receipt.claim_id, "receipt"
+            ),
+            SupportReceipt,
+            receipt,
+        )
+        if (
+            stored.plan_id != receipt.plan_id
+            or stored.claim_id != receipt.claim_id
+            or stored.intent_sha256 != receipt.intent_sha256
+            or stored.statement_guid != receipt.statement_guid
+            or stored.primary != receipt.primary
+            or stored.circumstance != receipt.circumstance
+        ):
+            raise CreationRefused("another receipt records different support")
+        return stored
+
     def _key(self, generation: Generation, operation: Mapping | str) -> str:
         if not isinstance(operation, (Mapping, str)) or not operation:
             raise ValueError(
