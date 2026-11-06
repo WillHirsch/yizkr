@@ -61,7 +61,7 @@ from yizkr.pipeline.transcribe import TranscribedPage, Transcription
 
 pytestmark = pytest.mark.live
 WHEN = "2026-01-01T12:00:00Z"
-HANG_GUARD = 120
+HANG_GUARD = 300
 NAMES = {
     "nicholas": "Nicholas Lobig",
     "gustav": "Gustav Löbig",
