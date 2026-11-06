@@ -111,13 +111,37 @@ def _snapshot(client):
                 }
             )["entities"]
         )
-    return (
-        entities,
-        {
-            title: client.immutable_page(title)
-            for title in client.page_titles(PREFIX)
-        },
-    )
+    titles = client.page_titles(PREFIX)
+    records = {}
+    # Raw revision/content equality proves no effects without revalidating
+    # each immutable record separately. Long registry titles keep GET batches
+    # smaller than entity batches to fit the server's request-line limit.
+    for start in range(0, len(titles), 20):
+        selected = titles[start : start + 20]
+        pages = client.api_get(
+            {
+                "action": "query",
+                "prop": "revisions",
+                "titles": "|".join(selected),
+                "rvprop": "ids|content",
+                "rvslots": "main",
+                "formatversion": "2",
+            }
+        )["query"]["pages"]
+        assert len(pages) == len(selected)
+        for page in pages:
+            assert not any(
+                k in page for k in ("missing", "invalid", "redirect")
+            )
+            (revision,) = page["revisions"]
+            assert revision["parentid"] == 0
+            assert page["title"] not in records
+            records[page["title"]] = (
+                revision["revid"],
+                revision["slots"]["main"]["content"],
+            )
+    assert records.keys() == set(titles)
+    return entities, records
 
 
 def _fixture(client, directory, suffix):
@@ -317,6 +341,15 @@ def _prepare(client, fixture, store, selections=None):
     return prepared
 
 
+def _without_snak_hashes(reference):
+    """Keep reference identity/content; WBI omits inner snak hashes."""
+    result = copy.deepcopy(reference)
+    for snaks in result["snaks"].values():
+        for snak in snaks:
+            snak.pop("hash", None)
+    return result
+
+
 def _assert_receipts(client, result):
     registry = CreationRegistry(client)
     snapshot = registry.assignment_snapshot()
@@ -344,14 +377,18 @@ def _assert_receipts(client, result):
             if s["id"] == receipt.statement_guid
         ]
         (statement,) = statements
-        references = {r["hash"]: r for r in statement["references"]}
-        assert references[receipt.primary_hash] == receipt.primary
+        references = {
+            r["hash"]: _without_snak_hashes(r) for r in statement["references"]
+        }
+        assert references[receipt.primary_hash] == _without_snak_hashes(
+            receipt.primary
+        )
         if receipt.circumstance_hash is not None:
-            assert (
-                references[receipt.circumstance_hash] == receipt.circumstance
-            )
+            assert references[
+                receipt.circumstance_hash
+            ] == _without_snak_hashes(receipt.circumstance)
         assert all(
-            references[reference["hash"]] == reference
+            references[reference["hash"]] == _without_snak_hashes(reference)
             for reference in receipt.observed_process
         )
         for role in planned.roles:
