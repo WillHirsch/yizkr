@@ -22,7 +22,7 @@ from yizkr.core.claim_applications import (
     plan_identity,
     same_reviewed_scope,
 )
-from yizkr.core.identity_assignments import record_digest
+from yizkr.core.identity_assignments import RegistryBinding, record_digest
 from yizkr.core.instance import require_retained_code
 from yizkr.core.provenance import RecordRef
 from yizkr.core.write_recovery import CreationRegistry
@@ -138,6 +138,10 @@ def _authority(registry, prepared):
     snapshot = registry.assignment_snapshot()
     if snapshot.generation is None:
         raise ApplicationRefused("application generation is missing")
+    # Repeated roles and corroborating claims share checks only within this
+    # read-only pass. Every later mutation checkpoint starts fresh.
+    entities = {}
+    sources = {}
     for claim in prepared.claims:
         if (
             claim.basis["deployment_id"] != snapshot.generation.deployment_id
@@ -145,18 +149,23 @@ def _authority(registry, prepared):
         ):
             raise ApplicationRefused("application generation changed")
         for role in claim.roles:
-            if (
-                snapshot.assignments.get(role.mention_id) != role.assignment
-                or registry.binding(role.assignment.entity_id) != role.binding
-            ):
+            if snapshot.assignments.get(role.mention_id) != role.assignment:
+                raise ApplicationRefused(
+                    "accepted assignment or binding changed"
+                )
+            entity_id = role.assignment.entity_id
+            if entity_id not in entities:
+                entities[entity_id] = registry.binding(entity_id)
+            if entities[entity_id] != role.binding:
                 raise ApplicationRefused(
                     "accepted assignment or binding changed"
                 )
         for raw in claim.provenance["artifact_bindings"].values():
-            from yizkr.core.identity_assignments import RegistryBinding
-
             binding = RegistryBinding.model_validate(raw)
-            if registry.verify_binding(binding.binding) != binding:
+            entity_id = binding.binding.entity_id
+            if entity_id not in sources:
+                sources[entity_id] = registry.verify_binding(binding.binding)
+            if sources[entity_id] != binding:
                 raise ApplicationRefused("registered source binding changed")
     properties, _ = registry.client.vocabulary()
     if (

@@ -408,6 +408,88 @@ def test_edited_chain_or_changed_generation_refuses(authority):
         registry.assignment_snapshot()
 
 
+@pytest.mark.parametrize("read", ["verify", "binding", "snapshot"])
+def test_generation_change_during_binding_verification_refuses(
+    authority, monkeypatch, read
+):
+    wiki, registry, binding, store, mentions = authority
+    registry.append_assignments(
+        delta(
+            mentions,
+            reviewed(store, mentions[:1], binding),
+            [(mentions[0], binding)],
+        ),
+        expected_head=None,
+    )
+    before = dict(wiki._recovery_pages)
+    verify = wiki.verify_creation
+
+    def changed_generation(*args):
+        verify(*args)
+        wiki._recovery_edited.add(GENERATION_PAGE)
+
+    monkeypatch.setattr(wiki, "verify_creation", changed_generation)
+    with pytest.raises(RecoveryEvidenceError, match="edited"):
+        if read == "verify":
+            registry.verify_binding(binding)
+        elif read == "binding":
+            registry.binding(binding.entity_id)
+        else:
+            registry.assignment_snapshot()
+    assert wiki._recovery_pages == before
+
+
+@pytest.mark.parametrize(
+    "damage", ["index", "intent", "dispatch", "receipt", "creation"]
+)
+def test_assignment_reads_revalidate_existing_binding_authority(
+    authority, damage
+):
+    wiki, registry, binding, store, mentions = authority
+    accepted = registry.append_assignments(
+        delta(
+            mentions,
+            reviewed(store, mentions[:2], binding),
+            [(mention, binding) for mention in mentions[:2]],
+        ),
+        expected_head=None,
+    )
+    assert registry.assignment_snapshot() == accepted
+    if damage == "creation":
+        wiki.wbi.item.creation_history[0]["hidden"] = True
+    else:
+        suffix = "/binding/1" if damage == "index" else f"/{damage}"
+        title = next(
+            title for title in wiki._recovery_pages if title.endswith(suffix)
+        )
+        wiki._recovery_edited.add(title)
+    before = dict(wiki._recovery_pages)
+    # Reuse the same registry, so a previously verified binding cannot hide
+    # changed server authority or missing creation evidence on the next pass.
+    with pytest.raises(RecoveryEvidenceError):
+        registry.assignment_snapshot()
+    with pytest.raises(RecoveryEvidenceError):
+        registry.binding(binding.entity_id)
+    assert wiki._recovery_pages == before
+
+
+def test_missing_receipt_needs_reconciliation_before_binding_index(authority):
+    wiki, registry, binding, _, _ = authority
+    registered = registry.verify_binding(binding)
+    del wiki._recovery_pages[registered.receipt_locator]
+    before = dict(wiki._recovery_pages)
+    # Creation proof alone may recover a lookup, but cannot establish an
+    # indexed receipt until the separate reconciliation operation publishes it.
+    assert registry.lookup(
+        {"kind": "fictional-assignment", "fixture": "first"}
+    )
+    with pytest.raises(CreationRefused, match="reconciliation"):
+        registry.verify_binding(binding)
+    with pytest.raises(CreationRefused, match="reconciliation"):
+        registry.index_binding(binding)
+    assert wiki._recovery_pages == before
+
+
 def test_retained_admission_refuses_before_index_or_assignment_mutation(
     authority, monkeypatch
 ):

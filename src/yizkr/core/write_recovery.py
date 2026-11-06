@@ -32,6 +32,7 @@ if TYPE_CHECKING:
         RegistryBinding,
     )
     from yizkr.core.identity_migration import MigrationReceipt
+    from yizkr.core.wiki import WikiPage
 
 PREFIX = "Project:Yizkr write recovery/"
 GENERATION_PAGE = PREFIX + "generation"
@@ -275,11 +276,23 @@ class CreationRegistry:
         revisions are separate records, and never modify the creation receipt.
         A creation whose receipt was lost first needs ordinary reconciliation.
         """
-        from yizkr.core.identity_assignments import RegistryBinding
-
         binding = EntityBinding.model_validate(binding.model_dump(mode="json"))
         generation = self.generation
-        if generation is None or (
+        if generation is None:
+            raise CreationRefused(
+                "binding belongs to another deployment generation"
+            )
+        registered = self._verify_binding(generation, binding)
+        self._assert_generation(generation)
+        return registered
+
+    def _verify_binding(
+        self, generation: Generation, binding: EntityBinding
+    ) -> RegistryBinding:
+        """Verify within a read-only pass whose caller checks generation."""
+        from yizkr.core.identity_assignments import RegistryBinding
+
+        if (
             generation.deployment_id != binding.deployment_id
             or generation.generation != binding.generation
         ):
@@ -287,7 +300,9 @@ class CreationRegistry:
                 "binding belongs to another deployment generation"
             )
         intent = self._intent(generation, binding.intent_key)
-        verified = self._binding(generation, intent) if intent else None
+        verified, page = (
+            self._read_binding(generation, intent) if intent else (None, None)
+        )
         if verified is None or verified.model_dump(
             mode="json"
         ) != binding.model_dump(mode="json"):
@@ -295,16 +310,10 @@ class CreationRegistry:
                 "binding is not proved by its creation authority"
             )
         title = self._title(generation, binding.intent_key, "receipt")
-        page = self.client.immutable_page(title)
         if page is None:
             raise CreationRefused(
                 "creation receipt needs reconciliation before indexing"
             )
-        if _parse(EntityBinding, page).model_dump(
-            mode="json"
-        ) != binding.model_dump(mode="json"):
-            raise CreationRefused("creation receipt differs from its binding")
-        self._assert_generation(generation)
         return RegistryBinding(
             binding=binding,
             receipt_locator=title,
@@ -324,11 +333,19 @@ class CreationRegistry:
 
     def binding(self, entity_id: str) -> RegistryBinding | None:
         """Read the stable entity index and verify its original receipt."""
-        from yizkr.core.identity_assignments import RegistryBinding
-
         generation = self.generation
         if generation is None:
             return None
+        registered = self._indexed_binding(generation, entity_id)
+        self._assert_generation(generation)
+        return registered
+
+    def _indexed_binding(
+        self, generation: Generation, entity_id: str
+    ) -> RegistryBinding | None:
+        """Read each binding afresh within the caller's generation checks."""
+        from yizkr.core.identity_assignments import RegistryBinding
+
         page = self.client.immutable_page(
             self._binding_title(generation, entity_id)
         )
@@ -337,12 +354,12 @@ class CreationRegistry:
         registered = _parse(RegistryBinding, page)
         if (
             registered.binding.entity_id != entity_id
-            or self.verify_binding(registered.binding) != registered
+            or self._verify_binding(generation, registered.binding)
+            != registered
         ):
             raise CreationRefused(
                 "entity index differs from its verified creation binding"
             )
-        self._assert_generation(generation)
         return registered
 
     def index_binding(self, binding: EntityBinding) -> RegistryBinding:
@@ -404,7 +421,9 @@ class CreationRegistry:
 
         def bound(entity_id):
             if entity_id not in bindings:
-                bindings[entity_id] = self.binding(entity_id)
+                bindings[entity_id] = self._indexed_binding(
+                    generation, entity_id
+                )
             return bindings[entity_id]
 
         while True:
@@ -909,6 +928,15 @@ class CreationRegistry:
     def _binding(
         self, generation: Generation, intent: _Intent
     ) -> EntityBinding | None:
+        binding, _ = self._read_binding(generation, intent)
+        if binding is not None:
+            self._assert_generation(generation)
+        return binding
+
+    def _read_binding(
+        self, generation: Generation, intent: _Intent
+    ) -> tuple[EntityBinding | None, WikiPage | None]:
+        """Read creation proof once; the caller checks its generation."""
         dispatch_page = self.client.immutable_page(
             self._title(generation, intent.intent_key, "dispatch")
         )
@@ -920,7 +948,7 @@ class CreationRegistry:
                 raise CreationRefused(
                     "creation receipt has no dispatch authority"
                 )
-            return None
+            return None, None
         if _identity(_parse(_Dispatch, dispatch_page)) != _identity(intent):
             raise CreationRefused("dispatch does not match its intent")
         if receipt_page is not None:
@@ -942,8 +970,7 @@ class CreationRegistry:
         self.client.verify_creation(
             binding.qid, binding.revision, _marker(intent)
         )
-        self._assert_generation(generation)
-        return binding
+        return binding, receipt_page
 
     def lookup(self, operation: Mapping | str) -> EntityBinding | None:
         generation = self.generation

@@ -8,6 +8,7 @@ import pytest
 from tests.unit.test_claim_review import approve, prepare
 from tests.unit.test_claim_review import case as case
 from yizkr.core.claim_applications import SupportReceipt
+from yizkr.core.identity_assignments import RegistryBinding
 from yizkr.core.write_recovery import CreationRefused, CreationRegistry
 from yizkr.pipeline import assignment_writes
 from yizkr.pipeline.assignment_writes import (
@@ -149,6 +150,31 @@ def test_an_intervening_curator_edit_does_not_rebase_a_reserved_intent(
         apply(case, prepared, tmp_path)
     assert case.wiki.wbi.item.get(target).get_json() == before
     assert not before.get("claims")
+
+
+def test_source_binding_is_rechecked_after_process_creation(
+    case, tmp_path, monkeypatch
+):
+    prepared = approved(case)
+    source = RegistryBinding.model_validate(
+        next(iter(prepared.claims[0].provenance["artifact_bindings"].values()))
+    )
+    original = assignment_writes._process_item
+
+    def change_source_authority(*args):
+        qid = original(*args)
+        case.wiki._recovery_edited.add(source.receipt_locator)
+        return qid
+
+    monkeypatch.setattr(
+        assignment_writes, "_process_item", change_source_authority
+    )
+    with pytest.raises(ApplicationInterrupted, match="edited"):
+        apply(case, prepared, tmp_path)
+    assert all(
+        not case.wiki.wbi.item.get(binding.qid).get_json().get("claims")
+        for binding in case.bindings.values()
+    )
 
 
 def test_current_changed_claim_does_not_reuse_a_prepared_approval(
