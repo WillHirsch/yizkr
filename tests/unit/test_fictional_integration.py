@@ -814,6 +814,23 @@ def test_one_group_cleanup_error_does_not_leave_its_sibling_running(docker):
     assert docker.evidence("other")["teardown"] == "passed"
     assert (docker.state / "instance.json").exists()
 
+    failed = docker.evidence("assignments")
+    assert failed["cleanup_error"]
+    # A previous attempt can also have failed to reap its Compose child.
+    failed["process_cleanup_error"] = "fictional previous reap failure"
+    put(docker.state / "assignments", "evidence.json", json.dumps(failed))
+    docker.cleanup_failure = None
+    lane.execute("down", docker.state)
+
+    docker.assert_clean()
+    assert docker.evidence()["status"] == "failed"
+    assert docker.evidence()["revision"] == "fixture-revision"
+    for name in lane.GROUPS:
+        recovered = docker.evidence(name)
+        assert recovered["teardown"] == "passed"
+        assert "cleanup_error" not in recovered
+        assert "process_cleanup_error" not in recovered
+
 
 @pytest.mark.parametrize("command", ["run", "down"])
 def test_leftover_group_volume_fails_lane_and_keeps_recovery_marker(
@@ -851,6 +868,22 @@ def test_down_recovers_both_groups_and_legacy_without_staging_sources(
     }
     assert docker.active == set()
     assert not (docker.state / "instance.json").exists()
+
+
+def test_down_removes_projects_even_when_evidence_is_not_an_object(docker):
+    lane.execute("down", docker.state)
+    docker.active.update(docker.down)
+    for folder, content in (
+        (docker.state, "[]"),
+        (docker.state / "assignments", "null"),
+        (docker.state / "other", "false"),
+    ):
+        put(folder, "evidence.json", content)
+    put(docker.state, "instance.json", '{"status": "interrupted"}')
+
+    lane.execute("down", docker.state)
+
+    docker.assert_clean()
 
 
 def test_distinct_state_directories_control_disjoint_projects(
