@@ -73,6 +73,10 @@ REQUIRED_CASES = (
         "tests.fictional_integration.test_write_recovery",
         "test_concurrent_creation_reserves_one_dispatch",
     ),
+    (
+        "tests.fictional_integration.test_graph_projection",
+        "test_recorded_graph_projection_replays_and_refuses_stale_capture",
+    ),
 )
 GROUPS = {
     "assignments": tuple(

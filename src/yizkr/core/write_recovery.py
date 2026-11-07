@@ -340,6 +340,40 @@ class CreationRegistry:
         self._assert_generation(generation)
         return registered
 
+    def indexed_bindings(self) -> dict[str, RegistryBinding]:
+        """Read the verified entity index by QID without adding bindings.
+
+        Unindexed items remain unbound. A display match or an unindexed
+        creation receipt never supplies an implicit index entry.
+        """
+        generation = self.generation
+        if generation is None:
+            raise CreationRefused("binding catalog requires a generation")
+        prefix = PREFIX + generation.generation + "/entities/"
+        local_prefix = prefix.removeprefix("Project:")
+        bindings = {}
+        for title in self.client.page_titles(prefix):
+            # Enumeration is already restricted to namespace 4. MediaWiki
+            # returns its canonical name, which can differ from Project:.
+            namespace, separator, local_title = title.partition(":")
+            match = re.fullmatch(
+                re.escape(local_prefix) + r"([0-9a-f]{32})/binding/1",
+                local_title,
+            )
+            if not namespace or not separator or match is None:
+                raise CreationRefused("unrecognized entity binding index")
+            binding = self._indexed_binding(generation, match[1])
+            if binding is None:
+                raise CreationRefused("enumerated binding index is missing")
+            qid = binding.binding.qid
+            if qid in bindings:
+                raise CreationRefused(
+                    "multiple indexed identities name one item"
+                )
+            bindings[qid] = binding
+        self._assert_generation(generation)
+        return bindings
+
     def _indexed_binding(
         self, generation: Generation, entity_id: str
     ) -> RegistryBinding | None:

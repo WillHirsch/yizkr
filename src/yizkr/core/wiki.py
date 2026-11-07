@@ -217,6 +217,51 @@ class WikiClient:
                 }
         return entities
 
+    def entity_revisions(self, ids: list[str]) -> dict[str, int]:
+        """Read exact current revisions of the supplied live P/Q entities.
+
+        Missing, redirected or incomplete responses refuse the whole read;
+        an absent revision cannot establish query-service completeness.
+        """
+        if len(set(ids)) != len(ids) or any(
+            not re.fullmatch(r"[PQ][1-9][0-9]*", entity_id)
+            for entity_id in ids
+        ):
+            raise ValueError("entity revisions require distinct P/Q IDs")
+        revisions = {}
+        for start in range(0, len(ids), 50):
+            batch = ids[start : start + 50]
+            data = self.api_get(
+                {
+                    "action": "wbgetentities",
+                    "ids": "|".join(batch),
+                    "props": "info",
+                }
+            )
+            entities = data.get("entities")
+            if not isinstance(entities, dict) or set(entities) != set(batch):
+                raise RecoveryEvidenceError(
+                    "entity revision read is incomplete"
+                )
+            for entity_id, entity in entities.items():
+                if not isinstance(entity, dict):
+                    raise RecoveryEvidenceError(
+                        "entity revision response is invalid"
+                    )
+                revision = entity.get("lastrevid")
+                if (
+                    entity.get("id") != entity_id
+                    or "missing" in entity
+                    or "redirects" in entity
+                    or type(revision) is not int
+                    or revision <= 0
+                ):
+                    raise RecoveryEvidenceError(
+                        "entity revision is missing or redirected"
+                    )
+                revisions[entity_id] = revision
+        return revisions
+
     def fetch_claims(self, ids: list[str]) -> dict[str, dict]:
         """id -> its statements, as `wbgetentities` gives them, for the
         entities `ids` alone, 50 a request: what a reader that needs the
