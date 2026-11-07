@@ -2886,6 +2886,8 @@ class BatchWriter:
         value,
         result: WriteResult,
         source_artifact_qid: str | None,
+        *,
+        resolve=None,
     ):
         from wikibaseintegrator.datatypes import (
             ExternalID,
@@ -2901,8 +2903,12 @@ class BatchWriter:
         if isinstance(value, ItemValue):
             return Item(
                 prop_nr=pid,
-                value=self._resolve_ref(
-                    value.value, result, source_artifact_qid
+                value=(
+                    resolve(value.value)
+                    if resolve is not None
+                    else self._resolve_ref(
+                        value.value, result, source_artifact_qid
+                    )
                 ),
             )
         # text, a claim's value or a qualifier's, goes in the form the

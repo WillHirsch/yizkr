@@ -412,7 +412,7 @@ def test_verified_migration_preserves_evidence_and_publishes_graph_origins(
     rows = [
         row
         for row in sparql.select(client.config.sparql_url, query)
-        if row["migration"]["value"] == receipt.migration_id
+        if row.get("migration", {}).get("value") == receipt.migration_id
     ]
     assert rows
     uri = client.config.concept_uri + "/entity/"

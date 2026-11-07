@@ -17,7 +17,7 @@ from pathlib import Path
 from wikibaseintegrator.datatypes import Item, String
 from wikibaseintegrator.models import Reference
 
-from yizkr.core.identity_assignments import record_digest
+from yizkr.core.identity_assignments import RegistryBinding, record_digest
 from yizkr.core.instance import require_retained_code
 from yizkr.core.provenance import ProcessRecord, RecordRef
 from yizkr.core.write_recovery import CreationRegistry, write_existing
@@ -29,6 +29,7 @@ from yizkr.pipeline.run_statements import (
     ensure_run_statements,
     validate_run_statements,
 )
+from yizkr.pipeline.source_bindings import unique_source_qids
 
 METHOD_ITEMS = {
     "confident": "identity_confident",
@@ -45,6 +46,15 @@ RECORD_KIND = "identity_decision_record"
 
 class IdentityProvenanceRefused(ValueError):
     """Saved authority or current graph evidence cannot support projection."""
+
+
+@dataclass(frozen=True)
+class IdentitySource:
+    mention_id: str
+    artifact_sha1: str
+    kind: str
+    binding: RegistryBinding
+    method: str
 
 
 @dataclass(frozen=True)
@@ -202,39 +212,18 @@ def _read_evidence(registry, migration_id, directory):
     return receipt, record, assignments, decisions, producer
 
 
-def _sources(client, property_id, wanted):
-    # Unlike the registrar's compatibility index, provenance cannot choose the
-    # earliest QID when duplicate source hashes make support ambiguous.
-    candidates = {sha1: set() for sha1 in wanted}
-    active = {sha1: set() for sha1 in wanted}
-    for qid, entity in client.iter_entities("claims"):
-        for statement in entity.get("claims", {}).get(property_id, []):
-            value = (statement.get("mainsnak", {}).get("datavalue") or {}).get(
-                "value"
-            )
-            if isinstance(value, str) and value.lower() in candidates:
-                candidates[value.lower()].add(qid)
-                if statement.get("rank") != "deprecated":
-                    active[value.lower()].add(qid)
-    if any(
-        len(qids) != 1 or active[sha1] != qids
-        for sha1, qids in candidates.items()
-    ):
-        raise IdentityProvenanceRefused(
-            "migration source is missing or ambiguous"
+def _targets(client, sources_to_locate, properties, items):
+    try:
+        sources = unique_source_qids(
+            client,
+            properties["media_sha1"],
+            {c.artifact_sha1 for c in sources_to_locate},
         )
-    return {sha1: next(iter(qids)) for sha1, qids in candidates.items()}
-
-
-def _targets(client, receipt, properties, items):
-    sources = _sources(
-        client,
-        properties["media_sha1"],
-        {c.artifact_sha1 for c in receipt.correspondences},
-    )
+    except ValueError as exc:
+        raise IdentityProvenanceRefused(str(exc)) from exc
     found = []
     entities = {}
-    for correspondence in receipt.correspondences:
+    for correspondence in sources_to_locate:
         qid = correspondence.binding.binding.qid
         if qid not in entities:
             entities[qid] = client.wbi.item.get(qid)
@@ -262,30 +251,34 @@ def _targets(client, receipt, properties, items):
     return entities, found
 
 
-def _references(
-    receipt,
-    correspondence,
+def identity_references(
     assignment,
-    decisions,
+    decision,
     properties,
     items,
     record_qid,
-    producer,
+    *,
+    record_sha256,
+    method,
+    producer=None,
+    migration_id=None,
 ):
+    """Separate the assignment's origin from its affirmative confirmation."""
     origin = Reference()
     for snak in (
         Item(prop_nr=properties["identity_record"], value=record_qid),
         Item(
             prop_nr=properties["identity_method"],
-            value=items[METHOD_ITEMS[correspondence.method]],
+            value=items[METHOD_ITEMS[method]],
         ),
         _string(
             properties, "identity_assignment_revision", assignment.revision_id
         ),
-        _string(properties, "identity_migration_id", receipt.migration_id),
-        _string(properties, "run_record_sha256", receipt.record_sha256),
+        _string(properties, "run_record_sha256", record_sha256),
     ):
         origin.add(snak)
+    if migration_id is not None:
+        origin.add(_string(properties, "identity_migration_id", migration_id))
     if producer is not None:
         origin.add(
             _string(
@@ -308,7 +301,6 @@ def _references(
             )
         )
     yield origin
-    decision = decisions[correspondence.mention_id]
     confirmation = Reference()
     for snak in (
         Item(prop_nr=properties["identity_record"], value=record_qid),
@@ -322,7 +314,7 @@ def _references(
         ),
         _string(properties, "identity_confirmation_actor", decision.actor),
         _string(properties, "identity_confirmation_at", decision.time),
-        _string(properties, "run_record_sha256", receipt.record_sha256),
+        _string(properties, "run_record_sha256", record_sha256),
     ):
         confirmation.add(snak)
     yield confirmation
@@ -344,34 +336,75 @@ def publish_identity_provenance(
     receipt, record, assignments, decisions, producer = _read_evidence(
         registry, migration_id, record_dir
     )
+    sources = tuple(
+        IdentitySource(
+            c.mention_id, c.artifact_sha1, c.kind, c.binding, c.method
+        )
+        for c in receipt.correspondences
+    )
+
+    def references(source, properties, items, qid):
+        return identity_references(
+            assignments[source.mention_id],
+            decisions[source.mention_id],
+            properties,
+            items,
+            qid,
+            record_sha256=receipt.record_sha256,
+            method=source.method,
+            producer=producer,
+            migration_id=migration_id,
+        )
+
+    return publish_identity_record(
+        client,
+        registry=registry,
+        record=record,
+        record_sha256=receipt.record_sha256,
+        operation={
+            "kind": "identity-provenance",
+            "migration": migration_id,
+            "record": receipt.record_sha256,
+        },
+        label=f"Identity decision record {migration_id[:16]}",
+        sources=sources,
+        references=references,
+        revalidate=lambda: _read_evidence(registry, migration_id, record_dir),
+        dry_run=dry_run,
+    )
+
+
+def publish_identity_record(
+    client,
+    *,
+    registry,
+    record,
+    record_sha256,
+    operation,
+    label,
+    sources,
+    references,
+    revalidate,
+    dry_run=False,
+):
+    """Publish one verified identity record and append exact kind references.
+
+    The caller supplies immutable authority and revalidates it before effects.
+    This common projection does not establish assignments or historical kinds.
+    """
+    revalidate()
     properties, items = client.vocabulary()
     try:
         validate_run_statements(client, record, record_kind=RECORD_KIND)
-        entities, targets = _targets(client, receipt, properties, items)
+        entities, targets = _targets(client, sources, properties, items)
         # A harmless placeholder validates all reference values and vocabulary
         # before the process item can be created.
         for correspondence, _, _ in targets:
-            list(
-                _references(
-                    receipt,
-                    correspondence,
-                    assignments[correspondence.mention_id],
-                    decisions,
-                    properties,
-                    items,
-                    "Q1",
-                    producer,
-                )
-            )
+            list(references(correspondence, properties, items, "Q1"))
     except KeyError as exc:
         raise IdentityProvenanceRefused(
             f"identity provenance needs current model bootstrap: {exc.args[0]}"
         ) from exc
-    operation = {
-        "kind": "identity-provenance",
-        "migration": migration_id,
-        "record": receipt.record_sha256,
-    }
     binding = registry.lookup(operation)
     statements = tuple(
         sorted({(c.binding.binding.qid, guid) for c, guid, _ in targets})
@@ -382,9 +415,9 @@ def publish_identity_provenance(
     if not dry_run:
         require_retained_code(client)
         item = client.wbi.item.new()
-        item.labels.set("en", f"Identity decision record {migration_id[:16]}")
+        item.labels.set("en", label)
         binding = registry.create(
-            operation, item, summary="identity: verified migration provenance"
+            operation, item, summary="identity: verified decision provenance"
         )
         created = binding.created
     assert binding is not None
@@ -393,7 +426,7 @@ def publish_identity_provenance(
             client,
             binding.qid,
             record,
-            receipt.record_sha256,
+            record_sha256,
             dry_run=dry_run,
             record_kind=RECORD_KIND,
         )
@@ -401,8 +434,8 @@ def publish_identity_provenance(
     )
     # Creation/metadata writes may have been interrupted or overlapped curator
     # work. Recheck authority and use fresh items, preserving current ranks.
-    _read_evidence(registry, migration_id, record_dir)
-    entities, current_targets = _targets(client, receipt, properties, items)
+    revalidate()
+    entities, current_targets = _targets(client, sources, properties, items)
     if targets != current_targets:
         raise IdentityProvenanceRefused(
             "source-backed kind statement changed during publication"
@@ -411,15 +444,8 @@ def publish_identity_provenance(
     blocks = {}
     for correspondence, guid, _ in current_targets:
         qid = correspondence.binding.binding.qid
-        for reference in _references(
-            receipt,
-            correspondence,
-            assignments[correspondence.mention_id],
-            decisions,
-            properties,
-            items,
-            binding.qid,
-            producer,
+        for reference in references(
+            correspondence, properties, items, binding.qid
         ):
             key = _reference_key(reference)
             expected.setdefault((qid, guid), set()).add(key)
@@ -428,20 +454,20 @@ def publish_identity_provenance(
         if not dry_run:
             check_cancelled()
             require_retained_code(client)
-            _read_evidence(registry, migration_id, record_dir)
-            entities, refreshed = _targets(client, receipt, properties, items)
+            revalidate()
+            entities, refreshed = _targets(client, sources, properties, items)
             if refreshed != current_targets:
                 raise IdentityProvenanceRefused(
                     "source-backed kind statement changed during publication"
                 )
         item = entities[qid]
         altered = False
-        for (target, guid), references in blocks.items():
+        for (target, guid), reference_blocks in blocks.items():
             if target != qid:
                 continue
             statement = next(s for s in item.claims if s.id == guid)
             present = {_reference_key(r) for r in statement.references}
-            for key, reference in references.items():
+            for key, reference in reference_blocks.items():
                 if key not in present:
                     altered = True
                     if not dry_run:
@@ -454,16 +480,16 @@ def publish_identity_provenance(
                     summary="identity: append origin and confirmation",
                 )
     if not dry_run:
-        _read_evidence(registry, migration_id, record_dir)
-        _, refreshed = _targets(client, receipt, properties, items)
+        revalidate()
+        _, refreshed = _targets(client, sources, properties, items)
         if refreshed != current_targets:
             raise IdentityProvenanceRefused(
                 "source-backed kind statement changed during publication"
             )
-        for (qid, guid), references in expected.items():
+        for (qid, guid), expected_keys in expected.items():
             item = client.wbi.item.get(qid)
             matches = [s for s in item.claims if s.id == guid]
-            if len(matches) != 1 or not references <= {
+            if len(matches) != 1 or not expected_keys <= {
                 _reference_key(r) for r in matches[0].references
             }:
                 raise IdentityProvenanceRefused(
