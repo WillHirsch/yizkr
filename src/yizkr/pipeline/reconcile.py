@@ -1,33 +1,24 @@
-"""Entity reconciliation (ADR-0007): proposals, never assertions.
+"""Entity reconciliation from explicit roster and containment inputs.
 
-Deterministic parts first — a roster prefetch of every graph entity
-(one SPARQL query; a family archive's roster fits a prompt for years)
-and candidate blocking (shared kind + a shared whole name form). Only
-then an
-LLM adjudication call, which weighs RELATIONAL evidence (same spouse,
-compatible dates beats edit distance) and emits equivalence proposals.
+Candidate blocking compares shared kinds and whole name forms. Optional
+LLM adjudication weighs relational facts and returns equivalence advice.
+Cohort matching records that advice in JSON; model verdicts supply no
+human approval.
 
-Every proposal lands in a review CSV with the same approve/reject
-contract as claim review; a human approves each equivalence before it
-takes effect (identity is never auto-confirmed — a wrong merge corrupts
-every downstream attribution). Approved matches are applied by
-`apply_equivalences`, which sets EntityRecord.qid and rewrites local
-refs to the existing item, so the writer attaches claims (and the
-document's aliases) there instead of minting a duplicate.
+`fetch_roster` and `fetch_place_containment` read the graph for live
+curator commands and recorded captures. Cohort matching replays recorded
+inputs without a wiki connection. The document stages in `ingest run`
+still do not read the graph before writing. Roster reads refuse dates
+before the common era or outside the proleptic Gregorian calendar.
 
-The same blocking + adjudication over roster x roster proposes pairs of
-EXISTING items (`propose_graph_pairs`) — cleanup of duplicates already
-in the graph. Executing those is a curator action: a MediaWiki item
-merge, or a referenced `said to be the same as` statement when the
-equivalence is itself a contestable judgement.
+The legacy CSV route collects explicit human approval.
+`apply_equivalences` applies approved matches by setting EntityRecord.qid
+and rewriting local references to existing items for the writer.
 
-Blocking and adjudication take the roster and place containment as explicit
-inputs. `fetch_roster` and `fetch_place_containment` supply live curator
-commands and recorded graph capture; cohort matching replays the recorded
-inputs without connecting to the wiki. The document stages in `ingest run`
-still do not read the graph before writing. Roster capture refuses dates
-before the common era or outside the proleptic Gregorian calendar, so those
-unsupported dates are never presented as adjudication facts.
+`propose_graph_pairs` uses blocking and adjudication to suggest
+equivalences between existing items. Acting on those suggestions remains
+a separate curator operation: an item merge or a referenced
+`said to be the same as` statement for a contestable identity judgement.
 """
 
 from __future__ import annotations

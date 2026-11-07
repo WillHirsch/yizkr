@@ -80,7 +80,7 @@ class MatchingReview(_Record):
 
 
 class CandidateMatch(_Record):
-    """Displayed facts; projection digest and QID identify the full row."""
+    """Displayed facts, linked to a projection row by digest, QID and kind."""
 
     qid: str = Field(pattern=r"^Q[1-9][0-9]*$")
     label: str
