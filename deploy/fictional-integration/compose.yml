@@ -116,7 +116,8 @@ services:
       PYTHONDONTWRITEBYTECODE: "1"
     volumes:
       - test-state:/state
-    command: [python, -m, pytest, -o, "addopts=", -m, live, tests/fictional_integration, -v, -x, --durations=20, --junitxml=/state/results.xml]
+    # The launcher selects and validates the complete fixed case groups.
+    command: [python, -c, "raise SystemExit('Run make test-integration to select the required fixture groups.')"]
 
 networks:
   default:

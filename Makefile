@@ -35,7 +35,7 @@ test:               ## offline unit tests
 test-live:          ## integration tests against the running stack (make up first)
 	$(UV) run pytest -m live tests/integration -v
 
-test-integration:   ## required fictional writer/query lane; creates and removes its own stack
+test-integration:   ## required fictional writer/query lane; creates and removes its own stacks
 	python3 scripts/fictional_integration.py run $(ARGS)
 
 integration-down:   ## recover only this checkout's fictional lane after a hard kill

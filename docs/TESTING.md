@@ -107,11 +107,26 @@ The designated lane is CI's `fictional-integration` job, run on pull requests, m
 make test-integration
 # Select an explicit evidence/lock directory when needed:
 make test-integration ARGS="--state /tmp/yizkr-fictional-evidence"
+# Run one fresh group at a time on a host with less available memory:
+make test-integration ARGS="--sequential"
 ```
 
-The launcher needs Python 3.11+, Git and Docker with Compose on the local socket; host package installation and `deploy/.env` are unnecessary. It stages only its allowlisted repository source, fixtures and deployment controls into a build context, builds the test image with the locked Python dependencies, and starts a new MariaDB, Wikibase and WDQS stack. All twelve required cases must run and pass: setup failure, test failure, a skipped case or an omitted case fails the invocation. Pytest stops after the first failure and reports the twenty slowest test stages; the launcher still captures evidence and tears down the stack. An incomplete run cannot pass the required-case check. The default offline command deselects these tests; invoking a test directly without its dedicated setup fails rather than falling back to another deployment.
+The launcher needs Python 3.11+, Git and Docker with Compose on the local socket; host package installation and `deploy/.env` are unnecessary. It stages only its allowlisted repository source, fixtures and deployment controls, and builds one test image with the locked Python dependencies. The three assignment-writing cases and the remaining nine cases run in two fresh MariaDB/Wikibase/WDQS stacks. Their test processes run concurrently within the same runner and Actions job; each stack starts empty, so unrelated groups do not inherit each other's fixture history. `--sequential` runs and removes one group before starting the other, with the same required coverage.
 
-[The dedicated Compose file](../deploy/fictional-integration/compose.yml) is independent of the archive deployment. Its fixed fictional credentials and connection settings, project-specific volumes, instance records and locks never inherit archive defaults. The services use an internal network with no published ports; no archive credentials, corpus directories, runtime state or Docker socket are mounted into them. The only host bind mount is a staged copy of the tracked upload configuration. The checkout and selected state directory determine a separate project identity, and a nonblocking lock refuses concurrent use of that lane. Different worktrees have separate projects and locks.
+```mermaid
+flowchart TD
+    A["One runner: launcher"] --> B["Stage and build one image"]
+    B --> C["Assignment writes: 3 cases<br/>Isolated stack"]
+    B --> D["Other boundaries: 9 cases<br/>Isolated stack"]
+    C --> E["Validate all 12 cases<br/>Collect evidence"]
+    D --> E
+    E --> F["Teardown both stacks"]
+    A -. "Failure or interruption" .-> F
+```
+
+All twelve required cases must run exactly once and pass. Setup failure, test failure, a skipped, omitted, duplicated or unexpected case fails the invocation. Each group stops after its first failure and reports the twenty slowest test stages; failure or interruption stops its sibling and cleans both projects. An incomplete run cannot pass the aggregate required-case check. The default offline command deselects these tests; invoking a test directly without its dedicated setup fails rather than falling back to another deployment.
+
+[The dedicated Compose file](../deploy/fictional-integration/compose.yml) is independent of the archive deployment. Its fixed fictional credentials and connection settings, project-specific volumes, instance records and locks never inherit archive defaults. Each group's services use their own internal network with no published ports; no archive credentials, corpus directories, runtime state or Docker socket are mounted into them. The only host bind mount is a staged copy of the tracked upload configuration. The checkout, selected state directory and group determine each project identity, and a nonblocking lock refuses concurrent use of that lane. Different worktrees have separate projects and locks.
 
 The required case in [test_write_query.py](../tests/fictional_integration/test_write_query.py) bootstraps the real model, uploads the two authored fictional birth-source texts, creates their person through a declared identity map and writes both contradictory birth dates through `BatchWriter`. Fresh API reads verify two normal-rank values at day precision with separate source and process references, page locations and excerpts. Before querying, the test waits until WDQS's `schema:version` reaches each entity's current MediaWiki revision, including the query vocabulary. It then runs the production disagreement-report query and checks both attributed rows. A fresh client repeats bootstrap, registration and both writes; entity IDs, statements, references and query results must remain unchanged.
 
@@ -127,7 +142,7 @@ The three required [assignment-write cases](../tests/fictional_integration/test_
 
 The required [owner-override case](../tests/fictional_integration/test_owner_override_provenance.py) distinguishes ordinary approval from a rejected candidate followed by an explicitly reviewed replacement. It exercises the accepted evidence and graph projection boundary, preserving existing sourced kind statements, ranks and references while exposing override origin and human confirmation separately. It does not authorize movement of an established assignment.
 
-Every invocation starts from empty volumes and removes its own containers, volumes and network after success or failure. It keeps `evidence.json`, JUnit `results.xml` when the test process ran, and `services.log` under the selected state directory (by default a checkout-specific directory beneath the system temporary directory). Evidence records the tested Git revision, dirty-tree flag, source-content hash, image IDs and actual non-skipped cases. CI uploads these files as `fictional-integration-evidence`. A dirty-tree run identifies its source hash but is not evidence for an unchanged commit; record the relevant revision and command in the PR. Before #159 retains the shared instance, retain a successful demonstration of this lane and its real checks.
+Every invocation starts from empty volumes and removes its own containers, volumes and networks after success or failure. The selected state directory (by default a checkout-specific directory beneath the system temporary directory) keeps aggregate `evidence.json` and JUnit `results.xml`, with each group's evidence, available JUnit results and test/service logs under `assignments/` and `other/`. Evidence records the tested Git revision, dirty-tree flag, source-content hash, image IDs, actual non-skipped cases and cleanup outcomes. CI uploads the directory as `fictional-integration-evidence`. A dirty-tree run identifies its source hash but is not evidence for an unchanged commit; record the relevant revision and command in the PR. Before #159 retains the shared instance, retain a successful demonstration of this lane and its real checks.
 
 The launcher handles ordinary interruption with teardown. After a hard kill or failed cleanup, recover only this lane with the same state selection:
 
@@ -137,7 +152,7 @@ make integration-down
 make integration-down ARGS="--state /tmp/yizkr-fictional-evidence"
 ```
 
-Recovery refuses while another invocation holds that lane's lock. It does not reset or stop the archive deployment. The fixture clears only its own instance-contents record at entry and exit. Missing integration evidence still blocks affected persistence changes, not unrelated work.
+Recovery refuses while another invocation holds that lane's lock. It cleans both group projects and any unsuffixed fictional project left by an interrupted earlier launcher, without staging application sources. It does not reset or stop the archive deployment. Each fixture clears only its own instance-contents record at entry and exit. Missing integration evidence still blocks affected persistence changes, not unrelated work.
 
 ### Additional live checks on an explicit disposable target
 
