@@ -12,6 +12,7 @@ import json
 import re
 import urllib.error
 import urllib.parse
+from types import MappingProxyType
 
 import pytest
 import yaml
@@ -211,10 +212,19 @@ PEOPLE = [
 ]
 
 
+_PROPERTY_IDS = MappingProxyType(
+    {
+        key: f"P{n}"
+        for n, key in enumerate(
+            yaml.safe_load(read_manifest_data())["properties"], 1
+        )
+    }
+)
+
+
 def property_id(key: str) -> str:
     """A manifest property's id as the ``vocabulary`` fixture numbers it."""
-    raw = yaml.safe_load(read_manifest_data())
-    return f"P{list(raw['properties']).index(key) + 1}"
+    return _PROPERTY_IDS[key]
 
 
 def qualifier_cells(*qualifiers: tuple[str, str, str]) -> str:

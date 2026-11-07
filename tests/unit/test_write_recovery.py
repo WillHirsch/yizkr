@@ -290,31 +290,91 @@ class ApiClient(WikiClient):
         return self.answer(params)
 
 
+def immutable_response(params, page, *, events=()):
+    """A query can independently request log entries and page revisions."""
+    query = {}
+    if params.get("list") == "logevents":
+        query["logevents"] = [
+            event for event in events if event["type"] == params["letype"]
+        ]
+    if params.get("prop") == "revisions":
+        query["pages"] = [page]
+    return {"query": query}
+
+
+def immutable_record(*, text="{}", revision=4, parent=0):
+    return {
+        "title": GENERATION_PAGE,
+        "revisions": [
+            {
+                "revid": revision,
+                "parentid": parent,
+                "slots": {"main": {"content": text}},
+            }
+        ],
+    }
+
+
+def test_immutable_api_record_reads_content_with_two_query_budget():
+    client = ApiClient(
+        lambda params: immutable_response(params, immutable_record())
+    )
+
+    assert client.immutable_page(GENERATION_PAGE) == WikiPage(
+        GENERATION_PAGE, "{}", 4
+    )
+    # Immutable evidence reads dominate the real integration suite. Keep
+    # this request budget while the refusal cases protect both log checks.
+    assert len(client.calls) <= 2
+    assert all(call["letitle"] == GENERATION_PAGE for call in client.calls)
+    content_reads = [c for c in client.calls if c.get("prop") == "revisions"]
+    assert len(content_reads) == 1
+    assert content_reads[0]["titles"] == GENERATION_PAGE
+
+
 @pytest.mark.parametrize("parent,hidden", [(1, False), (0, True)])
 def test_immutable_api_record_rejects_edits_or_hidden_content(parent, hidden):
-    def answer(params):
-        if params.get("list") == "logevents":
-            return {"query": {"logevents": []}}
-        slot = {} if hidden else {"content": "{}"}
-        return {
-            "query": {
-                "pages": [
-                    {
-                        "title": GENERATION_PAGE,
-                        "revisions": [
-                            {
-                                "revid": 4,
-                                "parentid": parent,
-                                "slots": {"main": slot},
-                            }
-                        ],
-                    }
-                ]
-            }
-        }
+    page = immutable_record(parent=parent)
+    if hidden:
+        page["revisions"][0]["slots"]["main"].pop("content")
+    client = ApiClient(lambda params: immutable_response(params, page))
 
-    with pytest.raises(RecoveryEvidenceError):
-        ApiClient(answer).immutable_page(GENERATION_PAGE)
+    message = (
+        "content or revision is unavailable"
+        if hidden
+        else "not an immutable initial revision"
+    )
+    with pytest.raises(RecoveryEvidenceError, match=message):
+        client.immutable_page(GENERATION_PAGE)
+
+
+@pytest.mark.parametrize(
+    "log_type,action",
+    [("delete", "delete"), ("delete", "restore"), ("move", "move")],
+)
+def test_immutable_api_record_rejects_logged_changes_despite_initial_content(
+    log_type, action
+):
+    event = {"logid": 1, "type": log_type, "action": action}
+    client = ApiClient(
+        lambda params: immutable_response(
+            params, immutable_record(), events=[event]
+        )
+    )
+
+    with pytest.raises(RecoveryEvidenceError, match="deleted or moved"):
+        client.immutable_page(GENERATION_PAGE)
+
+
+def test_immutable_api_record_absent_without_logs_is_unused():
+    client = ApiClient(
+        lambda params: immutable_response(
+            params, {"title": GENERATION_PAGE, "missing": True}
+        )
+    )
+
+    assert client.immutable_page(GENERATION_PAGE) is None
+    assert len(client.calls) <= 2
 
 
 def test_deleted_dispatch_cannot_be_treated_as_an_unused_title():
@@ -429,24 +489,9 @@ def test_createonly_api_never_retries_or_overwrites(monkeypatch, outcome):
         return {"edit": {"result": "Success"}}
 
     def answer(params):
-        if params.get("list") == "logevents":
-            return {"query": {"logevents": []}}
-        return {
-            "query": {
-                "pages": [
-                    {
-                        "title": GENERATION_PAGE,
-                        "revisions": [
-                            {
-                                "revid": 8,
-                                "parentid": 0,
-                                "slots": {"main": {"content": existing}},
-                            }
-                        ],
-                    }
-                ]
-            }
-        }
+        return immutable_response(
+            params, immutable_record(text=existing, revision=8)
+        )
 
     monkeypatch.setattr(wbi_helpers, "mediawiki_api_call_helper", send)
     client = ApiClient(answer)

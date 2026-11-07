@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import ast
 import re
-import shutil
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -218,17 +217,16 @@ def importers(root: Path) -> dict[str, list[str]]:
 
 
 def test_only_engine_execution_imports_the_cache():
+    found = importers(SRC)
     outside = {
-        path: reasons
-        for path, reasons in importers(SRC).items()
-        if path not in ALLOWED
+        path: reasons for path, reasons in found.items() if path not in ALLOWED
     }
     assert outside == {}, (
         "only engine execution may import the LLM cache: take a client "
         "from the factory instead (ADR-0032)"
     )
     # the factory does import it, so the rule is not passed vacuously
-    assert "yizkr/pipeline/llm.py" in importers(SRC)
+    assert "yizkr/pipeline/llm.py" in found
 
 
 # -- planted imports are caught ---------------------------------------------
@@ -348,9 +346,13 @@ def test_a_relative_import_in_a_package_init_is_caught():
 
 def test_a_planted_import_fails_the_tree(tmp_path):
     tree = tmp_path / "yizkr"
-    shutil.copytree(SRC, tree, ignore=shutil.ignore_patterns("__pycache__"))
-    assert set(importers(tree)) <= ALLOWED
-    target = tree / "pipeline" / "orchestrate.py"
+    package = tree / "pipeline"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("")
+    (package / "llm.py").write_text("from .llmcache import wrap\n")
+    target = package / "orchestrate.py"
+    target.write_text("from . import llm\n")
+    assert set(importers(tree)) == {"yizkr/pipeline/llm.py"}
     target.write_text(
         target.read_text()
         + "\n\nimport importlib\n\n"

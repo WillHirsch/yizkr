@@ -454,31 +454,31 @@ class WikiClient:
     def immutable_page(self, title: str) -> WikiPage | None:
         """Read an immutable record; edited or unavailable evidence refuses."""
         for log_type in ("delete", "move"):
-            log = self.api_get(
-                {
-                    "action": "query",
-                    "list": "logevents",
-                    "letitle": title,
-                    "letype": log_type,
-                    "lelimit": 1,
-                    "leprop": "ids|type",
-                }
-            )
-            if log.get("query", {}).get("logevents"):
+            params = {
+                "action": "query",
+                "list": "logevents",
+                "letitle": title,
+                "letype": log_type,
+                "lelimit": 1,
+                "leprop": "ids|type",
+            }
+            if log_type == "move":
+                # One query can return both the move log and page content.
+                params.update(
+                    {
+                        "prop": "revisions",
+                        "titles": title,
+                        "rvprop": "ids|content",
+                        "rvslots": "main",
+                        "formatversion": "2",
+                    }
+                )
+            data = self.api_get(params)
+            if data.get("query", {}).get("logevents"):
                 raise RecoveryEvidenceError(
                     "recovery page was deleted or moved; "
                     "reconciliation required"
                 )
-        data = self.api_get(
-            {
-                "action": "query",
-                "prop": "revisions",
-                "titles": title,
-                "rvprop": "ids|content",
-                "rvslots": "main",
-                "formatversion": "2",
-            }
-        )
         pages = data.get("query", {}).get("pages", [])
         if len(pages) != 1:
             raise RecoveryEvidenceError("missing recovery page response")

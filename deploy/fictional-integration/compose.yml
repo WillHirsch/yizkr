@@ -116,7 +116,7 @@ services:
       PYTHONDONTWRITEBYTECODE: "1"
     volumes:
       - test-state:/state
-    command: [python, -m, pytest, -o, "addopts=", -m, live, tests/fictional_integration, -v, --junitxml=/state/results.xml]
+    command: [python, -m, pytest, -o, "addopts=", -m, live, tests/fictional_integration, -v, -x, --durations=20, --junitxml=/state/results.xml]
 
 networks:
   default:

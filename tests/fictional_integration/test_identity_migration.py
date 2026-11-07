@@ -44,6 +44,7 @@ from yizkr.pipeline.transcribe import Transcription
 from yizkr.pipeline.writer import BatchWriter
 from yizkr.queries.publish import load_templates, render_for_instance
 
+from .test_assignment_writes import _snapshot
 from .test_write_query import _synchronize
 
 pytestmark = pytest.mark.live
@@ -220,16 +221,6 @@ def _assert_preserved(client, qid, before):
     return after
 
 
-def _authority_state(client):
-    from yizkr.core.write_recovery import PREFIX
-
-    return (
-        set(client.list_entity_ids()),
-        set(client.page_titles(PREFIX)),
-        CreationRegistry(client).assignment_snapshot(),
-    )
-
-
 def test_verified_migration_preserves_evidence_and_publishes_graph_origins(
     fictional_client, tmp_path, monkeypatch
 ):
@@ -245,7 +236,7 @@ def test_verified_migration_preserves_evidence_and_publishes_graph_origins(
     )
     registry = CreationRegistry(client)
     properties, items = client.vocabulary()
-    before = _authority_state(client)
+    before = _snapshot(client)
 
     # A valid map of the same names with no corresponding creation intent is
     # not evidence that a nearby item can be adopted by its current terms.
@@ -260,7 +251,7 @@ def test_verified_migration_preserves_evidence_and_publishes_graph_origins(
             _method(identity, "confident"),
             selections=selections,
         )
-    assert _authority_state(client) == before
+    assert _snapshot(client) == before
 
     # Two model records pointing to the same literal occurrence have no unique
     # correspondence. Choosing one local ID cannot silently resolve that fact.
@@ -280,7 +271,7 @@ def test_verified_migration_preserves_evidence_and_publishes_graph_origins(
         prepare_map_migration(
             store, unclear, registry, identity, selections=selections
         )
-    assert _authority_state(client) == before
+    assert _snapshot(client) == before
 
     directory = tmp_path / "identity-records"
     path = tmp_path / "migration-review.sqlite"
@@ -385,7 +376,7 @@ def test_verified_migration_preserves_evidence_and_publishes_graph_origins(
         properties["identity_method"] not in ref["snaks"]
         for ref in confirmations
     )
-    after = _authority_state(client)
+    after = _snapshot(client)
     with ReviewStore(path) as store:
         repeated = prepare_map_migration(
             store, request, registry, identity, selections=selections
@@ -399,7 +390,7 @@ def test_verified_migration_preserves_evidence_and_publishes_graph_origins(
     assert not publish_identity_provenance(
         client, receipt.migration_id, record_dir=directory
     ).changed
-    assert _authority_state(client) == after
+    assert _snapshot(client) == after
     assert _entity(client, binding.qid) == projected
 
     _synchronize(client)
