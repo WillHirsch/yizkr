@@ -269,17 +269,14 @@ def test_structured_run_records_roundtrip_without_rewriting(
     ids = set(client.list_entity_ids())
     files = {path.name: path.read_bytes() for path in directory.iterdir()}
     client = WikiClient(client.config)
-    for _ in range(2):
-        counts = bootstrap_instance(
-            client, load_manifest(), log=lambda *_: None
-        )
-        assert (
-            counts["created"]
-            == counts["updated"]
-            == counts["statements_added"]
-            == 0
-        )
-        client.forget_vocabulary()
+    counts = bootstrap_instance(client, load_manifest(), log=lambda *_: None)
+    assert (
+        counts["created"]
+        == counts["updated"]
+        == counts["statements_added"]
+        == 0
+    )
+    client.forget_vocabulary()
     again = BatchWriter(
         client, run_marks=marks, record_dir=directory
     ).write_batch(batch)

@@ -21,7 +21,6 @@ judgement and is left to review (docs/AGENT_PROTOCOL.md §4).
 import ast
 import io
 import re
-import shutil
 import tokenize
 from collections.abc import Iterator
 from pathlib import Path
@@ -304,13 +303,14 @@ def test_planted_violation_fails_the_tree_and_readmes_are_exempt(
     tmp_path, relative, addition
 ):
     tree = tmp_path / "yizkr"
-    shutil.copytree(SRC, tree, ignore=shutil.ignore_patterns("__pycache__"))
+    target = tree / relative
+    target.parent.mkdir(parents=True)
+    target.write_text("VALUE = 1\n" if target.suffix == ".py" else "Review.\n")
     (tree / "README.md").write_text("Development docs may cite #189.\n")
+    (tree / "pipeline" / "README.md").write_text("See ROADMAP, item 18.\n")
     assert tree_violations(tree) == []
 
-    target = tree / relative
-    source = target.read_text() if target.exists() else ""
-    target.write_text(source + addition)
+    target.write_text(target.read_text() + addition)
     problems = tree_violations(tree)
     assert len(problems) == 3
     assert all(

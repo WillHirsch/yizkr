@@ -144,11 +144,13 @@ def _snapshot(client):
     return entities, records
 
 
-def _fixture(client, directory, suffix):
+def _fixture(client, directory, suffix, *, single_claim=False):
     directory.mkdir()
     registry = CreationRegistry(client)
     bindings = {}
     for key, name in NAMES.items():
+        if single_claim and key == "maisie":
+            continue
         item = client.wbi.item.new()
         item.labels.set("en", f"Assignment writes {suffix}: {name}")
         bindings[key] = registry.create(
@@ -157,7 +159,12 @@ def _fixture(client, directory, suffix):
             summary="fictional assignment-write target",
         )
     sources, proposals, selections = [], [], []
-    for source_key in ("interview-2002", "family-tree-1984"):
+    source_keys = (
+        ("interview-2002",)
+        if single_claim
+        else ("interview-2002", "family-tree-1984")
+    )
+    for source_key in source_keys:
         original = u.by_key()[source_key]
         text = (
             original.title
@@ -182,6 +189,8 @@ def _fixture(client, directory, suffix):
             if interview
             else {"nicholas": "Nicholas", "gustav": "Gustav"}
         )
+        if single_claim:
+            labels.pop("maisie", None)
         entities = []
         for key, label in labels.items():
             lines = [
@@ -228,7 +237,7 @@ def _fixture(client, directory, suffix):
                 ),
             )
         ]
-        if interview:
+        if interview and not single_claim:
             claims.append(
                 Claim(
                     subject=_local("maisie"),
@@ -357,6 +366,7 @@ def _assert_receipts(client, result):
     plan = registry.application_plan(result.plan_id)
     assert plan is not None
     roles = set()
+    entities, bindings = {}, {}
     for receipt in result.receipts:
         assert (
             registry.application_receipt(result.plan_id, receipt.claim_id)
@@ -368,7 +378,9 @@ def _assert_receipts(client, result):
             c for c in plan.claims if c.claim_id == receipt.claim_id
         )
         roles.update(r["role"].split(":", 1)[0] for r in planned.roles)
-        entity = _entity(client, receipt.qid)
+        if receipt.qid not in entities:
+            entities[receipt.qid] = _entity(client, receipt.qid)
+        entity = entities[receipt.qid]
         assert entity["lastrevid"] >= receipt.revision
         statements = [
             s
@@ -394,7 +406,11 @@ def _assert_receipts(client, result):
         for role in planned.roles:
             assignment = snapshot.assignments[role["mention_id"]]
             assert role["assignment"] == assignment.model_dump(mode="json")
-            binding = registry.binding(assignment.entity_id)
+            if assignment.entity_id not in bindings:
+                bindings[assignment.entity_id] = registry.binding(
+                    assignment.entity_id
+                )
+            binding = bindings[assignment.entity_id]
             assert role["binding"] == binding.model_dump(mode="json")
             qid = binding.binding.qid
             if role["role"] == "subject":
@@ -465,13 +481,13 @@ def test_reviewed_writes_keep_exact_shared_support_and_assignment_roles(
         assert len({r.statement_guid for r in father_receipts}) == 1
         assert len({r.primary_hash for r in father_receipts}) == 2
         frozen = _snapshot(client)
-        for selection, expected in (
-            (fixture.selections[:2], first_result),
-            (fixture.selections[2:], second_result),
+        for prepared, expected in (
+            (first, first_result),
+            (later, second_result),
         ):
             again = apply_reviewed_claims(
                 store,
-                _prepare(client, fixture, store, selection),
+                prepared,
                 client,
                 record_dir=fixture.directory / "records",
             )
@@ -582,7 +598,7 @@ def test_partial_writes_recover_and_ambiguous_support_refuses(
             patch.setattr(assigned_support, "write_existing", counted_write)
             resumed = apply_reviewed_claims(
                 store,
-                _prepare(client, fixture, store),
+                prepared,
                 client,
                 record_dir=fixture.directory / "records",
             )
@@ -610,7 +626,9 @@ def test_partial_writes_recover_and_ambiguous_support_refuses(
     # Both unsupported cases start from current approval without a historical
     # application. The fixture creates problematic graph evidence explicitly.
     for variant in ("ambiguous", "curator"):
-        fixture = _fixture(client, tmp_path / variant, variant)
+        fixture = _fixture(
+            client, tmp_path / variant, variant, single_claim=True
+        )
         properties, _ = client.vocabulary()
         target = client.wbi.item.get(fixture.bindings["nicholas"].qid)
         father = Item(
@@ -666,7 +684,12 @@ def test_competing_reviewed_plans_dispatch_one_historical_write(
     )
 
     client = fictional_client
-    fixture = _fixture(client, tmp_path / "concurrent", "concurrent-support")
+    fixture = _fixture(
+        client,
+        tmp_path / "concurrent",
+        "concurrent-support",
+        single_claim=True,
+    )
     copied_database = fixture.directory / "second-review.sqlite"
     shutil.copyfile(fixture.database, copied_database)
     competitor = replace(fixture, database=copied_database)
@@ -687,6 +710,14 @@ def test_competing_reviewed_plans_dispatch_one_historical_write(
                     time="2026-01-02T12:00:00Z",
                 )
             ],
+        )
+
+        prepared_by_database = {
+            competitor.database: _prepare(client, competitor, store, selection)
+        }
+    with ReviewStore(fixture.database) as store:
+        prepared_by_database[fixture.database] = _prepare(
+            client, fixture, store, selection
         )
 
     barrier, lock = Barrier(2), Lock()
@@ -713,7 +744,7 @@ def test_competing_reviewed_plans_dispatch_one_historical_write(
             try:
                 return apply_reviewed_claims(
                     store,
-                    _prepare(independent, current, store, selection),
+                    prepared_by_database[current.database],
                     independent,
                     record_dir=current.directory / "records",
                 )

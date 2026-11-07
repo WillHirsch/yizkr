@@ -4,7 +4,7 @@ on:
   # every commit that lands on main
   push:
     branches: [main]
-  # every push to a pull request, drafts included, tested merged with main
+  # every push to a pull request, drafts included, tested with its base branch
   pull_request:
   # a run by hand on any branch
   workflow_dispatch:
@@ -28,7 +28,7 @@ jobs:
       # pytest-xdist: one worker per CPU; loadfile keeps each test file in
       # one worker, so its module fixtures and test order hold as in a
       # serial run. Local runs stay serial unless -n is given.
-      - run: uv run pytest -n auto --dist loadfile
+      - run: uv run pytest -n auto --dist loadfile --durations=20
 
   fictional-integration:
     runs-on: ubuntu-latest
