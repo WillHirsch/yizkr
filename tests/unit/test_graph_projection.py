@@ -270,6 +270,24 @@ def test_binding_catalog_verifies_receipts_without_adopting_unindexed_items(
     assert wiki._recovery_pages == before
 
 
+def test_binding_catalog_accepts_canonical_project_namespace_titles(
+    graph, monkeypatch
+):
+    wiki, registry, binding, _, _ = graph
+    pages = dict(wiki._recovery_pages)
+    original = wiki.page_titles
+
+    def canonical_titles(prefix):
+        return [
+            "Fictional integration:" + title.removeprefix("Project:")
+            for title in original(prefix)
+        ]
+
+    monkeypatch.setattr(wiki, "page_titles", canonical_titles)
+    assert registry.indexed_bindings() == {binding.binding.qid: binding}
+    assert wiki._recovery_pages == pages
+
+
 def test_capture_keeps_accepted_assignments_without_publishing(
     graph, tmp_path
 ):

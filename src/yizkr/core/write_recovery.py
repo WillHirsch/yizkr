@@ -350,12 +350,17 @@ class CreationRegistry:
         if generation is None:
             raise CreationRefused("binding catalog requires a generation")
         prefix = PREFIX + generation.generation + "/entities/"
+        local_prefix = prefix.removeprefix("Project:")
         bindings = {}
         for title in self.client.page_titles(prefix):
+            # Enumeration is already restricted to namespace 4. MediaWiki
+            # returns its canonical name, which can differ from Project:.
+            namespace, separator, local_title = title.partition(":")
             match = re.fullmatch(
-                re.escape(prefix) + r"([0-9a-f]{32})/binding/1", title
+                re.escape(local_prefix) + r"([0-9a-f]{32})/binding/1",
+                local_title,
             )
-            if match is None:
+            if not namespace or not separator or match is None:
                 raise CreationRefused("unrecognized entity binding index")
             binding = self._indexed_binding(generation, match[1])
             if binding is None:
