@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import select
 import signal
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
+from contextlib import suppress
 from pathlib import Path
 
 import pytest
@@ -21,6 +24,9 @@ SCRIPT = (
 _spec = importlib.util.spec_from_file_location("fictional_integration", SCRIPT)
 lane = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(lane)
+
+# Only bounds a missed readiness/exit cue; never a delay under test.
+HANG_GUARD = 60
 
 
 def put(root: Path, name: str, content: str) -> Path:
@@ -139,6 +145,7 @@ def test_docker_transport_does_not_inherit_archive_or_compose_settings(
 
 
 def results(path: Path, cases) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
     root = ET.Element("testsuites")
     suite = ET.SubElement(root, "testsuite")
     for class_name, name, outcome in cases:
@@ -187,6 +194,56 @@ def test_required_results_refuse_duplicate_boundary_case(tmp_path):
         lane.verify_results(path)
 
 
+def test_required_results_refuse_extra_cases_even_when_all_required_pass(
+    tmp_path,
+):
+    path = results(
+        tmp_path / "results.xml",
+        [
+            *((*case, None) for case in lane.REQUIRED_CASES),
+            ("fictional.extra", "test_not_in_the_required_lane", None),
+        ],
+    )
+    with pytest.raises(lane.LaneError, match="unexpected"):
+        lane.verify_results(path)
+
+
+def test_group_results_cannot_borrow_a_case_from_the_other_group(tmp_path):
+    own = lane.GROUPS["assignments"]
+    other = lane.GROUPS["other"]
+    path = results(
+        tmp_path / "results.xml",
+        [(*case, None) for case in (*own[:-1], other[0])],
+    )
+    with pytest.raises(lane.LaneError):
+        lane.verify_results(path, own)
+
+
+def test_group_reports_combine_into_complete_required_results(tmp_path):
+    paths = [
+        results(
+            tmp_path / name / "results.xml",
+            [(*case, None) for case in cases],
+        )
+        for name, cases in lane.GROUPS.items()
+    ]
+    combined = tmp_path / "results.xml"
+    lane.combine_results(paths, combined)
+
+    observed = lane.verify_results(combined)
+    assert observed["passed"] == len(lane.REQUIRED_CASES)
+    assert set(observed["cases"]) == set(lane.REQUIRED_CASES)
+
+
+def test_combining_reports_cannot_hide_duplicate_or_missing_groups(tmp_path):
+    only = results(
+        tmp_path / "assignments.xml",
+        [(*case, None) for case in lane.GROUPS["assignments"]],
+    )
+    with pytest.raises(lane.LaneError):
+        lane.combine_results([only, only], tmp_path / "results.xml")
+
+
 @pytest.mark.parametrize("omitted", range(len(lane.REQUIRED_CASES)))
 def test_required_results_refuse_any_omitted_boundary_case(tmp_path, omitted):
     path = results(
@@ -229,46 +286,309 @@ def test_lane_lock_excludes_a_second_open_and_releases_after_failure(tmp_path):
         pass
 
 
-def test_down_recovers_without_staging_invalid_application_sources(
-    monkeypatch, tmp_path
+def test_interrupted_command_reaps_its_process_and_stops_descendants(
+    monkeypatch,
 ):
-    state = tmp_path / "lane"
-    put(state, "instance.json", '{"status": "interrupted"}')
-    calls = []
+    ready_read, ready_write = os.pipe()
+    cue_read, cue_write = os.pipe()
+    open_fds = {ready_read, ready_write, cue_read, cue_write}
+    children = []
+    descendant = []
+    popen = subprocess.Popen
 
-    def invalid_source(*args):
-        pytest.fail("cleanup tried to stage invalid application sources")
+    def interrupt_when_ready(timeout=None):
+        readable, _, _ = select.select([ready_read], [], [], HANG_GUARD)
+        assert readable, "the child did not start its descendant"
+        descendant.append(int(os.read(ready_read, 100)))
+        raise KeyboardInterrupt("fictional command interrupted")
 
-    def fake_run(args, **kwargs):
-        calls.append(args)
-        return subprocess.CompletedProcess(args, 0, stdout="")
+    def start(args, **kwargs):
+        child = popen(args, pass_fds=(ready_write, cue_read), **kwargs)
+        children.append(child)
+        for fd in (ready_write, cue_read):
+            os.close(fd)
+            open_fds.remove(fd)
+        monkeypatch.setattr(child, "communicate", interrupt_when_ready)
+        return child
 
-    monkeypatch.setattr(lane, "stage_context", invalid_source)
-    monkeypatch.setattr(lane, "run", fake_run)
-    lane.execute("down", state)
-    cleanup = [args for args in calls if "compose" in args and "down" in args]
-    assert len(cleanup) == 1
-    assert_cleanup_covers_all_volumes(cleanup[0])
-    assert not (state / "instance.json").exists()
+    # The descendant inherits the ready pipe, so EOF proves it exited too.
+    script = """\
+import os
+import subprocess
+import sys
+
+ready, cue = map(int, sys.argv[1:])
+child = subprocess.Popen(
+    [
+        sys.executable,
+        "-c",
+        "import os, sys; os.read(int(sys.argv[1]), 1)",
+        str(cue),
+    ],
+    pass_fds=(ready, cue),
+)
+os.write(ready, str(child.pid).encode())
+child.wait()
+"""
+    monkeypatch.setattr(lane.subprocess, "Popen", start)
+    try:
+        with pytest.raises(KeyboardInterrupt, match="fictional command"):
+            lane.run(
+                [
+                    sys.executable,
+                    "-c",
+                    script,
+                    str(ready_write),
+                    str(cue_read),
+                ]
+            )
+        assert children[0].returncode is not None
+        readable, _, _ = select.select([ready_read], [], [], HANG_GUARD)
+        assert readable, "command descendant survived process-group cleanup"
+        assert os.read(ready_read, 1) == b""
+    finally:
+        for child in children:
+            with suppress(ProcessLookupError):
+                os.killpg(child.pid, signal.SIGKILL)
+            if child.poll() is None:
+                child.kill()
+            child.wait(timeout=HANG_GUARD)
+        for pid in descendant:
+            with suppress(ProcessLookupError):
+                os.kill(pid, signal.SIGKILL)
+        for fd in open_fds:
+            os.close(fd)
 
 
-def test_distinct_state_directories_control_distinct_projects(
-    monkeypatch, tmp_path
-):
-    projects = []
+class CheckProcess:
+    """A Compose child and its test container have separate lifetimes."""
 
-    def fake_run(args, **kwargs):
-        if "down" in args:
-            projects.append(args[args.index("--project-name") + 1])
-        return subprocess.CompletedProcess(args, 0, stdout="")
+    def __init__(self, docker, args, log):
+        self.docker = docker
+        self.args = args
+        self.project = args[args.index("--project-name") + 1]
+        self.name = args[args.index("--name") + 1]
+        self.pid = 10000 + len(docker.processes)
+        self.group = docker.group(self.project)
+        self.cases = []
+        for arg in args:
+            if not arg.startswith("tests/fictional_integration"):
+                continue
+            path, _, selected_name = arg.partition("::")
+            for module, name in lane.REQUIRED_CASES:
+                module_path = module.replace(".", "/") + ".py"
+                if (
+                    path == "tests/fictional_integration"
+                    or path == module_path
+                ) and (not selected_name or name == selected_name):
+                    self.cases.append((module, name))
+        self.returncode = None
+        self.created = docker.ticks
+        self.container_running = True
+        self.terminated = False
+        self.killed = False
+        self.completed = False
+        self.log = log
+        self.log.write(f"fictional {self.group} checks started\n")
+        self.log.flush()
 
-    monkeypatch.setattr(lane, "run", fake_run)
-    lane.execute("down", tmp_path / "first-lane")
-    lane.execute("down", tmp_path / "second-lane")
-    lane.execute("down", tmp_path / "first-lane")
-    assert projects[0] == projects[2]
-    assert projects[0] != projects[1]
-    assert all(project.startswith("yizkr-fictional-") for project in projects)
+    def poll(self):
+        if self.returncode is not None:
+            return self.returncode
+        if self.docker.interrupt:
+            interruption = self.docker.interrupt
+            self.docker.interrupt = None
+            if interruption == "term":
+                signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
+            raise KeyboardInterrupt("fictional interrupted check")
+        if self.docker.ticks > self.created:
+            code = self.docker.returncodes.get(self.group, 0)
+            if code is not None:
+                self.returncode = code
+                self.container_running = False
+                self.completed = True
+                self.docker.finished.append(self.group)
+        return self.returncode
+
+    def terminate(self):
+        self.terminated = True
+        if self.group not in self.docker.stubborn:
+            self.returncode = -signal.SIGTERM
+
+    def kill(self):
+        self.killed = True
+        self.returncode = -signal.SIGKILL
+
+    def wait(self, timeout=None):
+        if self.returncode is None:
+            raise subprocess.TimeoutExpired(self.args, timeout)
+        return self.returncode
+
+    def stop_container(self):
+        self.container_running = False
+        if self.group not in self.docker.stubborn:
+            self.returncode = -signal.SIGTERM
+
+
+class Docker:
+    """Stateful transport: commands affect projects, processes and reports."""
+
+    def __init__(self, monkeypatch, state):
+        self.state = state
+        self.active = set()
+        self.up = []
+        self.down = []
+        self.processes = {}
+        self.environments = []
+        self.finished = []
+        self.stopped = []
+        self.returncodes = {}
+        self.reports = {}
+        self.leftovers = {}
+        self.stubborn = set()
+        self.ticks = 0
+        self.maximum_running = 0
+        self.builds = 0
+        self.stages = 0
+        self.interrupt = None
+        self.stage_failure = False
+        self.setup_failure = None
+        self.cleanup_failure = None
+        self.log_failure = None
+        monkeypatch.setattr(lane, "run", self.run)
+        monkeypatch.setattr(lane, "stage_context", self.stage)
+        monkeypatch.setattr(lane.subprocess, "run", self.run)
+        monkeypatch.setattr(lane.subprocess, "Popen", self.start)
+        monkeypatch.setattr(lane.time, "sleep", self.advance)
+        monkeypatch.setattr(lane.time, "monotonic", lambda: float(self.ticks))
+        monkeypatch.setattr(lane.os, "killpg", self.signal_process)
+
+    @staticmethod
+    def group(project):
+        return next(
+            (name for name in lane.GROUPS if project.endswith("-" + name)),
+            "legacy",
+        )
+
+    def stage(self, repo, context):
+        self.stages += 1
+        assert self.evidence()["status"] == "failed"
+        assert self.evidence()["revision"] == "fixture-revision"
+        assert not (self.state / "results.xml").exists()
+        for name in lane.GROUPS:
+            assert not (self.state / name / "results.xml").exists()
+            assert self.evidence(name)["status"] == "failed"
+        if self.stage_failure:
+            raise lane.LaneError("fictional setup unavailable")
+        return "fixture-source-hash"
+
+    def advance(self, delay):
+        self.ticks += 1
+        assert self.ticks < 10, "supervisor did not stop after child failure"
+
+    def start(self, args, **kwargs):
+        self.environments.append(kwargs["env"])
+        process = CheckProcess(self, args, kwargs["stdout"])
+        self.processes[process.name] = process
+        self.maximum_running = max(
+            self.maximum_running,
+            sum(p.returncode is None for p in self.processes.values()),
+        )
+        return process
+
+    def signal_process(self, pid, signum):
+        process = next(p for p in self.processes.values() if p.pid == pid)
+        if signum == signal.SIGTERM:
+            process.terminate()
+        elif signum == signal.SIGKILL:
+            process.kill()
+        else:
+            pytest.fail(f"unexpected child signal: {signum}")
+
+    def run(self, args, **kwargs):
+        args = list(args)
+        output = ""
+        code = 0
+        project = (
+            args[args.index("--project-name") + 1]
+            if "--project-name" in args
+            else None
+        )
+        if args and "docker" in Path(args[0]).name:
+            self.environments.append(kwargs.get("env", {}))
+        group = self.group(project) if project else None
+        if args[:3] == ["git", "rev-parse", "HEAD"]:
+            output = "fixture-revision\n"
+        elif "build" in args:
+            self.builds += 1
+        elif "info" in args:
+            output = (
+                '{"ServerVersion":"fixture","NCPU":4,"MemTotal":8000000000}'
+            )
+        elif "up" in args:
+            self.up.append(project)
+            self.active.add(project)
+            if group == self.setup_failure:
+                raise subprocess.CalledProcessError(1, args)
+        elif "down" in args:
+            self.down.append(project)
+            assert_cleanup_covers_all_volumes(args)
+            if group == self.cleanup_failure and project in self.active:
+                raise OSError("fictional cleanup transport failed")
+            self.active.discard(project)
+        elif "logs" in args:
+            if group == self.log_failure:
+                raise subprocess.TimeoutExpired(args, 30)
+        elif "stop" in args:
+            for name in args:
+                if name in self.processes:
+                    self.stopped.append(name)
+                    self.processes[name].stop_container()
+        elif "cp" in args:
+            name = args[-2].split(":", 1)[0]
+            process = self.processes.get(name)
+            if process is None or not process.completed:
+                code = 1
+            else:
+                cases = self.reports.get(
+                    process.group,
+                    [(*case, None) for case in process.cases],
+                )
+                if cases is None:
+                    code = 1
+                else:
+                    results(Path(args[-1]), cases)
+        elif "ps" in args:
+            output = f"{project}-checks\n"
+        elif "inspect" in args:
+            output = "fictional-test-image sha256:fixture\n"
+        elif "ls" in args and "--filter" in args:
+            project = args[args.index("--filter") + 1].rsplit("=", 1)[1]
+            group = self.group(project)
+            kind = args[args.index("ls") - 1]
+            count = self.leftovers.get((group, kind), 0)
+            if project in self.active:
+                count += 1
+            output = "fictional-leftover\n" * count
+        if code and kwargs.get("check", True):
+            raise subprocess.CalledProcessError(code, args)
+        return subprocess.CompletedProcess(args, code, stdout=output)
+
+    def evidence(self, group=None):
+        folder = self.state if group is None else self.state / group
+        return json.loads((folder / "evidence.json").read_text())
+
+    def assert_clean(self):
+        assert self.active == set()
+        assert all(not p.container_running for p in self.processes.values())
+        assert all(p.returncode is not None for p in self.processes.values())
+        assert not (self.state / "instance.json").exists()
+        assert self.evidence()["teardown"] == "passed"
+
+
+@pytest.fixture
+def docker(monkeypatch, tmp_path):
+    return Docker(monkeypatch, tmp_path / "lane")
 
 
 def assert_cleanup_covers_all_volumes(args):
@@ -286,7 +606,11 @@ def assert_cleanup_covers_all_volumes(args):
     covered = set()
     for service in spec["services"].values():
         profiles = set(service.get("profiles", []))
-        if profiles and not profiles.intersection(active_profiles):
+        if (
+            profiles
+            and "*" not in active_profiles
+            and not profiles.intersection(active_profiles)
+        ):
             continue
         covered.update(
             mount.split(":")[0] for mount in service.get("volumes", [])
@@ -296,53 +620,140 @@ def assert_cleanup_covers_all_volumes(args):
     assert "--volumes" in args
 
 
-@pytest.mark.parametrize("setup_failure", ["stage", "up"])
-@pytest.mark.parametrize("diagnostic_failure", ["open", "timeout"])
-def test_failed_setup_cleans_up_even_when_diagnostics_fail(
-    monkeypatch, tmp_path, diagnostic_failure, setup_failure
+def test_success_runs_both_groups_and_requires_complete_combined_evidence(
+    docker,
 ):
-    state = tmp_path / "lane"
-    put(state, "evidence.json", '{"status": "passed", "revision": "old"}')
-    put(state, "results.xml", "old successful result")
-    calls = []
+    lane.execute("run", docker.state)
 
-    def failed_stage(*args):
-        # A failure here must not leave yesterday's successful evidence.
-        evidence = json.loads((state / "evidence.json").read_text())
-        assert evidence["status"] == "failed"
-        assert evidence["revision"] == "fixture-revision"
-        if setup_failure == "stage":
-            raise lane.LaneError("fictional setup unavailable")
-        return "fixture-source-hash"
-
-    def fake_run(args, **kwargs):
-        calls.append(args)
-        if args[:3] == ["git", "rev-parse", "HEAD"]:
-            output = "fixture-revision\n"
+    assert docker.stages == docker.builds == 1
+    assert docker.maximum_running == 2
+    assert len(set(docker.up)) == 2
+    assert set(docker.finished) == {"assignments", "other"}
+    assert docker.evidence()["status"] == "passed"
+    observed = lane.verify_results(docker.state / "results.xml")
+    assert set(observed["cases"]) == set(lane.REQUIRED_CASES)
+    for name, expected in lane.GROUPS.items():
+        assert docker.evidence(name)["status"] == "passed"
+        observed = lane.verify_results(
+            docker.state / name / "results.xml", expected
+        )
+        assert set(observed["cases"]) == set(expected)
+        if name == "assignments":
+            assert len(observed["cases"]) == 3
+            assert all(
+                module.endswith(".test_assignment_writes")
+                for module, _ in observed["cases"]
+            )
         else:
-            output = ""
-        if "compose" in args and "up" in args:
-            raise subprocess.CalledProcessError(1, args)
-        return subprocess.CompletedProcess(args, 0, stdout=output)
+            assert len(observed["cases"]) == 9
+            assert all(
+                not module.endswith(".test_assignment_writes")
+                for module, _ in observed["cases"]
+            )
+    docker.assert_clean()
 
-    original_open = Path.open
 
-    def fail_log_open(path, *args, **kwargs):
-        if path == state / "services.log":
-            raise PermissionError("fictional log unavailable")
-        return original_open(path, *args, **kwargs)
+def test_sequential_mode_keeps_both_fresh_groups_and_all_required_cases(
+    docker,
+):
+    lane.execute("run", docker.state, sequential=True)
 
-    def timed_out_capture(args, **kwargs):
-        assert "logs" in args
-        raise subprocess.TimeoutExpired(args, 30)
+    assert docker.maximum_running == 1
+    assert docker.stages == docker.builds == 1
+    assert len(set(docker.up)) == 2
+    assert lane.verify_results(docker.state / "results.xml")["passed"] == 12
+    docker.assert_clean()
 
-    monkeypatch.setattr(lane, "run", fake_run)
-    monkeypatch.setattr(lane, "stage_context", failed_stage)
-    monkeypatch.setattr(lane.subprocess, "run", timed_out_capture)
-    if diagnostic_failure == "open":
-        monkeypatch.setattr(Path, "open", fail_log_open)
+
+@pytest.mark.parametrize("invalid_partition", ["missing", "duplicate"])
+def test_invalid_group_partition_cannot_start_a_partial_lane(
+    docker, monkeypatch, invalid_partition
+):
+    groups = dict(lane.GROUPS)
+    if invalid_partition == "missing":
+        groups["assignments"] = groups["assignments"][:-1]
+    else:
+        groups["other"] = (*groups["other"], groups["assignments"][0])
+    monkeypatch.setattr(lane, "GROUPS", groups)
+
+    with pytest.raises(lane.LaneError):
+        lane.execute("run", docker.state)
+
+    assert docker.up == []
+    assert docker.builds == 0
+    assert docker.processes == {}
+
+
+def test_group_children_do_not_inherit_archive_or_compose_settings(
+    docker, monkeypatch
+):
+    inherited = {
+        "MW_ADMIN_PASS": "fictional-archive-password",
+        "YIZKR_INSTANCE_STATE": "fictional-archive-state",
+        "COMPOSE_PROJECT_NAME": "fictional-archive-project",
+        "COMPOSE_FILE": "fictional-archive-compose.yml",
+    }
+    for name, value in inherited.items():
+        monkeypatch.setenv(name, value)
+
+    lane.execute("run", docker.state)
+
+    assert docker.environments
+    assert all(
+        not inherited.keys() & env.keys() for env in docker.environments
+    )
+    assert all(p != inherited["COMPOSE_PROJECT_NAME"] for p in docker.up)
+    docker.assert_clean()
+
+
+@pytest.mark.parametrize("failure", ["exit", "missing", "skipped", "wrong"])
+def test_first_failed_or_invalid_group_stops_its_running_sibling(
+    docker, failure
+):
+    docker.returncodes["other"] = None
+    if failure == "exit":
+        docker.returncodes["assignments"] = 1
+    elif failure == "missing":
+        docker.reports["assignments"] = None
+    elif failure == "skipped":
+        docker.reports["assignments"] = [
+            (*case, "skipped" if index == 0 else None)
+            for index, case in enumerate(lane.GROUPS["assignments"])
+        ]
+    else:
+        docker.reports["assignments"] = [
+            (*case, None) for case in lane.GROUPS["other"]
+        ]
+
+    with pytest.raises((lane.LaneError, subprocess.CalledProcessError)):
+        lane.execute("run", docker.state)
+
+    sibling = next(p for p in docker.processes.values() if p.group == "other")
+    assert sibling.name in docker.stopped
+    assert not sibling.completed
+    assert docker.evidence()["status"] == "failed"
+    assert (docker.state / "assignments" / "tests.log").exists()
+    docker.assert_clean()
+
+
+def test_cleanup_kills_a_compose_child_that_ignores_termination(docker):
+    docker.returncodes.update(assignments=1, other=None)
+    docker.stubborn.add("other")
+    with pytest.raises(lane.LaneError):
+        lane.execute("run", docker.state)
+
+    sibling = next(p for p in docker.processes.values() if p.group == "other")
+    assert sibling.terminated and sibling.killed
+    docker.assert_clean()
+
+
+@pytest.mark.parametrize("interruption", ["keyboard", "term"])
+def test_interruption_stops_children_and_cleans_both_projects(
+    docker, monkeypatch, interruption
+):
+    docker.interrupt = interruption
     monkeypatch.setattr(
-        sys, "argv", [str(SCRIPT), "run", "--state", str(state)]
+        sys, "argv", [str(SCRIPT), "run", "--state", str(docker.state)]
     )
     previous_handler = signal.getsignal(signal.SIGTERM)
     try:
@@ -350,55 +761,144 @@ def test_failed_setup_cleans_up_even_when_diagnostics_fail(
     finally:
         signal.signal(signal.SIGTERM, previous_handler)
 
-    cleanup = [args for args in calls if "compose" in args and "down" in args]
-    assert len(cleanup) == (1 if setup_failure == "stage" else 2)
-    for args in cleanup:
-        assert_cleanup_covers_all_volumes(args)
-    assert not (state / "instance.json").exists()
-    assert not (state / "results.xml").exists()
-    evidence = json.loads((state / "evidence.json").read_text())
-    assert evidence["status"] == "failed"
-    assert evidence["teardown"] == "passed"
-    assert evidence["revision"] == "fixture-revision"
-    assert evidence["diagnostics_error"]
+    assert len(docker.processes) == 2
+    assert len(set(docker.stopped)) == 2
+    assert docker.evidence()["status"] == "failed"
+    docker.assert_clean()
+
+
+@pytest.mark.parametrize("setup_failure", ["stage", "other"])
+@pytest.mark.parametrize("diagnostic_failure", ["open", "timeout"])
+def test_failed_setup_cleans_both_projects_even_when_diagnostics_fail(
+    docker, monkeypatch, diagnostic_failure, setup_failure
+):
+    for folder in [docker.state, *(docker.state / n for n in lane.GROUPS)]:
+        put(folder, "evidence.json", '{"status": "passed", "revision": "old"}')
+        put(folder, "results.xml", "old successful result")
+    docker.stage_failure = setup_failure == "stage"
+    docker.setup_failure = setup_failure
+    docker.log_failure = (
+        "assignments" if diagnostic_failure == "timeout" else None
+    )
+    original_open = Path.open
+
+    def fail_log_open(path, *args, **kwargs):
+        if path == docker.state / "assignments" / "services.log":
+            raise PermissionError("fictional log unavailable")
+        return original_open(path, *args, **kwargs)
+
+    if diagnostic_failure == "open":
+        monkeypatch.setattr(Path, "open", fail_log_open)
+    with pytest.raises((lane.LaneError, subprocess.CalledProcessError)):
+        lane.execute("run", docker.state)
+
+    assert {docker.group(p) for p in docker.down} >= {"assignments", "other"}
+    assert docker.evidence()["status"] == "failed"
+    assert docker.evidence()["revision"] == "fixture-revision"
+    assert docker.evidence("assignments")["diagnostics_error"]
+    assert not (docker.state / "results.xml").exists()
+    assert not any(
+        (docker.state / n / "results.xml").exists() for n in lane.GROUPS
+    )
+    docker.assert_clean()
+
+
+def test_one_group_cleanup_error_does_not_leave_its_sibling_running(docker):
+    docker.cleanup_failure = "assignments"
+    with pytest.raises(lane.LaneError, match="teardown"):
+        lane.execute("run", docker.state)
+
+    assert {docker.group(p) for p in docker.active} == {"assignments"}
+    assert docker.evidence()["status"] == "failed"
+    assert docker.evidence()["teardown"] == "failed"
+    assert docker.evidence("other")["teardown"] == "passed"
+    assert (docker.state / "instance.json").exists()
+
+    failed = docker.evidence("assignments")
+    assert failed["cleanup_error"]
+    # A previous attempt can also have failed to reap its Compose child.
+    failed["process_cleanup_error"] = "fictional previous reap failure"
+    put(docker.state / "assignments", "evidence.json", json.dumps(failed))
+    docker.cleanup_failure = None
+    lane.execute("down", docker.state)
+
+    docker.assert_clean()
+    assert docker.evidence()["status"] == "failed"
+    assert docker.evidence()["revision"] == "fixture-revision"
+    for name in lane.GROUPS:
+        recovered = docker.evidence(name)
+        assert recovered["teardown"] == "passed"
+        assert "cleanup_error" not in recovered
+        assert "process_cleanup_error" not in recovered
 
 
 @pytest.mark.parametrize("command", ["run", "down"])
-def test_leftover_test_volume_fails_lane_and_keeps_recovery_marker(
-    monkeypatch, tmp_path, command
+def test_leftover_group_volume_fails_lane_and_keeps_recovery_marker(
+    docker, command
 ):
-    state = tmp_path / "lane"
-    put(state, "instance.json", '{"status": "interrupted"}')
+    put(docker.state, "instance.json", '{"status": "interrupted"}')
+    docker.leftovers["assignments", "volume"] = 1
+    with pytest.raises(lane.LaneError, match="teardown|resources remain"):
+        lane.execute(command, docker.state)
 
-    def fake_run(args, **kwargs):
-        output = ""
-        if args[:3] == ["git", "rev-parse", "HEAD"]:
-            output = "fixture-revision\n"
-        elif "cp" in args:
-            results(
-                Path(args[-1]), [(*case, None) for case in lane.REQUIRED_CASES]
-            )
-        elif "volume" in args and "ls" in args:
-            assert any(
-                arg.startswith("label=com.docker.compose.project=")
-                for arg in args
-            )
-            output = "fictional-project_test-state\n"
-        return subprocess.CompletedProcess(args, 0, stdout=output)
-
-    monkeypatch.setattr(lane, "run", fake_run)
-    monkeypatch.setattr(lane, "stage_context", lambda *args: "fixture-hash")
-    monkeypatch.setattr(
-        lane.subprocess,
-        "run",
-        lambda args, **kwargs: subprocess.CompletedProcess(args, 0),
-    )
-    with pytest.raises(lane.LaneError, match="teardown"):
-        lane.execute(command, state)
-    assert (state / "instance.json").exists()
+    assert (docker.state / "instance.json").exists()
+    assert {docker.group(p) for p in docker.down} >= {"assignments", "other"}
     if command == "run":
-        evidence = json.loads((state / "evidence.json").read_text())
-        assert evidence["checks"]["passed"] == len(lane.REQUIRED_CASES)
-        assert evidence["status"] == "failed"
-        assert evidence["teardown"] == "failed"
-        assert evidence["remaining_resources"]["volume"] == 1
+        assert docker.evidence()["status"] == "failed"
+        assert docker.evidence()["teardown"] == "failed"
+
+
+def test_down_recovers_both_groups_and_legacy_without_staging_sources(
+    docker, monkeypatch
+):
+    def invalid_source(*args):
+        pytest.fail("cleanup tried to stage invalid application sources")
+
+    monkeypatch.setattr(lane, "stage_context", invalid_source)
+    lane.execute("down", docker.state)
+    # A hard kill leaves projects and a marker but no live Python process.
+    docker.active.update(docker.down)
+    docker.down.clear()
+    put(docker.state, "instance.json", '{"status": "interrupted"}')
+    lane.execute("down", docker.state)
+    assert {docker.group(p) for p in docker.down} == {
+        "assignments",
+        "other",
+        "legacy",
+    }
+    assert docker.active == set()
+    assert not (docker.state / "instance.json").exists()
+
+
+def test_down_removes_projects_even_when_evidence_is_not_an_object(docker):
+    lane.execute("down", docker.state)
+    docker.active.update(docker.down)
+    for folder, content in (
+        (docker.state, "[]"),
+        (docker.state / "assignments", "null"),
+        (docker.state / "other", "false"),
+    ):
+        put(folder, "evidence.json", content)
+    put(docker.state, "instance.json", '{"status": "interrupted"}')
+
+    lane.execute("down", docker.state)
+
+    docker.assert_clean()
+
+
+def test_distinct_state_directories_control_disjoint_projects(
+    docker, tmp_path
+):
+    def projects(state):
+        start = len(docker.down)
+        lane.execute("down", state)
+        return set(docker.down[start:])
+
+    first = projects(tmp_path / "first-lane")
+    second = projects(tmp_path / "second-lane")
+    again = projects(tmp_path / "first-lane")
+    assert first == again
+    assert first.isdisjoint(second)
+    assert all(
+        project.startswith("yizkr-fictional-") for project in first | second
+    )
