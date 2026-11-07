@@ -189,7 +189,8 @@ The current code has byte-addressed media, located source references, derivation
 | Item creation intents, instance-qualified receipts and interrupted creation recovery | Implemented; [recovery boundaries](ARCHITECTURE.md#item-creation-and-interrupted-write-recovery) |
 | Structured run metadata, preserved producer identity and retained-code admission | Implemented; [record storage, graph projection and limits](RUN_PROVENANCE.md) |
 | Assignment revisions, verified identity migration and exact historical-support receipts | Implemented for the [explicit existing-entity route](IDENTITY_REVIEW.md); legacy callers retain their guards |
-| Later-cohort matching and protected candidate-absence checks | [#756](https://github.com/WillHirsch/yizkr/issues/756) |
+| Recorded graph projection and later-cohort candidate proposals | Implemented; [read-only matching and its limits](IDENTITY_REVIEW.md#record-graph-context-and-inspect-later-cohort-matches) |
+| Protected later-cohort application and candidate-absence checks | [#767](https://github.com/WillHirsch/yizkr/issues/767), within [#756](https://github.com/WillHirsch/yizkr/issues/756) |
 | First incremental text addition; reviewed split/reassignment | [#723](https://github.com/WillHirsch/yizkr/issues/723), [#142](https://github.com/WillHirsch/yizkr/issues/142) |
 | Cancellation; response/session ownership | [Cancellation has explicit bounds](ARCHITECTURE.md#cancellation-and-execution-ownership); [provider sessions have execution ownership](ARCHITECTURE.md#provider-conversation-ownership) separate from response storage, with the exclusive cache lock retained |
 

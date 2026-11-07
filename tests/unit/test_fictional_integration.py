@@ -645,7 +645,7 @@ def test_success_runs_both_groups_and_requires_complete_combined_evidence(
                 for module, _ in observed["cases"]
             )
         else:
-            assert len(observed["cases"]) == 9
+            assert len(observed["cases"]) == len(lane.REQUIRED_CASES) - 3
             assert all(
                 not module.endswith(".test_assignment_writes")
                 for module, _ in observed["cases"]
@@ -661,7 +661,9 @@ def test_sequential_mode_keeps_both_fresh_groups_and_all_required_cases(
     assert docker.maximum_running == 1
     assert docker.stages == docker.builds == 1
     assert len(set(docker.up)) == 2
-    assert lane.verify_results(docker.state / "results.xml")["passed"] == 12
+    assert lane.verify_results(docker.state / "results.xml")["passed"] == len(
+        lane.REQUIRED_CASES
+    )
     docker.assert_clean()
 
 

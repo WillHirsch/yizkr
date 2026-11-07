@@ -21,16 +21,13 @@ in the graph. Executing those is a curator action: a MediaWiki item
 merge, or a referenced `said to be the same as` statement when the
 equivalence is itself a contestable judgement.
 
-Blocking and adjudication take the roster, and the place containment,
-as inputs. Only `fetch_roster` and `fetch_place_containment` read them
-from the graph, for the commands a curator runs on it (`ingest
-reconcile`, `reconcile-graph`): a stage before the write reads nothing
-from the wiki (ADR-0025 §2), so `ingest run`'s reconcile step has no
-roster to match against. `fetch_roster` first asks the graph for any
-date before the common era or in a calendar other than the proleptic
-Gregorian, and stops with UnsupportedDate naming each item and statement
-that holds one (ADR-0034): the roster's dates are adjudication facts, and
-such a date is never put to the adjudicator.
+Blocking and adjudication take the roster and place containment as explicit
+inputs. `fetch_roster` and `fetch_place_containment` supply live curator
+commands and recorded graph capture; cohort matching replays the recorded
+inputs without connecting to the wiki. The document stages in `ingest run`
+still do not read the graph before writing. Roster capture refuses dates
+before the common era or outside the proleptic Gregorian calendar, so those
+unsupported dates are never presented as adjudication facts.
 """
 
 from __future__ import annotations
@@ -290,12 +287,14 @@ GROUP BY ?item ?itemLabel ?kind ?kindLabel
 """
 
 
-def fetch_roster(client: WikiClient, config: Config) -> list[RosterEntity]:
+def fetch_roster(
+    client: WikiClient, config: Config, *, runner: sparql.Runner | None = None
+) -> list[RosterEntity]:
     """Every instance-of-bearing item with identity-relevant facts. A
     graph holding an unsupported date raises UnsupportedDate, before the
     roster is read (ADR-0034)."""
     unsupported_in_graph(
-        sparql.runner(config), prefix_block(config.concept_uri)
+        runner or sparql.runner(config), prefix_block(config.concept_uri)
     )
     properties, items = client.vocabulary()
     # a kind item maps back to its manifest key by its QID, never by label
@@ -323,7 +322,7 @@ def fetch_roster(client: WikiClient, config: Config) -> list[RosterEntity]:
     )
     # sent in a POST body: the query is longer than a GET's request line
     # may be (ADR-0033)
-    runner = sparql.runner(config, timeout=120)
+    runner = runner or sparql.runner(config, timeout=120)
     bindings = runner(query)
     deaths = roster_deaths(runner, properties, items, config.concept_uri)
 
@@ -707,7 +706,7 @@ def read_place_containment(rows: Iterable[dict]) -> PlaceContainment:
 
 
 def fetch_place_containment(
-    client: WikiClient, config: Config
+    client: WikiClient, config: Config, *, runner: sparql.Runner | None = None
 ) -> PlaceContainment:
     """One SPARQL query, the inconsistency report's containment query ->
     the transitive place-containment closure."""
@@ -718,7 +717,7 @@ def fetch_place_containment(
         items,
         config.concept_uri,
     )
-    return read_place_containment(sparql.runner(config)(query))
+    return read_place_containment((runner or sparql.runner(config))(query))
 
 
 @dataclass

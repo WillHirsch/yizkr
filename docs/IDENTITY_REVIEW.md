@@ -90,6 +90,58 @@ The semantic basis retains source occurrence/scope, entity interpretation, relev
 
 A new source gets its own mentions and unapproved proposals; it does not revoke unchanged decisions about earlier sources or inherit their consent. Only materially changed scopes need review. Unknown correspondence keeps the previous decision attached to its original evidence.
 
+## Record graph context and inspect later-cohort matches
+
+`pipeline.graph_projection.capture_graph_projection(registry)` reads an explicitly supplied `CreationRegistry` and its Wikibase/WDQS connection. It records the current generation, every live nonredirect item/property revision, the existing matcher's roster and containment closure, verified entity bindings, accepted assignments and negative constraints. Each query and returned row is retained with the capture's time and watermarks. Capture never creates a generation, binding or assignment.
+
+```mermaid
+flowchart LR
+    api["Wikibase API<br/>inventory, revisions, registry"] --> capture["Qualify and record graph context"]
+    wdqs["WDQS<br/>roster, containment, revision index"] --> capture
+    capture --> saved["GraphProjection JSON<br/>content digest + read provenance"]
+    saved --> matcher["Existing blocker + optional adjudicator"]
+    products["Current source batches + readings"] --> matcher
+    review["Prepared durable review"] --> matcher
+    matcher --> result["CohortMatchResult JSON<br/>candidates, retained targets, blockers"]
+```
+
+Capture requires the WDQS revision index to match the authoritative API inventory before and after reading. The inventory, entity revisions, generation and MediaWiki revision/log watermarks must remain unchanged. Lag, missing coverage, unsupported dates or an observed intervening edit refuse capture; retry after the index catches up or concurrent work finishes. This is an observed consistent read, not a transaction or permission to create an entity. Unbound graph entities remain visible candidates with an explicit blocker; display labels cannot supply their missing creation evidence.
+
+The direct Python workflow takes current source products and an existing durable review store:
+
+```python
+from pathlib import Path
+
+from yizkr.pipeline.cohort_matching import match_cohort, save_cohort_match
+from yizkr.pipeline.graph_projection import (
+    capture_graph_projection,
+    load_graph_projection,
+    save_graph_projection,
+)
+from yizkr.pipeline.review_stages import ReviewRequest, prepare_review
+
+# registry, store and sources are explicitly supplied by the caller.
+# sources is a tuple of ReviewSource(artifact_sha1, batch, reading).
+projection_path = Path("var/graph-projection.json")
+save_graph_projection(capture_graph_projection(registry), projection_path)
+
+# Loading and matching need no graph connection.
+recorded = load_graph_projection(projection_path)
+request = ReviewRequest(
+    sources=sources,
+    current_targets=tuple(entry.binding for entry in recorded.bindings.values()),
+)
+prepared = prepare_review(store, request)
+result = match_cohort(recorded, sources, prepared_review=prepared)
+save_cohort_match(result, Path("var/cohort-matches.json"))
+```
+
+Preparation observes source occurrences in the local review store. Matching itself records no human decisions or assignments. It checks that the prepared review describes exactly the supplied products, then runs the existing name/kind blocker separately for each source batch. Artifact-qualified mention IDs prevent identical model-local IDs in different documents from colliding. Accepted targets remain attached after graph display edits, and current reviewed targets remain distinguishable from accepted assignments. A confirmed same-person component carries its accepted target as advice for the other mentions; conflicting accepted targets block the component without merging them. Relevant human negative constraints and missing or stale review context block affected proposals.
+
+Omitting `client` performs deterministic candidate blocking only. To request the existing adjudicator, supply `client` and an `AdjudicationProvenance` naming its provider, model and configuration. The result records source, review and projection digests, the prompt digest, optional provider identity and returned candidate verdicts. Missing, repeated or invalid pair answers are incomplete advice. A verdict never becomes human approval, and an empty candidate list never authorizes creation. Matching does not change source extraction or its evidence.
+
+Keep both JSON products with the inputs needed for replay, outside Git: their facts and query results may contain private archive data. Loaders verify their content digests; they do not establish current graph state or trust in an external producer. Protected review-to-application and candidate-absence enforcement remain in [#767](https://github.com/WillHirsch/yizkr/issues/767). The recorded proposal product cannot be submitted directly for assignment acceptance or graph writes.
+
 ## Accept assignments to existing entities
 
 `yizkr.pipeline.assignment_stages.accept_reviewed_assignments` accepts a `ReviewStore`, current `ReviewRequest` and explicitly supplied `CreationRegistry`. It prepares current evidence again, verifies target creation bindings against the server, and pins the observed mention, proposal and decision revisions while publishing. A saved projection is an inspection product, not authorization to import assignments. Relevant stale or blocked review refuses the entire request; callers can submit separately scoped requests for unrelated sources.
@@ -178,4 +230,4 @@ An explicit owner override replaces a rejected proposed target before the mentio
 
 ## Integration boundary
 
-The existing scratch clustering map remains a proposal snapshot, and the one-batch `reconcile`/`resolve --equivalences` CSV path has no automatic migration into these decisions. Its local IDs and QIDs cannot prove historical consent or source correspondence. The explicit assignment-aware route above writes reviewed claims to verified existing entities; it does not select new candidates or allocate entities. Later-cohort matching and protected candidate-absence checks remain under [#756](https://github.com/WillHirsch/yizkr/issues/756), incremental document orchestration under [#723](https://github.com/WillHirsch/yizkr/issues/723), and correction/split under [#142](https://github.com/WillHirsch/yizkr/issues/142). Legacy one-map and retained-state guards remain in force; these bounded operations do not establish a complete keeper workflow.
+The existing scratch clustering map remains a proposal snapshot, and the one-batch `reconcile`/`resolve --equivalences` CSV path has no automatic migration into these decisions. Its local IDs and QIDs cannot prove historical consent or source correspondence. The explicit assignment-aware route above writes reviewed claims to verified existing entities; it does not select new candidates or allocate entities. Recorded later-cohort matching above supplies read-only advice. Protected application and candidate-absence checks remain under [#767](https://github.com/WillHirsch/yizkr/issues/767), completing [#756](https://github.com/WillHirsch/yizkr/issues/756). Incremental document orchestration remains under [#723](https://github.com/WillHirsch/yizkr/issues/723), and correction/split under [#142](https://github.com/WillHirsch/yizkr/issues/142). Legacy one-map and retained-state guards remain in force; these bounded operations do not establish a complete keeper workflow.
