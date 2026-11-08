@@ -648,7 +648,7 @@ properties:
 
   identity_record:
     label: identity decision record
-    description: reference to the graph record of the verified origin and acceptance of an identity assignment
+    description: reference to the graph record of an identity origin, with accepted assignments and human confirmations when present
     datatype: wikibase-item
     reference: true
     accepts: [identity_decision_record]
@@ -662,6 +662,12 @@ properties:
   identity_origin_run:
     label: identity origin run identifier
     description: original run identifier explicitly recorded by the identity producer; absent when unavailable
+    datatype: string
+    reference: true
+
+  identity_cluster:
+    label: identity map cluster
+    description: cluster locator within the referenced immutable identity map; not a persistent entity identifier
     datatype: string
     reference: true
 
@@ -1114,7 +1120,7 @@ items:
 
   identity_decision_record:
     label: identity decision record
-    description: verified identity origin, accepted assignment revisions and human confirmations with immutable off-graph evidence
+    description: verified identity origin with immutable off-graph evidence; accepted assignment revisions and human confirmations are recorded separately when present
     entity_class: true
 
   occupation_class:

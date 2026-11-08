@@ -142,7 +142,7 @@ def _wiki(*kinds: tuple[str, str], tree: bool = True) -> FakeWiki:
     """A fake instance holding the family history, under its title, an
     `instance of` each of `kinds` (QID, rank), a genealogical report
     without any, and the family tree, a genealogical report."""
-    from wikibaseintegrator.datatypes import Item
+    from wikibaseintegrator.datatypes import Item, String
     from wikibaseintegrator.wbi_enums import ActionIfExists, WikibaseRank
 
     wiki = SourcedWiki(detached=True)
@@ -152,6 +152,7 @@ def _wiki(*kinds: tuple[str, str], tree: bool = True) -> FakeWiki:
     for sha1, title, given in sources:
         source = wiki.wbi.item.new()
         source.labels.set("en", title)
+        source.claims.add(String(prop_nr=PROPERTIES["media_sha1"], value=sha1))
         for qid, rank in given or ((SOURCE_KINDS["genealogical_report"], ""),):
             source.claims.add(
                 Item(
@@ -390,12 +391,15 @@ class TestTheSourceKind:
         letter = "f" * 40
         source = wiki.wbi.item.new()
         source.labels.set("en", "a letter")
-        from wikibaseintegrator.datatypes import Item
+        from wikibaseintegrator.datatypes import Item, String
 
         source.claims.add(
             Item(
                 prop_nr=PROPERTIES["instance_of"], value=SOURCE_KINDS["letter"]
             )
+        )
+        source.claims.add(
+            String(prop_nr=PROPERTIES["media_sha1"], value=letter)
         )
         wiki.media[letter] = source.write().id
         given = _eugens().model_dump(mode="json")
@@ -854,6 +858,11 @@ class TestAVocabularyLabel:
         wiki = VocabularyWiki(detached=True)
         source = wiki.wbi.item.new()
         source.labels.set("en", TITLE)
+        from wikibaseintegrator.datatypes import String
+
+        source.claims.add(
+            String(prop_nr=PROPERTIES["media_sha1"], value=MEDIA_SHA1)
+        )
         wiki.media[MEDIA_SHA1] = source.write().id
         marriage = wiki.wbi.item.new()
         marriage.id = "Q93"

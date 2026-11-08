@@ -4048,6 +4048,15 @@ class BatchWriter:
         for placement in self._placements.values():
             self._cluster_item(placement)
         self._run_binding(batch, self._identity_hash)
+        map_origin = None
+        if self._identity_hash:
+            from yizkr.pipeline.map_identity_provenance import (
+                prepare_map_origin,
+                validate_map_origin,
+            )
+
+            map_origin = prepare_map_origin(identity)
+            validate_map_origin(self.client, map_origin)
         if not self.dry_run:
             from yizkr.core.instance import require_retained_code
 
@@ -4184,7 +4193,69 @@ class BatchWriter:
             if blocks:
                 self._add_blocks(subject_qid, existing, blocks, result)
                 result.skipped -= 1
+        if map_origin is not None and not self.dry_run:
+            self._publish_map_origin(map_origin, batch, refused, result)
         return result
+
+    def _publish_map_origin(self, prepared, batch, refused, result) -> None:
+        """Attribute map resolutions after all source-backed kinds exist.
+
+        Planning can inspect bindings for claims later refused. Only local
+        references materialized by emitted claims establish publication
+        targets; explicit QID resolutions have their own identity authority.
+        Publication runs last so a cached pre-publication entity cannot erase
+        its references during another historical write in this batch.
+        """
+        from yizkr.pipeline.map_identity_provenance import (
+            MapOriginSelection,
+            publish_map_origin,
+        )
+
+        selections = {}
+        bindings = {}
+        for index, claim in enumerate(batch.claims):
+            if index in refused:
+                continue
+            for ref in local_refs(claim):
+                record = self._entity_records.get(ref.local_id)
+                if record is not None and record.qid:
+                    continue
+                placement = self._placements.get(ref.local_id)
+                qid = result.created_items.get(ref.local_id)
+                kind = record.kind if record else ref.instance_of
+                if (
+                    placement is None
+                    or qid is None
+                    or self._bound_clusters.get(placement.cluster) != qid
+                    or kind not in self.items
+                ):
+                    continue
+                cluster = placement.cluster
+                if cluster not in bindings:
+                    binding = self._creation_registry.lookup(
+                        self._cluster_operation(cluster)
+                    )
+                    if binding is None or binding.qid != qid:
+                        raise CreationRefused(
+                            "map origin has no matching entity "
+                            "creation receipt"
+                        )
+                    bindings[cluster] = binding
+                artifact = claim.source.artifact.sha1
+                selections[(cluster, artifact, kind)] = MapOriginSelection(
+                    document=self._document,
+                    cluster_id=cluster,
+                    artifact_sha1=artifact,
+                    kind=kind,
+                    binding=bindings[cluster],
+                )
+        if selections:
+            publish_map_origin(
+                self.client,
+                prepared,
+                selections=tuple(selections.values()),
+                record_dir=self.record_dir,
+            )
 
     def _add_blocks(
         self, subject_qid: str, statement, blocks: list, result: WriteResult

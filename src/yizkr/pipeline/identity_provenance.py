@@ -1,10 +1,10 @@
 """Publish verified identity origins without rewriting historical assertions.
 
-A server migration receipt is the authority for accepted assignments. Its
-content-addressed process record retains the complete origin and confirmation
-evidence. This projection only adds metadata items and reference blocks to
-existing source-backed kind statements; it neither assigns mentions nor
-changes statement values, qualifiers, ranks or existing references.
+Immutable map evidence describes unratified placements; accepted assignment
+publishers separately verify their server authority and confirmation evidence.
+This shared projection adds metadata items and reference blocks to existing
+source-backed kind statements. It neither assigns mentions nor changes
+statement values, qualifiers, ranks or existing references.
 """
 
 from __future__ import annotations
@@ -55,6 +55,10 @@ class IdentitySource:
     kind: str
     binding: RegistryBinding
     method: str
+
+    @property
+    def qid(self) -> str:
+        return self.binding.binding.qid
 
 
 @dataclass(frozen=True)
@@ -212,23 +216,26 @@ def _read_evidence(registry, migration_id, directory):
     return receipt, record, assignments, decisions, producer
 
 
-def _targets(client, sources_to_locate, properties, items):
-    try:
-        sources = unique_source_qids(
-            client,
-            properties["media_sha1"],
-            {c.artifact_sha1 for c in sources_to_locate},
-        )
-    except ValueError as exc:
-        raise IdentityProvenanceRefused(str(exc)) from exc
+def _targets(
+    client, sources_to_locate, properties, items, *, source_qids=None
+):
+    if source_qids is None:
+        try:
+            source_qids = unique_source_qids(
+                client,
+                properties["media_sha1"],
+                {c.artifact_sha1 for c in sources_to_locate},
+            )
+        except ValueError as exc:
+            raise IdentityProvenanceRefused(str(exc)) from exc
     found = []
     entities = {}
     for correspondence in sources_to_locate:
-        qid = correspondence.binding.binding.qid
+        qid = correspondence.qid
         if qid not in entities:
             entities[qid] = client.wbi.item.get(qid)
         entity = entities[qid]
-        source = sources[correspondence.artifact_sha1]
+        source = source_qids[correspondence.artifact_sha1]
         matches = [
             statement
             for statement in entity.claims.get(properties["instance_of"]) or ()
@@ -385,6 +392,7 @@ def publish_identity_record(
     sources,
     references,
     revalidate,
+    revalidate_target=None,
     dry_run=False,
 ):
     """Publish one verified identity record and append exact kind references.
@@ -406,9 +414,7 @@ def publish_identity_record(
             f"identity provenance needs current model bootstrap: {exc.args[0]}"
         ) from exc
     binding = registry.lookup(operation)
-    statements = tuple(
-        sorted({(c.binding.binding.qid, guid) for c, guid, _ in targets})
-    )
+    statements = tuple(sorted({(c.qid, guid) for c, guid, _ in targets}))
     if dry_run and binding is None:
         return IdentityPublication(None, True, statements)
     created = False
@@ -443,7 +449,7 @@ def publish_identity_record(
     expected = {}
     blocks = {}
     for correspondence, guid, _ in current_targets:
-        qid = correspondence.binding.binding.qid
+        qid = correspondence.qid
         for reference in references(
             correspondence, properties, items, binding.qid
         ):
@@ -454,9 +460,26 @@ def publish_identity_record(
         if not dry_run:
             check_cancelled()
             require_retained_code(client)
-            revalidate()
-            entities, refreshed = _targets(client, sources, properties, items)
-            if refreshed != current_targets:
+            if revalidate_target is None:
+                revalidate()
+            else:
+                revalidate_target(qid)
+            # The source inventory is checked before publication, after
+            # metadata creation and at completion. Each individual update
+            # only needs a fresh target and its kind/source references;
+            # rescanning the entire graph for every item is quadratic.
+            selected = [t for t in current_targets if t[0].qid == qid]
+            entities, refreshed = _targets(
+                client,
+                [source for source, _, _ in selected],
+                properties,
+                items,
+                source_qids={
+                    source.artifact_sha1: artifact
+                    for source, _, artifact in selected
+                },
+            )
+            if refreshed != selected:
                 raise IdentityProvenanceRefused(
                     "source-backed kind statement changed during publication"
                 )
@@ -481,13 +504,13 @@ def publish_identity_record(
                 )
     if not dry_run:
         revalidate()
-        _, refreshed = _targets(client, sources, properties, items)
+        entities, refreshed = _targets(client, sources, properties, items)
         if refreshed != current_targets:
             raise IdentityProvenanceRefused(
                 "source-backed kind statement changed during publication"
             )
         for (qid, guid), expected_keys in expected.items():
-            item = client.wbi.item.get(qid)
+            item = entities[qid]
             matches = [s for s in item.claims if s.id == guid]
             if len(matches) != 1 or not expected_keys <= {
                 _reference_key(r) for r in matches[0].references

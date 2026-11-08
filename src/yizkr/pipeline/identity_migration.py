@@ -72,8 +72,15 @@ _LIMITS = (
 )
 
 
-def validated_map(identity: IdentityMap) -> dict[str, Any]:
-    """Validate the supported map format without rerunning its algorithms."""
+def validated_map(
+    identity: IdentityMap, *, require_uniform_kind: bool = True
+) -> dict[str, Any]:
+    """Validate the supported map format without rerunning its algorithms.
+
+    Migration requires uniform kinds for its source correspondence. Ordinary
+    map creation also supports clusters of compatible event subtypes, retaining
+    each mention's original kind independently of the cluster's display kind.
+    """
     data = copy.deepcopy(identity.data)
     if (
         not isinstance(data, dict)
@@ -152,7 +159,9 @@ def validated_map(identity: IdentityMap) -> dict[str, Any]:
                 or (
                     mention["cluster"] != key
                     or mention["method"] != row["method"]
-                    or mention["kind"] != row["kind"]
+                    or (
+                        require_uniform_kind and mention["kind"] != row["kind"]
+                    )
                 )
             ):
                 raise MigrationRefused(
