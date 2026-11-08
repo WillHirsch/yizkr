@@ -26,6 +26,10 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 REQUIRED_CASES = (
     (
+        "tests.fictional_integration.test_cohort_additions",
+        "test_protected_cohort_choices_claims_and_creation_recovery",
+    ),
+    (
         "tests.fictional_integration.test_assignment_authority",
         "test_reviewed_assignments_are_atomic_recoverable_and_graph_preserving",
     ),
@@ -103,7 +107,10 @@ CONTROLS = (
     "scripts/fictional_integration.py",
     "deploy/fictional-integration/compose.yml",
     "deploy/fictional-integration/Dockerfile",
+    "deploy/fictional-integration/mutation-guard-probe.php",
     "deploy/config/Uploads.php",
+    "deploy/config/MutationGuard.php",
+    "deploy/config/mutation-guard",
 )
 
 
@@ -667,6 +674,33 @@ def execute(command: str, state: Path, *, sequential=False) -> None:
                         ],
                         env=env,
                     )
+                    probe = run(
+                        [
+                            *group.compose,
+                            "exec",
+                            "-T",
+                            "wikibase",
+                            "php",
+                            "/yizkr-fictional-mutation-guard-probe.php",
+                        ],
+                        env=env,
+                        capture=True,
+                        timeout=90,
+                    )
+                    guard_evidence = json.loads(probe.stdout)
+                    if guard_evidence != {
+                        "protocol": "yizkr-mutation-guard-v1",
+                        "request_drain": True,
+                        "shutdown_drain": True,
+                        "restart": True,
+                        "stale_capability": True,
+                        "invalid_state": True,
+                        "database_drain": True,
+                    }:
+                        raise LaneError(
+                            "mutation guard subprocess probe failed"
+                        )
+                    group.evidence["mutation_guard_probe"] = guard_evidence
                     if sequential:
                         start_checks(group, env)
                         wait_checks([group], docker, env)

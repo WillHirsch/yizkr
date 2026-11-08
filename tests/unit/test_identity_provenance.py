@@ -13,6 +13,7 @@ from wikibaseintegrator.wbi_enums import ActionIfExists, WikibaseRank
 
 from tests.unit.test_review_stages import request
 from tests.unit.test_run_statements import ITEMS, PROPERTIES, ProvenanceWiki
+from yizkr.core.identity_migration import MigrationRefused
 from yizkr.core.provenance import ProcessRecord, StageProvenance
 from yizkr.core.write_recovery import (
     CreationRegistry,
@@ -22,6 +23,7 @@ from yizkr.pipeline.clustering import IdentityMap, Manifest, identity_hash
 from yizkr.pipeline.identity_migration import (
     accept_map_migration,
     prepare_map_migration,
+    validated_map,
 )
 from yizkr.pipeline.identity_provenance import (
     METHOD_ITEMS,
@@ -143,7 +145,11 @@ def values(reference, key):
 
 
 @pytest.mark.parametrize(
-    "method", sorted(set(METHOD_ITEMS) - {"owner_override"})
+    "method",
+    sorted(
+        set(METHOD_ITEMS)
+        - {"owner_override", "reviewed_assignment", "reviewed_creation"}
+    ),
 )
 def test_original_method_and_confirmation_are_distinct_and_repeatable(
     tmp_path, method
@@ -189,6 +195,20 @@ def test_original_method_and_confirmation_are_distinct_and_repeatable(
     assert before == {
         qid: item.get_json() for qid, item in f.wiki.wbi.item.store.items()
     }
+
+
+@pytest.mark.parametrize(
+    "method", ["reviewed_assignment", "reviewed_creation"]
+)
+def test_cohort_methods_cannot_be_adopted_as_legacy_map_origins(method):
+    source = request().sources[0]
+    identity = IdentityMap.of([Manifest(source.artifact_sha1, source.batch)])
+    row = next(iter(identity.data["mentions"].values()))
+    row["method"] = method
+    identity.data["clusters"][row["cluster"]]["method"] = method
+    identity.data["hash"] = identity_hash(identity.data["mentions"])
+    with pytest.raises(MigrationRefused, match="invalid map mention"):
+        validated_map(identity)
 
 
 def test_dry_run_is_read_only(tmp_path):

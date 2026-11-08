@@ -140,7 +140,56 @@ Preparation observes source occurrences in the local review store. Matching itse
 
 Omitting `client` performs deterministic candidate blocking only. To request the existing adjudicator, supply `client` and an `AdjudicationProvenance` naming its provider, model and configuration. The result records source, review and projection digests, the prompt digest, optional provider identity and returned candidate verdicts. Missing, repeated or invalid pair answers are incomplete advice. A verdict never becomes human approval, and an empty candidate list never authorizes creation. Matching does not change source extraction or its evidence.
 
-Keep both JSON products with the inputs needed for replay, outside Git: their facts and query results may contain private archive data. Loaders verify their content digests; they do not establish current graph state or trust in an external producer. Protected review-to-application and candidate-absence enforcement remain in [#767](https://github.com/WillHirsch/yizkr/issues/767). The recorded proposal product cannot be submitted directly for assignment acceptance or graph writes.
+Keep both JSON products with the inputs needed for replay, outside Git: their facts and query results may contain private archive data. Loaders verify their content digests; they do not establish current graph state or trust in an external producer. The recorded proposal product cannot be submitted directly for assignment acceptance or graph writes. The protected application below captures current evidence again.
+
+## Apply later-cohort identity additions
+
+`pipeline.cohort_additions` connects explicit `assign` and `new_entity` choices to the shared authority. It uses the existing roster blocker, durable review store, creation registry, assignment acceptance and identity-provenance publisher. It is a Python API for bounded additions; document discovery and incremental job orchestration remain under [#723](https://github.com/WillHirsch/yizkr/issues/723).
+
+```mermaid
+flowchart TD
+    sources["Current source products"] --> prepare["Capture candidates and prepare explicit choices"]
+    prepare --> review["Human identity review"]
+    review --> guard["Acquire server mutation exclusion"]
+    guard --> refresh["Recheck source, candidates and decisions"]
+    refresh --> create["Create or recover approved entity<br/>intent and verified receipt"]
+    refresh --> accept["Accept assignments"]
+    create --> accept
+    accept --> origin["Publish identity origin and confirmation"]
+    origin --> release["Release server exclusion"]
+    release --> claims["Separate claim review and support receipts"]
+```
+
+Prepare a `ReviewRequest` with actual sources and explicit choices, using complete bindings for existing targets. Source artifacts must be uniquely registered before application. No model call or human interaction occurs while the mutation guard is held.
+
+```python
+from yizkr.pipeline.cohort_additions import (
+    prepare_cohort_additions, apply_cohort_additions,
+)
+from yizkr.pipeline.review_stages import export_review, record_review
+
+prepared = prepare_cohort_additions(store, request, registry)
+sheet = export_review(store, prepared.review)
+# The curator inspects sheet and fills only selected decision cells.
+record_review(store, reviewed_sheet, actor="curator")
+result = apply_cohort_additions(
+    store, request, registry,
+    state_path=state_dir / "cohort-capability.json",
+    operation_id="cohort-addition-001",
+    record_dir=record_dir,
+)
+# Use result.request with the separate historical-claim review/write API.
+```
+
+An optional `scope` selects durable mention IDs. Related positive and negative decisions still participate in validation. Each previously unassigned selected mention needs one explicit cohort choice; a call permits at most one creation. Apply subsequent creations separately so each can consider the item just added. Existing-target assignments can be grouped. The initial creation contains only the reviewed display label and an operational description; it adds no historical type, aliases or claims. Its assignment references the original `new_entity` decision, verified through the exact creation authorization and receipt, with no synthetic `assign` decision.
+
+Preparation stores scoped candidate bindings and identity facts in the ordinary proposal basis. Full capture digests belong to origin metadata, so an unrelated graph edit or display rename does not revoke unchanged approval. Previously inspected candidates stay in scope after renaming. New candidates or changed material facts require review for affected unaccepted choices; accepted identities remain fixed, while changed source interpretation still needs review. Source correspondence and retained negative constraints remain mandatory. Reassignment, merge and split are refused.
+
+The operational creation authorization retains the reviewed source interpretation. Deterministic blocking considers that context even before historical claims exist, after a rename, or after a receipt/index publication was interrupted. It remains distinguishable from asserted graph facts and is never inserted into the historical-fact adjudication prompt. Ambiguous dispatch stays unresolved and is not resent. An untyped item without such context makes candidate coverage incomplete and conservatively blocks new assignments; finish or investigate that item before proceeding. An unbound candidate likewise cannot be silently ignored. An empty candidate list alone never grants creation permission.
+
+Application requires the [deployed server mutation guard](../deploy/README.md#protected-identity-additions). It reacquires the graph and validates review inside that boundary; it accepts no saved projection as current authority. The same operation, products and review store recover an interrupted creation through its original intent. A partially completed application remains partial: identity provenance can be retried, and historical claims require their own explicit decisions and exact applied-support receipts. Keep the review database, process records and any retained graph-context products with backups. Capability files are private recovery credentials, not provenance records.
+
+Accepted cohort origins use the explicit `reviewed_assignment` or `reviewed_creation` method and separate actor/time confirmation references. Their immutable process record retains the actual scoped decision material and any supplied producer record. An operational `identity record` link carries them without asserting a source-backed historical type. Existing source statements, prior origins, ranks and curator display changes are preserved.
 
 ## Accept assignments to existing entities
 
@@ -234,4 +283,4 @@ An explicit owner override replaces a rejected proposed target before the mentio
 
 ## Integration boundary
 
-The existing scratch clustering map remains a proposal snapshot, and the one-batch `reconcile`/`resolve --equivalences` CSV path has no automatic migration into these decisions. Its local IDs and QIDs cannot prove historical consent or source correspondence. The explicit assignment-aware route above writes reviewed claims to verified existing entities; it does not select new candidates or allocate entities. Recorded later-cohort matching above supplies read-only advice. Protected application and candidate-absence checks remain under [#767](https://github.com/WillHirsch/yizkr/issues/767), completing [#756](https://github.com/WillHirsch/yizkr/issues/756). Incremental document orchestration remains under [#723](https://github.com/WillHirsch/yizkr/issues/723), and correction/split under [#142](https://github.com/WillHirsch/yizkr/issues/142). Legacy one-map and retained-state guards remain in force; these bounded operations do not establish a complete keeper workflow.
+The existing scratch clustering map remains a proposal snapshot, and the one-batch `reconcile`/`resolve --equivalences` CSV path has no automatic migration into these decisions. Its local IDs and QIDs cannot prove historical consent or source correspondence. The assignment-aware claim route writes reviewed claims to verified entities. Recorded matching supplies replayable advice; protected cohort application separately establishes reviewed additions under server exclusion. Incremental document orchestration remains under [#723](https://github.com/WillHirsch/yizkr/issues/723), and correction/split under [#142](https://github.com/WillHirsch/yizkr/issues/142). Legacy one-map and retained-state guards remain in force; these bounded operations do not establish a complete keeper workflow.

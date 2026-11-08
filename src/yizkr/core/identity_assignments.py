@@ -10,11 +10,14 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from yizkr.core.write_recovery import EntityBinding, Generation
+
+if TYPE_CHECKING:
+    from yizkr.pipeline.identity_review import Decision
 
 _ID = r"^[0-9a-f]{32}$"
 _HASH = r"^[0-9a-f]{64}$"
@@ -198,6 +201,8 @@ def validated_revisions(
     snapshot: AssignmentSnapshot,
     delta: AssignmentDelta,
     binding: Callable[[str], RegistryBinding | None],
+    *,
+    creation: Callable[[Decision, str], bool] | None = None,
 ) -> tuple[AssignmentRevision, ...]:
     """Check a complete delta against current authority; never publish it."""
     mentions, decisions = _evidence(delta)
@@ -265,7 +270,10 @@ def validated_revisions(
         if p.operation == "same" and decision.outcome == "approve":
             a, b = p.mentions
             parent[find(b)] = find(a)
-        if p.operation in ("same", "assign") and decision.outcome == "approve":
+        if (
+            p.operation in ("same", "assign", "new_entity")
+            and decision.outcome == "approve"
+        ):
             positives.append(decision)
     desired = dict(snapshot.assignments)
     for target in delta.assignments:
@@ -368,6 +376,17 @@ def validated_revisions(
         members = groups[find(target.mention_id)]
         support = [d for d in positives if set(d.proposal.mentions) <= members]
         direct = [d for d in support if d.proposal.operation == "assign"]
+        created = [d for d in support if d.proposal.operation == "new_entity"]
+        if len(created) > 1:
+            raise AssignmentRefused(
+                "same component has multiple creation approvals"
+            )
+        if created and (
+            creation is None or not creation(created[0], target.entity_id)
+        ):
+            raise AssignmentRefused(
+                "assignment has no applicable affirmative creation receipt"
+            )
         for decision in direct:
             proposed = decision.proposal.target
             verified = binding(proposed.entity_id)
@@ -385,18 +404,9 @@ def validated_revisions(
             and snapshot.assignments[m].entity_id == target.entity_id
             for m in members
         )
-        if not direct and not (established and support):
+        if not direct and not created and not (established and support):
             raise AssignmentRefused(
                 "assignment has no applicable affirmative decision"
-            )
-        if any(
-            d.proposal.operation == "new_entity"
-            and d.outcome == "approve"
-            and set(d.proposal.mentions) & members
-            for d in decisions.values()
-        ):
-            raise AssignmentRefused(
-                "approved creation does not authorize an existing assignment"
             )
         if target.mention_id in snapshot.assignments:
             continue

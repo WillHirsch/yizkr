@@ -190,7 +190,7 @@ The current code has byte-addressed media, located source references, derivation
 | Structured run metadata, preserved producer identity and retained-code admission | Implemented; [record storage, graph projection and limits](RUN_PROVENANCE.md) |
 | Assignment revisions, verified identity migration and exact historical-support receipts | Implemented for the [explicit existing-entity route](IDENTITY_REVIEW.md); legacy callers retain their guards |
 | Recorded graph projection and later-cohort candidate proposals | Implemented; [read-only matching and its limits](IDENTITY_REVIEW.md#record-graph-context-and-inspect-later-cohort-matches) |
-| Protected later-cohort application and candidate-absence checks | [#767](https://github.com/WillHirsch/yizkr/issues/767), within [#756](https://github.com/WillHirsch/yizkr/issues/756) |
+| Protected later-cohort application and candidate-absence checks | Implemented for bounded explicit choices under deployed server exclusion; [scope, recovery and coverage limits](IDENTITY_REVIEW.md#apply-later-cohort-identity-additions) |
 | First incremental text addition; reviewed split/reassignment | [#723](https://github.com/WillHirsch/yizkr/issues/723), [#142](https://github.com/WillHirsch/yizkr/issues/142) |
 | Cancellation; response/session ownership | [Cancellation has explicit bounds](ARCHITECTURE.md#cancellation-and-execution-ownership); [provider sessions have execution ownership](ARCHITECTURE.md#provider-conversation-ownership) separate from response storage, with the exclusive cache lock retained |
 

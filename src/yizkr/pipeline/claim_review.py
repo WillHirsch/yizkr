@@ -267,7 +267,9 @@ def _additive_identity_basis(previous: dict, current: dict) -> bool:
     return old == new
 
 
-def _current_assignment_consistency(applications, snapshot) -> None:
+def _current_assignment_consistency(
+    applications, snapshot, *, creation=None
+) -> None:
     """Refuse current review that changes an accepted identity component."""
     for application in applications:
         decision = application.decision
@@ -303,9 +305,24 @@ def _current_assignment_consistency(applications, snapshot) -> None:
             and approved
             and assigned[0] is not None
         ):
-            raise ReviewRefused(
-                "current creation review would replace an accepted assignment"
+            assignment = assigned[0]
+            original = any(
+                reference.id == decision.id
+                and reference.revision == decision.revision
+                and reference.proposal_id == proposal.id
+                and reference.proposal_revision == proposal.revision
+                and reference.basis_digest == proposal.digest
+                for reference in assignment.decision_references
             )
+            if (
+                not original
+                or creation is None
+                or not creation(decision, assignment.entity_id)
+            ):
+                raise ReviewRefused(
+                    "current creation review would replace an accepted "
+                    "assignment"
+                )
 
 
 def prepare_claim_review(
@@ -496,7 +513,9 @@ def prepare_claim_review(
                 raise ReviewRefused(
                     "claim roles require current unblocked identity review"
                 )
-        _current_assignment_consistency(applications, snapshot)
+        _current_assignment_consistency(
+            applications, snapshot, creation=registry.verify_reviewed_creation
+        )
         for mention_id in current_mentions:
             supplied = identity.projection.assignments.get(mention_id)
             assigned = snapshot.assignments[mention_id]

@@ -227,3 +227,24 @@ docker compose up -d
 - **Blazegraph aborts with "unable to allocate file descriptor table":** the compose file already raises `nofile` ulimits; check your Docker daemon doesn't override them lower.
 - **Items never appear in SPARQL:** `docker compose logs wdqs-updater`. The updater must be able to reach the `wikibase` service and its `WIKIBASE_CONCEPT_URI` must match `MW_WG_SERVER` (both are derived from the same `.env` values here, so drift means `.env` was changed after first boot).
 - **404s or wrong site answered:** the `Host` header didn't match either configured hostname — check DNS/hosts entries point at the server and match `.env` exactly.
+
+## Protected identity additions
+
+The Compose Wikibase service mounts `config/MutationGuard.php` before the other local settings and keeps its durable state in `/config/yizkr-mutation-guard`, shared with its job runner. The guard is required by the bounded cohort application API. Ordinary browsing and ingestion otherwise retain their current behavior; an active protected operation temporarily refuses competing mutations, browser routes and maintenance processes. A narrow set of read/authentication API actions remains available for authoritative reads and owner recovery. WDQS RDF fetches are excluded while the guard is held; synchronize before acquisition. If an intervening write leaves the query index behind, capture refuses and releases the guard so it can catch up before retry.
+
+```mermaid
+flowchart LR
+    clients["Application, curator and raw API clients"] --> gate["Early PHP admission gate"]
+    jobs["Bounded maintenance/job runner"] --> gate
+    owner["Authenticated owner capability"] --> gate
+    gate --> db["Wikibase database"]
+    control["Authenticated begin/end"] --> drain["Drain PHP and outstanding SQL"]
+    drain --> state["Durable owner and epoch"]
+    state --> gate
+```
+
+This enforcement boundary supports the supplied single-host deployment: every Wikibase PHP process mounts the same gate and lock volume, and the wiki uses a dedicated MariaDB 10.11 account. Admission holds a shared process lock through shutdown; begin/end take the exclusive lock and drain other database sessions for that account before changing ownership. The database drain covers a killed PHP worker whose already-sent SQL outlives the process. It terminates outstanding sessions and waits for their cleanup; failure refuses the transition. External SQL/XA writers, alternate PHP entrypoints without the gate, privileged database/host changes and distributed lock filesystems are outside this guarantee. Do not run those operations concurrently with protected additions.
+
+The owner capability is nonexpiring. It is saved locally with mode `0600` before acquisition and sent only to the configured API; records retain only nonsecret protocol/operation/epoch evidence. Handled exits release the guard after draining pending work. A killed client or uncertain release retains recovery state; retry with the same capability path and operation ID. A restarted container preserves ownership and starts the configured server without a schema update, allowing recovery. Job-runner invocations are bounded rather than waiting indefinitely while holding the process lock.
+
+Deploy the configuration and rerun the normal model bootstrap before using cohort additions, to install the reviewed-assignment and reviewed-creation vocabulary. Keep the server guard state with coherent database backups and protect local capability files. Never delete an active guard or impose a timeout to admit another owner. If its capability is lost, stop all application/PHP/DB work and investigate or restore a coherent backup under administrator control; the application deliberately offers no automatic lease stealing. Ordinary application use cannot authorize a keeper transition or a destructive reset.

@@ -20,6 +20,7 @@ services:
 
   wikibase:
     image: wikibase/wikibase:7
+    command: /yizkr-mutation-guard/entrypoint.sh
     depends_on:
       mysql:
         condition: service_healthy
@@ -31,6 +32,8 @@ services:
       - ./config/extensions:/var/www/html/extensions/extensions:z
       - ./config/Extensions.php:/var/www/html/LocalSettings.d/90_UserDefinedExtensions.php:z
       - ./config/Uploads.php:/var/www/html/LocalSettings.d/91_Uploads.php:z
+      - ./config/MutationGuard.php:/var/www/html/LocalSettings.d/00_YizkrMutationGuard.php:ro
+      - ./config/mutation-guard:/yizkr-mutation-guard:ro
       - wikibase-image-data:/var/www/html/images
       - quickstatements-data:/quickstatements/data
     environment:
@@ -50,13 +53,14 @@ services:
       WDQS_PUBLIC_ENDPOINT_URL: ${PUBLIC_SCHEME:-http}://${WDQS_PUBLIC_HOST}/sparql
       WDQS_PUBLIC_FRONTEND_URL: ${PUBLIC_SCHEME:-http}://${WDQS_PUBLIC_HOST}
     healthcheck:
-      test: curl --silent --fail localhost/wiki/Main_Page
+      test:
+        [CMD, curl, --silent, --fail, "http://localhost/w/api.php?action=query&meta=siteinfo&format=json"]
       interval: 10s
       start_period: 5m
 
   wikibase-jobrunner:
     image: wikibase/wikibase:7
-    command: /jobrunner-entrypoint.sh
+    command: /yizkr-mutation-guard/jobrunner.sh
     depends_on:
       wikibase:
         condition: service_healthy

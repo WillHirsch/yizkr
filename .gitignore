@@ -1,6 +1,7 @@
 # Deployment secrets and generated config (written by first boot)
 deploy/.env
 deploy/config/LocalSettings.php
+deploy/config/yizkr-mutation-guard/
 deploy/config/wdqs-frontend-config.json
 deploy/config/wikibase-php.ini
 
