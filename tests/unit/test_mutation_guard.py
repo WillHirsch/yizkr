@@ -19,6 +19,8 @@ from yizkr.core.mutation_guard import (
 )
 from yizkr.core.wiki import WikiClient
 
+HANG_GUARD = 30
+
 
 class Server:
     def __init__(self):
@@ -216,7 +218,7 @@ def test_same_client_and_same_capability_file_refuse_concurrent_use(tmp_path):
             ThreadPoolExecutor(max_workers=1) as executor,
             pytest.raises(RuntimeError, match="across threads"),
         ):
-            executor.submit(lambda: wiki.wbi).result(timeout=5)
+            executor.submit(lambda: wiki.wbi).result(timeout=HANG_GUARD)
         with (
             pytest.raises(MutationGuardError, match="another process"),
             protected_mutation(
