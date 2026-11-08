@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 
 import pytest
+import requests
 from wikibaseintegrator.datatypes import Item
 
 from tests.fixtures.semantic_acceptance import birth_batch, source_case
@@ -219,6 +220,23 @@ def _guard_rejects_competing_and_raw_writes(client, directory, target):
     ) as guard:
         capability = client._mutation_capability
         assert capability is not None
+        rdf_url = (
+            f"{client.config.wikibase_url}/wiki/"
+            f"Special:EntityData/{target}.ttl"
+        )
+        rdf = requests.get(
+            rdf_url, params={"flavor": "dump", "nocache": "1"}, timeout=30
+        )
+        assert rdf.status_code == 200 and target in rdf.text
+        assert "turtle" in rdf.headers["Content-Type"]
+        altered = requests.get(
+            rdf_url,
+            params={"action": "edit", "flavor": "dump"},
+            timeout=30,
+        )
+        assert altered.status_code == 423
+        posted = requests.post(rdf_url, data={"flavor": "dump"}, timeout=30)
+        assert posted.status_code == 423
         with (
             pytest.raises(MutationGuardError),
             protected_mutation(

@@ -70,6 +70,30 @@ if ($mode === 'admission') {
     require_true(!YizkrMutationGuard::admit($state, '', false, ''), 'Browser/REST mutation was admitted');
     require_true(YizkrMutationGuard::admit($state, '', true, 'clientlogin'), 'Recovery login was refused');
     require_true(YizkrMutationGuard::admit($state, '', true, 'wbgetentities'), 'Read was refused');
+    $rdfServer = ['REQUEST_METHOD' => 'GET', 'REQUEST_URI' => '/wiki/Special:EntityData/Q90.ttl?flavor=dump&nocache=1794144878680'];
+    $rdfQuery = ['flavor' => 'dump', 'nocache' => '1794144878680'];
+    require_true(YizkrMutationGuard::readOnlyEntityDataRequest($rdfServer, $rdfQuery, []), 'Canonical updater RDF read was refused');
+    require_true(YizkrMutationGuard::admit($state, '', false, '', true), 'Protected RDF read was refused');
+    require_true(!YizkrMutationGuard::admit($state, 'stale', false, '', true), 'RDF read bypassed stale capability refusal');
+    foreach ([
+        [$rdfServer, $rdfQuery + ['action' => 'edit'], []],
+        [$rdfServer, $rdfQuery + ['action' => 'view'], []],
+        [$rdfServer, $rdfQuery + ['title' => 'Special:NewItem'], []],
+        [$rdfServer, $rdfQuery + ['format' => 'json'], []],
+        [$rdfServer, ['flavor' => ['dump']], []],
+        [$rdfServer, ['nocache' => ['1']], []],
+        [$rdfServer, ['nocache' => '1;action=edit'], []],
+        [$rdfServer, ['flavor' => 'unknown'], []],
+        [$rdfServer, $rdfQuery, ['action' => 'edit']],
+        [array_replace($rdfServer, ['REQUEST_METHOD' => 'POST']), $rdfQuery, []],
+        [array_replace($rdfServer, ['REQUEST_METHOD' => 'HEAD']), $rdfQuery, []],
+        [array_replace($rdfServer, ['REQUEST_URI' => '/wiki/Special:NewItem']), [], []],
+        [array_replace($rdfServer, ['REQUEST_URI' => '/wiki/Special:EntityData/Q90.json']), [], []],
+        [array_replace($rdfServer, ['REQUEST_URI' => '/w/index.php?title=Special:EntityData/Q90.ttl']), [], []],
+        [array_replace($rdfServer, ['REQUEST_URI' => '/wiki/Special:EntityData/Q90.ttl/../Special:NewItem']), [], []],
+    ] as [$server, $query, $post]) {
+        require_true(!YizkrMutationGuard::readOnlyEntityDataRequest($server, $query, $post), 'RDF admission accepted a different request');
+    }
     echo "admitted\n"; exit;
 }
 if ($mode === 'release') {

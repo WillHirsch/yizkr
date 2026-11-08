@@ -54,7 +54,28 @@ final class YizkrMutationGuard {
             hash_equals($state['owner']['digest'], hash('sha256', $capability));
     }
 
-    public static function admit(array $state, string $capability, bool $api, string $action): bool {
+    public static function readOnlyEntityDataRequest(array $server, array $query, array $post): bool {
+        // The updater's canonical Turtle route must stay available: treating
+        // its fetch as a refused mutation makes WDQS abandon that revision.
+        // No action/title/format override or alternate route is admitted.
+        $uri = $server['REQUEST_URI'] ?? '';
+        if (($server['REQUEST_METHOD'] ?? '') !== 'GET' || $post !== [] ||
+            !is_string($uri) ||
+            !preg_match('#^/wiki/Special:EntityData/[QP][1-9][0-9]*\.ttl$#D', explode('?', $uri, 2)[0]) ||
+            array_diff(array_keys($query), ['flavor', 'nocache']) !== []) {
+            return false;
+        }
+        if (array_key_exists('flavor', $query) && $query['flavor'] !== 'dump') {
+            return false;
+        }
+        if (array_key_exists('nocache', $query) && (!is_string($query['nocache']) ||
+            !preg_match('/^[0-9]{1,20}$/D', $query['nocache']))) {
+            return false;
+        }
+        return true;
+    }
+
+    public static function admit(array $state, string $capability, bool $api, string $action, bool $entityData = false): bool {
         if (self::$exclusive) {
             return $api && $action === 'yizkrmutationguard';
         }
@@ -67,7 +88,7 @@ final class YizkrMutationGuard {
         // Authentication must remain available for recovery with a new client.
         // Jobs on web requests are disabled; these fixed modules do not edit
         // entities, registry pages, or their revision visibility.
-        return $api && in_array($action, ['query', 'wbgetentities', 'paraminfo', 'login', 'clientlogin'], true);
+        return $entityData || ($api && in_array($action, ['query', 'wbgetentities', 'paraminfo', 'login', 'clientlogin'], true));
     }
 
     public static function publicState(array $state): array {
