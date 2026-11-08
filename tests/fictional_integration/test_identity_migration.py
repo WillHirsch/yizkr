@@ -32,6 +32,11 @@ from yizkr.core.provenance import RecordRef
 from yizkr.core.write_recovery import CreationRegistry, write_existing
 from yizkr.pipeline.clustering import ADJUDICATED, IdentityMap, identity_hash
 from yizkr.pipeline.identity_review import ReviewRefused, ReviewStore
+from yizkr.pipeline.map_identity_provenance import (
+    MapOriginSelection,
+    prepare_map_origin,
+    publish_map_origin,
+)
 from yizkr.pipeline.registrar import register_artifact
 from yizkr.pipeline.review_mentions import observe_mentions
 from yizkr.pipeline.review_stages import (
@@ -236,6 +241,31 @@ def test_verified_migration_preserves_evidence_and_publishes_graph_origins(
     )
     registry = CreationRegistry(client)
     properties, items = client.vocabulary()
+    directory = tmp_path / "identity-records"
+
+    # Ordinary placement evidence remains unratified when this same entity
+    # later gains explicitly accepted assignments. Reuse the existing source,
+    # binding, migration and query synchronization for that coexistence check.
+    (cluster,) = identity.clusters()
+    first = request.sources[0]
+    map_origin = prepare_map_origin(identity)
+    ordinary = publish_map_origin(
+        client,
+        map_origin,
+        selections=(
+            MapOriginSelection(
+                document=first.artifact_sha1,
+                cluster_id=cluster,
+                artifact_sha1=first.artifact_sha1,
+                kind="human",
+                binding=binding,
+            ),
+        ),
+        record_dir=directory,
+    )
+    assert ordinary.changed and ordinary.record_qid is not None
+    historical = _assert_preserved(client, binding.qid, historical)
+    original_map_record = _entity(client, ordinary.record_qid)
     before = _snapshot(client)
 
     # A valid map of the same names with no corresponding creation intent is
@@ -273,7 +303,6 @@ def test_verified_migration_preserves_evidence_and_publishes_graph_origins(
         )
     assert _snapshot(client) == before
 
-    directory = tmp_path / "identity-records"
     path = tmp_path / "migration-review.sqlite"
     with ReviewStore(path) as store:
         prepared = prepare_map_migration(
@@ -354,13 +383,16 @@ def test_verified_migration_preserves_evidence_and_publishes_graph_origins(
         client, receipt.migration_id, record_dir=directory
     )
     assert published.record_qid == interrupted[0]
+    assert published.record_qid != ordinary.record_qid
     assert published.changed
     projected = _assert_preserved(client, binding.qid, historical)
+    assert _entity(client, ordinary.record_qid) == original_map_record
     (kind,) = projected["claims"][properties["instance_of"]]
     origins = [
         ref
         for ref in kind["references"]
         if properties["identity_method"] in ref["snaks"]
+        and properties["identity_assignment_revision"] in ref["snaks"]
     ]
     confirmations = [
         ref
@@ -400,13 +432,59 @@ def test_verified_migration_preserves_evidence_and_publishes_graph_origins(
         items,
         client.config.concept_uri,
     )
-    rows = [
+    uri = client.config.concept_uri + "/entity/"
+    all_rows = [
         row
         for row in sparql.select(client.config.sparql_url, query)
-        if row.get("migration", {}).get("value") == receipt.migration_id
+        if row["entity"]["value"] == uri + binding.qid
+    ]
+    assert {row["record"]["value"] for row in all_rows} == {
+        uri + ordinary.record_qid,
+        uri + published.record_qid,
+    }
+    unratified = [
+        row
+        for row in all_rows
+        if row["record"]["value"] == uri + ordinary.record_qid
+    ]
+    assert unratified
+    assert {row["method"]["value"] for row in unratified} == {
+        uri + items["identity_adjudicated"]
+    }
+    assert {row["mapHash"]["value"] for row in unratified} == {identity.hash}
+    assert {row["cluster"]["value"] for row in unratified} == {cluster}
+    assert {row["unratified"]["value"] for row in unratified} == {"true"}
+    assert {row["recordSha256"]["value"] for row in unratified} == {
+        map_origin.record_sha256
+    }
+    assert {row["recordFile"]["value"] for row in unratified} == {
+        map_origin.record_sha256 + ".json"
+    }
+    assert not any(
+        set(row)
+        & {
+            "assignmentRevision",
+            "originDecisionRevision",
+            "decisionRevision",
+            "actor",
+            "confirmedAt",
+            "originRecordSha256",
+            "originRun",
+            "model",
+            "prompt",
+        }
+        for row in unratified
+    )
+    rows = [
+        row
+        for row in all_rows
+        if row["record"]["value"] == uri + published.record_qid
     ]
     assert rows
-    uri = client.config.concept_uri + "/entity/"
+    assert {row["migration"]["value"] for row in rows} == {
+        receipt.migration_id
+    }
+    assert {row["unratified"]["value"] for row in rows} == {"unknown"}
     assert {row["entity"]["value"] for row in rows} == {uri + binding.qid}
     assert {row["method"]["value"] for row in rows} == {
         uri + items["identity_adjudicated"]

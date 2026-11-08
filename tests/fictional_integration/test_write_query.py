@@ -16,7 +16,7 @@ from wikibaseintegrator.datatypes import Item, String
 from wikibaseintegrator.models import Reference
 
 from tests.fixtures.semantic_acceptance import birth_batch, source_case
-from yizkr.claims import GivenName, PersonStructure, QidRef
+from yizkr.claims import QidRef
 from yizkr.core import sparql
 from yizkr.core.provenance import ProcessRecord, RecordRef
 from yizkr.core.write_recovery import (
@@ -27,20 +27,8 @@ from yizkr.core.write_recovery import (
 from yizkr.model.bootstrap import bootstrap_instance
 from yizkr.model.schema import load_manifest
 from yizkr.pipeline.clustering import IdentityMap, ensure_identity_map
-from yizkr.pipeline.identity_migration import (
-    accept_map_migration,
-    prepare_map_migration,
-)
-from yizkr.pipeline.identity_provenance import publish_identity_provenance
-from yizkr.pipeline.identity_review import ReviewStore
 from yizkr.pipeline.registrar import register_artifact
-from yizkr.pipeline.review_stages import (
-    MentionKey,
-    ReviewRequest,
-    ReviewSource,
-)
 from yizkr.pipeline.run_provenance import read_record, record_digest
-from yizkr.pipeline.transcribe import Transcription
 from yizkr.pipeline.writer import BatchWriter
 from yizkr.queries.publish import load_templates, render_for_instance
 
@@ -200,55 +188,6 @@ def _assert_unratified_rows(client, rows, identity, origin):
         }
         for row in found
     )
-
-
-def _accept_same_map(client, directory, identity, first):
-    case = source_case(SOURCES[0])
-    request = ReviewRequest(
-        sources=(
-            ReviewSource(
-                case.sha1,
-                first,
-                Transcription(
-                    artifact=case.source_ref().artifact,
-                    text=case.text,
-                    language=case.language,
-                    engine="authored-fictional-text",
-                ),
-            ),
-        )
-    )
-    registry = CreationRegistry(client)
-    with ReviewStore(directory / "map-review.sqlite") as store:
-        prepared = prepare_map_migration(
-            store,
-            request,
-            registry,
-            identity,
-            selections=(
-                MentionKey(artifact_sha1=case.sha1, local_id="gustav"),
-            ),
-        )
-        (proposal,) = prepared.review.proposals
-        store.decide(
-            proposal.id,
-            proposal.revision,
-            expected_digest=proposal.digest,
-            outcome="approve",
-            actor="fictional curator",
-            time=REVIEW_TIME,
-        )
-        receipt = accept_map_migration(
-            store, prepared, registry, record_dir=directory
-        )
-    published = publish_identity_provenance(
-        client, receipt.migration_id, record_dir=directory
-    )
-    assert published.changed
-    assert not publish_identity_provenance(
-        client, receipt.migration_id, record_dir=directory
-    ).changed
-    return receipt, published
 
 
 def _synchronize(client):
@@ -428,14 +367,7 @@ def test_fictional_write_query_roundtrip(
         assert artifacts[key].fragment_qids[1]
 
     # Run the real deterministic map stage, including its producer capture.
-    # The literal occurrence also supports a later explicit identity review.
     first = birth_batch(SOURCES[0])
-    first.entities[0].label = "Gustav"
-    first.entities[0].aliases = ["Gustav"]
-    first.entities[0].mention_lines = [1]
-    first.entities[0].structure = PersonStructure(
-        given=[GivenName(written="Gustav")]
-    )
     batch_path = tmp_path / "first-batch.json"
     batch_path.write_text(first.model_dump_json())
     made = ensure_identity_map(
@@ -581,36 +513,9 @@ def test_fictional_write_query_roundtrip(
     _assert_reference_targets(client, artifacts, (first_result, second_result))
     assert _persisted_births(client, person, expected) == persisted
 
-    # Explicit approval adds accepted provenance beside the unratified origin;
-    # it neither rewrites the producer nor ratifies the earlier map as a whole.
-    receipt, accepted = _accept_same_map(client, directory, identity, first)
-    assert accepted.record_qid != origin[0]
-    _preserved_kind(kind_before_repeat, _kind(client, person))
-    assert _persisted_births(client, person, expected) == persisted
-    assert _map_origin(client, person, identity, directory) == origin
     _synchronize(client)
     assert _query_births(client, person, expected) == queried
     rows = _identity_rows(client, person)
     _assert_unratified_rows(client, rows, identity, origin)
     uri = client.config.concept_uri + "/entity/"
-    assert {row["record"]["value"] for row in rows} == {
-        uri + origin[0],
-        uri + accepted.record_qid,
-    }
-    confirmed = [
-        row
-        for row in rows
-        if row["record"]["value"] == uri + accepted.record_qid
-    ]
-    assert confirmed
-    assert {row["assignmentRevision"]["value"] for row in confirmed} == {
-        assignment.revision_id for assignment in receipt.assignments
-    }
-    assert {row["actor"]["value"] for row in confirmed} == {
-        "fictional curator"
-    }
-    assert {row["confirmedAt"]["value"] for row in confirmed} == {REVIEW_TIME}
-    assert all(
-        "decisionRevision" in row and row["unratified"]["value"] == "unknown"
-        for row in confirmed
-    )
+    assert {row["record"]["value"] for row in rows} == {uri + origin[0]}
