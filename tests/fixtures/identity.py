@@ -101,6 +101,10 @@ def joined(
             mentions[fingerprint]["method"] = CONFIDENT
     data["clusters"] = dict(sorted(clusters.items()))
     data["hash"] = identity_hash(mentions)
+    if data["hash"] != identity.hash:
+        # A test-authored merge is no longer the original producer's output.
+        # Missing producer evidence is honest; relabelling its record is not.
+        data.pop("provenance", None)
     return IdentityMap(data)
 
 

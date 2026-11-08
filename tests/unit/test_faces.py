@@ -7,6 +7,7 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+from wikibaseintegrator.datatypes import String
 
 from tests.fixtures import example_universe as u
 from tests.fixtures.identity import write_mapped
@@ -1067,6 +1068,9 @@ def wiki_with_portrait() -> FakeWiki:
     wiki = PortraitWiki({PORTRAIT_SCAN.sha1: PORTRAIT.qid})
     photograph = wiki.wbi.item.new()
     photograph.id = PORTRAIT.qid
+    photograph.claims.add(
+        String(prop_nr=PROPERTIES["media_sha1"], value=PORTRAIT_SCAN.sha1)
+    )
     photograph.write()
     rahel = wiki.wbi.item.new()
     rahel.id = "Q28"

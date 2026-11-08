@@ -16,6 +16,7 @@ import json
 import re
 
 import pytest
+from wikibaseintegrator.datatypes import String
 
 from tests.fixtures.identity import write_mapped
 from tests.unit.test_chunking import (
@@ -1377,6 +1378,9 @@ class TestTheWriter:
         0), and writes the statement there, with both references."""
         wiki = IssuingWiki()
         artifact = wiki.wbi.item.new()
+        artifact.claims.add(
+            String(prop_nr=PROPERTIES["media_sha1"], value=DOC_REF.sha1)
+        )
         artifact.write()
         wiki.media[DOC_REF.sha1] = artifact.id
         batch = ClaimBatch.model_validate(
@@ -1451,6 +1455,9 @@ class TestTheWriter:
         items = {}
         for ref in (DOC_REF, OTHER_REF):
             artifact = wiki.wbi.item.new()
+            artifact.claims.add(
+                String(prop_nr=PROPERTIES["media_sha1"], value=ref.sha1)
+            )
             artifact.write()
             wiki.media[ref.sha1] = artifact.id
             items[ref.sha1] = artifact.id
@@ -1487,6 +1494,9 @@ class TestTheWriter:
         is refused and counted, and the rest of the batch is written."""
         wiki = IssuingWiki()
         artifact = wiki.wbi.item.new()
+        artifact.claims.add(
+            String(prop_nr=PROPERTIES["media_sha1"], value=DOC_REF.sha1)
+        )
         artifact.write()
         wiki.media[DOC_REF.sha1] = artifact.id
         batch = ClaimBatch.model_validate(

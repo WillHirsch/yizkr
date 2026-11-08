@@ -522,7 +522,10 @@ class TestAnEntitysNote:
         again = write_mapped(BatchWriter(wiki), batch, identity=identity)
         assert again.notes_written == 0
         (kind,) = statements(wiki, court, "instance_of")
-        assert len(blocks(kind)) == 3
+        assert (
+            len([b for b in blocks(kind) if "identity_record" not in b]) == 3
+        )
+        assert len([b for b in blocks(kind) if "identity_record" in b]) == 1
 
     def test_a_later_document_adds_its_note_with_its_source(self):
         """The court found again from another document gains that
@@ -1453,6 +1456,9 @@ class TestMoreKinds:
         kinds = item.claims.claims[NOTE_PROPERTIES["instance_of"]]
         kinds.insert(0, kinds.pop())
         item.write()
+        curated_before = json.loads(
+            json.dumps(statements(wiki, court, "instance_of")[0].get_json())
+        )
         noted = court_of(KIND_NOTE).model_dump(mode="json")
         later = batch_of(
             *noted["claims"], entities=noted["entities"], run=LATER_RUN
@@ -1460,6 +1466,7 @@ class TestMoreKinds:
         result = write_mapped(BatchWriter(wiki), later, identity=identity)
         assert result.notes_written == 1
         curators, machine = statements(wiki, court, "instance_of")
+        assert curators.get_json() == curated_before
         assert run_blocks(curators) == []
         assert run_blocks(machine) == [
             (first.run_qid, None, None),

@@ -277,6 +277,7 @@ class FakeWiki(RecoveryWiki):
         "source_part_locator": "P59",
     }
     ITEMS = {
+        **RecoveryWiki.PROCESS_ITEMS,
         "photograph": "Q2",
         "artifact": "Q3",
         "artifact_fragment": "Q4",
@@ -372,7 +373,7 @@ class FakeWiki(RecoveryWiki):
         return self.PROPERTIES, self.ITEMS
 
     def iter_entities(self, props):
-        assert props == "labels|claims"
+        assert props in {"labels|claims", "claims"}
         self.reads += 1
         for qid in sorted(self.entities, key=lambda q: int(q[1:])):
             yield qid, copy.deepcopy(self.entities[qid])

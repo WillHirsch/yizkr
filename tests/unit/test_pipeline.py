@@ -1710,6 +1710,7 @@ PROPERTIES = {
     "source_part_locator": "P27",
 }
 ITEMS = {
+    **RecoveryWiki.PROCESS_ITEMS,
     "human": "Q1",
     "extraction_run": "Q2",
     "unclassified_entity": "Q3",
@@ -1943,6 +1944,7 @@ class FakeItems:
         self._next = 100
         self.revisions: dict[str, int] = {}
         self.creation_history: list[dict] = []
+        self._statement_ids = itertools.count(1)
         self._lock = threading.RLock()
 
     def _record_write(self, item, summary, options) -> None:
@@ -1962,6 +1964,9 @@ class FakeItems:
         if new:
             item.id = f"Q{self._next}"
             self._next += 1
+        for statement in item.claims:
+            if statement.id is None:
+                statement.id = f"{item.id}${next(self._statement_ids)}"
         item.lastrevid = self.writes
         self.revisions[item.id] = item.lastrevid
         if new:
@@ -2041,16 +2046,12 @@ class DetachedItems(FakeItems):
 
     def __init__(self) -> None:
         super().__init__()
-        self._statement_ids = itertools.count(1)
         self.sent: list[dict] = []
 
     def _bound(self, item):
         def write(summary=None, **options):
             with self._lock:
                 self._record_write(item, summary, options)
-                for statement in item.claims:
-                    if statement.id is None:
-                        statement.id = f"{item.id}${next(self._statement_ids)}"
                 self.sent.append(item.get_json())
                 self.store[item.id] = self._copy(item, _as_stored)
                 return item
@@ -2178,6 +2179,32 @@ class FakeWiki(RecoveryWiki):
         self.index_reads += 1
         return dict(self.media)
 
+    def iter_entities(self, props):
+        """Read graph claims, including the pre-existing source fixtures.
+
+        ``media`` supplies registered artifacts without counting fixture setup
+        as writes or consuming the QIDs used by the test. An actual stored
+        item's claims take precedence, so removed or retired hashes remain
+        visible to provenance validation rather than being reconstructed.
+        """
+        from wikibaseintegrator.datatypes import String
+
+        assert props == "claims"
+        properties, _ = self.vocabulary()
+        entities = {
+            qid: copy.deepcopy(item.get_json())
+            for qid, item in self.wbi.item.store.items()
+        }
+        for sha1, qid in self.media.items():
+            if qid in self.wbi.item.store:
+                continue
+            entity = entities.setdefault(qid, {"id": qid, "claims": {}})
+            hashes = entity["claims"].setdefault(properties["media_sha1"], [])
+            hashes.append(
+                String(prop_nr=properties["media_sha1"], value=sha1).get_json()
+            )
+        yield from sorted(entities.items())
+
 
 def _cited(statement, key: str) -> list[str]:
     """The items a statement's references point at through `key`."""
@@ -2261,7 +2288,7 @@ class TestWriterArtifactResolution:
 
     def test_caller_supplied_qids_skip_the_index(self):
         # write-time registration hands over what it just registered
-        wiki = FakeWiki()
+        wiki = FakeWiki({MEDIA_SHA1: "Q23"})
         writer = BatchWriter(wiki, artifact_qids={MEDIA_SHA1.upper(): "Q23"})
         result = write_mapped(writer, batch())
         assert wiki.index_reads == 0
@@ -2536,7 +2563,7 @@ def _by_value(statements) -> dict:
 
 
 def _sources(statement) -> list[tuple[list[str], list[str]]]:
-    """Each reference block's (stated-in items, extraction-run items)."""
+    """Historical source/run blocks, separate from identity-only metadata."""
     return [
         (
             [
@@ -2551,6 +2578,8 @@ def _sources(statement) -> list[tuple[list[str], list[str]]]:
             ],
         )
         for block in statement.references.references
+        if block.snaks.get(PROPERTIES["stated_in"])
+        or block.snaks.get(PROPERTIES["inferred_from_extraction_run"])
     ]
 
 
@@ -3233,24 +3262,31 @@ class TestWriterRefKindWitnesses:
 
     # the directory typing the firm by the interview's word for it, which
     # is no kind in the vocabulary: on a local ref of a claims file, or in
-    # its entity manifest -> (the batch, the firm's local id, claims)
+    # its entity manifest, or without a supplied kind at all.
     UNKNOWN_KIND = {
         "ref": (
             lambda: _directory_pages_batch("hat_shop", None),
             "c001:firm",
             2,
+            True,
         ),
-        "record": (lambda: _directory_batch("hat_shop"), "firm", 1),
+        "record": (lambda: _directory_batch("hat_shop"), "firm", 1, True),
+        "kindless": (
+            lambda: _directory_pages_batch(None, None),
+            "c001:firm",
+            2,
+            False,
+        ),
     }
 
     @pytest.mark.parametrize(
-        ("given", "local_id", "claims"),
+        ("given", "local_id", "claims", "warn"),
         UNKNOWN_KIND.values(),
         ids=UNKNOWN_KIND.keys(),
     )
     @pytest.mark.parametrize("found", [True, False], ids=["found", "minted"])
-    def test_a_kind_the_vocabulary_lacks_is_skipped_with_a_warning(
-        self, found, given, local_id, claims
+    def test_missing_or_unsupported_kind_keeps_types_and_publishes_origin(
+        self, found, given, local_id, claims, warn
     ):
         wiki = _three_sources()
 
@@ -3279,15 +3315,31 @@ class TestWriterRefKindWitnesses:
         planned = write_mapped(
             BatchWriter(wiki, dry_run=True), batch, identity=identity
         )
-        assert planned.warnings == [warning]
+        assert planned.warnings == ([warning] if warn else [])
         assert wiki.wbi.item.writes == writes
 
         directory = write_mapped(BatchWriter(wiki), batch, identity=identity)
 
-        assert directory.warnings == [warning]
+        assert directory.warnings == ([warning] if warn else [])
         assert directory.written == claims
         assert kinds(directory.created_items[local_id]) == kinds_before
         assert directory.type_statements_written == 0
+        qid = directory.created_items[local_id]
+        (origin_link,) = _statements(wiki, qid, "identity_record")
+        assert any(
+            ref.snaks.get(PROPERTIES["identity_method"])
+            for ref in origin_link.references
+        )
+        assert not any(
+            ref.snaks.get(PROPERTIES["stated_in"])
+            for ref in origin_link.references
+        )
+        before = json.dumps(origin_link.get_json(), sort_keys=True)
+        again = write_mapped(BatchWriter(wiki), batch, identity=identity)
+        assert again.created_items[local_id] == qid
+        (origin_link,) = _statements(wiki, qid, "identity_record")
+        assert json.dumps(origin_link.get_json(), sort_keys=True) == before
+        assert kinds(qid) == kinds_before
 
     # a claims file written on an empty instance: page 1's ref mints the
     # firm, and each later page's ref, under a local id of its own, finds
@@ -3930,12 +3982,14 @@ class TestWriterPlaces:
             (born,) = item.claims.get(PROPERTIES["date_of_birth"])
             born.rank = WikibaseRank.DEPRECATED
             item.write()
-        before = _snapshot(wiki, sebastian)
+        (born,) = _statements(wiki, sebastian, "date_of_birth")
+        before = copy.deepcopy(born.get_json())
 
         later = write_mapped(BatchWriter(wiki), _births(margin, run=LATER_RUN))
 
         assert (later.written, later.referenced, later.skipped) == (0, 0, 1)
-        assert _snapshot(wiki, sebastian) == before
+        (born,) = _statements(wiki, sebastian, "date_of_birth")
+        assert born.get_json() == before
 
     def test_a_gedcom_export_keeps_both_citations_of_one_birth(self):
         from yizkr.pipeline.gedcom import adapt_gedcom

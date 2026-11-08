@@ -4048,6 +4048,15 @@ class BatchWriter:
         for placement in self._placements.values():
             self._cluster_item(placement)
         self._run_binding(batch, self._identity_hash)
+        map_origin = None
+        if self._identity_hash:
+            from yizkr.pipeline.map_identity_provenance import (
+                prepare_map_origin,
+                validate_map_origin,
+            )
+
+            map_origin = prepare_map_origin(identity)
+            validate_map_origin(self.client, map_origin)
         if not self.dry_run:
             from yizkr.core.instance import require_retained_code
 
@@ -4184,7 +4193,125 @@ class BatchWriter:
             if blocks:
                 self._add_blocks(subject_qid, existing, blocks, result)
                 result.skipped -= 1
+        if map_origin is not None and not self.dry_run:
+            self._publish_map_origin(map_origin, batch, refused, result)
         return result
+
+    def _publish_map_origin(self, prepared, batch, refused, result) -> None:
+        """Attribute map resolutions after source-backed kinds are recorded.
+
+        Planning can inspect bindings for claims later refused. Only local
+        references materialized by emitted claims establish publication
+        targets; explicit QID resolutions have their own identity authority.
+        Publication runs last so a cached pre-publication entity cannot erase
+        its references during another historical write in this batch.
+        """
+        from yizkr.pipeline.map_identity_provenance import (
+            MapOriginSelection,
+            publish_map_origin,
+        )
+
+        selections = {}
+        bindings = {}
+        for index, claim in enumerate(batch.claims):
+            if index in refused:
+                continue
+            for ref in local_refs(claim):
+                record = self._entity_records.get(ref.local_id)
+                if record is not None and record.qid:
+                    continue
+                placement = self._placements.get(ref.local_id)
+                qid = result.created_items.get(ref.local_id)
+                kind = record.kind if record else ref.instance_of
+                if (
+                    placement is None
+                    or qid is None
+                    or self._bound_clusters.get(placement.cluster) != qid
+                ):
+                    continue
+                # A kindless reference still has a map placement. Its origin
+                # uses an operational record link, without asserting a type
+                # that the source did not supply or the vocabulary lacks.
+                if kind not in self.items:
+                    kind = None
+                cluster = placement.cluster
+                if cluster not in bindings:
+                    binding = self._creation_registry.lookup(
+                        self._cluster_operation(cluster)
+                    )
+                    if binding is None or binding.qid != qid:
+                        raise CreationRefused(
+                            "map origin has no matching entity "
+                            "creation receipt"
+                        )
+                    bindings[cluster] = binding
+                artifact = claim.source.artifact.sha1
+                statement = (
+                    self._map_origin_statement(
+                        qid, kind, self._artifact_qids[artifact], prepared
+                    )
+                    if kind is not None
+                    else None
+                )
+                selections[(cluster, artifact, kind)] = MapOriginSelection(
+                    document=self._document,
+                    cluster_id=cluster,
+                    artifact_sha1=artifact,
+                    kind=kind,
+                    binding=bindings[cluster],
+                    statement_id=statement.id
+                    if statement is not None
+                    else None,
+                )
+        if selections:
+            publish_map_origin(
+                self.client,
+                prepared,
+                selections=tuple(selections.values()),
+                record_dir=self.record_dir,
+            )
+
+    def _map_origin_statement(self, qid, kind, artifact_qid, prepared):
+        """Anchor placement metadata without conflating equal kind statements.
+
+        Reuse an existing origin's anchor after curator edits; otherwise prefer
+        the machine kind just used by ordinary kind recording. If all matching
+        kinds are curated, placement evidence can reference an existing one
+        without changing its historical assertion, rank or source references.
+        The publisher rereads and validates this exact GUID before appending.
+        """
+        from yizkr.pipeline.identity_provenance import (
+            IdentityProvenanceRefused,
+        )
+
+        matches = [
+            statement
+            for statement in self._entity(qid).claims.get(
+                self.properties["instance_of"]
+            )
+            if self._type_value(statement) == self.items[kind]
+            and not self._qualifier_snapshot(statement)
+            and self._has_artifact_reference(statement, artifact_qid)
+            and statement.id
+        ]
+        if not matches:
+            raise IdentityProvenanceRefused(
+                "map origin has no source-backed kind statement"
+            )
+        for statement in matches:
+            if any(
+                (snak.datavalue or {}).get("value") == prepared.record_sha256
+                for reference in statement.references
+                for snak in reference.snaks.get(
+                    self.properties["run_record_sha256"]
+                )
+                or ()
+            ):
+                return statement
+        return next(
+            (s for s in matches if not self._is_curated(s)),
+            min(matches, key=lambda s: s.id),
+        )
 
     def _add_blocks(
         self, subject_qid: str, statement, blocks: list, result: WriteResult

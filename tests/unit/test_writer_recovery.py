@@ -81,7 +81,8 @@ def test_lost_creation_reply_recovers_after_curator_changes_terms(
     assert target.wbi.item.get(qid).descriptions.get("en").value == (
         "curator's retained description"
     )
-    expected_remaining = 2 if summary == "ingest: extraction run" else 1
+    # The remaining cluster creations and one shared map-origin record.
+    expected_remaining = 3 if summary == "ingest: extraction run" else 2
     assert (
         len(target.wbi.item.creation_history) == creations + expected_remaining
     )

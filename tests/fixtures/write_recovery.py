@@ -40,6 +40,33 @@ class RecoveryWiki:
                 "scratch_run",
                 "run_manifest_hash",
                 "identity_map_hash",
+                "identity_record",
+                "identity_origin_record_sha256",
+                "identity_origin_run",
+                "identity_method",
+                "identity_assignment_revision",
+                "identity_decision_revision",
+                "identity_confirmation_actor",
+                "identity_confirmation_at",
+                "identity_migration_id",
+                "identity_cluster",
+            ),
+            1,
+        )
+    }
+    PROCESS_ITEMS = {
+        key: f"Q{9000 + index}"
+        for index, key in enumerate(
+            (
+                "identity_decision_record",
+                "identity_confident",
+                "identity_adjudicated",
+                "identity_confident_component",
+                "identity_owner_override",
+                "identity_singleton",
+                "identity_ambiguous",
+                "identity_conflicting",
+                "identity_unclustered",
             ),
             1,
         )
