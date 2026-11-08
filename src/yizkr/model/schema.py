@@ -70,9 +70,10 @@ class ManifestProperty(BaseModel):
     # validation refuses every claim of it, and no prompt offers it
     # (ADR-0036's `spouse`). It accepts nothing.
     retired: bool = False
-    # A reference property is written only in a statement's references
-    # (ADR-0003; ADR-0035 §4's judgement notes): validation refuses it as
-    # a claim's or a qualifier's property, and no prompt offers it.
+    # A reference property is unavailable to historical claims and their
+    # qualifiers, and no extraction prompt offers it. Operational publishers
+    # may also use it on metadata statements, such as process record digests
+    # and identity-record links; this does not admit authored source claims.
     reference: bool = False
     # Whether the prompts rendered from the manifest offer the property.
     # A retired or reference property is never offered, whatever this

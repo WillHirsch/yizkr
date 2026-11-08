@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 from wikibaseintegrator.datatypes import Item, String
 from wikibaseintegrator.models import Reference
+from wikibaseintegrator.wbi_enums import ActionIfExists
 
 from tests.unit.test_clustering import day, identity_of, judgment, tree_union
 from tests.unit.test_identity_provenance import Wiki, kind, values
@@ -32,7 +33,7 @@ from yizkr.pipeline.map_identity_provenance import (
 from yizkr.pipeline.run_provenance import read_record, record_digest
 
 
-def fixture(tmp_path, method="singleton", *, producer=True):
+def fixture(tmp_path, method="singleton", *, producer=True, kindless=False):
     wiki = Wiki(detached=True)
     source = request().sources[0]
     identity = IdentityMap.of([Manifest(source.artifact_sha1, source.batch)])
@@ -70,7 +71,8 @@ def fixture(tmp_path, method="singleton", *, producer=True):
     reference = Reference()
     reference.add(Item(prop_nr=PROPERTIES["stated_in"], value=artifact.id))
     statement.references.add(reference)
-    subject.claims.add(statement)
+    if not kindless:
+        subject.claims.add(statement)
     binding = CreationRegistry(wiki).create(
         cluster_creation_operation(identity.hash, row["cluster"]),
         subject,
@@ -85,7 +87,7 @@ def fixture(tmp_path, method="singleton", *, producer=True):
             document=source.artifact_sha1,
             cluster_id=row["cluster"],
             artifact_sha1=source.artifact_sha1,
-            kind="human",
+            kind=None if kindless else "human",
             binding=binding,
         ),
         directory=tmp_path / "records",
@@ -107,6 +109,13 @@ def snapshot(f):
         {key: item.get_json() for key, item in f.wiki.wbi.item.store.items()},
         dict(f.wiki._recovery_pages),
     )
+
+
+def operational(f):
+    (statement,) = f.wiki.wbi.item.get(f.qid).claims.get(
+        PROPERTIES["identity_record"]
+    )
+    return statement
 
 
 @pytest.mark.parametrize(
@@ -174,8 +183,9 @@ def test_preparation_owns_snapshot_and_never_invents_legacy_metadata(tmp_path):
     assert not f.directory.exists()
 
 
-def test_dry_run_leaves_graph_authority_and_disk_unchanged(tmp_path):
-    f = fixture(tmp_path)
+@pytest.mark.parametrize("kindless", [False, True])
+def test_dry_run_leaves_graph_authority_and_disk_unchanged(tmp_path, kindless):
+    f = fixture(tmp_path, kindless=kindless)
     before = snapshot(f)
     result = publish(f, dry_run=True)
     assert result.record_qid is None and result.changed
@@ -231,8 +241,11 @@ def test_preparation_rejects_invalid_full_map_before_effects(tmp_path, damage):
 
 
 @pytest.mark.parametrize("damage", ["document", "binding", "source"])
-def test_publication_rejects_unverified_placement_or_source(tmp_path, damage):
-    f = fixture(tmp_path)
+@pytest.mark.parametrize("kindless", [False, True])
+def test_publication_rejects_unverified_placement_or_source(
+    tmp_path, damage, kindless
+):
+    f = fixture(tmp_path, kindless=kindless)
     if damage == "document":
         f.selection = replace(f.selection, document="f" * 40)
     elif damage == "binding":
@@ -321,12 +334,13 @@ def test_actual_source_and_reviewed_kind_can_differ_from_the_map(tmp_path):
     assert any(values(r, "identity_record") for r in reviewed.references)
 
 
+@pytest.mark.parametrize("kindless", [False, True])
 def test_duplicate_source_during_target_write_prevents_success(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, kindless
 ):
     import yizkr.pipeline.identity_provenance as module
 
-    f = fixture(tmp_path)
+    f = fixture(tmp_path, kindless=kindless)
     original = module.write_existing
 
     def then_duplicate(item, **kwargs):
@@ -347,13 +361,15 @@ def test_duplicate_source_during_target_write_prevents_success(
         publish(f)
     # Publication is additive, not a transaction. An incomplete attempt must
     # refuse success even when the conflicting source appeared after a write.
-    assert any(values(r, "identity_record") for r in kind(f).references)
+    anchor = operational(f) if kindless else kind(f)
+    assert any(values(r, "identity_record") for r in anchor.references)
 
 
+@pytest.mark.parametrize("kindless", [False, True])
 def test_publication_reads_scale_linearly_with_target_count(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, kindless
 ):
-    f = fixture(tmp_path)
+    f = fixture(tmp_path, kindless=kindless)
     selections = [f.selection]
     registry = CreationRegistry(f.wiki)
     for cid, cluster in f.identity.data["clusters"].items():
@@ -368,7 +384,8 @@ def test_publication_reads_scale_linearly_with_target_count(
             Item(prop_nr=PROPERTIES["stated_in"], value=f.source_qid)
         )
         claim.references.add(reference)
-        item.claims.add(claim)
+        if not kindless:
+            item.claims.add(claim)
         binding = registry.create(
             cluster_creation_operation(f.identity.hash, cid),
             item,
@@ -378,7 +395,7 @@ def test_publication_reads_scale_linearly_with_target_count(
             replace(
                 f.selection,
                 cluster_id=cid,
-                kind=cluster["kind"],
+                kind=None if kindless else cluster["kind"],
                 binding=binding,
             )
         )
@@ -411,3 +428,128 @@ def test_publication_reads_scale_linearly_with_target_count(
     }
     assert len(scans) <= 3
     assert len(lookups) <= 4 * len(selections)
+
+
+def test_kindless_placement_adds_only_operational_identity_metadata(tmp_path):
+    f = fixture(tmp_path, kindless=True)
+    result = publish(f)
+    statement = operational(f)
+    assert statement.id
+    assert statement.mainsnak.datavalue["value"]["id"] == result.record_qid
+    assert result.statements == ((f.qid, statement.id),)
+    assert set(f.wiki.wbi.item.get(f.qid).claims.get_json()) == {
+        PROPERTIES["identity_record"]
+    }
+    (origin,) = statement.references
+    assert values(origin, "identity_cluster") == [f.selection.cluster_id]
+    assert values(origin, "identity_origin_run") == ["fictional-map-run"]
+    for key in (
+        "stated_in",
+        "inferred_from_extraction_run",
+        "identity_assignment_revision",
+        "identity_decision_revision",
+        "identity_confirmation_actor",
+        "identity_confirmation_at",
+    ):
+        assert not values(origin, key)
+    before = snapshot(f)
+    repeated = publish(f)
+    assert not repeated.changed
+    assert repeated.statements == result.statements
+    assert snapshot(f) == before
+
+
+@pytest.mark.parametrize("after_write", [False, True])
+def test_kindless_anchor_recovers_interrupted_publication(
+    tmp_path, monkeypatch, after_write
+):
+    import yizkr.pipeline.identity_provenance as module
+
+    f = fixture(tmp_path, kindless=True)
+    original = module.write_existing
+
+    class Interrupted(BaseException):
+        pass
+
+    def interrupt(item, **kwargs):
+        if item.id != f.qid:
+            return original(item, **kwargs)
+        if after_write:
+            original(item, **kwargs)
+        raise Interrupted()
+
+    with monkeypatch.context() as patch:
+        patch.setattr(module, "write_existing", interrupt)
+        with pytest.raises(Interrupted):
+            publish(f)
+    items = set(f.wiki.wbi.item.store)
+    result = publish(f)
+    assert result.changed is not after_write
+    assert set(f.wiki.wbi.item.store) == items
+    assert result.statements == ((f.qid, operational(f).id),)
+    assert not publish(f).changed
+
+
+def test_kindless_anchor_survives_later_genuine_source_kind(tmp_path):
+    f = fixture(tmp_path, kindless=True)
+    first = publish(f)
+    before = operational(f).get_json()
+    entity = f.wiki.wbi.item.get(f.qid)
+    statement = Item(prop_nr=PROPERTIES["instance_of"], value=ITEMS["human"])
+    reference = Reference()
+    reference.add(Item(prop_nr=PROPERTIES["stated_in"], value=f.source_qid))
+    statement.references.add(reference)
+    entity.claims.add(statement)
+    entity.write()
+    f.selection = replace(f.selection, kind="human")
+    later = publish(f)
+    assert later.record_qid == first.record_qid
+    assert operational(f).get_json() == before
+    assert any(values(r, "identity_record") for r in kind(f).references)
+    assert not publish(f).changed
+    assert operational(f).get_json() == before
+
+
+def test_ambiguous_operational_anchors_refuse_without_effects(tmp_path):
+    f = fixture(tmp_path, kindless=True)
+    result = publish(f)
+    entity = f.wiki.wbi.item.get(f.qid)
+    entity.claims.add(
+        Item(prop_nr=PROPERTIES["identity_record"], value=result.record_qid),
+        action_if_exists=ActionIfExists.FORCE_APPEND,
+    )
+    entity.write()
+    before = snapshot(f)
+    with pytest.raises(IdentityProvenanceRefused, match="ambiguous"):
+        publish(f)
+    assert snapshot(f) == before
+
+
+def test_later_producer_preserves_all_earlier_operational_links(tmp_path):
+    f = fixture(tmp_path, kindless=True)
+    first = publish(f)
+    entity = f.wiki.wbi.item.get(f.qid)
+    qualified = Item(
+        prop_nr=PROPERTIES["identity_record"], value=first.record_qid
+    )
+    qualified.qualifiers.add(
+        String(prop_nr=PROPERTIES["page_number"], value="curator annotation")
+    )
+    entity.claims.add(qualified, action_if_exists=ActionIfExists.FORCE_APPEND)
+    entity.write()
+    before = {
+        statement.id: statement.get_json()
+        for statement in f.wiki.wbi.item.get(f.qid).claims
+    }
+    f.identity.data["provenance"]["metadata"]["producer_run_id"] = (
+        "fictional-later-run"
+    )
+    later = publish(f)
+    assert later.record_qid != first.record_qid
+    after = {
+        statement.id: statement.get_json()
+        for statement in f.wiki.wbi.item.get(f.qid).claims
+    }
+    assert len(after) == len(before) + 1
+    assert {guid: after[guid] for guid in before} == before
+    assert not publish(f).changed

@@ -3262,24 +3262,31 @@ class TestWriterRefKindWitnesses:
 
     # the directory typing the firm by the interview's word for it, which
     # is no kind in the vocabulary: on a local ref of a claims file, or in
-    # its entity manifest -> (the batch, the firm's local id, claims)
+    # its entity manifest, or without a supplied kind at all.
     UNKNOWN_KIND = {
         "ref": (
             lambda: _directory_pages_batch("hat_shop", None),
             "c001:firm",
             2,
+            True,
         ),
-        "record": (lambda: _directory_batch("hat_shop"), "firm", 1),
+        "record": (lambda: _directory_batch("hat_shop"), "firm", 1, True),
+        "kindless": (
+            lambda: _directory_pages_batch(None, None),
+            "c001:firm",
+            2,
+            False,
+        ),
     }
 
     @pytest.mark.parametrize(
-        ("given", "local_id", "claims"),
+        ("given", "local_id", "claims", "warn"),
         UNKNOWN_KIND.values(),
         ids=UNKNOWN_KIND.keys(),
     )
     @pytest.mark.parametrize("found", [True, False], ids=["found", "minted"])
-    def test_a_kind_the_vocabulary_lacks_is_skipped_with_a_warning(
-        self, found, given, local_id, claims
+    def test_missing_or_unsupported_kind_keeps_types_and_publishes_origin(
+        self, found, given, local_id, claims, warn
     ):
         wiki = _three_sources()
 
@@ -3308,15 +3315,31 @@ class TestWriterRefKindWitnesses:
         planned = write_mapped(
             BatchWriter(wiki, dry_run=True), batch, identity=identity
         )
-        assert planned.warnings == [warning]
+        assert planned.warnings == ([warning] if warn else [])
         assert wiki.wbi.item.writes == writes
 
         directory = write_mapped(BatchWriter(wiki), batch, identity=identity)
 
-        assert directory.warnings == [warning]
+        assert directory.warnings == ([warning] if warn else [])
         assert directory.written == claims
         assert kinds(directory.created_items[local_id]) == kinds_before
         assert directory.type_statements_written == 0
+        qid = directory.created_items[local_id]
+        (origin_link,) = _statements(wiki, qid, "identity_record")
+        assert any(
+            ref.snaks.get(PROPERTIES["identity_method"])
+            for ref in origin_link.references
+        )
+        assert not any(
+            ref.snaks.get(PROPERTIES["stated_in"])
+            for ref in origin_link.references
+        )
+        before = json.dumps(origin_link.get_json(), sort_keys=True)
+        again = write_mapped(BatchWriter(wiki), batch, identity=identity)
+        assert again.created_items[local_id] == qid
+        (origin_link,) = _statements(wiki, qid, "identity_record")
+        assert json.dumps(origin_link.get_json(), sort_keys=True) == before
+        assert kinds(qid) == kinds_before
 
     # a claims file written on an empty instance: page 1's ref mints the
     # firm, and each later page's ref, under a local id of its own, finds

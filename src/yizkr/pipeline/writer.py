@@ -4198,7 +4198,7 @@ class BatchWriter:
         return result
 
     def _publish_map_origin(self, prepared, batch, refused, result) -> None:
-        """Attribute map resolutions after all source-backed kinds exist.
+        """Attribute map resolutions after source-backed kinds are recorded.
 
         Planning can inspect bindings for claims later refused. Only local
         references materialized by emitted claims establish publication
@@ -4227,9 +4227,13 @@ class BatchWriter:
                     placement is None
                     or qid is None
                     or self._bound_clusters.get(placement.cluster) != qid
-                    or kind not in self.items
                 ):
                     continue
+                # A kindless reference still has a map placement. Its origin
+                # uses an operational record link, without asserting a type
+                # that the source did not supply or the vocabulary lacks.
+                if kind not in self.items:
+                    kind = None
                 cluster = placement.cluster
                 if cluster not in bindings:
                     binding = self._creation_registry.lookup(
@@ -4242,8 +4246,12 @@ class BatchWriter:
                         )
                     bindings[cluster] = binding
                 artifact = claim.source.artifact.sha1
-                statement = self._map_origin_statement(
-                    qid, kind, self._artifact_qids[artifact], prepared
+                statement = (
+                    self._map_origin_statement(
+                        qid, kind, self._artifact_qids[artifact], prepared
+                    )
+                    if kind is not None
+                    else None
                 )
                 selections[(cluster, artifact, kind)] = MapOriginSelection(
                     document=self._document,
@@ -4251,7 +4259,9 @@ class BatchWriter:
                     artifact_sha1=artifact,
                     kind=kind,
                     binding=bindings[cluster],
-                    statement_id=statement.id,
+                    statement_id=statement.id
+                    if statement is not None
+                    else None,
                 )
         if selections:
             publish_map_origin(

@@ -648,7 +648,7 @@ properties:
 
   identity_record:
     label: identity decision record
-    description: reference to the graph record of an identity origin, with accepted assignments and human confirmations when present
+    description: link to the graph record of an identity origin; used in references on sourced kinds, or as an operational statement when no supported kind is supplied; accepted assignments and human confirmations are separate evidence
     datatype: wikibase-item
     reference: true
     accepts: [identity_decision_record]

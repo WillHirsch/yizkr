@@ -58,7 +58,7 @@ class MapOriginSelection:
     document: str
     cluster_id: str
     artifact_sha1: str
-    kind: str
+    kind: str | None
     binding: EntityBinding
     statement_id: str | None = None
 
@@ -206,12 +206,14 @@ def publish_map_origin(
     record_dir: Path,
     dry_run: bool = False,
 ) -> IdentityPublication:
-    """Append origins only to verified map creations with current support.
+    """Append origins only to verified map creations with current sources.
 
     Selections distinguish the map's document from the actual cited source,
     which may be another page. A reviewed kind may likewise differ from the
     original map kind. The shared publisher verifies each actual kind/source
-    statement; the creation receipt proves the map's entity placement.
+    statement; the creation receipt proves the map's entity placement. With
+    no supported kind, an operational identity-record link carries placement
+    evidence without inventing a historical type or source assertion.
     """
     record, data, producer = _validated_evidence(client, prepared)
     sources = tuple(dict.fromkeys(selections))

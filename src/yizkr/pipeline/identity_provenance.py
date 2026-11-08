@@ -3,8 +3,9 @@
 Immutable map evidence describes unratified placements; accepted assignment
 publishers separately verify their server authority and confirmation evidence.
 This shared projection adds metadata items and reference blocks to existing
-source-backed kind statements. It neither assigns mentions nor changes
-statement values, qualifiers, ranks or existing references.
+source-backed kind statements, or operational identity links for kindless map
+creations. It neither assigns mentions nor changes existing statement values,
+qualifiers, ranks or references.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from pathlib import Path
 
 from wikibaseintegrator.datatypes import Item, String
 from wikibaseintegrator.models import Reference
+from wikibaseintegrator.wbi_enums import ActionIfExists
 
 from yizkr.core.identity_assignments import RegistryBinding, record_digest
 from yizkr.core.instance import require_retained_code
@@ -216,8 +218,24 @@ def _read_evidence(registry, migration_id, directory):
     return receipt, record, assignments, decisions, producer
 
 
+def _operational_statements(entity, properties, record_qid):
+    return [
+        statement
+        for statement in entity.claims.get(properties["identity_record"]) or ()
+        if isinstance(_value(statement.mainsnak), dict)
+        and _value(statement.mainsnak).get("id") == record_qid
+        and not list(statement.qualifiers)
+    ]
+
+
 def _targets(
-    client, sources_to_locate, properties, items, *, source_qids=None
+    client,
+    sources_to_locate,
+    properties,
+    items,
+    *,
+    source_qids=None,
+    record_qid=None,
 ):
     if source_qids is None:
         try:
@@ -236,6 +254,30 @@ def _targets(
             entities[qid] = client.wbi.item.get(qid)
         entity = entities[qid]
         source = source_qids[correspondence.artifact_sha1]
+        statement_id = getattr(correspondence, "statement_id", None)
+        if correspondence.kind is None:
+            # A kindless entity need not have any historical assertion of its
+            # own (it may occur only as another claim's object). The verified
+            # map creation authorizes an operational link, not a type claim.
+            matches = [
+                s
+                for s in _operational_statements(
+                    entity, properties, record_qid
+                )
+                if statement_id is None or s.id == statement_id
+            ]
+            if (
+                len(matches) > 1
+                or (statement_id is not None and not matches)
+                or (matches and not matches[0].id)
+            ):
+                raise IdentityProvenanceRefused(
+                    "operational identity statement is missing or ambiguous"
+                )
+            found.append(
+                (correspondence, matches[0].id if matches else None, source)
+            )
+            continue
         matches = [
             statement
             for statement in entity.claims.get(properties["instance_of"]) or ()
@@ -243,10 +285,7 @@ def _targets(
             and _value(statement.mainsnak).get("id")
             == items[correspondence.kind]
             and not list(statement.qualifiers)
-            and (
-                getattr(correspondence, "statement_id", None) is None
-                or statement.id == correspondence.statement_id
-            )
+            and (statement_id is None or statement.id == statement_id)
             and any(
                 isinstance(_value(snak), dict)
                 and _value(snak).get("id") == source
@@ -260,6 +299,20 @@ def _targets(
             )
         found.append((correspondence, matches[0].id, source))
     return entities, found
+
+
+def _same_targets(before, after):
+    """Only a previously absent operational anchor may gain a new GUID."""
+    return len(before) == len(after) and all(
+        source == current_source
+        and artifact == current_artifact
+        and (guid == current_guid or (source.kind is None and guid is None))
+        for (source, guid, artifact), (
+            current_source,
+            current_guid,
+            current_artifact,
+        ) in zip(before, after, strict=True)
+    )
 
 
 def identity_references(
@@ -399,16 +452,23 @@ def publish_identity_record(
     revalidate_target=None,
     dry_run=False,
 ):
-    """Publish one verified identity record and append exact kind references.
+    """Publish verified identity evidence on historical or operational links.
 
     The caller supplies immutable authority and revalidates it before effects.
     This common projection does not establish assignments or historical kinds.
     """
     revalidate()
     properties, items = client.vocabulary()
+    binding = registry.lookup(operation)
     try:
         validate_run_statements(client, record, record_kind=RECORD_KIND)
-        entities, targets = _targets(client, sources, properties, items)
+        entities, targets = _targets(
+            client,
+            sources,
+            properties,
+            items,
+            record_qid=binding.qid if binding is not None else None,
+        )
         # A harmless placeholder validates all reference values and vocabulary
         # before the process item can be created.
         for correspondence, _, _ in targets:
@@ -417,8 +477,9 @@ def publish_identity_record(
         raise IdentityProvenanceRefused(
             f"identity provenance needs current model bootstrap: {exc.args[0]}"
         ) from exc
-    binding = registry.lookup(operation)
-    statements = tuple(sorted({(c.qid, guid) for c, guid, _ in targets}))
+    statements = tuple(
+        sorted({(c.qid, guid) for c, guid, _ in targets if guid is not None})
+    )
     if dry_run and binding is None:
         return IdentityPublication(None, True, statements)
     created = False
@@ -445,10 +506,12 @@ def publish_identity_record(
     # Creation/metadata writes may have been interrupted or overlapped curator
     # work. Recheck authority and use fresh items, preserving current ranks.
     revalidate()
-    entities, current_targets = _targets(client, sources, properties, items)
-    if targets != current_targets:
+    entities, current_targets = _targets(
+        client, sources, properties, items, record_qid=binding.qid
+    )
+    if not _same_targets(targets, current_targets):
         raise IdentityProvenanceRefused(
-            "source-backed kind statement changed during publication"
+            "identity statement changed during publication"
         )
     expected = {}
     blocks = {}
@@ -482,17 +545,36 @@ def publish_identity_record(
                     source.artifact_sha1: artifact
                     for source, _, artifact in selected
                 },
+                record_qid=binding.qid,
             )
-            if refreshed != selected:
+            if not _same_targets(selected, refreshed):
                 raise IdentityProvenanceRefused(
-                    "source-backed kind statement changed during publication"
+                    "identity statement changed during publication"
                 )
         item = entities[qid]
         altered = False
         for (target, guid), reference_blocks in blocks.items():
             if target != qid:
                 continue
-            statement = next(s for s in item.claims if s.id == guid)
+            if guid is None:
+                existing = _operational_statements(
+                    item, properties, binding.qid
+                )
+                if existing:
+                    (statement,) = existing
+                else:
+                    statement = Item(
+                        prop_nr=properties["identity_record"],
+                        value=binding.qid,
+                    )
+                    altered = True
+                    if not dry_run:
+                        item.claims.add(
+                            statement,
+                            action_if_exists=ActionIfExists.FORCE_APPEND,
+                        )
+            else:
+                statement = next(s for s in item.claims if s.id == guid)
             present = {_reference_key(r) for r in statement.references}
             for key, reference in reference_blocks.items():
                 if key not in present:
@@ -508,18 +590,25 @@ def publish_identity_record(
                 )
     if not dry_run:
         revalidate()
-        entities, refreshed = _targets(client, sources, properties, items)
-        if refreshed != current_targets:
+        entities, refreshed = _targets(
+            client, sources, properties, items, record_qid=binding.qid
+        )
+        if not _same_targets(current_targets, refreshed):
             raise IdentityProvenanceRefused(
-                "source-backed kind statement changed during publication"
+                "identity statement changed during publication"
             )
         for (qid, guid), expected_keys in expected.items():
             item = entities[qid]
-            matches = [s for s in item.claims if s.id == guid]
+            matches = (
+                _operational_statements(item, properties, binding.qid)
+                if guid is None
+                else [s for s in item.claims if s.id == guid]
+            )
             if len(matches) != 1 or not expected_keys <= {
                 _reference_key(r) for r in matches[0].references
             }:
                 raise IdentityProvenanceRefused(
                     "identity provenance publication is incomplete"
                 )
+        statements = tuple(sorted({(c.qid, guid) for c, guid, _ in refreshed}))
     return IdentityPublication(binding.qid, changed, statements)

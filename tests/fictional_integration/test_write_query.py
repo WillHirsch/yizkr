@@ -16,7 +16,7 @@ from wikibaseintegrator.datatypes import Item, String
 from wikibaseintegrator.models import Reference
 
 from tests.fixtures.semantic_acceptance import birth_batch, source_case
-from yizkr.claims import QidRef
+from yizkr.claims import Claim, ItemValue, LocalRef, QidRef
 from yizkr.core import sparql
 from yizkr.core.provenance import ProcessRecord, RecordRef
 from yizkr.core.write_recovery import (
@@ -104,7 +104,32 @@ def _map_origin(client, person, identity, directory):
     return value("identity_record")["id"], digest, producer
 
 
-def _identity_rows(client, person):
+def _operational_origins(client, clusters, origin):
+    """Kindless targets carry operational evidence without source claims."""
+    properties, _ = client.vocabulary()
+    claims = client.fetch_claims(list(clusters))
+    for qid, cluster in clusters.items():
+        assert set(claims[qid]) == {properties["identity_record"]}
+        (statement,) = claims[qid][properties["identity_record"]]
+        assert statement["mainsnak"]["datavalue"]["value"]["id"] == origin[0]
+        (reference,) = statement["references"]
+        snaks = reference["snaks"]
+        assert not set(snaks) & {
+            properties["stated_in"],
+            properties["inferred_from_extraction_run"],
+        }
+        for key, expected in (
+            ("identity_cluster", cluster),
+            ("run_record_sha256", origin[1]),
+        ):
+            (snak,) = snaks[properties[key]]
+            assert snak["datavalue"]["value"] == expected
+        (record,) = snaks[properties["identity_record"]]
+        assert record["datavalue"]["value"]["id"] == origin[0]
+    return claims
+
+
+def _identity_rows(client, qids):
     properties, items = client.vocabulary()
     query = render_for_instance(
         load_templates()["identity-provenance"],
@@ -112,11 +137,11 @@ def _identity_rows(client, person):
         items,
         client.config.concept_uri,
     )
+    entities = {client.config.concept_uri + "/entity/" + qid for qid in qids}
     return [
         row
         for row in sparql.select(client.config.sparql_url, query)
-        if row["entity"]["value"]
-        == client.config.concept_uri + "/entity/" + person
+        if row["entity"]["value"] in entities
     ]
 
 
@@ -144,12 +169,24 @@ def _orphan_confirmation(client, person, record_qid):
     write_existing(entity, summary="fixture: orphan identity confirmation")
 
 
-def _assert_unratified_rows(client, rows, identity, origin):
+def _assert_unratified_rows(client, rows, identity, origin, person, kindless):
     qid, digest, producer = origin
     _, items = client.vocabulary()
     uri = client.config.concept_uri + "/entity/"
     found = [row for row in rows if row["record"]["value"] == uri + qid]
     assert found
+    assert {row["entity"]["value"] for row in found} == {
+        uri + qid for qid in (person, *kindless)
+    }
+    assert all(
+        row.get("kind", {}).get("value")
+        == (
+            uri + items["human"]
+            if row["entity"]["value"] == uri + person
+            else None
+        )
+        for row in found
+    )
     assert {row["method"]["value"] for row in found} == {
         uri + items["identity_singleton"]
     }
@@ -367,7 +404,36 @@ def test_fictional_write_query_roundtrip(
         assert artifacts[key].fragment_qids[1]
 
     # Run the real deterministic map stage, including its producer capture.
-    first = birth_batch(SOURCES[0])
+    subject = LocalRef(
+        local_id="gustav", label="Gustav Löbig", instance_of="human"
+    )
+    first = birth_batch(SOURCES[0], subject=subject)
+    # A manifest-free authored batch represents both parents only as objects.
+    # Their relations are attested; neither omitted nor unsupported kind
+    # metadata may invent a sourced type or suppress placement provenance.
+    first.entities = []
+    for property_key, local_id, label, kind, excerpt in (
+        ("father", "sebastian", "Sebastian Löbig", None, "Sebastian Löbig"),
+        (
+            "mother",
+            "hildegard",
+            "Hildegard Löbig",
+            "family_member",
+            "Hildegard Löbig geborene Laudler",
+        ),
+    ):
+        first.claims.append(
+            Claim(
+                subject=subject,
+                property=property_key,
+                value=ItemValue(
+                    value=LocalRef(
+                        local_id=local_id, label=label, instance_of=kind
+                    )
+                ),
+                source=source_case(SOURCES[0]).source_ref(excerpt),
+            )
+        )
     batch_path = tmp_path / "first-batch.json"
     batch_path.write_text(first.model_dump_json())
     made = ensure_identity_map(
@@ -382,8 +448,13 @@ def test_fictional_write_query_roundtrip(
         run_manifest={"run_id": "fictional-normal-map-origin"},
     )
     identity = IdentityMap(made.identity_map)
-    (cluster,) = identity.clusters()
-    assert identity.data["clusters"][cluster]["method"] == "singleton"
+    _, clusters = identity.clusters_of(first, [source_case(SOURCES[0]).sha1])
+    assert set(clusters) == {"gustav", "sebastian", "hildegard"}
+    cluster = clusters["gustav"]
+    assert all(
+        value["method"] == "singleton"
+        for value in identity.data["clusters"].values()
+    )
     directory = tmp_path / "records"
     properties, _ = client.vocabulary()
     registry = CreationRegistry(client)
@@ -415,9 +486,11 @@ def test_fictional_write_query_roundtrip(
     )
     assert binding is not None
     person = binding.qid
-    births_before_retry = client.fetch_claims([person])[person][
-        properties["date_of_birth"]
-    ]
+    claims_before_retry = client.fetch_claims([person])[person]
+    historical_before_retry = {
+        properties[key]: claims_before_retry[properties[key]]
+        for key in ("date_of_birth", "father", "mother")
+    }
     kind_before_retry = _kind(client, person)
     entities_before_retry = set(client.list_entity_ids())
     client = type(client)(client.config)
@@ -425,17 +498,23 @@ def test_fictional_write_query_roundtrip(
         first, identity=identity
     )
     assert first_result.written == first_result.referenced == 0
-    assert first_result.skipped == 1 and first_result.minted == []
+    assert first_result.skipped == len(first.claims)
+    assert first_result.minted == []
     assert first_result.refused == []
     assert first_result.created_items["gustav"] == person
     assert set(client.list_entity_ids()) == entities_before_retry
-    assert (
-        client.fetch_claims([person])[person][properties["date_of_birth"]]
-        == births_before_retry
-    )
+    after_retry = client.fetch_claims([person])[person]
+    assert {
+        key: after_retry[key] for key in historical_before_retry
+    } == historical_before_retry
     _preserved_kind(kind_before_retry, _kind(client, person))
     origin = _map_origin(client, person, identity, directory)
     assert origin[0] == interrupted[0]
+    kindless = {
+        first_result.created_items[local_id]: clusters[local_id]
+        for local_id in ("sebastian", "hildegard")
+    }
+    operational = _operational_origins(client, kindless, origin)
     assert CreationRegistry(client).assignment_snapshot() == authority_before
     # The fixture explicitly identifies the second reading's subject.
     # This is authored identity, not a model inference or similarity match.
@@ -473,7 +552,12 @@ def test_fictional_write_query_roundtrip(
     _synchronize(client)
     queried = _query_births(client, person, expected)
     _assert_unratified_rows(
-        client, _identity_rows(client, person), identity, origin
+        client,
+        _identity_rows(client, first_result.created_items.values()),
+        identity,
+        origin,
+        person,
+        kindless,
     )
     entities = set(client.list_entity_ids())
     kind_before_repeat = _kind(client, person)
@@ -503,19 +587,20 @@ def test_fictional_write_query_roundtrip(
         )
         assert again.run_qid == original.run_qid
         assert again.written == again.referenced == 0
-        assert again.skipped == 1
+        assert again.skipped == len(batch.claims)
         assert again.minted == []
         assert again.refused == []
     assert set(client.list_entity_ids()) == entities
     assert _kind(client, person) == kind_before_repeat
     assert _map_origin(client, person, identity, directory) == origin
+    assert _operational_origins(client, kindless, origin) == operational
     assert CreationRegistry(client).assignment_snapshot() == authority_before
     _assert_reference_targets(client, artifacts, (first_result, second_result))
     assert _persisted_births(client, person, expected) == persisted
 
     _synchronize(client)
     assert _query_births(client, person, expected) == queried
-    rows = _identity_rows(client, person)
-    _assert_unratified_rows(client, rows, identity, origin)
+    rows = _identity_rows(client, first_result.created_items.values())
+    _assert_unratified_rows(client, rows, identity, origin, person, kindless)
     uri = client.config.concept_uri + "/entity/"
     assert {row["record"]["value"] for row in rows} == {uri + origin[0]}

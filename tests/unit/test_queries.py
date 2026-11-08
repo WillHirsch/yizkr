@@ -31,6 +31,7 @@ EXPECTED_QUERIES = {
     "unclassified-entities",
     # what the shared "died by" derivation reads (ADR-0040 §2.4)
     "died-by",
+    "identity-provenance",
 }
 
 

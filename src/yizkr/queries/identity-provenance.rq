@@ -1,14 +1,21 @@
 # Identity origins and separate human confirmations, read entirely
 # from graph references. recordFile resolves in the configured process-record
 # directory; its SHA-256 verifies the immutable complete record. These rows
-# include unratified map placements and accepted assignment evidence.
+# include unratified map placements and accepted assignment evidence. An
+# operational origin link carries no kind when no sourced type was recorded.
 SELECT DISTINCT ?entity ?entityLabel ?kind ?statement ?method ?methodLabel
        ?record ?recordSha256 ?recordFile ?originRecordSha256 ?originRecordFile
        ?originRun ?migration ?assignmentRevision ?mapHash ?cluster ?unratified
        ?originDecisionRevision ?decisionRevision ?actor ?confirmedAt ?stage ?model ?prompt ?limitation
 WHERE {
-  ?entity p:{P:instance_of} ?statement .
-  ?statement ps:{P:instance_of} ?kind ; prov:wasDerivedFrom ?origin .
+  {
+    ?entity p:{P:instance_of} ?statement .
+    ?statement ps:{P:instance_of} ?kind .
+  } UNION {
+    ?entity p:{P:identity_record} ?statement .
+    ?statement ps:{P:identity_record} ?record .
+  }
+  ?statement prov:wasDerivedFrom ?origin .
   ?origin pr:{P:identity_record} ?record ;
           pr:{P:identity_method} ?method ;
           pr:{P:run_record_sha256} ?recordSha256 .
