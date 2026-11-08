@@ -617,6 +617,7 @@ class TestReferenceProperties:
         "identity_origin_record_sha256",
         "identity_origin_run",
         "identity_method",
+        "identity_cluster",
         "identity_assignment_revision",
         "identity_decision_revision",
         "identity_confirmation_actor",
@@ -1172,12 +1173,17 @@ class TestRecordsAreNeverWritten:
     """
 
     def test_a_record_changes_no_historical_entity_writes(self, tmp_path):
-        from tests.unit.test_pipeline import TREE_SHA1, FakeWiki, _tree_batch
+        from tests.unit.test_pipeline import (
+            PROPERTIES,
+            TREE_SHA1,
+            FakeWiki,
+            _tree_batch,
+        )
         from yizkr.claims import GivenName, Surname
         from yizkr.pipeline.writer import BatchWriter
 
         def sent(batch, directory):
-            """Complete historical writes, alongside their input provenance."""
+            """Historical writes and source/run refs, without map metadata."""
             wiki = FakeWiki({TREE_SHA1: "Q29"}, detached=True)
             result = write_mapped(
                 BatchWriter(wiki, record_dir=directory), batch
@@ -1186,9 +1192,34 @@ class TestRecordsAreNeverWritten:
             items = [
                 item
                 for item in wiki.wbi.item.sent
-                if item["id"] != result.run_qid
+                if item["id"] in result.created_items.values()
             ]
             assert items
+            identity_refs = []
+            for item in items:
+                for statements in item["claims"].values():
+                    for statement in statements:
+                        references = statement.get("references", [])
+                        identity_refs.extend(
+                            block
+                            for block in references
+                            if PROPERTIES["identity_record"] in block["snaks"]
+                        )
+                        if references:
+                            statement["references"] = [
+                                block
+                                for block in references
+                                if PROPERTIES["identity_record"]
+                                not in block["snaks"]
+                            ]
+            assert identity_refs
+            assert all(
+                not {
+                    PROPERTIES["stated_in"],
+                    PROPERTIES["inferred_from_extraction_run"],
+                }.intersection(block["snaks"])
+                for block in identity_refs
+            )
             process = [
                 json.loads(path.read_text())
                 for path in directory.glob("*.json")

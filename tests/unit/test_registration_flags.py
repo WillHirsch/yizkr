@@ -3612,7 +3612,7 @@ class CountingWiki(WritingWiki):
         return sorted(self.entities)
 
     def iter_entities(self, props):
-        self.whole_reads.append("iter_entities")
+        self.whole_reads.append(f"iter_entities:{props}")
         return super().iter_entities(props)
 
     def string_statement_index(self, pid):
@@ -3627,8 +3627,9 @@ class CountingWiki(WritingWiki):
 
 class TestWhatResolveAndAWriteRead:
     """Resolve reads nothing of the instance (#109); a write reads the
-    labels once, and the statements of only the items it finds, never
-    every entity's statements, however many the instance holds."""
+    labels once. Map provenance checks source bindings against the claim
+    inventory; individual item reads remain limited to the write's own
+    targets, sources and process records."""
 
     UNRELATED = 200
 
@@ -3691,7 +3692,7 @@ class TestWhatResolveAndAWriteRead:
 
         assert [flag.artifact for flag in written.flags] == [artifact]
         assert wiki.label_reads == ["label_index"]
-        assert wiki.whole_reads == []
+        assert wiki.whole_reads == ["iter_entities:claims"] * 3
         assert wiki.claims_of == []
         assert not set(wiki.items_read) & set(people)
 
@@ -3715,7 +3716,7 @@ class TestWhatResolveAndAWriteRead:
         assert again.created_items == first.created_items
         assert again.run_qid == first.run_qid
         assert wiki.label_reads == ["label_index"]
-        assert wiki.whole_reads == []
+        assert wiki.whole_reads == ["iter_entities:claims"] * 3
         assert not set(wiki.items_read) & set(people)
 
     def test_two_refs_under_one_label_meet_on_the_item_the_write_makes(

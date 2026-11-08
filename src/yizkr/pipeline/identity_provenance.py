@@ -243,6 +243,10 @@ def _targets(
             and _value(statement.mainsnak).get("id")
             == items[correspondence.kind]
             and not list(statement.qualifiers)
+            and (
+                getattr(correspondence, "statement_id", None) is None
+                or statement.id == correspondence.statement_id
+            )
             and any(
                 isinstance(_value(snak), dict)
                 and _value(snak).get("id") == source

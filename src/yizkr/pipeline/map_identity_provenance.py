@@ -60,6 +60,7 @@ class MapOriginSelection:
     artifact_sha1: str
     kind: str
     binding: EntityBinding
+    statement_id: str | None = None
 
     @property
     def qid(self) -> str:
@@ -69,7 +70,7 @@ class MapOriginSelection:
 def prepare_map_origin(identity: IdentityMap) -> PreparedMapOrigin:
     """Snapshot and validate the complete map without graph or disk access."""
     try:
-        data = validated_map(identity, require_uniform_kind=False)
+        data = validated_map(identity, for_migration=False)
     except MigrationRefused as exc:
         raise IdentityProvenanceRefused(str(exc)) from exc
     producer = (

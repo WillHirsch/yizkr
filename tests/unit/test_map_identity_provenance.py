@@ -183,6 +183,29 @@ def test_dry_run_leaves_graph_authority_and_disk_unchanged(tmp_path):
     assert not f.directory.exists()
 
 
+@pytest.mark.parametrize("version", [8, 10])
+def test_ordinary_origins_preserve_supported_maps_algorithm_version(
+    tmp_path, version
+):
+    f = fixture(tmp_path, producer=False)
+    f.identity.data["version"] = version
+    prepared = prepare_map_origin(f.identity)
+    assert prepared.record.metadata["identity_map"]["version"] == version
+    assert publish(f).changed
+    with pytest.raises(MigrationRefused):
+        validated_map(f.identity)
+
+
+@pytest.mark.parametrize("version", [True, "9", 0, -1])
+def test_ordinary_origins_refuse_invalid_algorithm_versions(tmp_path, version):
+    f = fixture(tmp_path)
+    f.identity.data["version"] = version
+    before = snapshot(f)
+    with pytest.raises(IdentityProvenanceRefused):
+        publish(f)
+    assert snapshot(f) == before
+
+
 @pytest.mark.parametrize("damage", ["method", "producer", "map"])
 def test_preparation_rejects_invalid_full_map_before_effects(tmp_path, damage):
     f = fixture(tmp_path)

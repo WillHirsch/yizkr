@@ -108,6 +108,7 @@ def _writer_recovery_case(fictional_client, tmp_path, monkeypatch, failure):
         title=f"Fictional recovery {failure}",
     )
     identity = mapped(batch)
+    record_dir = tmp_path / f"{failure}-records"
     before = set(client.list_entity_ids())
     created = []
     write = ItemEntity.write
@@ -139,13 +140,13 @@ def _writer_recovery_case(fictional_client, tmp_path, monkeypatch, failure):
         if failure == "lost-receipt":
             patch.setattr(client, "create_page_once", fail_receipt)
         with pytest.raises(InterruptedWrite):
-            BatchWriter(client).write_batch(
+            BatchWriter(client, record_dir=record_dir).write_batch(
                 batch, identity=identity, one_map=False
             )
     ((qid, initial_revision),) = created
     renamed = _rename(client, qid)
     fresh = WikiClient(client.config)
-    result = BatchWriter(fresh).write_batch(
+    result = BatchWriter(fresh, record_dir=record_dir).write_batch(
         batch, identity=identity, one_map=False
     )
     assert result.created_items == {"gustav": qid}
@@ -154,7 +155,7 @@ def _writer_recovery_case(fictional_client, tmp_path, monkeypatch, failure):
     observed = _entity(fresh, qid)
     assert observed["labels"] == renamed["labels"]
     assert observed["descriptions"] == renamed["descriptions"]
-    properties, _ = fresh.vocabulary()
+    properties, items = fresh.vocabulary()
     (born,) = observed["claims"][properties["date_of_birth"]]
     references = [reference["snaks"] for reference in born["references"]]
     assert len(references) == 2
@@ -180,14 +181,33 @@ def _writer_recovery_case(fictional_client, tmp_path, monkeypatch, failure):
     )
     assert receipt is not None
     assert EntityBinding.model_validate_json(receipt.text) == binding
-    assert set(fresh.list_entity_ids()) - before == {qid, result.run_qid}
-    again = BatchWriter(WikiClient(client.config)).write_batch(
-        batch, identity=identity, one_map=False
+    (kind,) = observed["claims"][properties["instance_of"]]
+    (origin,) = [
+        reference["snaks"]
+        for reference in kind["references"]
+        if properties["identity_cluster"] in reference["snaks"]
+    ]
+    (cluster_snak,) = origin[properties["identity_cluster"]]
+    assert cluster_snak["datavalue"]["value"] == cluster
+    (record_snak,) = origin[properties["identity_record"]]
+    record_qid = record_snak["datavalue"]["value"]["id"]
+    origin_record = _entity(fresh, record_qid)
+    assert any(
+        statement["mainsnak"]["datavalue"]["value"]["id"]
+        == items["identity_decision_record"]
+        for statement in origin_record["claims"][properties["instance_of"]]
     )
+    created_ids = {qid, result.run_qid, record_qid}
+    assert len(created_ids) == 3
+    assert set(fresh.list_entity_ids()) == before | created_ids
+    again = BatchWriter(
+        WikiClient(client.config), record_dir=record_dir
+    ).write_batch(batch, identity=identity, one_map=False)
     assert again.minted == [] and again.written == again.referenced == 0
     assert again.skipped == 1 and not again.refused
     assert _entity(fresh, qid) == observed
-    assert set(fresh.list_entity_ids()) - before == {qid, result.run_qid}
+    assert _entity(fresh, record_qid) == origin_record
+    assert set(fresh.list_entity_ids()) == before | created_ids
     # Both copies read the same revision. A competing change to this same
     # field must be protected; nonconflicting stale edits may auto-merge.
     curator = WikiClient(client.config).wbi.item.get(qid)

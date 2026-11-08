@@ -30,6 +30,7 @@ import json
 from pathlib import Path
 
 import pytest
+from wikibaseintegrator.datatypes import String
 
 from tests.fixtures.identity import write_mapped
 from tests.unit.test_chunking import ScriptedLlm, ndjson
@@ -944,6 +945,9 @@ def registered(wiki, *refs: ArtifactRef) -> dict[str, str]:
     qids = {}
     for ref in refs:
         artifact = wiki.wbi.item.new()
+        artifact.claims.add(
+            String(prop_nr=PROPERTIES["media_sha1"], value=ref.sha1)
+        )
         artifact.write()
         wiki.media[ref.sha1] = artifact.id
         qids[ref.sha1] = artifact.id

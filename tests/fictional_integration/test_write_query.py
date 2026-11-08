@@ -611,6 +611,6 @@ def test_fictional_write_query_roundtrip(
     }
     assert {row["confirmedAt"]["value"] for row in confirmed} == {REVIEW_TIME}
     assert all(
-        "decisionRevision" in row and "unratified" not in row
+        "decisionRevision" in row and row["unratified"]["value"] == "unknown"
         for row in confirmed
     )

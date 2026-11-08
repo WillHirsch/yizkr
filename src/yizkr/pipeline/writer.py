@@ -4242,12 +4242,16 @@ class BatchWriter:
                         )
                     bindings[cluster] = binding
                 artifact = claim.source.artifact.sha1
+                statement = self._map_origin_statement(
+                    qid, kind, self._artifact_qids[artifact], prepared
+                )
                 selections[(cluster, artifact, kind)] = MapOriginSelection(
                     document=self._document,
                     cluster_id=cluster,
                     artifact_sha1=artifact,
                     kind=kind,
                     binding=bindings[cluster],
+                    statement_id=statement.id,
                 )
         if selections:
             publish_map_origin(
@@ -4256,6 +4260,48 @@ class BatchWriter:
                 selections=tuple(selections.values()),
                 record_dir=self.record_dir,
             )
+
+    def _map_origin_statement(self, qid, kind, artifact_qid, prepared):
+        """Anchor placement metadata without conflating equal kind statements.
+
+        Reuse an existing origin's anchor after curator edits; otherwise prefer
+        the machine kind just used by ordinary kind recording. If all matching
+        kinds are curated, placement evidence can reference an existing one
+        without changing its historical assertion, rank or source references.
+        The publisher rereads and validates this exact GUID before appending.
+        """
+        from yizkr.pipeline.identity_provenance import (
+            IdentityProvenanceRefused,
+        )
+
+        matches = [
+            statement
+            for statement in self._entity(qid).claims.get(
+                self.properties["instance_of"]
+            )
+            if self._type_value(statement) == self.items[kind]
+            and not self._qualifier_snapshot(statement)
+            and self._has_artifact_reference(statement, artifact_qid)
+            and statement.id
+        ]
+        if not matches:
+            raise IdentityProvenanceRefused(
+                "map origin has no source-backed kind statement"
+            )
+        for statement in matches:
+            if any(
+                (snak.datavalue or {}).get("value") == prepared.record_sha256
+                for reference in statement.references
+                for snak in reference.snaks.get(
+                    self.properties["run_record_sha256"]
+                )
+                or ()
+            ):
+                return statement
+        return next(
+            (s for s in matches if not self._is_curated(s)),
+            min(matches, key=lambda s: s.id),
+        )
 
     def _add_blocks(
         self, subject_qid: str, statement, blocks: list, result: WriteResult
