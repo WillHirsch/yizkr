@@ -42,7 +42,7 @@ from yizkr.pipeline.review_stages import (
     ReviewSource,
 )
 from yizkr.pipeline.run_provenance import read_record
-from yizkr.pipeline.transcribe import Transcription
+from yizkr.pipeline.transcribe import TranscribedPage, Transcription
 
 from .test_write_query import _synchronize
 
@@ -88,6 +88,18 @@ def _source(client, directory, key, suffix):
             text=path.read_text(),
             language=case.language,
             engine="authored-fictional-text",
+            pages=[
+                TranscribedPage(
+                    page=1,
+                    start=0,
+                    end=len(path.read_text()),
+                    status="transcribed",
+                    provenance={
+                        "method": "text-layer",
+                        "engine": "authored-fictional-text",
+                    },
+                )
+            ],
         ),
     )
 
