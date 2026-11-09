@@ -277,7 +277,18 @@ def _retained_text_source(client, directory, target, old_support, monkeypatch):
     item.labels.set("en", "Curator's corrected Gustav identity")
     item.descriptions.set("en", "Curator's retained certificate annotation")
     write_existing(item, summary="fictional curator corrections to retain")
-    before = item.get_json()
+
+    def target_snapshot():
+        # Preserve server reference hashes, which WBI serialization omits.
+        return client.api_get(
+            {
+                "action": "wbgetentities",
+                "ids": target.qid,
+                "props": "labels|descriptions|claims",
+            }
+        )["entities"][target.qid]
+
+    before = target_snapshot()
     (old_birth,) = before["claims"][properties["date_of_birth"]]
     database = directory / "retained-review.sqlite"
     products_dir = directory / "retained-text"
@@ -400,7 +411,7 @@ def _retained_text_source(client, directory, target, old_support, monkeypatch):
             assert receipt == attempted_receipts[0]
             assert receipt.statement_guid == old_support.statement_guid
             assert receipt.primary_hash != old_support.primary_hash
-            after = client.wbi.item.get(target.qid).get_json()
+            after = target_snapshot()
             assert after["labels"] == before["labels"]
             assert after["descriptions"] == before["descriptions"]
             (current_birth,) = after["claims"][properties["date_of_birth"]]

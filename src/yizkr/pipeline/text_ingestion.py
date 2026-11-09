@@ -396,12 +396,13 @@ class TextIngestion:
             keys = tuple(sorted(set(local_ids)))
             if not keys or len(keys) != len(local_ids):
                 raise ReviewRefused("choose a nonempty unique identity scope")
-            prepared = prepare_cohort_additions(
-                self.store, self._request(products), self.registry
-            )
+            request = self._request(products)
+            # Resolve only the selected durable mention IDs here. The shared
+            # application captures current graph context inside its guard.
+            prepared = prepare_review(self.store, request)
             try:
                 mentions = tuple(
-                    prepared.review.mentions[products.artifact.sha1, key].id
+                    prepared.mentions[products.artifact.sha1, key].id
                     for key in keys
                 )
             except KeyError as exc:
@@ -414,7 +415,7 @@ class TextIngestion:
 
             return apply_cohort_additions(
                 self.store,
-                prepared.request,
+                request,
                 self.registry,
                 scope=mentions,
                 state_path=self.directory / "mutation.capability",
