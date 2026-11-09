@@ -9,6 +9,8 @@ Development runs the whole corpus through the pipeline again and again (ADR-0025
 
 The run directory beside them records what each run did, for the scratch driver (docs/runbooks/scratch-run.md), the live monitor ([docs/MONITOR.md](MONITOR.md)), the anomaly checks (#196), the call estimate (#101) and the run report ([docs/RUN_REPORT.md](RUN_REPORT.md)). How the claude-code engine meets the subscription's limits, and stops its calls at a reserve left to development sessions, is under Subscription limits, below.
 
+A provider classifier refusal (`ClassifierRefused`) fails the affected call without retrying or caching its notice. The run records the failure instead of treating the notice as source text.
+
 All three are runtime state under `var/` and are **local-only data** (docs/AGENT_PROTOCOL.md §6): they hold transcriptions, claims, session transcripts and raw model output of the corpus. Nothing from them is copied into the repository, GitHub or a cloud session.
 
 Code: `yizkr.pipeline.stage_planning` (fixed descriptors and the pure freshness decision), `yizkr.pipeline.scratch` (document execution), `yizkr.pipeline.run_resources` (model/cache ownership), `yizkr.pipeline.llmcache` (the cache), `yizkr.pipeline.llm` (the engines and their limits, the reports of their calls, the call estimate, and the client factory that alone imports the cache: `open_cache`, `read_cache`, `cached_client`, `cache_holder`) and `yizkr.pipeline.rundir` (the run directory and run state).

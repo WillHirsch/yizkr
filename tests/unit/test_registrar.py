@@ -1967,11 +1967,7 @@ class TestCutsKeepWholeLetters:
     def test_a_description_cut_keeps_whole_letters(self, tmp_path):
         wiki = StoringWiki()
         description = (
-            "ingested by `yizkr scratch run` from Brief"
-            + "x" * 13
-            + " "
-            + ", ".join([STRESSED] * 12)
-            + ".pdf"
+            "Fictional source".ljust(248, "x") + f"ю{STRESS} {STRESSED}"
         )
         result = register_artifact(
             wiki,
@@ -1981,7 +1977,7 @@ class TestCutsKeepWholeLetters:
             description=description,
         )
         stored = wiki.entities[result.artifact_qid]["descriptions"]["en"]
-        # 249 characters would end in "бю", the accent of its "ю" cut off
+        # 249 characters would keep "ю" but cut off its combining accent.
         assert description[248:250] == f"ю{STRESS}"
         assert stored["value"] == description[:248] + "…"
 

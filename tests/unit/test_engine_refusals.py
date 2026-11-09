@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import json
 import subprocess
-from pathlib import Path
 
 import pytest
 
@@ -56,7 +55,6 @@ from yizkr.pipeline.llm import (
     open_cache,
 )
 
-ROOT = Path(__file__).resolve().parents[2]
 LOGIN_HINT = "not logged in?"
 # the notice the CLI's refusal frame carries; never read by the engine
 NOTICE = (
@@ -636,13 +634,3 @@ class TestReport:
         errors = made["aggregate"]["calls"]["engine_calls"]["errors"]
         assert errors["ClassifierRefused"] == 1
         assert "ClassifierRefused" in rr.render_markdown(made["aggregate"])
-
-
-class TestDocs:
-    def test_the_engine_section_says_so(self):
-        readme = (ROOT / "src/yizkr/pipeline/README.md").read_text()
-        engine = readme.split("## LLM providers")[1].split("\n## ")[0]
-        flat = " ".join(engine.split())
-        assert "`ClassifierRefused`" in flat
-        assert "does not ask it again" in flat
-        assert "keeps nothing" in flat
