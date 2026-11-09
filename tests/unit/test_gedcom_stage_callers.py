@@ -10,13 +10,16 @@ import json
 import pytest
 
 from tests.fixtures.example_universe import GEDCOM_FIXTURE
+from tests.unit.test_run_provenance import fixed_capture  # noqa: F401
 from yizkr import cli
 from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.core.corpus import ExclusionList
 from yizkr.pipeline import gedcom_stages, llm, scratch, stage_planning
+from yizkr.pipeline.document_state import BATCHED, FAILED
 from yizkr.pipeline.estimate import Estimator, StageCalls
-from yizkr.pipeline.orchestrate import AWAITING_CLAIMS, FAILED, Orchestrator
 from yizkr.pipeline.scratch import ScratchDriver
+
+pytestmark = pytest.mark.usefixtures("fixed_capture")
 
 
 @pytest.fixture
@@ -43,17 +46,15 @@ def no_model_infrastructure(monkeypatch):
         "_step_extract",
         "_step_critique",
     ):
-        monkeypatch.setattr(Orchestrator, name, refuse)
+        monkeypatch.setattr(ScratchDriver, name, refuse)
 
 
-def make_driver(source, state, *, workflow="reviewed", **settings):
+def make_driver(source, state, *, workflow="scratch", **settings):
     options = {
         "exclusions": ExclusionList(),
         "log": lambda *_a, **_k: None,
         **settings,
     }
-    if workflow == "reviewed":
-        return Orchestrator(source.parent, state, **options)
     # A file cannot hold a model-response cache. Deterministic work has no
     # reason to open it, test its contents, or require provider credentials.
     cache = state.parent / "not-a-model-cache"
@@ -78,9 +79,8 @@ def estimate(source, state):
     return result.stages["gedcom"]
 
 
-@pytest.mark.parametrize("workflow", ["reviewed", "scratch"])
 def test_gedcom_callers_preserve_proposals_without_models_or_approval(
-    source, tmp_path, workflow
+    source, tmp_path
 ):
     standalone_path = tmp_path / "standalone.json"
     assert (
@@ -97,8 +97,8 @@ def test_gedcom_callers_preserve_proposals_without_models_or_approval(
         == 0
     )
     standalone = ClaimBatch.model_validate_json(standalone_path.read_text())
-    driver = make_driver(source, tmp_path / workflow, workflow=workflow)
-    assert driver.run() == (2 if workflow == "reviewed" else 0)
+    driver = make_driver(source, tmp_path / "state")
+    assert driver.run() == 0
     doc, proposed = saved_batch(driver)
     assert proposed.claims == standalone.claims
     assert proposed.entities == standalone.entities
@@ -116,13 +116,9 @@ def test_gedcom_callers_preserve_proposals_without_models_or_approval(
     )
     assert not doc.transcription.exists()
     assert not doc.critique.exists()
-    assert not doc.approved.exists()
-    assert not doc.write_result.exists()
+    assert not doc.dir.joinpath("write.json").exists()
     assert doc.state.detail["stage_results"]["gedcom"]["status"] == "complete"
-    if workflow == "reviewed":
-        assert doc.state.status == AWAITING_CLAIMS
-        assert doc.review.exists()
-        assert not doc.review_reviewed.exists()
+    assert doc.state.status == BATCHED
 
 
 def test_saved_gedcom_run_and_estimate_agree_on_reuse(source, tmp_path):
@@ -192,7 +188,7 @@ def test_model_configuration_does_not_invalidate_gedcom_proposals(
 ):
     state = tmp_path / "reviewed"
     first = make_driver(source, state)
-    assert first.run() == 2
+    assert first.run() == 0
     doc, _ = saved_batch(first)
     batch = doc.batch.read_bytes()
     derivations = doc.derivations.path.read_bytes()
@@ -212,11 +208,10 @@ def test_model_configuration_does_not_invalidate_gedcom_proposals(
         ).plan.action
         == "reuse"
     )
-    assert changed.run() == 2
-    doc, _ = saved_batch(changed)
+    changed._run_stage_of(doc, "gedcom")
     assert doc.batch.read_bytes() == batch
     assert doc.derivations.path.read_bytes() == derivations
-    assert doc.state.status == AWAITING_CLAIMS
+    assert doc.state.status == BATCHED
 
 
 def test_failed_new_generation_preserves_old_proposals_but_requires_retry(
@@ -224,10 +219,9 @@ def test_failed_new_generation_preserves_old_proposals_but_requires_retry(
 ):
     state = tmp_path / "reviewed"
     first = make_driver(source, state)
-    assert first.run() == 2
+    assert first.run() == 0
     doc, _ = saved_batch(first)
     batch = doc.batch.read_bytes()
-    review = doc.review.read_bytes()
     processing = json.loads(doc.derivations.path.read_text())["processing"]
     changed_adapter_dependencies(monkeypatch)
 
@@ -244,7 +238,6 @@ def test_failed_new_generation_preserves_old_proposals_but_requires_retry(
             doc.state.detail["stage_results"]["gedcom"]["status"] == "failed"
         )
         assert doc.batch.read_bytes() == batch
-        assert doc.review.read_bytes() == review
         assert json.loads(doc.derivations.path.read_text())["processing"] == (
             processing
         )
@@ -256,20 +249,18 @@ def test_failed_new_generation_preserves_old_proposals_but_requires_retry(
         )
 
     retried = make_driver(source, state)
-    assert retried.run() == 2
+    assert retried.run() == 0
     doc, _ = saved_batch(retried)
-    assert doc.state.status == AWAITING_CLAIMS
+    assert doc.state.status == BATCHED
     assert doc.state.detail["stage_results"]["gedcom"]["status"] == "complete"
     assert doc.batch.read_bytes() == batch
-    assert doc.review.read_bytes() == review
     assert (
         retried._inspect_view(
             doc, doc.batch, ClaimBatch.model_validate_json
         ).plan.action
         == "reuse"
     )
-    assert not doc.approved.exists()
-    assert not doc.write_result.exists()
+    assert not doc.dir.joinpath("write.json").exists()
 
 
 @pytest.mark.parametrize("alias", ["same-path", "symlink", "hardlink"])

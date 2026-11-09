@@ -3906,7 +3906,6 @@ class BatchWriter:
     def write_batch(
         self,
         batch: ClaimBatch,
-        bulk_accepted: bool = False,
         identity: IdentityMap | None = None,
         mapped_from: ClaimBatch | None = None,
         one_map: bool = True,
@@ -3941,8 +3940,8 @@ class BatchWriter:
         that may take neither its label nor its tagged label, refused with
         the claims that name it (step 2 of the module docstring).
         `claim_summary` is the edit summary of each
-        claim's write, by default one that says whether its batch was
-        reviewed row by row or accepted whole. `placed` names, by the SHA-1
+        claim's write, by default one that records a reviewed claim.
+        `placed` names, by the SHA-1
         of a source's media, the SHA-1s of the artifacts it places: the
         derived media registered for that source in this write, or those
         `yizkr ingest write --placed` names (from a container's inventory,
@@ -3961,15 +3960,8 @@ class BatchWriter:
             raise ValueError(
                 "source-part provenance needs the current model bootstrap"
             )
-        # a bulk-accepted batch (whole-sheet accept-all, ADR-0023) gets a
-        # distinct edit summary so MediaWiki history is the low-scrutiny
-        # reappraisal queue — no graph flag, no staleness.
         if claim_summary is None:
-            claim_summary = (
-                "ingest: write bulk-accepted claim"
-                if bulk_accepted
-                else "ingest: write reviewed claim"
-            )
+            claim_summary = "ingest: write reviewed claim"
         # every cited artifact must resolve before the first write; an
         # artifact a source places resolves where an item carries it, and
         # a caption about one that does not is refused below

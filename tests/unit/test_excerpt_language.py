@@ -41,6 +41,7 @@ from tests.unit.test_run_report import (
     render_markdown,
 )
 from yizkr.pipeline.chunking import CHUNK_PROMPT, ChunkedClaimExtractor
+from yizkr.pipeline.document_state import slugify
 from yizkr.pipeline.extract import (
     EXTRACTION_PROMPT,
     LlmClaimExtractor,
@@ -48,7 +49,6 @@ from yizkr.pipeline.extract import (
     language_on_source,
     salvage_valid_claims,
 )
-from yizkr.pipeline.orchestrate import slugify
 from yizkr.pipeline.transcribe import Transcription
 
 RUN = {

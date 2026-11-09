@@ -17,9 +17,10 @@ from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.core.corpus import ExclusionList
 from yizkr.pipeline import llm
 from yizkr.pipeline.llm import PassPaused
-from yizkr.pipeline.orchestrate import AWAITING_CLAIMS, Orchestrator
 from yizkr.pipeline.scratch import ScratchDriver
 from yizkr.pipeline.transcribe import Transcription
+
+pytestmark = pytest.mark.usefixtures("fixed_capture")
 
 
 def extraction_client():
@@ -41,11 +42,10 @@ def extraction_client():
     )
 
 
-@pytest.mark.parametrize("workflow", ["reviewed", "scratch"])
 @pytest.mark.parametrize("finished_critique", [True, False])
 @pytest.mark.usefixtures("fixed_capture")
 def test_text_callers_preserve_the_same_proposals_and_advisory_critique(
-    tmp_path, monkeypatch, workflow, finished_critique
+    tmp_path, monkeypatch, finished_critique
 ):
     # Compare caller behavior with identical observed clock/code inputs;
     # producer metadata remains in the complete reading equality below.
@@ -97,7 +97,7 @@ def test_text_callers_preserve_the_same_proposals_and_advisory_critique(
 
     critic_answer = '{"done":true}' if finished_critique else "unfinished"
     monkeypatch.setattr(
-        Orchestrator,
+        ScratchDriver,
         "_llm",
         lambda self, role, doc: (
             extraction_client()
@@ -105,33 +105,26 @@ def test_text_callers_preserve_the_same_proposals_and_advisory_critique(
             else ScriptedClient(critic_answer)
         ),
     )
-    state = tmp_path / workflow
+    state = tmp_path / "scratch"
     options = {
         "language": "en",
         "exclusions": ExclusionList(),
         "log": lambda *_a, **_k: None,
     }
-    if workflow == "scratch":
-        # The script owns no provider or deployed service to preflight.
-        monkeypatch.setattr(
-            ScratchDriver, "_preflight_host", lambda self: None
-        )
-        monkeypatch.setattr(
-            ScratchDriver, "_preflight_models", lambda self, past: None
-        )
-        driver = ScratchDriver(
-            folder,
-            state,
-            until="critique",
-            corpus_stages=(),
-            cache_dir=tmp_path / "cache",
-            **options,
-        )
-        assert driver.run() == 0
-    else:
-        driver = Orchestrator(folder, state, **options)
-        assert driver.run() == 2
-
+    # The script owns no provider or deployed service to preflight.
+    monkeypatch.setattr(ScratchDriver, "_preflight_host", lambda self: None)
+    monkeypatch.setattr(
+        ScratchDriver, "_preflight_models", lambda self, past: None
+    )
+    driver = ScratchDriver(
+        folder,
+        state,
+        until="critique",
+        corpus_stages=(),
+        cache_dir=tmp_path / "cache",
+        **options,
+    )
+    assert driver.run() == 0
     (doc,) = driver.documents()
     run_batch = ClaimBatch.model_validate_json(doc.batch.read_text())
     assert run_batch.claims == standalone.claims
@@ -160,11 +153,7 @@ def test_text_callers_preserve_the_same_proposals_and_advisory_critique(
     )
     if not finished_critique:
         assert doc.state.detail["attention"]["critique"]
-    assert not doc.approved.exists()
-    assert not doc.write_result.exists()
-    if workflow == "reviewed":
-        assert doc.state.status == AWAITING_CLAIMS
-        assert doc.review.exists()
+    assert not doc.dir.joinpath("write.json").exists()
 
 
 @pytest.mark.parametrize(
@@ -183,7 +172,7 @@ def test_failed_refresh_does_not_report_the_previous_attempt_complete(
     folder.mkdir()
     media = folder / "naturalisation-1952.txt"
     media.write_text(case.text)
-    driver = Orchestrator(
+    driver = ScratchDriver(
         folder,
         tmp_path / "state",
         language="en",

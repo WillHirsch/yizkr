@@ -10,7 +10,7 @@ images themselves, each once by its canonical owner's SHA-1 (`PlacedImage`).
 The transcription (yizkr.pipeline.transcribe.PagedTranscriber) makes the
 container's own transcription from them, page by page behind its page
 markers, and reads each image by the vision engine on its own, as a
-witness of its own: an excerpt (yizkr.pipeline.orchestrate.ExcerptRun).
+witness of its own: an excerpt (yizkr.pipeline.document_state.ExcerptRun).
 
 The readers:
 

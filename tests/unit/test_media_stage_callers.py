@@ -8,10 +8,13 @@ from tests.fixtures import pdfs
 from tests.fixtures.records import record_answer
 from tests.unit.test_pdf_exclusions import EXTRACT, RecordingClient, scan
 from tests.unit.test_pdf_pages import EXCERPT
+from tests.unit.test_run_provenance import fixed_capture  # noqa: F401
 from yizkr.core.corpus import ExclusionList
-from yizkr.pipeline import media_stages, orchestrate
+from yizkr.pipeline import media_stages, scratch
 from yizkr.pipeline.llm import PassPaused
-from yizkr.pipeline.orchestrate import Orchestrator
+from yizkr.pipeline.scratch import ScratchDriver
+
+pytestmark = pytest.mark.usefixtures("fixed_capture")
 
 
 def driver_for(tmp_path, monkeypatch, *, image=False, client=None):
@@ -21,7 +24,7 @@ def driver_for(tmp_path, monkeypatch, *, image=False, client=None):
         "birth-extract-1938.jpg" if image else "family-booklet-2011.pdf"
     )
     source.write_bytes(pdfs.JPEG if image else pdfs.pdf([scan(pdfs.jpeg())]))
-    driver = Orchestrator(
+    driver = ScratchDriver(
         folder,
         tmp_path / "state",
         exclusions=ExclusionList(),
@@ -32,7 +35,7 @@ def driver_for(tmp_path, monkeypatch, *, image=False, client=None):
         driver, "_llm", lambda *_a: client or RecordingClient()
     )
     (doc,) = driver.documents()
-    driver._prepare_document(doc)
+    driver._prepare(doc)
     return driver, doc
 
 
@@ -60,14 +63,14 @@ def test_media_products_close_when_publication_fails(
     if publication == "images":
         monkeypatch.setattr(driver, "_keep_reading", fail)
     else:
-        write = orchestrate._write_view
+        write = scratch._write_view
 
         def write_view(path, value):
             if path == doc.transcription:
                 fail()
             return write(path, value)
 
-        monkeypatch.setattr(orchestrate, "_write_view", write_view)
+        monkeypatch.setattr(scratch, "_write_view", write_view)
     with pytest.raises(OSError, match="fictional publication failure"):
         driver._step_transcribe(doc)
     (result,) = results
@@ -153,7 +156,7 @@ def test_excerpt_reuse_follows_verified_parent_reading_not_just_image_bytes(
     driver, parent = driver_for(tmp_path, monkeypatch)
     driver._step_transcribe(parent)
     (excerpt,) = driver._excerpts_of(parent, ())
-    driver._prepare_document(excerpt)
+    driver._prepare(excerpt)
     first = driver._transcription(excerpt)
     assert EXTRACT in first.text
     excerpt.save()
@@ -168,7 +171,7 @@ def test_excerpt_reuse_follows_verified_parent_reading_not_just_image_bytes(
     )
     resumed._step_transcribe(parent)
     (excerpt,) = resumed._excerpts_of(parent, ())
-    resumed._prepare_document(excerpt)
+    resumed._prepare(excerpt)
     current = resumed._transcription(excerpt)
     assert excerpt.sha1 == original_owner
     assert EXCERPT in current.text and EXTRACT not in current.text

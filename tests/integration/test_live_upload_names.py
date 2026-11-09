@@ -1,5 +1,5 @@
 """Live upload names and descriptions (#373): the write's registration of
-a deck (`Orchestrator._step_register`) whose file name is long, holds
+a deck (`ScratchDriver._step_register`) whose file name is long, holds
 letters beyond ASCII, characters MediaWiki refuses in a file name and
 sequences for which it refuses a name (``illegal-filename``: a "%" hex
 escape and "~~~"), and makes a description longer than the 250
@@ -13,7 +13,7 @@ characters Wikibase takes.
   name>"``, its title cut, ending in "…", and its own name whole. Another
   file holds that name, so the image takes the content-tagged name, 9
   bytes longer, within MediaWiki's 240.
-* The deck's description, ``"ingested by `yizkr ingest run` from <file
+* The deck's description, ``"ingested by `yizkr scratch run` from <file
   name>"``, is cut to 250 characters, ending in "…".
 * A second write finds both files and every item, and uploads and writes
   nothing.
@@ -22,7 +22,7 @@ Fictional synthetic media only (docs/EXAMPLES.md). The deck's title and
 file name, and the bytes of its image and of the other file, carry a
 marker: eight hex digits of a hash over the fixture, over the source of the
 code that names the files and writes the description (the registrar, the
-wiki client and the orchestrator) and over eight random bytes drawn once a
+wiki client and the scratch driver) and over eight random bytes drawn once a
 session (conftest.fixture_mark). So each session, and each version of the
 fixture and of that code, uploads and registers the fixture as a first
 write does: a mutant of the harness cannot pass by finding what an earlier
@@ -54,9 +54,9 @@ from tests.unit.test_presentation import (
 )
 from yizkr.core import wiki
 from yizkr.core.corpus import ExclusionList
-from yizkr.pipeline import orchestrate, registrar
-from yizkr.pipeline.orchestrate import Orchestrator
+from yizkr.pipeline import registrar, scratch
 from yizkr.pipeline.registrar import _upload_name
+from yizkr.pipeline.scratch import ScratchDriver
 
 from .conftest import fictional_png, fixture_mark
 
@@ -68,7 +68,7 @@ FIXTURE = (
     "Russian that holds sequences a title refuses, and the shop front it "
     "shows"
 )
-MARK = fixture_mark(FIXTURE, registrar, wiki, orchestrate)
+MARK = fixture_mark(FIXTURE, registrar, wiki, scratch)
 
 # the deck's title, its marker and the sequences MediaWiki refuses
 # first, so that both cuts leave them: of 235 characters, within the 250
@@ -84,7 +84,7 @@ DECK_NAME = f"{DECK_TITLE}.pptx"
 IMAGE_NAME = "Flörburg, Brunnenring 35 [1912].png"
 IMAGE = fictional_png(f"yizkr live test #373: the shop front {MARK}")
 OTHER = fictional_png(f"yizkr live test #373: another file {MARK}")
-DESCRIPTION = f"ingested by `yizkr ingest run` from {DECK_NAME}"
+DESCRIPTION = f"ingested by `yizkr scratch run` from {DECK_NAME}"
 
 
 def sha1(data: bytes) -> str:
@@ -132,7 +132,7 @@ def register(client, where) -> str:
     folder = where / "corpus"
     folder.mkdir(parents=True)
     build_deck(folder / DECK_NAME)
-    orchestrator = Orchestrator(
+    orchestrator = ScratchDriver(
         folder,
         where / "state",
         exclusions=ExclusionList(),

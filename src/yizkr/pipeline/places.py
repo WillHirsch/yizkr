@@ -376,7 +376,7 @@ _BATCH_VIEWS = ("batch.approved.json", "batch.resolved.json", "batch.json")
 def _document_dirs(run_dir: Path) -> list[Path]:
     """Each directory of a run directory, an excerpt's too; one that
     holds no write.json is passed over by the caller."""
-    from yizkr.pipeline.orchestrate import EXCERPTS_DIR
+    from yizkr.pipeline.document_state import EXCERPTS_DIR
 
     try:
         entries = sorted(run_dir.iterdir())
@@ -440,7 +440,7 @@ def _content_sha1(directory: Path) -> str | None:
     """The SHA-1 of the document a run directory's document directory
     holds the state of, as its state.json records it; None when it
     records none or cannot be read."""
-    from yizkr.pipeline.orchestrate import DocumentState
+    from yizkr.pipeline.document_state import DocumentState
 
     try:
         return DocumentState.load(directory / "state.json").content_sha1

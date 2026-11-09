@@ -7,7 +7,7 @@ Amended by #389 (2026-09-29): a vision transcription's language comes from its t
 
 ## Context
 
-`yizkr ingest run` walks a whole folder, but a real family archive is multilingual: German certificates sit beside an English oral history and naturalisation papers. The pipeline took a single run-wide `--language` (default `en`) and applied it to every file in the batch.
+A corpus can mix languages: German certificates may sit beside an English oral history or naturalisation papers. Source language is therefore determined per document rather than inferred from the corpus as a whole.
 
 That language is not cosmetic. It is the BCP-47 tag on the `transcription_excerpt` monolingual values written as references (ADR-0003) — real graph data attached to every source quotation. It is also injected into the extraction prompt as a hint about the source language. Under a run-wide value, ingesting a mixed folder `--language de` tags every English document's excerpts `de` (and vice versa), and misleads the extractor. The only workaround was to physically split the corpus by language and run it in passes — friction that scales with the archive.
 

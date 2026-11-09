@@ -19,6 +19,7 @@ from tests.unit.test_pdf_pages import (
     Reader,
     document,
     folder,
+    recheck_containers,
     renderer,  # noqa: F401
     run,
     transcription_of,
@@ -26,8 +27,8 @@ from tests.unit.test_pdf_pages import (
 )
 from yizkr.core.corpus import EXCLUDE_FILE_VAR, ExclusionList
 from yizkr.pipeline import llm, transcribe
+from yizkr.pipeline.document_state import FAILED
 from yizkr.pipeline.estimate import Estimator, _Made
-from yizkr.pipeline.orchestrate import FAILED
 from yizkr.pipeline.transcribe import LlmVisionTranscriber
 
 pytestmark = pytest.mark.usefixtures("env")
@@ -133,7 +134,7 @@ def test_run_rechecks_saved_pdf_image_against_current_exclusions(tmp_path):
     old_reading = doc.transcription.read_bytes()
     old_batch = doc.batch.read_bytes()
     reader.read.clear()
-    again = run(
+    again = recheck_containers(
         tmp_path,
         corpus,
         reader,
@@ -148,7 +149,7 @@ def test_run_rechecks_saved_pdf_image_against_current_exclusions(tmp_path):
     assert doc.batch.read_bytes() == old_batch
 
 
-def test_legacy_whole_pdf_is_reread_once_preserving_unchanged_batch(tmp_path):
+def test_legacy_whole_pdf_is_refreshed_preserving_unchanged_batch(tmp_path):
     corpus = folder(tmp_path, birth_extract_1938=pdfs.pdf([vision_page()]))
     reader = Reader({"birth-extract-1938.pdf": EXTRACT})
     first = run(tmp_path, corpus, reader)
@@ -160,7 +161,8 @@ def test_legacy_whole_pdf_is_reread_once_preserving_unchanged_batch(tmp_path):
     reader.read.clear()
     refreshed = run(tmp_path, corpus, reader)
     current = document(refreshed, "birth-extract-1938.pdf")
-    assert len(reader.read) == 1
+    # The cached model response can rebuild a legacy persisted reading.
+    assert reader.read == []
     assert transcription_of(current).input_representation == "rendered-pdf-v1"
     assert current.batch.read_bytes() == before
     reader.read.clear()
@@ -200,7 +202,7 @@ def test_saved_pdf_correction_is_checked_before_reuse(tmp_path, suffix):
     assert transcription_of(doc).text == EXTRACT
     before = doc.transcription.read_bytes()
     reader.read.clear()
-    again = run(
+    again = recheck_containers(
         tmp_path,
         corpus,
         reader,

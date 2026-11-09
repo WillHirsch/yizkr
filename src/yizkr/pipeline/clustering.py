@@ -350,6 +350,7 @@ from yizkr.claims import (
     name_form_key,
 )
 from yizkr.died_by import When, died_by, from_batch
+from yizkr.pipeline.document_state import BATCH_VOLATILE
 from yizkr.pipeline.fingerprints import (
     Mention,
     cluster_id,
@@ -358,7 +359,6 @@ from yizkr.pipeline.fingerprints import (
     mentions_of,
 )
 from yizkr.pipeline.names import NOT_PERSONS, appellations_of
-from yizkr.pipeline.orchestrate import BATCH_VOLATILE
 from yizkr.pipeline.reconcile import (
     PLACE_KIND,
     PairFacts,
@@ -387,7 +387,7 @@ DEFAULTS = PACKAGE / "clustering.yaml"
 # the modules whose source makes the identity map: a map another source
 # made is made again, whatever VERSION says. The other yizkr modules that
 # this one and fingerprints.py import reach the key through the batches'
-# hashes: yizkr.claims parses the batches, orchestrate says what a hash
+# hashes: yizkr.claims parses the batches, document_state says what a hash
 # leaves out, and stages makes it. writer.py gives the form the instance
 # keeps a term in (stored_term), which names are compared in, and names.py
 # which forms are appellations (appellations_of).
@@ -3056,7 +3056,7 @@ class ClusteringInputError(RuntimeError):
 
 
 class _Document(Protocol):
-    """What the stage reads of a document (orchestrate.DocumentRun)."""
+    """What the stage reads of a document (document_state.DocumentRun)."""
 
     @property
     def sha1(self) -> str: ...

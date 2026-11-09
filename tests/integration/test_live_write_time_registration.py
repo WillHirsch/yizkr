@@ -7,7 +7,7 @@ deck's derived media, each found or made by the SHA-1 of its media.
 * Registering them again, by a registrar that reads the instance afresh,
   finds every item by its media's SHA-1: it makes no item, writes no
   statement and uploads no file.
-* The write's registration of a deck (`Orchestrator._step_register`)
+* The write's registration of a deck (`ScratchDriver._step_register`)
   registers the deck, its slides as page fragments, and its image from
   the record the stages before the write keep of it; a second write
   registers nothing new.
@@ -38,9 +38,9 @@ from tests.unit.test_presentation import (
     slide_xml,
 )
 from yizkr.core.corpus import ExclusionList
-from yizkr.pipeline import orchestrate, registrar
-from yizkr.pipeline.orchestrate import Orchestrator
+from yizkr.pipeline import registrar, scratch
 from yizkr.pipeline.registrar import Registrar
+from yizkr.pipeline.scratch import ScratchDriver
 
 from .conftest import fictional_png, fixture_mark
 
@@ -53,7 +53,7 @@ FIXTURE = (
     "and file name, two pages each; the family firm's deck of three "
     "slides, the shop front on the first two"
 )
-SESSION = fixture_mark(FIXTURE, registrar, orchestrate)
+SESSION = fixture_mark(FIXTURE, registrar, scratch)
 
 # two copies of Gustav's birth register extract, scanned into two folders
 # under one file name: two artifacts that share a title
@@ -292,7 +292,7 @@ def test_the_write_registers_a_deck_its_slides_and_its_image(client, tmp_path):
         folder.mkdir(parents=True)
         build_deck(folder / f"{DECK_TITLE}.pptx")
         lines: list[str] = []
-        orchestrator = Orchestrator(
+        orchestrator = ScratchDriver(
             folder,
             where / "state",
             exclusions=ExclusionList(),

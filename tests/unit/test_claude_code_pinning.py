@@ -24,8 +24,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from yizkr.core.corpus import ExclusionList
+from tests.fixtures.document_processing import IsolatedDriver
 from yizkr.pipeline import llm
+from yizkr.pipeline.document_state import FAILED
 from yizkr.pipeline.llm import (
     FILE_ERROR,
     REQUEST_ERROR,
@@ -47,7 +48,7 @@ from yizkr.pipeline.llm import (
     tool_failures,
     transcript_destination,
 )
-from yizkr.pipeline.orchestrate import FAILED, PENDING, Orchestrator
+from yizkr.pipeline.scratch import TRANSCRIBED
 
 PINNED = "2.1.237"
 PROJECT = "-tmp-yizkr-claude-code"
@@ -1004,37 +1005,47 @@ class TestVersionPin:
             except Exception:  # what isolation handlers catch
                 pytest.fail("a pause was caught as an ordinary failure")
 
-    def test_mismatch_pauses_an_orchestrated_pass(self, cli, tmp_path):
-        """The orchestrator's contract: a pause stops the pass, and the
-        document it stopped in is not marked failed."""
+    def test_mismatch_pauses_scratch_without_failing_a_document(
+        self, cli, tmp_path, monkeypatch
+    ):
+        from yizkr.pipeline import run_provenance
+
+        monkeypatch.setattr(
+            run_provenance, "now", lambda: "2026-07-14T09:00:00Z"
+        )
         folder = tmp_path / "docs"
         folder.mkdir()
         (folder / "a-letter.txt").write_text("A letter.")
         (folder / "b-letter.txt").write_text("Another letter.")
 
-        class Pass(Orchestrator):
-            batched: list[str] = []
+        class UpdatedClientDriver(IsolatedDriver):
+            batched = []
 
             def _step_batch(self, doc):
                 self.batched.append(doc.source.name)
-                cli.installed = "2.1.240"  # an update lands mid-pass
+                cli.installed = "2.1.240"
                 make_client("claude-code")
-                raise AssertionError("unreachable")
+                raise AssertionError("the changed CLI must refuse admission")
 
-        ClaudeCodeClient()  # the pass pinned its version at the start
-        orchestrator = Pass(
-            folder,
-            tmp_path / "state",
-            exclusions=ExclusionList(),
-            log=lambda *a, **k: None,
+        pinned = ClaudeCodeClient()
+        pinned.close()
+        driver = UpdatedClientDriver(
+            folder, tmp_path / "state", log=lambda *a, **k: None
         )
         with pytest.raises(CliVersionMismatch):
-            orchestrator.run()
-        assert Pass.batched == ["a-letter.txt"]
-        state = json.loads(
-            (tmp_path / "state" / "a-letter" / "state.json").read_text()
+            driver.run()
+        assert driver.batched == ["a-letter.txt"]
+        first, second = driver.documents()
+        assert first.state.status == TRANSCRIBED != FAILED
+        assert first.state.error is None
+        assert not second.state_path.exists()
+        assert not any(
+            event["event"] in {"failed", "document-failed"}
+            for event in driver.rundir.events()
         )
-        assert state["status"] == PENDING != FAILED
+        assert (
+            driver.rundir.manifest()["invocations"][-1]["outcome"] == "paused"
+        )
 
 
 class TestTranscripts:

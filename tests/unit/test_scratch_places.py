@@ -432,7 +432,7 @@ class PlaceRun(Run):
             tmp_path, monkeypatch, wiki=wiki or PlaceWiki(), run_id=run_id
         )
         self.engine = Adjudicator(self)
-        self.driver._engines[scratchwrite.PLACE_ROLE] = self.engine
+        self.driver.resources.engines[scratchwrite.PLACE_ROLE] = self.engine
         self.driver.rundir.path.mkdir(parents=True, exist_ok=True)
         monkeypatch.setattr(scratchwrite, "place_graph", graph)
         if documents is None:
@@ -904,6 +904,7 @@ def rerun(tmp_path, monkeypatch, documents=None, next_qid=94, read=graph):
     )
     # the one LLM cache both runs call through
     second.driver.cache_dir = first.driver.cache_dir
+    second.driver.resources.cache_dir = first.driver.cache_dir
     second.past_the_barrier()
     return first, second
 
@@ -996,6 +997,7 @@ class TestKeys:
             scratchwrite, "place_graph", lambda w: list(reversed(swap(w)))
         )
         second.driver.cache_dir = first.driver.cache_dir
+        second.driver.resources.cache_dir = first.driver.cache_dir
         second.past_the_barrier()
         assert second.engine.prompts == []
         (statement,) = stage_written(second.wiki, second.qid("Koshnovka"))
@@ -1508,7 +1510,7 @@ class TestTheLiveScenario:
 
         run = PlaceRun(tmp_path, monkeypatch, documents=live.documents())
         engine = live.Adjudicator()
-        run.driver._engines[scratchwrite.PLACE_ROLE] = engine
+        run.driver.resources.engines[scratchwrite.PLACE_ROLE] = engine
         run.past_the_barrier(until="write")
         documents = run.record("write")["documents"]
 

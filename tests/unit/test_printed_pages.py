@@ -65,8 +65,8 @@ from yizkr.pipeline.extract import (
     claim_schema_prompt_text,
     printed_page_number,
 )
-from yizkr.pipeline.orchestrate import Orchestrator
 from yizkr.pipeline.review import claim_id
+from yizkr.pipeline.scratch import ScratchDriver
 from yizkr.pipeline.transcribe import (
     TRANSCRIPTION_PROMPT,
     PageProvenance,
@@ -877,7 +877,7 @@ class TestAnExcerpt:
         wiki = RegistrarWiki()
         orchestrator._client = wiki
         doc = document(orchestrator, "booklet.pdf")
-        pdf = Orchestrator._step_register(orchestrator, doc)
+        pdf = ScratchDriver._step_register(orchestrator, doc)
         excerpt = excerpt_of(orchestrator, LETTER_SHA1)
-        image = Orchestrator._step_register(orchestrator, excerpt)
+        image = ScratchDriver._step_register(orchestrator, excerpt)
         assert part_of(wiki.entities[image]) == {(pdf, "6"): [pdf]}

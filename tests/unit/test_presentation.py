@@ -9,12 +9,15 @@ import zipfile
 import pytest
 
 from tests.fixtures import pdfs
+from tests.unit.test_run_provenance import fixed_capture  # noqa: F401
 from yizkr.pipeline.container_inventory import (
     CONTAINER_INVENTORY,
     read_inventory,
 )
 from yizkr.pipeline.presentation import slide_transcript, unpack_pptx
 from yizkr.pipeline.rundir import DONE, run_state
+
+pytestmark = pytest.mark.usefixtures("fixed_capture")
 
 CT = "[Content_Types].xml"
 # every member of a built deck carries this one timestamp, so the same
@@ -183,37 +186,29 @@ class TestTranscript:
         )
 
 
-class TestOrchestratorBranch:
+class TestScratchProcessing:
     def test_pptx_routes_through_adapter(self, tmp_path):
-        from tests.unit.test_orchestrate import ScriptedOrchestrator
+        from tests.fixtures.document_processing import ScriptedDriver
         from tests.unit.test_pdf_pages import Reader
 
         folder = tmp_path / "docs"
         folder.mkdir()
         build_deck(folder / "Family Deck.pptx")
 
-        from yizkr.pipeline.orchestrate import Orchestrator
-
         image_sha1 = hashlib.sha1(pdfs.JPEG).hexdigest()
         reader = Reader({image_sha1: ""})
 
-        class ScriptedDeck(ScriptedOrchestrator):
+        class ScriptedDeck(ScriptedDriver):
             def _llm(self, role, doc):
                 return (
                     reader if role == "transcribe" else super()._llm(role, doc)
                 )
 
-            def _step_batch(self, doc):
-                # use the REAL branch: deterministic pptx transcription,
-                # then the (scripted) extract below
-                self.calls.append(f"batch:{doc.source.name}")
-                return Orchestrator._step_batch(self, doc)
-
             def _step_extract(self, doc, transcription):
                 self.calls.append("extract")
                 assert transcription.engine == "pptx-adapter"
                 assert "[Slide 2]" in transcription.text
-                from tests.unit.test_orchestrate import make_batch
+                from tests.fixtures.document_processing import make_batch
 
                 return make_batch()
 
@@ -225,18 +220,11 @@ class TestOrchestratorBranch:
         )
         orchestrator.run()
         (doc,) = orchestrator.documents()
-        # the film is no image: the log counts it, and the deck's
-        # transcription needs no attention for it
-        assert (
-            "  Family Deck.pptx: 1 embedded .mp4 media not read (images only)"
-            in lines
-        )
         assert (
             run_state(orchestrator.rundir)[(doc.sha1, "transcription")].status
             == DONE
         )
-        # the deck waits at a gate, and is registered only by its write
-        # (#103)
+        # Processing stops before graph writing and registration.
         assert "register:Family Deck.pptx" not in orchestrator.calls
         assert doc.state.artifact_qid is None
         # its media are inventoried in the document's directory (#128), by

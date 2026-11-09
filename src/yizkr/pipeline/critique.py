@@ -4,10 +4,10 @@ One adversarial LLM turn that reviews an extracted batch for the
 confident-but-wrong assignments the first pass will not self-report — an
 agent typed as a place, a role/field label captured as a name, an entity
 dumped into the escape hatch that plainly fits a real kind. It FLAGS,
-never rewrites: findings are surfaced to the human curator at the
-existing review gate. It is the reconciliation adjudicator's pattern
-applied to extraction, and it is what catches the "MOTHER as a name" and
-"hat shop as a place" errors without a human eyeballing raw output.
+never rewrites: findings are saved alongside the batch and surfaced
+in run reports and anomaly alerts. It is the reconciliation adjudicator's
+pattern applied to extraction, and it catches "MOTHER as a name" and
+"hat shop as a place" errors without a human reading raw output.
 It reads the batch beside the document's transcription, each line
 numbered, and every citation (a claim's excerpt, a container's evidence)
 where it stands, and judges each by one support test (ADR-0003, ADR-0023).

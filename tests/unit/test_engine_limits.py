@@ -29,6 +29,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.fixtures.document_processing import IsolatedDriver
 from tests.unit.test_chunking import (
     DOC_REF,
     LINE_LENGTH,
@@ -43,7 +44,6 @@ from tests.unit.test_claude_code_pinning import (
     install_fake_cli,
 )
 from yizkr.claims import ClaimBatch
-from yizkr.core.corpus import ExclusionList
 from yizkr.pipeline import llm
 from yizkr.pipeline.chunking import ChunkedClaimExtractor
 from yizkr.pipeline.llm import (
@@ -82,9 +82,6 @@ from yizkr.pipeline.llm import (
     run_calls,
     unsupported_model,
 )
-from yizkr.pipeline.orchestrate import AWAITING_CLAIMS, BATCHED, Orchestrator
-from yizkr.pipeline.review import export_review_csv
-from yizkr.pipeline.rundir import DOCUMENT_FAILED, INTERRUPTED, run_state
 
 PINNED = "2.1.237"
 ROOT = Path(__file__).resolve().parents[2]
@@ -1469,13 +1466,6 @@ class TestOverageDocs:
         assert self.CAVEAT in bullet
         assert f"the run {self.OVERCLAIM}" not in text
 
-    def test_run_manifest_doc_states_the_caveat(self):
-        text = (ROOT / "docs" / "RUN_MANIFEST.md").read_text()
-        bullet = text.split(
-            "except a report that a call ran on usage credits", 1
-        )[1]
-        assert self.CAVEAT in bullet[:400]
-
 
 class TestUtilizationDocs:
     """`surpassedThreshold` is not part of the CLI's own client-side
@@ -1558,21 +1548,15 @@ class TestUnifiedWindowsDocs:
 
 
 class TestPinDocs:
-    """The docs name 2.1.309 as the pin and say how to install it, and the
-    pipeline README names both settings that keep a call as it ran on
-    2.1.237 (#452 review, #526, #559)."""
+    """Operational guidance installs and configures the supported CLI pin."""
 
     PIN = "2.1.309"
     RUNBOOK = ROOT / "docs" / "runbooks" / "scratch-run.md"
-    README = ROOT / "src" / "yizkr" / "pipeline" / "README.md"
-    # the versions other than the pin each text names on purpose: the
-    # oldest that runs claude-opus-5-5, and the README's account of what
-    # 2.1.237 did
+    # The runbook also names the oldest version supporting the model.
     OTHER_VERSIONS = {
         "llm.py": set(),
         "LLM_CACHE.md": set(),
         "scratch-run.md": {"2.1.280"},
-        "README.md": {"2.1.237", "2.1.280"},
     }
 
     def test_the_runbook_installs_exactly_the_pin(self):
@@ -1590,7 +1574,6 @@ class TestPinDocs:
             "llm.py": inspect.getsource(llm),
             "LLM_CACHE.md": (ROOT / "docs" / "LLM_CACHE.md").read_text(),
             "scratch-run.md": self.RUNBOOK.read_text(),
-            "README.md": self.README.read_text(),
         }
         for name, text in texts.items():
             flat = TestUnifiedWindowsDocs.normalised(text)
@@ -1609,14 +1592,6 @@ class TestPinDocs:
                 name,
                 versions,
             )
-
-    def test_the_readme_names_the_pin_and_both_settings(self):
-        text = self.README.read_text()
-        assert f"Install {self.PIN}, which `claude-opus-5-5`" in " ".join(
-            text.split()
-        )
-        assert "`--permission-mode default`" in text
-        assert "`CLAUDE_CODE_HARBOR_KITE=0`" in text
 
 
 # -- engine calls as events ---------------------------------------------------
@@ -1972,138 +1947,6 @@ def a_folder(tmp_path) -> Path:
     return folder
 
 
-class Run(Orchestrator):
-    """The wiki steps scripted, a text transcription, a fixed batch for
-    each letter, and the critic for real, through the claude-code engine
-    on the fake CLI."""
-
-    def __init__(self, *args, **kwargs):
-        kwargs.setdefault("exclusions", ExclusionList())
-        kwargs.setdefault("llm", "claude-code")
-        kwargs.setdefault("log", quiet)
-        super().__init__(*args, **kwargs)
-
-    def _step_register(self, doc):
-        return "Q23"
-
-    def _step_extract(self, doc, transcription):
-        return self._run_stage(
-            doc, "extraction", lambda: a_batch(*LETTERS[doc.source.name])
-        )
-
-    def _step_resolve(self, doc, batch):
-        return batch
-
-    def _step_export_review(self, doc, batch):
-        return export_review_csv(batch, doc.review)
-
-
-class TestNoDocumentFails:
-    """A limit never fails a document: the run pauses, and the next run
-    goes on from where it stopped."""
-
-    @pytest.mark.parametrize(
-        "cached", [False, True], ids=["no cache", "cache"]
-    )
-    def test_a_limit_on_the_last_document_pauses_the_run(
-        self, cli, clock, tmp_path, cached
-    ):
-        cli.answer = CRITIQUE_ANSWER
-        resets = START + 2 * HOUR
-        # the first letter's critique is answered, the last one's refused
-        cli.script = [None, usage_window(resets)]
-        options = {"cache_dir": tmp_path / "cache" if cached else None}
-        run = Run(a_folder(tmp_path), tmp_path / "state", **options)
-        with pytest.raises(UsageLimitReached):
-            run.run()
-        first, last = run.documents()
-        assert first.state.status == AWAITING_CLAIMS
-        assert last.state.status == BATCHED
-        assert last.state.error is None
-        events = run.rundir.events()
-        assert not [event for event in events if event["event"] == "failed"]
-        assert not [
-            event for event in events if event["event"] == DOCUMENT_FAILED
-        ]
-        (invocation,) = run.rundir.manifest()["invocations"]
-        assert (invocation["outcome"], invocation["reason"]) == (
-            "paused",
-            "UsageLimitReached",
-        )
-        # the engine's calls, with or without the cache
-        made = [event for event in events if event["event"] == ENGINE_CALL]
-        assert [(e["subject"], e["role"], e["outcome"]) for e in made] == [
-            (first.sha1, "critique", "ok"),
-            (last.sha1, "critique", "paused"),
-        ]
-        assert made[-1]["kind"] == "text"
-        assert made[-1]["resumes_at"] == stamp(resets)
-        # the stage was cut short, not failed: the paused invocation has
-        # ended, so the stage reads as interrupted (#300), and the next run
-        # makes it
-        state = run_state(run.rundir)[(last.sha1, "critique")]
-        assert state.status == INTERRUPTED
-
-        clock.now = resets + HOUR
-        again = Run(a_folder(tmp_path), tmp_path / "state", **options)
-        assert again.run() == 2
-        first, last = again.documents()
-        assert last.state.status == AWAITING_CLAIMS
-        # only the last letter's critique is asked again
-        assert len(cli.calls) == 3
-
-    def test_a_model_the_cli_does_not_support_stops_the_run_once(
-        self, cli, clock, tmp_path, monkeypatch
-    ):
-        """A model change in the middle of a run: the API refuses the last
-        letter's critique for a model the CLI does not support. The run
-        pauses with no time to go on, no document fails, and the next run,
-        on a CLI that runs the model, goes on from where it stopped."""
-        cli.answer = CRITIQUE_ANSWER
-        cli.script = [None, UNSUPPORTED]
-        run = Run(a_folder(tmp_path), tmp_path / "state")
-        with pytest.raises(ModelUnsupported):
-            run.run()
-        first, last = run.documents()
-        assert first.state.status == AWAITING_CLAIMS
-        assert last.state.status == BATCHED
-        assert last.state.error is None
-        events = run.rundir.events()
-        assert not [
-            event
-            for event in events
-            if event["event"] in ("failed", DOCUMENT_FAILED)
-        ]
-        (invocation,) = run.rundir.manifest()["invocations"]
-        assert (invocation["outcome"], invocation["reason"]) == (
-            "paused",
-            "ModelUnsupported",
-        )
-        made = [event for event in events if event["event"] == ENGINE_CALL]
-        assert [e["outcome"] for e in made] == ["ok", "paused"]
-        assert len(cli.calls) == 2
-
-        # a new process, on a CLI that runs the model
-        monkeypatch.setattr(llm, "_PIN", llm._CliPin())
-        again = Run(a_folder(tmp_path), tmp_path / "state")
-        assert again.run() == 2
-        assert again.documents()[1].state.status == AWAITING_CLAIMS
-        assert len(cli.calls) == 3
-
-    def test_calls_the_cache_answers_are_no_engine_calls(
-        self, cli, clock, tmp_path
-    ):
-        cli.answer = CRITIQUE_ANSWER
-        cache = tmp_path / "cache"
-        Run(a_folder(tmp_path), tmp_path / "state", cache_dir=cache).run()
-        fresh = Run(a_folder(tmp_path), tmp_path / "fresh", cache_dir=cache)
-        fresh.run()
-        names = [event["event"] for event in fresh.rundir.events()]
-        assert names.count("cache-hit") == 2
-        assert ENGINE_CALL not in names
-        assert len(cli.calls) == 2
-
-
 # -- the estimate -------------------------------------------------------------
 
 A, B, C, D = ("a" * 40, "b" * 40, "c" * 40, "d" * 40)
@@ -2191,10 +2034,28 @@ class TestEstimate:
             "critique": StageEstimate(documents=4, calls=4),
         }
 
-    def test_a_run_estimates_its_own_rerun(self, cli, clock, tmp_path):
+    def test_a_run_estimates_its_own_rerun(
+        self, cli, clock, tmp_path, monkeypatch
+    ):
+        from yizkr.pipeline import run_provenance
+
+        monkeypatch.setattr(
+            run_provenance, "now", lambda: "2026-07-14T09:00:00Z"
+        )
+
+        class CritiquedDriver(IsolatedDriver):
+            def _step_extract(self, doc, transcription):
+                return self._run_stage(
+                    doc,
+                    "extraction",
+                    lambda: a_batch(*LETTERS[doc.source.name]),
+                )
+
         cli.answer = CRITIQUE_ANSWER
-        run = Run(a_folder(tmp_path), tmp_path / "state")
-        run.run()
+        run = CritiquedDriver(
+            a_folder(tmp_path), tmp_path / "state", log=quiet
+        )
+        assert run.run() == 0
         estimate = estimate_calls(
             run.rundir.manifest()["documents"],
             baseline=run_calls(run.rundir.events()),

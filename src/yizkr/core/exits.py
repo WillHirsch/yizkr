@@ -8,9 +8,7 @@ came to from its status alone:
   itself on an error it does not anticipate (which prints a traceback).
 * EXIT_STOPPED: it stopped short, and invoking it again goes on once the
   reason is dealt with: a pass paused by the engine or its cache
-  (yizkr.pipeline.llm.PassPaused), a run's control file (`scratch run`;
-  for `ingest run`, a stage it held), or, for `ingest run`, a document
-  awaiting a review gate.
+  (yizkr.pipeline.llm.PassPaused), or a scratch run's control file.
 * EXIT_REFUSED: it refused before doing what it was asked, and printed
   why: a usage error, an input it will not act on, or a run directory
   that records other settings (yizkr.pipeline.rundir.RunSettingsConflict).

@@ -101,9 +101,12 @@ from yizkr.claims import ClaimBatch, load_vocabulary
 from yizkr.pipeline import report
 from yizkr.pipeline.clustering import IDENTITY_MAP, read_identity_map
 from yizkr.pipeline.clustering import STAGE as CLUSTERING
+from yizkr.pipeline.document_state import (
+    BATCH_VOLATILE,
+    TRANSCRIPTION_VOLATILE,
+)
 from yizkr.pipeline.fingerprints import ClaimPrint, claim_prints, mentions_of
 from yizkr.pipeline.llm import ROLE_STAGES, PassPaused, read_cache
-from yizkr.pipeline.orchestrate import BATCH_VOLATILE, TRANSCRIPTION_VOLATILE
 from yizkr.pipeline.rundir import (
     ALERTS,
     EVENTS,

@@ -70,7 +70,7 @@ that runs the check as a step of its own; an engine error, the tool error
 among them, still raises from it, and so does an answer it cannot make a
 transcription of (`UnreadableAnswer`: not the record, or cut off). A
 caller that keeps transcriptions checks the ones it reuses again
-(yizkr.pipeline.orchestrate), so a stricter check applies to every
+(yizkr.pipeline.scratch), so a stricter check applies to every
 transcription, apart from its reading of tool errors and of a cut-off
 answer, which only a call records (yizkr.pipeline.transcription_check).
 

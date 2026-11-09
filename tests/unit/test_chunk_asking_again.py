@@ -43,6 +43,7 @@ from yizkr.pipeline.chunking import (
     ChunkedClaimExtractor,
     missing_field,
 )
+from yizkr.pipeline.document_state import FAILED
 from yizkr.pipeline.llm import (
     CUT_OFF_AT_LIMIT,
     REFUSAL_STOP,
@@ -51,7 +52,6 @@ from yizkr.pipeline.llm import (
     ConversationChanged,
     OutputLimitReached,
 )
-from yizkr.pipeline.orchestrate import FAILED
 
 LANGUAGE = "source.transcription_excerpt.language"
 HILDEGARD = ("e1", "Hildegard Löbig", 1876)
@@ -749,7 +749,7 @@ class TestARefusedCall:
 
 
 class TestTheStageNamesTheRefusal:
-    """Under `ingest run`: a refused call fails the document, whose reason
+    """Under scratch execution: a refused call fails the document, whose reason
     names the refusal by its class."""
 
     @pytest.mark.parametrize(
@@ -943,7 +943,7 @@ class TestTheRunReportCountsRetries:
             drilled,
             record,
         )
-        from yizkr.pipeline.orchestrate import slugify
+        from yizkr.pipeline.document_state import slugify
         from yizkr.pipeline.report import build, render_markdown
 
         path = record(tmp_path / "run")

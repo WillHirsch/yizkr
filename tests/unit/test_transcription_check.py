@@ -25,6 +25,7 @@ import sys
 import pytest
 
 from tests.fixtures import example_universe as u
+from tests.fixtures.document_processing import IsolatedDriver, prepare_document
 from tests.fixtures.records import page_text, record_answer
 from tests.unit.test_claude_code_pinning import (
     RENDERER_MISSING,
@@ -32,20 +33,16 @@ from tests.unit.test_claude_code_pinning import (
     install_fake_cli,
     read_events,
 )
+from tests.unit.test_run_provenance import fixed_capture  # noqa: F401
 from yizkr.claims import ClaimBatch
 from yizkr.pipeline import transcribe, transcription_check
+from yizkr.pipeline.document_state import BATCHED, FAILED, DocumentRun
 from yizkr.pipeline.llm import (
     ClaudeCodeClient,
     EngineToolError,
     ToolFailure,
     cached_client,
     open_cache,
-)
-from yizkr.pipeline.orchestrate import (
-    BATCHED,
-    FAILED,
-    DocumentRun,
-    Orchestrator,
 )
 from yizkr.pipeline.transcribe import (
     TRANSCRIPTION_PROMPT,
@@ -78,6 +75,8 @@ from yizkr.pipeline.transcription_check import (
     require_valid_transcription,
     text_char_count,
 )
+
+pytestmark = pytest.mark.usefixtures("fixed_capture")
 
 # seconds a test waits for an event before it fails as hung (#437)
 HANG_GUARD = 60
@@ -775,6 +774,7 @@ def answered(response: str) -> str:
 
 class FakeLlm:
     model_identifier = "fake-model"
+    config_hash = "fixture-transcription-check"
 
     def __init__(self, *responses: str) -> None:
         self.responses = list(responses)
@@ -842,7 +842,7 @@ class TestPreflight:
         self, tmp_path, monkeypatch
     ):
         """A run checks the host once, before any document, with
-        preflight_vision_transcription (tests/unit/test_orchestrate.py,
+        preflight_vision_transcription (tests/unit/test_scratch.py,
         #225); the transcriber does not ask again for each document."""
         asked = []
         monkeypatch.setattr(transcribe.shutil, "which", asked.append)
@@ -1129,7 +1129,7 @@ class TestToolErrorsWithTheCache:
     error, so the LLM cache keeps nothing for it (ADR-0032): no later call
     is answered with it, and the next asks the engine again, unless the
     call was a refresh: then the answer the cache kept stays and is served
-    (TestOrchestratorContract.test_a_refresh_that_raises_replaces_nothing).
+    (TestDocumentStageContract.test_a_refresh_that_raises_replaces_nothing).
     """
 
     @pytest.fixture
@@ -1233,22 +1233,22 @@ RUN = {
 }
 
 
-class TestOrchestratorContract:
-    """With the folder orchestrator, a failed check fails the document,
+class TestDocumentStageContract:
+    """Through the document stage API, a failed check fails the document,
     records the reason, keeps no transcription, and the next run
     transcribes again. A refresh that fails is the exception: the view it
     was to replace stays, and the next run reuses it."""
 
     @staticmethod
     def orchestrator(tmp_path, monkeypatch, engine, state="state", **options):
-        """A folder orchestrator over one scan, transcribing with `engine`
+        """A scratch driver over one scan, transcribing with `engine`
         and extracting nothing, with its state under `tmp_path / state` and
         any other `options` it takes: (the orchestrator, the scan)."""
         import yizkr.pipeline.llm as llm
 
         monkeypatch.setattr(llm, "make_client", lambda *a, **k: engine)
 
-        class Orch(Orchestrator):
+        class Orch(IsolatedDriver):
             def _step_register(self, doc):
                 return "Q23"
 
@@ -1276,14 +1276,16 @@ class TestOrchestratorContract:
         folder = scan.parent
 
         doc = DocumentRun(folder / "scan.png", tmp_path / "state")
-        assert orch.advance(doc, stop_after_extract=True) == FAILED
+        assert prepare_document(orch, doc) == FAILED
         assert "TranscriptionCheckFailed" in doc.state.error
         assert "(not-a-record)" in doc.state.error
         assert not doc.transcription.exists()
         assert not doc.batch.exists()
 
+        orch._close_engines()
+        orch, _ = self.orchestrator(tmp_path, monkeypatch, engine)
         doc = DocumentRun(folder / "scan.png", tmp_path / "state")
-        assert orch.advance(doc, stop_after_extract=True) == BATCHED
+        assert prepare_document(orch, doc) == BATCHED
         assert engine.calls == 2
         assert doc.transcription.exists()
         assert doc.state.error is None
@@ -1299,7 +1301,7 @@ class TestOrchestratorContract:
         orch, scan = self.orchestrator(tmp_path, monkeypatch, engine)
 
         doc = DocumentRun(scan, tmp_path / "state")
-        assert orch.advance(doc, stop_after_extract=True) == FAILED
+        assert prepare_document(orch, doc) == FAILED
         assert "TranscriptionCheckFailed" in doc.state.error
         assert "(tool-error)" in doc.state.error
         assert "Read (pdf-renderer-missing)" in doc.state.error
@@ -1312,8 +1314,10 @@ class TestOrchestratorContract:
         assert [event["stage"] for event in failed] == ["transcription"]
         assert "Read (pdf-renderer-missing)" in failed[0]["reason"]
 
+        orch._close_engines()
+        orch, _ = self.orchestrator(tmp_path, monkeypatch, engine)
         doc = DocumentRun(scan, tmp_path / "state")
-        assert orch.advance(doc, stop_after_extract=True) == BATCHED
+        assert prepare_document(orch, doc) == BATCHED
         assert engine.calls == 2
         assert doc.state.error is None
 
@@ -1345,7 +1349,7 @@ class TestOrchestratorContract:
             # the state directory's event log keeps every earlier run's
             # events, so only those this run appends count
             seen = len(orch.rundir.events())
-            status = orch.advance(doc, stop_after_extract=True)
+            status = prepare_document(orch, doc)
             events = [
                 (event["event"], event.get("reason") or event.get("stage"))
                 for event in orch.rundir.events()[seen:]
@@ -1408,7 +1412,7 @@ class TestOrchestratorContract:
             # the state directory's event log keeps every earlier run's
             # events, so only those this run appends count
             seen = len(orch.rundir.events())
-            status = orch.advance(doc, stop_after_extract=True)
+            status = prepare_document(orch, doc)
             events = [
                 (event["event"], event.get("reason") or event.get("stage"))
                 for event in orch.rundir.events()[seen:]

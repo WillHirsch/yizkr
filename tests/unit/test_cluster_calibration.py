@@ -495,18 +495,6 @@ def test_adjudication_chunks_keep_clusters_together_and_split_big_ones():
     ]
 
 
-def test_serial_per_artifact_rows_shrink_when_matches_merge():
-    docs = [
-        manifest(sha * 40, [person("e1", "Hildegard Löbig")]) for sha in "abc"
-    ]
-    plain = cc.simulate_serial(docs, 40)
-    assert plain.rows == 0 + 1 + 2  # every earlier mention is a candidate
-    merged = cc.simulate_serial(
-        docs, 40, {f"{sha * 40}:e1": "hildegard" for sha in "abc"}
-    )
-    assert merged.rows == 0 + 1 + 1
-
-
 # -- end to end ---------------------------------------------------------------
 
 

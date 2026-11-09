@@ -1,6 +1,6 @@
 """Per-document language detection for transcriptions.
 
-`yizkr ingest run` walks a whole folder, but a family archive mixes
+`yizkr scratch run` processes the whole corpus, but a family archive mixes
 languages — German register entries and letters beside English
 naturalisation papers and interviews. A single run-wide ``--language``
 therefore mis-tags every document that isn't in that language, and the
@@ -17,12 +17,12 @@ a PDF read page by page from its text layer) is detected from its *full*
 text outside its editorial marks (``[illegible]``, ``[?]``,
 ``[redacted]``, page markers) — offline and deterministically, with a
 statistical identifier (py3langid: pure Python, self-hosted model, no
-network, honouring rule 7). The marks are the transcription's, not the
+network). The marks are the transcription's, not the
 document's words, and a line thick with them would otherwise read as
 another language. An explicit ``--language de`` forces that code and
 skips both. Documents too short or ambiguous to identify with confidence,
 and records that name no language, fall back to ``--fallback-language``
-rather than guessing — unknown is never narrowed (rule 5), only
+rather than guessing — unknown is never narrowed, only
 defaulted to a code the curator chose.
 
 The extraction model still tags each *excerpt* in its own language (a

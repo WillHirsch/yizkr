@@ -39,7 +39,7 @@ A containment holds for a period. It is dated the way MODELING.md dates a reside
 
 ### 3. The model asserts no geography
 
-No model, at any stage, answers whether one place lies within another. A containment reaches the graph only from a source. The one question a model may be asked is **which item a source's container name means**, among existing places that share it: is "Rekau" in this document's chain the town Rekau or Stadtkreis Rekau? That is an identity question, like clustering's (ADR-0007, ADR-0019). Its answer picks the claim's value and never adds a containment the source does not state. Where the model can't tell, or names no candidate, nothing is written and the question is counted.
+No model, at any stage, answers whether one place lies within another. A containment reaches the graph only from a source. The one question a model may be asked is **which item a source's container name means**, among existing places that share it: is "Rekau" in this document's chain the town Rekau or Stadtkreis Rekau? That is an identity question, like clustering's (ADR-0007 and the [identity review guide](../IDENTITY_REVIEW.md)). Its answer picks the claim's value and never adds a containment the source does not state. Where the model can't tell, or names no candidate, nothing is written and the question is counted.
 
 ### 4. Competing values stay plural
 

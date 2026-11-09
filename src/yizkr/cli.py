@@ -4,8 +4,7 @@
     yizkr smoke-test       verify a deployment end to end
     yizkr publish-queries  publish the SPARQL library to wiki pages
     yizkr claims           claim-contract utilities (JSON schema, validate)
-    yizkr ingest <step>    pipeline steps; every step reads/writes plain
-                           files so runs pause for review and resume
+    yizkr ingest <step>    standalone preparation, review and write tools
     yizkr stages state     what a run did, from its run directory
     yizkr stages manifest  what shapes a run, from its run.json
     yizkr scratch run      the whole corpus through every stage, unattended;
@@ -30,9 +29,7 @@ Exit status, one scheme for every command (yizkr.core.exits):
   1    something failed: a document of a run, or the command itself on an
        error it does not anticipate, with a traceback
   2    stopped short; run it again once the reason it printed is dealt
-       with: a paused engine or cache, a run's control file (`scratch
-       run`; for `ingest run`, a stage it held), or, for `ingest run`, a
-       document awaiting a review gate
+       with: a paused engine or cache, or a scratch run's control file
   3    refused, before doing what was asked, with the reason alone: a
        usage error, an input it will not act on, or a run directory that
        records other settings
@@ -60,9 +57,9 @@ from yizkr.core.config import Config
 from yizkr.core.corpus import ExclusionList
 from yizkr.core.privacy import DEFAULT_CUTOFF_YEARS
 from yizkr.core.wiki import WikiClient
-from yizkr.pipeline.orchestrate import MODEL_ROLES
+from yizkr.pipeline.stage_planning import MODEL_ROLES
 
-# where `ingest run` keeps the LLM cache unless told otherwise
+# Default response-cache location for corpus execution and imports.
 DEFAULT_CACHE = Path("var/llm-cache")
 
 
@@ -114,8 +111,7 @@ def _refuse_if_excluded(
     transcription, gives the content SHA-1 its input records, and the
     source file too when it is given one. Without a file only the list's
     SHA-1 entries can be checked, so a list that names files by pattern
-    fails closed. The extract-all command, `ingest run`, requires the
-    list (cmd_run).
+    fails closed. Whole-corpus execution requires an explicit list.
 
     A glob also names the bytes of an image it names inside one of the
     corpus's decks, as in a run: with the corpus folder set
@@ -952,39 +948,6 @@ def cmd_apply_review(args) -> int:
     return 0
 
 
-def cmd_accept_all(args) -> int:
-    from yizkr.pipeline.review import accept_all
-
-    # default output name follows the input: review.csv -> review.reviewed.csv,
-    # equivalences.csv -> equivalences.reviewed.csv (the gate each satisfies).
-    out = args.out or args.csv.with_name(args.csv.stem + ".reviewed.csv")
-    if out.exists() and not args.force:
-        sys.exit(f"{out} already exists; pass --force to overwrite it")
-    try:
-        result = accept_all(args.csv, out)
-    except (OSError, ValueError) as exc:
-        sys.exit(str(exc))
-    if result.mode == "equivalences":
-        summary = (
-            f"{result.approved} match(es) approved, "
-            f"{result.rejected} distinct rejected, "
-            f"{result.uncertain} uncertain left blank"
-        )
-        if result.conflicted:
-            summary += (
-                f", {result.conflicted} conflicting (same vs >1 item) left "
-                f"blank — resolve these by hand"
-            )
-        print(f"wrote {out} (ratified {result.total} verdicts: {summary})")
-    else:
-        print(
-            f"wrote {out} ({result.approved} claims set to bulk-accept; "
-            f"`ingest run` writes them as low-scrutiny for reappraisal "
-            f"while no row has another decision)"
-        )
-    return 0
-
-
 def cmd_write(args) -> int:
     from pydantic import ValidationError
 
@@ -1048,58 +1011,6 @@ def cmd_write(args) -> int:
     return 0
 
 
-def cmd_run(args) -> int:
-    from yizkr.core.corpus import CORPUS_DIR_VAR, corpus_dir, load_exclusions
-    from yizkr.pipeline.orchestrate import Orchestrator
-    from yizkr.pipeline.rundir import ModelAliasRefused
-    from yizkr.pipeline.transcribe import MissingPrerequisite
-
-    if args.no_cache and (args.refresh or args.epoch):
-        sys.exit(
-            "--refresh and --epoch act through the LLM cache, and --no-cache "
-            "runs without one: drop --no-cache (a refreshed role's calls "
-            "then go to the engine whatever the cache holds)"
-        )
-    # fail closed: no never-ingest list, no run, before any file is
-    # read. An empty list file is an explicit, allowed configuration.
-    exclusions = load_exclusions(required=True, env_file=args.env_file)
-    folder = args.folder or corpus_dir(args.env_file)
-    if folder is None:
-        sys.exit(
-            f"no folder given and {CORPUS_DIR_VAR} is not set; name the "
-            f"folder, or set {CORPUS_DIR_VAR} (see deploy/README.md)"
-        )
-    if not folder.is_dir():
-        sys.exit(f"{folder} is not a directory")
-    state_dir = args.state or Path("var/runs") / folder.resolve().name
-    orchestrator = Orchestrator(
-        folder,
-        state_dir,
-        llm=args.llm,
-        artifact_type=args.type,
-        language=args.language,
-        fallback_language=args.fallback_language,
-        chunk_concurrency=args.chunk_concurrency,
-        extract_effort=args.extract_effort,
-        review_effort=args.review_effort,
-        # "inherit" (or empty) means: don't override — use the main model
-        extract_model=(args.extract_model or None)
-        if args.extract_model != "inherit"
-        else None,
-        serial=args.serial,
-        extract_concurrency=args.extract_concurrency,
-        env_file=args.env_file,
-        exclusions=exclusions,
-        cache_dir=None if args.no_cache else args.cache,
-        refresh=args.refresh or (),
-        epochs=dict(args.epoch or ()),
-    )
-    try:
-        return orchestrator.run()
-    except (MissingPrerequisite, ModelAliasRefused) as exc:
-        sys.exit(str(exc))
-
-
 def _gibibytes(value: str) -> float:
     """A size in GiB for --min-free: a finite number, 0 or more."""
     try:
@@ -1111,17 +1022,6 @@ def _gibibytes(value: str) -> float:
             f"a size in GiB, finite and 0 or more, not {value!r}"
         )
     return size
-
-
-def _role_epoch(value: str) -> tuple[str, int]:
-    """`ROLE=N` -> (role, N), for --epoch."""
-    role, _, epoch = value.partition("=")
-    if role not in MODEL_ROLES or not epoch.isdigit():
-        raise argparse.ArgumentTypeError(
-            f"expected ROLE=N with ROLE one of {', '.join(MODEL_ROLES)} and "
-            f"N a whole number, not {value!r}"
-        )
-    return role, int(epoch)
 
 
 def cmd_stages_state(args) -> int:
@@ -1875,7 +1775,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="DIR",
         help="answer each model call from this LLM cache when the same "
         "call was answered before, and keep every new answer there "
-        "(ADR-0032; `ingest run` uses var/llm-cache), so a re-run asks "
+        "(ADR-0032), so a re-run asks "
         "the engine only for what did not complete. Without it every "
         "call goes to the engine",
     )
@@ -1941,37 +1841,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out", type=Path, default=Path("approved.json"))
     p.set_defaults(func=cmd_apply_review)
 
-    p = isub.add_parser(
-        "accept-all",
-        help=(
-            "curator bulk-accept of a review CSV: write bulk-accept on every "
-            "claim (review.csv), which `ingest run` writes under a distinct "
-            "low-scrutiny edit summary while no row has another decision "
-            "(ADR-0023), or ratify each machine verdict (equivalences.csv); "
-            "refuses a whole claims sheet with "
-            "any depicts row (ADR-0005), or without an exact claim_id and "
-            "exactly one property column"
-        ),
-    )
-    p.add_argument(
-        "--csv",
-        type=Path,
-        required=True,
-        help="the review.csv or equivalences.csv to accept",
-    )
-    p.add_argument(
-        "--out",
-        type=Path,
-        default=None,
-        help="output path (default: <input-stem>.reviewed.csv beside --csv)",
-    )
-    p.add_argument(
-        "--force",
-        action="store_true",
-        help="overwrite an existing reviewed CSV",
-    )
-    p.set_defaults(func=cmd_accept_all)
-
     p = isub.add_parser("write", help="write approved claims as statements")
     p.add_argument(
         "--process-records",
@@ -1992,151 +1861,6 @@ def build_parser() -> argparse.ArgumentParser:
     _add_placed(p)
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_write)
-
-    p = isub.add_parser(
-        "run",
-        help="walk a folder through the whole pipeline, pausing at the "
-        "review gates; re-run to resume",
-    )
-    p.add_argument(
-        "folder",
-        type=Path,
-        nargs="?",
-        help="folder of documents to ingest (default $YIZKR_CORPUS_DIR). "
-        "Refuses to run unless $YIZKR_EXCLUDE_FILE names a never-ingest "
-        "list; see deploy/README.md",
-    )
-    p.add_argument(
-        "--state",
-        type=Path,
-        help="state/output directory (default var/runs/<folder name>)",
-    )
-    p.add_argument(
-        "--llm", default="anthropic", choices=["anthropic", "claude-code"]
-    )
-    p.add_argument(
-        "--type",
-        default="artifact",
-        help="manifest item key for registered artifacts (default artifact)",
-    )
-    p.add_argument(
-        "--language",
-        default="auto",
-        help="document language, e.g. de, en (tags source excerpts). "
-        "default 'auto' detects it per file from the transcription — a "
-        "mixed-language folder needs no per-file split; an explicit code "
-        "forces it for every file",
-    )
-    p.add_argument(
-        "--fallback-language",
-        default="en",
-        help="language tag for documents too short to auto-detect "
-        "(default en); ignored when --language is an explicit code",
-    )
-    p.add_argument(
-        "--chunk-concurrency",
-        type=int,
-        default=3,
-        metavar="N",
-        help="run up to N extraction chunks in parallel per document "
-        "(chunks are independent; default 3). Lower it if the engine "
-        "rate-limits; 1 is fully sequential",
-    )
-    p.add_argument(
-        "--extract-concurrency",
-        type=int,
-        default=1,
-        metavar="N",
-        help="with --serial, extract N documents in parallel during the "
-        "up-front extract-all phase (default 1). Multiplies with "
-        "--chunk-concurrency (N x chunks concurrent LLM calls), so keep the "
-        "product within the engine's limits. The phase reads and writes no "
-        "wiki: each document is registered and written after it, one at a "
-        "time. No effect without --serial",
-    )
-    effort_choices = ["low", "medium", "high", "xhigh", "max"]
-    p.add_argument(
-        "--extract-effort",
-        choices=effort_choices,
-        default="low",
-        help="reasoning effort for the mechanical bulk steps "
-        "(transcription, extraction). Default low — these are high-volume "
-        "and deep thinking there is wasted (claude-code engine only)",
-    )
-    p.add_argument(
-        "--review-effort",
-        choices=effort_choices,
-        default="high",
-        help="reasoning effort for the judgment step, the extraction "
-        "critique. Default high — a low-volume, high-stakes review worth "
-        "the thinking (claude-code engine only)",
-    )
-    p.add_argument(
-        "--extract-model",
-        default="claude-sonnet-5",
-        metavar="MODEL",
-        help="model for the claim-extraction step only; the run's main "
-        "model ($YIZKR_LLM_MODEL) still drives transcription and the "
-        "critique. Default claude-sonnet-5 — extraction rewards "
-        "source discipline over raw capability (ADR-0016). Pass 'inherit' "
-        "to use the run's main model for extraction too. Either is a full "
-        "model id: the run refuses an alias such as 'sonnet' or "
-        "'...-latest' (docs/RUN_MANIFEST.md)",
-    )
-    p.add_argument(
-        "--serial",
-        action="store_true",
-        help="take artifacts one at a time, hubs first, each fully written "
-        "before the next reconciles; each write finds the items of its "
-        "entities through the run's identity map, never by label, and "
-        "reconcile-graph consolidates an entity two artifacts name "
-        "differently (ADR-0019). Advance by re-running after each claim "
-        "review; about one re-run per artifact",
-    )
-    cache = p.add_mutually_exclusive_group()
-    cache.add_argument(
-        "--cache",
-        type=Path,
-        default=DEFAULT_CACHE,
-        metavar="DIR",
-        help="the LLM cache, shared across runs (default var/llm-cache; "
-        "ADR-0032): when a view is made again, each model call it makes is "
-        "answered from the cache if the same call, keyed on what it sends, "
-        "was answered before, and every new answer is kept there. It only "
-        "saves engine calls: a document's views persist in its state "
-        "directory and are reused while their inputs are unchanged, with "
-        "or without it",
-    )
-    cache.add_argument(
-        "--no-cache",
-        action="store_true",
-        help="run without the LLM cache: a view that is made again calls "
-        "the engine for every call, and no answer is read or kept. Views "
-        "persist and are reused as with the cache, so the run is otherwise "
-        "the same",
-    )
-    p.add_argument(
-        "--refresh",
-        action="append",
-        choices=MODEL_ROLES,
-        metavar="ROLE",
-        help="make this role's views again in this run, in place, current "
-        "or not, asking the engine afresh for each call even where the "
-        "cache holds an answer, which the new one replaces (repeatable; "
-        f"one of {', '.join(MODEL_ROLES)}; extract includes the GEDCOM "
-        "adapter's batches)",
-    )
-    p.add_argument(
-        "--epoch",
-        action="append",
-        type=_role_epoch,
-        metavar="ROLE=N",
-        help="key this role's calls under epoch N (default 0), so that a "
-        "view made again samples the role afresh while the answers of "
-        "other epochs stay in the cache; current views stand, so combine "
-        "it with --refresh to re-sample them (repeatable)",
-    )
-    p.set_defaults(func=cmd_run)
 
     p = isub.add_parser(
         "detect-faces", help="detect faces in a photo -> depicts proposals"
@@ -2266,6 +1990,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.set_defaults(func=cmd_gaps_rollup)
 
+    effort_choices = ["low", "medium", "high", "xhigh", "max"]
     _scratch_parsers(sub, effort_choices)
     return parser
 
@@ -2305,7 +2030,7 @@ def _scratch_parsers(sub, effort_choices) -> None:
     p.add_argument(
         "archive",
         type=Path,
-        help="the archived state directory of an `ingest run`: a folder "
+        help="a document-state archive: a folder "
         "per document, with its state.json and transcription.json",
     )
     p.add_argument(
@@ -2611,9 +2336,15 @@ def _scratch_plan_options(p, effort_choices, runs_help: str) -> None:
         help="the LLM cache every model call goes through (default "
         "var/llm-cache; ADR-0032)",
     )
-    p.add_argument("--language", default="auto", help="as for `ingest run`")
     p.add_argument(
-        "--fallback-language", default="en", help="as for `ingest run`"
+        "--language",
+        default="auto",
+        help="document language; auto detects each source",
+    )
+    p.add_argument(
+        "--fallback-language",
+        default="en",
+        help="language for sources too short to auto-detect",
     )
     p.add_argument(
         "--chunk-concurrency",

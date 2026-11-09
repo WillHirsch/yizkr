@@ -122,7 +122,7 @@ from yizkr.pipeline import llm
 from yizkr.pipeline.chunking import ChunkedClaimExtractor, ExtractionFailed
 from yizkr.pipeline.containers import VISION_SUFFIXES
 from yizkr.pipeline.critique import run_critique
-from yizkr.pipeline.orchestrate import (
+from yizkr.pipeline.document_state import (
     BATCH_VOLATILE,
     CHECKED_ROUTES,
     EXCERPT,
@@ -499,7 +499,7 @@ class _Extractor(ChunkedClaimExtractor):
     cannot answer is answered empty (_Keyed)."""
 
     def __init__(self, client: Any, keyed: _Keyed, tally: _Tally) -> None:
-        # as the driver makes it (Orchestrator._step_extract), one chunk
+        # as the driver makes it (ScratchDriver._step_extract), one chunk
         # at a time, reading the statement about the document's
         # preparation: how many run at once changes no key
         super().__init__(client, read_preparation=True)
@@ -694,7 +694,7 @@ class Estimator(ScratchDriver):
 
     def _engine_for(self, role: str) -> None:
         """Start the role's engine client on first use, as the driver
-        does (Orchestrator._engine): the role's first stale stage starts
+        does (ScratchDriver._engine): the role's first stale stage starts
         it. So a client that cannot start (ScratchRefused), a pause as it
         starts (llm.PassPaused), or one that applies other settings than
         the run it would invoke again recorded, a claude CLI updated
@@ -1027,7 +1027,7 @@ class Estimator(ScratchDriver):
     ) -> _Made:
         """The critique of the batch `before` holds, which reads the
         transcription `transcribed` holds, as the driver builds its prompt
-        (Orchestrator._step_critique): reused only when neither changed
+        (ScratchDriver._step_critique): reused only when neither changed
         and the view stands, and estimated when either is not in hand."""
         unknown_context = self._estimate_interpretation_context(
             doc, transcribed.view
@@ -1236,7 +1236,7 @@ class Estimator(ScratchDriver):
         """The excerpts the planned run may make, and their calls (the
         module docstring says how): each image once, however many containers
         place it, and none whose bytes a document of the corpus (`docs`) has,
-        as the driver takes them (Orchestrator._excerpts_of). Each stage
+        as the driver takes them (ScratchDriver._excerpts_of). Each stage
         left to make starts the engine client of its role (_engine_for),
         as it would in the run, so that a client the run refuses stops the
         estimate here."""
@@ -1291,12 +1291,27 @@ class Estimator(ScratchDriver):
             excerpts.stale[stage] = stale
         return excerpts
 
+    def _transcription_view(self, doc: DocumentRun):
+        """The document's transcription view as it stands, or None when it
+        is missing or cannot be read: read only, never made."""
+        from yizkr.pipeline.transcribe import Transcription
+
+        try:
+            return self._locate_transcription(
+                doc,
+                Transcription.model_validate_json(
+                    doc.transcription.read_text()
+                ),
+            )
+        except (OSError, ValueError):
+            return None
+
     def _stale_stages(
         self, excerpt: DocumentRun, planned: list[str]
     ) -> list[str]:
         """The planned stages of an excerpt the run holds already whose
         views it makes, as the driver tells (_stands, with its rechecks:
-        Orchestrator._transcription, _critique). A transcription that does
+        ScratchDriver._transcription, _critique). A transcription that does
         not stand is made again as the driver makes it, from the reading a
         container keeps, which reads files only: when its content is the
         one the excerpt's batch was made from, the views after it are
@@ -1419,7 +1434,7 @@ def _finished(rundir: RunDir) -> dict[tuple[str, str], int]:
 def _may_be_excerpt(image: ImageReading) -> bool:
     """Whether the run may make an excerpt of an image a container's
     transcription read on its own, as the driver judges the reading it
-    keeps (Orchestrator._excerpts_of): one whose record calls some page
+    keeps (ScratchDriver._excerpts_of): one whose record calls some page
     transcribed or illegible, not every page blank or not a document
     page. Every image has a reading here: the cache serves none the check
     fails, and a reading that stands in for the engine's passes it and

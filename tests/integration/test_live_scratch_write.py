@@ -43,7 +43,7 @@ from yizkr.core.instance import (
 )
 from yizkr.core.wiki import WikiClient
 from yizkr.pipeline import registrar, scratchwrite, writer
-from yizkr.pipeline.orchestrate import DocumentRun
+from yizkr.pipeline.document_state import DocumentRun
 from yizkr.pipeline.scratch import (
     CORPUS_DIR,
     CORPUS_STAGES,

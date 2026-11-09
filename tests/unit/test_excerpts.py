@@ -7,7 +7,7 @@ SHA-1 of its bytes, its own directory, its own batch, whose claims cite
 the image, and at the write an item of its own, `part of` each PDF that
 places it. The same image in two PDFs is one excerpt; one whose bytes a
 document of the corpus has is that document; one the never-ingest list
-names is never one. The ingest run and the scratch driver take excerpts
+names is never one. The scratch driver takes excerpts
 as their PDFs' transcriptions find them, and the run report counts the
 images each PDF places. Every PDF is fictional (tests/fixtures/pdfs.py),
 its texts the universe's (docs/EXAMPLES.md): the booklet *Our Family from
@@ -25,9 +25,9 @@ import shutil
 import pytest
 
 from tests.fixtures import pdfs
+from tests.fixtures.document_processing import this_run
 from tests.fixtures.records import page_text, record_answer, record_page
 from tests.unit.test_deck_excerpts import library_talk, talk_folder
-from tests.unit.test_orchestrate import this_run
 from tests.unit.test_pdf_pages import (
     CAPTION,
     COMMENT,
@@ -47,6 +47,7 @@ from tests.unit.test_pdf_pages import (
     excerpt_of,
     flag_alerts,
     folder,
+    recheck_containers,
     renderer,  # noqa: F401
     run,
     set_asides,
@@ -62,6 +63,7 @@ from tests.unit.test_registrar import (
     part_of,
     strings,
 )
+from tests.unit.test_run_provenance import fixed_capture  # noqa: F401
 from tests.unit.test_scratch import (  # noqa: F401
     Corpus,
     Recorder,
@@ -78,28 +80,24 @@ from yizkr.pipeline.container_inventory import (
     read_inventory,
 )
 from yizkr.pipeline.container_sources import project_sources
-from yizkr.pipeline.language import detect_language
-from yizkr.pipeline.orchestrate import (
-    AWAITING_CLAIMS,
-    DUPLICATE,
+from yizkr.pipeline.document_state import (
+    BATCHED,
     EXCERPTS_DIR,
-    WRITTEN,
-    Orchestrator,
     directory_names,
 )
-from yizkr.pipeline.orchestrate import (
-    EXCERPT as KIND,
-)
+from yizkr.pipeline.document_state import EXCERPT as KIND
+from yizkr.pipeline.language import detect_language
 from yizkr.pipeline.presentation import (
     DERIVED_MEDIA_DIR,
     derived_transcription,
 )
 from yizkr.pipeline.registrar import ExcludedMedia
 from yizkr.pipeline.report import build, render_markdown
-from yizkr.pipeline.review import accept_all
 from yizkr.pipeline.rundir import RunDir
-from yizkr.pipeline.scratch import EXIT_OK, CorpusStage
+from yizkr.pipeline.scratch import EXIT_OK, CorpusStage, ScratchDriver
 from yizkr.pipeline.textlayer import png
+
+pytestmark = pytest.mark.usefixtures("fixed_capture")
 
 # the booklet's own text on page 6, as its text layer gives it
 OWN = "\n".join(pdfs.lines(CAPTION, TRANSLATION, COMMENT))
@@ -181,7 +179,7 @@ class TestAnExcerpt:
         assert excerpt.kind == KIND
         assert excerpt.dir == tmp_path / "state" / EXCERPTS_DIR / LETTER_SHA1
         assert excerpt.state.title == "booklet — page 6, image 1"
-        assert excerpt.state.status == AWAITING_CLAIMS
+        assert excerpt.state.status == BATCHED
         assert [c.dir for c in excerpt.containers] == [doc.dir]
         # its transcription is the booklet's reading of it: no second call
         assert reader.read == [(f"{LETTER_SHA1}.png", LETTER_SHA1)]
@@ -208,7 +206,7 @@ class TestAnExcerpt:
         # the run plans it once it is found, and its end counts it
         assert planned(orchestrator) == {doc.sha1: "pdf", LETTER_SHA1: KIND}
         (end,) = this_run(orchestrator, "run-end")
-        assert end["statuses"] == {AWAITING_CLAIMS: 2}
+        assert end["statuses"] == {BATCHED: 2}
 
     def test_the_same_image_in_two_pdfs_is_one_witness(self, tmp_path):
         corpus = folder(
@@ -432,43 +430,6 @@ class TestAnExcerpt:
         } <= (reused)
         assert this_run(again, "started") == []
 
-    def test_serial_mode_extracts_the_excerpt_before_the_sequence(
-        self, tmp_path
-    ):
-        corpus = folder(tmp_path, booklet=booklet())
-        orchestrator = run(
-            tmp_path, corpus, Reader({LETTER_SHA1: EXCERPT}), serial=True
-        )
-        excerpt = excerpt_of(orchestrator, LETTER_SHA1)
-        assert excerpt.batch.exists()
-        assert planned(orchestrator)[LETTER_SHA1] == KIND
-        # found twice, before the sequence and in the loop, the PDF is one
-        # of the PDFs that place the image once
-        doc = document(orchestrator, "booklet.pdf")
-        assert [c.dir for c in excerpt.containers] == [doc.dir]
-
-    def test_a_written_excerpt_makes_a_later_copy_a_duplicate(self, tmp_path):
-        """Written in one run, the excerpt seeds the next run's content
-        dedup: a file of the folder with its bytes, added since, is its
-        duplicate, and is not extracted or written again (ADR-0010)."""
-        corpus = folder(tmp_path, booklet=booklet())
-        reader = Reader({LETTER_SHA1: EXCERPT, "letter-excerpt-1939": EXCERPT})
-        first = run(tmp_path, corpus, reader)
-        for doc in (
-            document(first, "booklet.pdf"),
-            excerpt_of(first, LETTER_SHA1),
-        ):
-            accept_all(doc.review, doc.review_reviewed)
-        second = run(tmp_path, corpus, reader)
-        assert excerpt_of(second, LETTER_SHA1).state.status == WRITTEN
-        (corpus / "letter-excerpt-1939.png").write_bytes(LETTER_PNG)
-        third = run(tmp_path, corpus, reader)
-        assert LETTER_SHA1 in third._prior_written_hashes()
-        letter = document(third, "letter-excerpt-1939.png")
-        assert letter.state.status == DUPLICATE
-        assert letter.state.detail["duplicate_of"] == f"{LETTER_SHA1}.png"
-        assert not letter.batch.exists()
-
 
 class TestReuse:
     """Source metadata/bytes recover without invalidating intact readings.
@@ -537,7 +498,7 @@ class TestReuse:
             in transcription_of(document(first, "booklet.pdf")).text
         )
         reader = Reader({})
-        again = run(
+        again = recheck_containers(
             tmp_path,
             corpus,
             reader,
@@ -566,7 +527,7 @@ class TestReuse:
 
 class TestRegistration:
     """The write registers a PDF's images as it registers a deck's
-    (Orchestrator._step_register), on the in-memory wiki."""
+    (ScratchDriver._step_register), on the in-memory wiki."""
 
     @staticmethod
     def made(tmp_path, exclusions=None, **documents):
@@ -585,7 +546,7 @@ class TestRegistration:
     def test_an_item_per_image_part_of_its_pdf(self, tmp_path):
         orchestrator, wiki = self.made(tmp_path, booklet=booklet())
         doc = document(orchestrator, "booklet.pdf")
-        pdf = Orchestrator._step_register(orchestrator, doc)
+        pdf = ScratchDriver._step_register(orchestrator, doc)
         (image,) = [
             qid
             for qid in wiki.entities
@@ -613,7 +574,7 @@ class TestRegistration:
         # the excerpt's write finds its item, and registers nothing new
         writes = wiki.writes
         excerpt = excerpt_of(orchestrator, LETTER_SHA1)
-        assert Orchestrator._step_register(orchestrator, excerpt) == image
+        assert ScratchDriver._step_register(orchestrator, excerpt) == image
         assert wiki.writes == writes
 
     def test_an_excerpt_s_write_registers_each_pdf_that_places_it(
@@ -625,7 +586,7 @@ class TestRegistration:
             reprint=reprint(SHARED_LETTER_IMAGE),
         )
         excerpt = excerpt_of(orchestrator, SHARED_LETTER_SHA1)
-        image = Orchestrator._step_register(orchestrator, excerpt)
+        image = ScratchDriver._step_register(orchestrator, excerpt)
         pdfs_ = {
             doc.source.name: strings(wiki, qid, "media_sha1")
             for doc in excerpt.containers
@@ -651,7 +612,7 @@ class TestRegistration:
         again = run(tmp_path, orchestrator.folder, Reader({}))
         again._client = wiki
         doc = document(again, "booklet.pdf")
-        Orchestrator._step_register(again, doc)
+        ScratchDriver._step_register(again, doc)
         sources = saved_sources(doc.dir)
         assert sources.inventory.source.sha1 == doc.sha1
         assert list(sources.sources) == [LETTER_SHA1]
@@ -673,11 +634,11 @@ class TestRegistration:
         )
         assert LETTER_SHA1 in planned(orchestrator)
         doc = document(orchestrator, "booklet.pdf")
-        Orchestrator._step_register(orchestrator, doc)
+        ScratchDriver._step_register(orchestrator, doc)
         (image,) = orchestrator.registered_media()[doc.sha1].values()
         assert strings(wiki, image, "media_sha1") == [LETTER_SHA1]
         excerpt = excerpt_of(orchestrator, LETTER_SHA1)
-        assert Orchestrator._step_register(orchestrator, excerpt) == image
+        assert ScratchDriver._step_register(orchestrator, excerpt) == image
 
     def test_reconstructed_deck_inventory_keeps_current_exclusions(
         self, tmp_path
@@ -696,7 +657,7 @@ class TestRegistration:
         record = json.loads((doc.dir / CONTAINER_INVENTORY).read_text())
         record["container"] = "pdf"
         (doc.dir / CONTAINER_INVENTORY).write_text(json.dumps(record))
-        Orchestrator._step_register(orchestrator, doc)
+        ScratchDriver._step_register(orchestrator, doc)
         assert saved_sources(doc.dir).inventory.container == "presentation"
         assert LETTER_SHA1 not in orchestrator.registered_media()[doc.sha1]
         assert LETTER_SHA1 not in wiki.files.values()
@@ -732,8 +693,8 @@ class TestRegistration:
         pdf = document(orchestrator, "booklet.pdf")
         talk = document(orchestrator, "library-talk-2018.pptx")
         for doc in (pdf, talk):
-            assert doc.state.status == AWAITING_CLAIMS, doc.state.error
-            Orchestrator._step_register(orchestrator, doc)
+            assert doc.state.status == BATCHED, doc.state.error
+            ScratchDriver._step_register(orchestrator, doc)
         return orchestrator, wiki, reader, pdf, talk
 
     @pytest.mark.parametrize(
@@ -797,8 +758,8 @@ class TestRegistration:
         wiki = FakeWiki()
         orchestrator._client = wiki
         pdf = document(orchestrator, "booklet.pdf")
-        assert pdf.state.status == AWAITING_CLAIMS, pdf.state.error
-        Orchestrator._step_register(orchestrator, pdf)
+        assert pdf.state.status == BATCHED, pdf.state.error
+        ScratchDriver._step_register(orchestrator, pdf)
         assert LETTER_SHA1 not in orchestrator.registered_media().get(
             pdf.sha1, {}
         )
@@ -828,7 +789,7 @@ class TestRegistration:
         excerpt = excerpt_of(orchestrator, LETTER_SHA1)
         orchestrator.exclusions = ExclusionList.parse(f"{LETTER_SHA1}\n")
         with pytest.raises(ExcludedMedia):
-            Orchestrator._step_register(orchestrator, excerpt)
+            ScratchDriver._step_register(orchestrator, excerpt)
         assert not [
             qid
             for qid in wiki.entities

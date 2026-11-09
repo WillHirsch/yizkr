@@ -2,10 +2,11 @@
 derived-media items, each found or made by the SHA-1 of its media
 (ADR-0003 §4, ADR-0010).
 
-Registration is part of the write (ADR-0025 §2): `ingest run` registers
-a document just before it writes the claims that cite it. The claims cite
-an artifact by the SHA-1 of its media, and the writer resolves that key to
-the item whose `media SHA-1` statement registration writes. Per artifact,
+Registration is part of graph writing (ADR-0025 §2): the scratch
+registration stage registers sources before the write stage uses them.
+The claims cite an artifact by the SHA-1 of its media, and the writer
+resolves that key to the item whose `media SHA-1` statement registration
+writes. Per artifact,
 registration writes:
 
 * the media file, uploaded to the wiki (W1: artifacts as wiki media,
@@ -49,7 +50,7 @@ the list names.
 **An item that may be an older artifact is flagged, never adopted.**
 Each registration of an artifact or a derived medium, of an item made or
 found, reports it for a person to look at (RegistrationFlag), raised by
-`ingest run` as an alert of the write (docs/ANOMALIES.md), while either
+the scratch driver as an alert of the write (docs/ANOMALIES.md), while either
 condition holds: another item names as its `media file` a wiki file that
 holds its bytes (``shared-file``; every such file, as MediaWiki lists
 them by their SHA-1), or its title, its own label before its content

@@ -1413,43 +1413,6 @@ class TestTheCriticWiring:
         # first row
         assert list(critique.sheet_notes([finding], claims, claims)) == [0]
 
-    def notes(self, tmp_path, transcription: str | None) -> dict[int, str]:
-        from types import MethodType, SimpleNamespace
-
-        from yizkr.pipeline.orchestrate import Orchestrator
-
-        (tmp_path / "critique.json").write_text(json.dumps([ON_THE_IMAGE]))
-        (tmp_path / "batch.json").write_text(self.claims().model_dump_json())
-        if transcription is not None:
-            (tmp_path / "transcription.json").write_text(transcription)
-        doc = SimpleNamespace(
-            critique=tmp_path / "critique.json",
-            batch=tmp_path / "batch.json",
-            transcription=tmp_path / "transcription.json",
-        )
-        # the view of a document no container inventory locates stands as
-        # it is read
-        runner = SimpleNamespace(
-            _locate_transcription=lambda doc, transcription: transcription
-        )
-        runner._transcription_view = MethodType(
-            Orchestrator._transcription_view, runner
-        )
-        return Orchestrator._critique_notes(runner, doc, self.claims())
-
-    def test_the_review_sheet_reads_the_transcription_view(self, tmp_path):
-        notes = self.notes(tmp_path, booklet().model_dump_json())
-        assert list(notes) == [1]
-        assert "unchecked" not in notes[1]
-
-    @pytest.mark.parametrize("transcription", [None, "{not json"])
-    def test_without_a_readable_view_it_names_no_place(
-        self, tmp_path, transcription
-    ):
-        # no places, and no raise: the finding's claim, named by a place,
-        # is none the sheet lists, so the note goes on its entity's row
-        assert list(self.notes(tmp_path, transcription)) == [0]
-
 
 # -- the export ---------------------------------------------------------------
 

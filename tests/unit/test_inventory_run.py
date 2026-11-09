@@ -8,12 +8,14 @@ import zipfile
 
 import pytest
 
+from tests.fixtures.document_processing import prepare_document
 from tests.fixtures.records import record_answer
 from tests.unit.test_deck_excerpts import talk_folder
 from tests.unit.test_pdf_pages import (
     EXCERPT,
     LETTER_SHA1,
     REFUSAL,
+    CachedRun,
     Raw,
     Reader,
     RefusingReader,
@@ -21,9 +23,12 @@ from tests.unit.test_pdf_pages import (
     run,
 )
 from tests.unit.test_presentation import DECK_TIME
+from tests.unit.test_run_provenance import fixed_capture  # noqa: F401
 from yizkr.core.corpus import ExclusionList
 from yizkr.pipeline.container_inventory import read_inventory
-from yizkr.pipeline.orchestrate import AWAITING_CLAIMS
+from yizkr.pipeline.document_state import BATCHED
+
+pytestmark = pytest.mark.usefixtures("fixed_capture")
 
 
 def inventory_of(doc):
@@ -48,7 +53,7 @@ def test_reading_outcome_names_the_published_image_product(tmp_path):
         run(tmp_path, talk_folder(tmp_path), Reader({LETTER_SHA1: EXCERPT})),
         "library-talk-2018.pptx",
     )
-    assert doc.state.status == AWAITING_CLAIMS, doc.state.error
+    assert doc.state.status == BATCHED, doc.state.error
     part = letter_part(doc)
     assert part.eligibility.state == "allowed"
     assert part.reading.state == "read"
@@ -68,8 +73,7 @@ def test_regeneration_preserves_existing_readings_and_proposals(
         "library-talk-2018.pptx",
     )
     before = {
-        path: path.read_bytes()
-        for path in (doc.transcription, doc.batch, doc.review)
+        path: path.read_bytes() for path in (doc.transcription, doc.batch)
     }
     part_id = letter_part(doc).id
     manifest = doc.dir / "container-inventory.json"
@@ -87,7 +91,7 @@ def test_regeneration_preserves_existing_readings_and_proposals(
         run(tmp_path, corpus, RefusingReader({})),
         "library-talk-2018.pptx",
     )
-    assert restored.state.status == AWAITING_CLAIMS, restored.state.error
+    assert restored.state.status == BATCHED, restored.state.error
     assert {path: path.read_bytes() for path in before} == before
     part = letter_part(restored)
     assert part.id == part_id
@@ -102,16 +106,15 @@ def test_changed_exclusion_updates_inventory_without_an_image_call(tmp_path):
     )
     original_id = letter_part(first).id
     reader = Reader({})
-    second = document(
-        run(
-            tmp_path,
-            corpus,
-            reader,
-            exclusions=ExclusionList.parse("image2.png\n"),
-        ),
-        "library-talk-2018.pptx",
+    driver = CachedRun(
+        corpus,
+        tmp_path / "state",
+        engine=reader,
+        exclusions=ExclusionList.parse("image2.png\n"),
     )
-    assert second.state.status == AWAITING_CLAIMS, second.state.error
+    second = document(driver, "library-talk-2018.pptx")
+    prepare_document(driver, second, until="critique")
+    assert second.state.status == BATCHED, second.state.error
     part = letter_part(second)
     assert part.id == original_id
     assert part.eligibility.state == "excluded"
@@ -131,7 +134,7 @@ def test_failed_image_reading_is_not_reported_as_unattempted(tmp_path):
         ),
         "library-talk-2018.pptx",
     )
-    assert doc.state.status == AWAITING_CLAIMS, doc.state.error
+    assert doc.state.status == BATCHED, doc.state.error
     part = letter_part(doc)
     assert part.eligibility.state == "allowed"
     assert part.reading.state == "failed"
@@ -159,7 +162,7 @@ def test_unreferenced_excluded_alias_cannot_send_the_shared_image(tmp_path):
         ),
         "library-talk-2018.pptx",
     )
-    assert doc.state.status == AWAITING_CLAIMS, doc.state.error
+    assert doc.state.status == BATCHED, doc.state.error
     copies = [
         part
         for part in inventory_of(doc).parts
@@ -180,7 +183,7 @@ def test_successful_blank_image_is_an_explicit_empty_reading(tmp_path):
         ),
         "library-talk-2018.pptx",
     )
-    assert doc.state.status == AWAITING_CLAIMS, doc.state.error
+    assert doc.state.status == BATCHED, doc.state.error
     part = letter_part(doc)
     assert part.reading.state == "read"
     assert part.reading.empty is True

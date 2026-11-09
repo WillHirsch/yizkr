@@ -56,6 +56,7 @@ from tests.fixtures.corpus import answers, build, verdicts
 from tests.fixtures.corpus.engine import Calls, RecordedEngine
 from tests.unit.test_clustering import Doc, assert_no_false_merge
 from tests.unit.test_no_wiki_before_write import refusals  # noqa: F401
+from tests.unit.test_run_provenance import fixed_capture  # noqa: F401
 from tests.unit.test_scratch import (
     MODEL,
     Driver,
@@ -72,15 +73,14 @@ from yizkr.pipeline import chunking, clustering, llm, scratch
 from yizkr.pipeline.container_inventory import read_inventory
 from yizkr.pipeline.container_sources import project_sources
 from yizkr.pipeline.critique import entries, sheet_notes
-from yizkr.pipeline.extract import run_metadata, salvage_valid_claims
-from yizkr.pipeline.gedcom import parse_gedcom
-from yizkr.pipeline.orchestrate import (
+from yizkr.pipeline.document_state import (
     BATCH_VOLATILE,
-    DOCUMENT_STAGES,
     EXCERPT,
     PDF,
     document_kind,
 )
+from yizkr.pipeline.extract import run_metadata, salvage_valid_claims
+from yizkr.pipeline.gedcom import parse_gedcom
 from yizkr.pipeline.presentation import (
     derived_transcription,
     slide_transcript,
@@ -111,9 +111,12 @@ from yizkr.pipeline.scratch import (
     EXIT_OK,
     CorpusStage,
 )
+from yizkr.pipeline.stage_planning import DOCUMENT_STAGES
 from yizkr.pipeline.stages import content_hash, read_jsonl, sha1_file
 from yizkr.pipeline.transcribe import Transcription
 from yizkr.pipeline.transcription_record import BLANK
+
+pytestmark = pytest.mark.usefixtures("fixed_capture")
 
 SOURCES = {source.key: source for source in u.SOURCES}
 # the documents the engine is asked about, and the images it reads
@@ -220,7 +223,7 @@ class Scratch:
             said.append(" ".join(map(str, args)))
 
         driver = self.driver(name, log=log)
-        assert driver.run() == EXIT_OK
+        assert driver.run() == EXIT_OK, "\n".join(said)
         return driver.state_dir
 
     def views(self, run: Path) -> dict:

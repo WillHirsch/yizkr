@@ -1,7 +1,7 @@
 """Offline tests for `yizkr scratch import-transcriptions` (#104).
 
 The archive is fictional and built here in the format the import reads:
-an `ingest run` state directory, one folder per document with its
+an archived document-state directory, one folder per document with its
 `state.json` and `transcription.json`, the transcription in the QID
 format (`artifact_qid`) the older runs wrote, or in the current one
 (`artifact.sha1`). The corpus and the engine are the scratch driver
@@ -43,7 +43,7 @@ from yizkr.pipeline import (
     estimate,
     llm,
     llmcache,
-    orchestrate,
+    run_resources,
     transcribe,
     transcription_check,
 )
@@ -125,7 +125,7 @@ def sha256(text: str) -> str:
 
 
 class Archive:
-    """A fictional archive: an `ingest run` state directory, a folder per
+    """A fictional archive: an archived document-state directory, a folder per
     document holding its state.json and transcription.json."""
 
     def __init__(self, path: Path) -> None:
@@ -484,20 +484,22 @@ class TestAdoption:
         corpus = small(tmp_path)
         photo = corpus.sha1(PHOTO)
         archive = an_archive(tmp_path, corpus, **{PHOTO: PORTRAIT})
-        real = orchestrate.Orchestrator.role_client
+        real = run_resources.RunResources.role_client
 
-        def rescanned(self, role, *, events=None):
+        def rescanned(self, role, engine, *, events=None):
             (corpus.folder / PHOTO).write_bytes(b"\x89PNG rescanned")
-            return real(self, role, events=events)
+            return real(self, role, engine, events=events)
 
-        monkeypatch.setattr(orchestrate.Orchestrator, "role_client", rescanned)
+        monkeypatch.setattr(
+            run_resources.RunResources, "role_client", rescanned
+        )
         (found,) = import_(tmp_path, archive, corpus).outcomes
         assert (found.sha1, found.outcome, found.skipped) == (
             photo,
             SKIPPED,
             CHANGED,
         )
-        monkeypatch.setattr(orchestrate.Orchestrator, "role_client", real)
+        monkeypatch.setattr(run_resources.RunResources, "role_client", real)
         corpus.image(PHOTO, "studio-photo-1890s")
         assert corpus.sha1(PHOTO) == photo
         real_digests = imports._digests
@@ -1445,10 +1447,10 @@ class TestTheCommand:
         monkeypatch.setenv("YIZKR_EXCLUDE_FILE", str(never))
         monkeypatch.setenv("YIZKR_ENV_FILE", str(tmp_path / "no.env"))
 
-        def held(self, role, events=None):
+        def held(self, role, engine, *, events=None):
             raise llmcache.CacheInUse(tmp_path / "cache", None)
 
-        monkeypatch.setattr(orchestrate.Orchestrator, "role_client", held)
+        monkeypatch.setattr(run_resources.RunResources, "role_client", held)
         argv = ["scratch", "import-transcriptions", str(archive.path)]
         argv += ["--corpus", str(corpus.folder)]
         argv += ["--cache", str(tmp_path / "cache")]
@@ -1571,7 +1573,7 @@ def test_cancelled_import_keeps_completed_adoption_and_resumes(
     adopt = imports._Adopter.adopt
     completed = []
     closed = []
-    close = imports._Adopter.close
+    close = imports.RunResources.close
 
     def first_only(adopter, media):
         outcome = adopt(adopter, media)
@@ -1584,7 +1586,7 @@ def test_cancelled_import_keeps_completed_adoption_and_resumes(
         close(adopter)
 
     monkeypatch.setattr(imports._Adopter, "adopt", first_only)
-    monkeypatch.setattr(imports._Adopter, "close", closing)
+    monkeypatch.setattr(imports.RunResources, "close", closing)
     with cancellation_scope(signal), pytest.raises(RunCancelled):
         import_(tmp_path, archive, corpus)
     assert len(completed) == 1 and completed[0].outcome == IMPORTED

@@ -32,8 +32,8 @@ from tests.unit.test_run_report import (
 from yizkr.claims import ArtifactRef, ClaimBatch, validate_against_manifest
 from yizkr.pipeline import report
 from yizkr.pipeline.chunking import CHUNK_PROMPT, ENTITY_MANIFEST_PROMPT
+from yizkr.pipeline.document_state import slugify
 from yizkr.pipeline.extract import EXTRACTION_PROMPT
-from yizkr.pipeline.orchestrate import slugify
 
 
 def flat(text: str) -> str:

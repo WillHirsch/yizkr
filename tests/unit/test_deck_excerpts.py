@@ -24,7 +24,7 @@ from pathlib import Path
 import pytest
 
 from tests.fixtures import pdfs
-from tests.unit.test_orchestrate import this_run
+from tests.fixtures.document_processing import this_run
 from tests.unit.test_pdf_pages import (
     CAPTION,
     COMMENT,
@@ -43,6 +43,7 @@ from tests.unit.test_pdf_pages import (
     document,
     excerpt_of,
     extract,
+    recheck_containers,
     renderer,  # noqa: F401
     run,
     transcription_of,
@@ -56,6 +57,7 @@ from tests.unit.test_presentation import (
     rels_xml,
 )
 from tests.unit.test_registrar import FakeWiki, strings
+from tests.unit.test_run_provenance import fixed_capture  # noqa: F401
 from tests.unit.test_scratch import Corpus, a_run, fakes  # noqa: F401
 from tests.unit.test_scratch_estimate import (  # noqa: F401
     engine,
@@ -74,18 +76,15 @@ from yizkr.pipeline.containers import (
     SLIDE_XML,
     image_size,
 )
-from yizkr.pipeline.monitor import reason_label
-from yizkr.pipeline.orchestrate import (
-    AWAITING_CLAIMS,
+from yizkr.pipeline.document_state import (
+    BATCHED,
     PAGED,
     PDF,
-    Orchestrator,
     document_kind,
     route_transcription,
 )
-from yizkr.pipeline.orchestrate import (
-    EXCERPT as EXCERPT_KIND,
-)
+from yizkr.pipeline.document_state import EXCERPT as EXCERPT_KIND
+from yizkr.pipeline.monitor import reason_label
 from yizkr.pipeline.presentation import (
     derived_transcription,
     read_slides,
@@ -94,9 +93,11 @@ from yizkr.pipeline.presentation import (
 )
 from yizkr.pipeline.report import build
 from yizkr.pipeline.rundir import exclusions_record
-from yizkr.pipeline.scratch import EXIT_OK
+from yizkr.pipeline.scratch import EXIT_OK, ScratchDriver
 from yizkr.pipeline.textlayer import png
 from yizkr.pipeline.transcribe import Transcription
+
+pytestmark = pytest.mark.usefixtures("fixed_capture")
 
 
 def saved_sources(directory):
@@ -495,7 +496,7 @@ class TestInheritedPictureBackgrounds:
             )
             first = run(tmp_path, corpus, Reader({LETTER_SHA1: EXCERPT}))
         original = document(first, "library-talk-2018.pptx")
-        assert original.state.status == AWAITING_CLAIMS, original.state.error
+        assert original.state.status == BATCHED, original.state.error
         assert original.transcription.exists()
         again = run(tmp_path, corpus, RefusingReader({}))
         current = document(again, "library-talk-2018.pptx")
@@ -858,7 +859,7 @@ class TestADeckSImages:
         reader = Reader({LETTER_SHA1: EXCERPT})
         orchestrator = run(tmp_path, talk_folder(tmp_path), reader)
         doc = document(orchestrator, "library-talk-2018.pptx")
-        assert doc.state.status == AWAITING_CLAIMS, doc.state.error
+        assert doc.state.status == BATCHED, doc.state.error
         assert reader.read == [(f"{LETTER_SHA1}.png", LETTER_SHA1)]
         transcription = transcription_of(doc)
         assert transcription.engine == "pptx-adapter"
@@ -884,7 +885,7 @@ class TestADeckSImages:
         assert excerpt.kind == EXCERPT_KIND
         assert [c.dir for c in excerpt.containers] == [doc.dir]
         assert excerpt.state.title == ("library-talk-2018 — image2.png")
-        assert excerpt.state.status == AWAITING_CLAIMS, excerpt.state.error
+        assert excerpt.state.status == BATCHED, excerpt.state.error
         cited = {
             run.sha1: {
                 claim.source.artifact.sha1
@@ -936,14 +937,14 @@ class TestADeckSImages:
         run(tmp_path, corpus, Reader({LETTER_SHA1: EXCERPT}))
         second = run(tmp_path, corpus, RefusingReader({}))
         doc = document(second, "library-talk-2018.pptx")
-        assert doc.state.status == AWAITING_CLAIMS, doc.state.error
-        assert excerpt_of(second, LETTER_SHA1).state.status == AWAITING_CLAIMS
+        assert doc.state.status == BATCHED, doc.state.error
+        assert excerpt_of(second, LETTER_SHA1).state.status == BATCHED
 
     def test_a_view_that_reads_no_image_is_made_again(self, tmp_path):
         """A deck's view that marks none of the images it reads on its
         own, as one made by a reader of its slide text alone, is set
         aside and made again, and the letter is read again with it, as a
-        PDF's images are (here with no cache to answer the call)."""
+        PDF's images are, with its cached reading reused."""
         corpus = talk_folder(tmp_path)
         run(tmp_path, corpus, Reader({LETTER_SHA1: EXCERPT}))
         doc = document(
@@ -958,8 +959,8 @@ class TestADeckSImages:
         doc.transcription.write_text(old.model_dump_json())
         reader = Reader({LETTER_SHA1: EXCERPT})
         doc = document(run(tmp_path, corpus, reader), "library-talk-2018.pptx")
-        assert doc.state.status == AWAITING_CLAIMS, doc.state.error
-        assert reader.names() == [f"{LETTER_SHA1}.png"]
+        assert doc.state.status == BATCHED, doc.state.error
+        assert reader.names() == []
         assert transcription_of(doc).pages[1].images == [LETTER_SHA1]
         assert (doc.dir / "transcription.superseded-1.json").exists()
 
@@ -1001,7 +1002,7 @@ class TestADeckSImages:
             tmp_path, corpus, reader := Reader({}), exclusions=exclusions
         )
         doc = document(orchestrator, "library-talk-2018.pptx")
-        assert doc.state.status == AWAITING_CLAIMS, doc.state.error
+        assert doc.state.status == BATCHED, doc.state.error
         assert orchestrator._excerpts == {}
         assert reader.read == []
         assert transcription_of(doc).pages[1].images == []
@@ -1027,7 +1028,7 @@ class TestADeckSImages:
         reading kept of it makes no excerpt, though it stays on disk."""
         corpus = talk_folder(tmp_path)
         run(tmp_path, corpus, Reader({LETTER_SHA1: EXCERPT}))
-        second = run(
+        second = recheck_containers(
             tmp_path,
             corpus,
             reader := Reader({}),
@@ -1035,7 +1036,7 @@ class TestADeckSImages:
         )
         assert reader.read == []
         doc = document(second, "library-talk-2018.pptx")
-        assert doc.state.status == AWAITING_CLAIMS, doc.state.error
+        assert doc.state.status == BATCHED, doc.state.error
         assert any(
             event.get("stage") == "transcription"
             and event.get("subject") == doc.sha1
@@ -1055,7 +1056,7 @@ class TestADeckSImages:
             Reader({LETTER_SHA1: Raw(REFUSAL)}),
         )
         doc = document(orchestrator, "library-talk-2018.pptx")
-        assert doc.state.status == AWAITING_CLAIMS, doc.state.error
+        assert doc.state.status == BATCHED, doc.state.error
         assert orchestrator._excerpts == {}
         (done,) = [
             event
@@ -1173,13 +1174,13 @@ class TestAGlobFollowsTheBytes:
         assert reader.read == []
         assert orchestrator._excerpts == {}
         later = document(orchestrator, "library-talk-2019.pptx")
-        assert later.state.status == AWAITING_CLAIMS, later.state.error
+        assert later.state.status == BATCHED, later.state.error
         assert transcription_of(later).pages[0].images == []
         assert LETTER_SHA1 not in saved_sources(later.dir).sources
         wiki = FakeWiki()
         orchestrator._client = wiki
         for name in ("library-talk-2018.pptx", "library-talk-2019.pptx"):
-            Orchestrator._step_register(
+            ScratchDriver._step_register(
                 orchestrator, document(orchestrator, name)
             )
         registered = orchestrator.registered_media()
@@ -1325,7 +1326,7 @@ class TestAGlobFollowsTheBytes:
             exclusions=ExclusionList(),
         )
         assert SHARED_LETTER_SHA1 in first._excerpts
-        again = run(
+        again = recheck_containers(
             tmp_path,
             corpus,
             reader := Reader({}),
@@ -1349,8 +1350,8 @@ class TestAGlobFollowsTheBytes:
         wiki = FakeWiki()
         again._client = wiki
         for doc in again.documents():
-            assert doc.state.status == AWAITING_CLAIMS, doc.state.error
-            Orchestrator._step_register(again, doc)
+            assert doc.state.status == BATCHED, doc.state.error
+            ScratchDriver._step_register(again, doc)
         registered = again.registered_media()
         assert not any(
             SHARED_LETTER_SHA1 in media for media in registered.values()

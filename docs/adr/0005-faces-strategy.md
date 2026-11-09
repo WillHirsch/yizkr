@@ -16,7 +16,7 @@ A proposed claim has the photograph item as subject, `depicts` as property and t
 
 ## Current enforcement and limits
 
-- The CSV implementation requires an affirmative decision on each `depicts` row, such as `approve`. `accept-all` and `bulk-accept` cannot confirm one. An interface for affirmatively confirming several displayed associations is permitted by policy but is not implemented by those bulk commands.
+- The CSV implementation requires an affirmative decision on each `depicts` row, such as `approve`. An interface may affirmatively confirm several displayed associations together; a general run decision cannot supply that confirmation.
 - `apply_review` stores `row_approval`, a digest of the claim's review ID and each entity-manifest record its local references use. The writer checks the digest before reading or writing the instance, including during dry runs. Editing the claim or an involved manifest record invalidates this record of approval.
 - Approval and writing use the same `entity_records` lookup. Conflicting references to a local ID without a manifest record also fail the approval check. Existing unresolved local references remain subject to the writer's identity-map requirements.
 - The digest is review state carried in the batch, not an authenticated signature or a durable graph-revision binding. Confirmation is evidenced by the reviewed batch and edit history; the graph's source/run references alone do not identify every aspect of the human decision. A hand-edited batch can forge its contents.

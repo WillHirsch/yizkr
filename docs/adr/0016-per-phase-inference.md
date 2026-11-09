@@ -2,8 +2,7 @@
 
 > **Temporary deprecated material — TODO [#730](https://github.com/WillHirsch/yizkr/issues/730):** this document still mixes current design details with development history and superseded prescriptions. Its historical material is not authoritative for new policy; use [REQUIREMENTS](../REQUIREMENTS.md), [CONTRACT](../CONTRACT.md) and the implemented code. Remove this note only after rewriting the document as current guidance with necessary rationale, or consolidating it elsewhere and deleting this file. The linked task tracks removal of all remaining historical and obsolete passages.
 
-Status: accepted — implemented. Reasoning effort and model are chosen **per pipeline phase**, not per run. Mechanical bulk extraction defaults to low effort on a discipline-first model (`claude-sonnet-5`); the judgment steps keep the run's main model at high effort.  
-Amended by #128 (2026-09-28): `ingest run` no longer adjudicates, since its reconcile step reads no roster (ADR-0007, as amended), so there the judgment steps are now the critique alone, and `--review-effort` governs only it.
+Status: accepted — implemented. Reasoning effort and model are chosen **per pipeline phase**, not per run. Mechanical bulk extraction defaults to low effort on a discipline-first model (`claude-sonnet-5`); the judgment steps keep the run's main model at high effort.
 
 ## Context
 
@@ -35,7 +34,7 @@ Inference configuration is **phase-tiered**.
 
 ## Consequences
 
-- The default ingest runs disciplined extraction (Sonnet 5, low effort) while leaving adjudication and critique on the run's main model — the operator picks capability where it matters and inherits discipline where it matters, with no flags.
+- The default scratch workflow uses disciplined extraction (Sonnet 5, low effort) while leaving adjudication and critique on the run's main model — the operator picks capability where it matters and inherits discipline where it matters, with no flags.
 - A cheaper/faster or maximally-capable extraction model is one flag away (`--extract-model`), and reverting to a single-model run is `--extract-model inherit`.
 - The choice is empirical and will drift as models change. The frozen chunk and the runner are reproducible, so re-measuring when a new model ships is cheap; this ADR records the method, not a permanent ranking.
 - Sonnet 4.6 remains useful for _diagnosis_ — it is the newest model that still exposes readable (summarized) thinking, so it is the model to run when inspecting _why_ extraction behaves as it does — but it is not the production default: it is the slowest, most token-hungry, and least disciplined of the models measured.

@@ -40,7 +40,7 @@ from yizkr.core.verbatim import Transcript
 from yizkr.pipeline import anomalies, report, rundiff
 from yizkr.pipeline.anomalies import batch_findings, default_config
 from yizkr.pipeline.chunking import ChunkedClaimExtractor, excerpt_audit
-from yizkr.pipeline.orchestrate import slugify
+from yizkr.pipeline.document_state import slugify
 from yizkr.pipeline.report import OTHER, build, render_markdown
 from yizkr.pipeline.review import claim_id
 from yizkr.pipeline.transcribe import Transcription

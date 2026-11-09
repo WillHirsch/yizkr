@@ -2,7 +2,7 @@
 
 The source corpus lives outside the working tree, in a private local
 folder named by ``$YIZKR_CORPUS_DIR``, which is the default folder for
-``yizkr ingest run``. ``$YIZKR_EXCLUDE_FILE`` names the never-ingest
+``yizkr scratch run``. ``$YIZKR_EXCLUDE_FILE`` names the never-ingest
 list: a document on it is never registered, transcribed, extracted or
 written, whatever folder it turns up in and whatever it is called. Both
 variables are read from the environment first, then from deploy/.env.
@@ -32,9 +32,9 @@ when the folder is set. Only identical bytes are followed.
 The list fails closed. A configured file that is missing or unreadable
 is an error, never an empty list. So is a line that would silently
 match nothing: a hash that is not a SHA-1 (a pasted SHA-256, a
-truncated hash), or a glob followed by an inline comment. Production
-and extract-all modes (today ``ingest run``) refuse to run when no list
-is configured; an empty file is an explicit configuration and allowed.
+truncated hash), or a glob followed by an inline comment. Whole-corpus
+execution refuses to run when no list is configured; an empty file is
+an explicit configuration and allowed.
 """
 
 from __future__ import annotations

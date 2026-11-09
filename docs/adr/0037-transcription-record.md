@@ -99,7 +99,7 @@ The anomaly checks' distributions (entity and claim yield, critic rate) compare 
 
 ### 7. Cache keys and the seeded archive
 
-The changed prompt changes every transcription call's cache key, which is intended: scratch run 1 transcribes the corpus afresh, about 21 more calls by #144's estimate. The transcriptions an earlier `ingest run` left were made with the earlier prompt, so `scratch import-transcriptions` adopts none of them; and one that were offered under the current prompt would still need to be the record, since the import judges an archived reading as the run judges an answer.
+A prompt change changes transcription response keys. `scratch import-transcriptions` accepts a supplied archived reading only when its recorded prompt and current transcription validation permit adoption. The importer retains the producer provenance and never substitutes a differently shaped answer merely to obtain a cache hit.
 
 ## Decided by the orchestrator (2026-09-29; the owner may override)
 

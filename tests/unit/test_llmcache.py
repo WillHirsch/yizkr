@@ -4,9 +4,9 @@ Scripted engines stand in for the model. The first part exercises the
 cache on its own: what a key holds, what is stored and how, the lock that
 keeps a cache to one process (#236), rejection, forks, the refresh switch,
 events and seeding. The second takes the real pipeline through it: the
-orchestrator's client wiring, the chunked extractor and the transcription
+scratch driver's client wiring, the chunked extractor and the transcription
 check, run once against a scripted engine and again from the cache, or
-without the cache at all.
+through a separate cold cache.
 """
 
 from __future__ import annotations
@@ -30,18 +30,18 @@ from pathlib import Path
 import pytest
 
 from tests.fixtures import records
-from tests.fixtures.records import page_text, record_answer
-from tests.unit.test_orchestrate import (
-    ScriptedOrchestrator,
-    approve_all_claims,
-    approve_all_equivalences,
+from tests.fixtures.document_processing import (
+    ScriptedDriver,
     quiet,
     this_run,
 )
+from tests.fixtures.records import page_text, record_answer
+from tests.unit.test_run_provenance import fixed_capture  # noqa: F401
 from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.pipeline import llm, llmcache
 from yizkr.pipeline.chunking import ChunkedClaimExtractor
 from yizkr.pipeline.critique import run_critique
+from yizkr.pipeline.document_state import BATCH_VOLATILE, BATCHED, FAILED
 from yizkr.pipeline.extract import ExtractionFailed, LlmClaimExtractor
 from yizkr.pipeline.llm import (
     FORK,
@@ -65,21 +65,17 @@ from yizkr.pipeline.llmcache import (
     call_key,
     wrap,
 )
-from yizkr.pipeline.orchestrate import (
-    AWAITING_EQUIVALENCES,
-    BATCH_VOLATILE,
-    FAILED,
-    WRITTEN,
-    Orchestrator,
-)
 from yizkr.pipeline.provider_sessions import SessionStore
 from yizkr.pipeline.rundir import RunDir, run_state
+from yizkr.pipeline.scratch import PreflightFailed, ScratchDriver
 from yizkr.pipeline.stages import content_hash
 from yizkr.pipeline.transcribe import (
     TRANSCRIPTION_PROMPT,
     LlmVisionTranscriber,
     Transcription,
 )
+
+pytestmark = pytest.mark.usefixtures("fixed_capture")
 
 # seconds a test waits for an event before it fails as hung (#437)
 HANG_GUARD = 60
@@ -2792,12 +2788,13 @@ def transcriptions(engine: Engine) -> int:
     )
 
 
-class CachedRun(ScriptedOrchestrator):
-    """The scripted orchestrator with the real client wiring: its engine
-    is a scripted model that the client factory wraps with the LLM cache
-    (or not, without a cache directory)."""
+class CachedRun(ScriptedDriver):
+    """Scratch processing with the real client wiring and cache wrapper.
 
-    _llm = Orchestrator._llm
+    Only the underlying engine is replaced by authored model responses.
+    """
+
+    _llm = ScratchDriver._llm
 
     def __init__(self, *args, engine, **kwargs):
         super().__init__(*args, **kwargs)
@@ -2894,18 +2891,21 @@ def outputs(state_dir: Path) -> dict:
 
 
 class TestThePipeline:
-    def test_no_cache_gives_the_same_outputs_as_a_cached_replay(
+    def test_cold_cache_gives_the_same_outputs_as_a_cached_replay(
         self, tmp_path
     ):
         """The same folder three ways: through the cache with the engine
         answering, from the cache with an engine that must not be called,
-        and with no cache at all."""
+        and through a separate cold cache."""
         folder = folder_of_three(tmp_path)
         cache = tmp_path / "cache"
         runs = {
             "engine": (Engine(pipeline_answers), cache),
             "replay": (Refusing(pipeline_answers), cache),
-            "no-cache": (Engine(pipeline_answers), None),
+            "cold-cache": (
+                Engine(pipeline_answers),
+                tmp_path / "cold-response-cache",
+            ),
         }
         found = {}
         for name, (engine, cache_dir) in runs.items():
@@ -2913,25 +2913,25 @@ class TestThePipeline:
             orchestrator = CachedRun(
                 folder, state, engine=engine, cache_dir=cache_dir, log=quiet
             )
-            assert orchestrator.run() == 2
+            assert orchestrator.run() == 0
             found[name] = outputs(state)
             if name == "replay":
                 names = {e["event"] for e in orchestrator.rundir.events()}
                 assert "cache-miss" not in names
                 assert "cache-hit" in names
-            if name == "no-cache":
+            if name == "cold-cache":
                 assert not any(
-                    e["event"].startswith("cache-")
+                    e["event"] == "cache-hit"
                     for e in orchestrator.rundir.events()
                 )
         assert len(found["engine"]) == 3
-        assert found["replay"] == found["engine"] == found["no-cache"]
+        assert found["replay"] == found["engine"] == found["cold-cache"]
         assert found["engine"]["a-scan"]["transcription"] == page_text(LETTER)
         # the engine took part in both live runs, the same calls each time
-        engine, uncached = runs["engine"][0], runs["no-cache"][0]
+        engine, uncached = runs["engine"][0], runs["cold-cache"][0]
         assert sorted(engine.calls) == sorted(uncached.calls)
 
-    def test_no_cache_reads_nothing_from_the_cache(self, tmp_path):
+    def test_cold_cache_reads_nothing_from_another_cache(self, tmp_path):
         folder = folder_of_three(tmp_path)
         first = CachedRun(
             folder,
@@ -2942,7 +2942,13 @@ class TestThePipeline:
         )
         first.run()
         engine = Engine(pipeline_answers)
-        CachedRun(folder, tmp_path / "second", engine=engine, log=quiet).run()
+        CachedRun(
+            folder,
+            tmp_path / "second",
+            engine=engine,
+            cache_dir=tmp_path / "second-cache",
+            log=quiet,
+        ).run()
         assert sorted(engine.calls) == sorted(first.engine.calls)
 
     @pytest.mark.parametrize(
@@ -2995,16 +3001,16 @@ class TestThePipeline:
                         if doc.dir.name == "e-card"
                     ]
                     card.correction.write_text("Eugen was born in 1836.")
-                assert orchestrator.run() == 2
+                assert orchestrator.run() == 0
             return orchestrator
 
         before = run("before", engine(reset_answers), cache)
-        # after the reset, the engine is asked again without the cache,
-        after = run("after", engine(reset_answers), None)
+        # A fresh cache asks the engine again.
+        after = run("after", engine(reset_answers), tmp_path / "after-cache")
         # and through it, every call is answered and the engine never asked
         replay = run("replay", refusing(reset_answers), cache)
 
-        # every document waits at a gate, and none has an artifact item
+        # Document processing has not registered any artifact item.
         registered = [
             {doc.state.artifact_qid for doc in orchestrator.documents()}
             for orchestrator in (before, after, replay)
@@ -3098,7 +3104,7 @@ class TestThePipeline:
             log=quiet,
             chunk_concurrency=1,
         )
-        assert again.run() == 2
+        assert again.run() == 0
         # the scan's views were finished, and stand
         scan = next(d for d in again.documents() if d.kind == "media")
         assert {
@@ -3121,17 +3127,15 @@ class TestThePipeline:
             answered[-1]
         ]
 
-    @pytest.mark.parametrize("cached", [True, False], ids=["cache", "none"])
     def test_a_reused_transcription_is_checked_again(
-        self, tmp_path, monkeypatch, cached
+        self, tmp_path, monkeypatch
     ):
         """A transcription view that stands is checked again whenever it
         is reused (#230). When a stricter check fails it, it is moved
         aside, never deleted, with a `set-aside` event giving the reason;
-        the cached answer behind it is rejected; the engine is asked, as
-        without the cache; and the new transcription is checked and made
-        the view. The batch made from it differs, so the reviews made on
-        the old one are moved aside."""
+        the cached answer behind it is rejected; the engine is asked; and
+        the new transcription is checked and made the view. Inert saved
+        decision files remain untouched."""
         folder = tmp_path / "docs"
         folder.mkdir()
         (folder / "scan.png").write_bytes(b"not really a png")
@@ -3141,7 +3145,7 @@ class TestThePipeline:
                 folder,
                 tmp_path / "state",
                 engine=engine,
-                cache_dir=tmp_path / "cache" if cached else None,
+                cache_dir=tmp_path / "cache",
                 log=quiet,
             )
             orchestrator.run()
@@ -3149,11 +3153,13 @@ class TestThePipeline:
             return orchestrator, doc
 
         _, doc = run(Engine(reading(NOTICE)))
-        approve_all_equivalences(doc)
-        _, doc = run(Engine(reading(NOTICE)))
-        approve_all_claims(doc)
-        _, doc = run(Engine(reading(NOTICE)))
-        assert doc.state.status == WRITTEN
+        doc.dir.joinpath("equivalences.reviewed.csv").write_text(
+            "fictional retained decision\n"
+        )
+        doc.dir.joinpath("review.reviewed.csv").write_text(
+            "fictional retained decision\n"
+        )
+        assert doc.state.status == BATCHED
         stricter_check(monkeypatch)
         engine = Engine(reading(READ_AGAIN))
         again, doc = run(engine)
@@ -3171,28 +3177,24 @@ class TestThePipeline:
         assert json.loads(doc.transcription.read_text())["text"] == page_text(
             READ_AGAIN
         )
-        if cached:
-            (reject,) = this_run(again, "cache-reject")
-            assert reject["role"] == "transcribe"
-            assert "reading-service-notice" in reject["reason"]
-            (miss,) = [
-                event
-                for event in this_run(again, "cache-miss")
-                if event["role"] == "transcribe"
-            ]
-            assert miss["reason"] == "rejected"
-        else:
-            assert not any(
-                event["event"].startswith("cache-")
-                for event in again.rundir.events()
+        (reject,) = this_run(again, "cache-reject")
+        assert reject["role"] == "transcribe"
+        assert "reading-service-notice" in reject["reason"]
+        (miss,) = [
+            event
+            for event in this_run(again, "cache-miss")
+            if event["role"] == "transcribe"
+        ]
+        assert miss["reason"] == "rejected"
+        for name in ("equivalences.reviewed.csv", "review.reviewed.csv"):
+            assert doc.dir.joinpath(name).read_text() == (
+                "fictional retained decision\n"
             )
-        # the new batch moved the reviews of the old one aside
-        assert doc.state.status == AWAITING_EQUIVALENCES
+        # Only the unusable transcription was set aside.
+        assert doc.state.status == BATCHED
         assert sorted(
             path.name for path in doc.dir.glob("*.superseded-*")
         ) == [
-            "equivalences.reviewed.superseded-1.csv",
-            "review.reviewed.superseded-1.csv",
             "transcription.superseded-1.json",
         ]
         # a view that passes the check stands, and is checked each time
@@ -3208,7 +3210,7 @@ class TestThePipeline:
         """In a fresh state directory, as every scratch run starts from, a
         cached transcription that a stricter check now fails is rejected
         and asked again in the same run (#230): the run ends as one
-        without the cache does, with one transcription asked of the
+        through a cold cache does, with one transcription asked of the
         engine in each."""
         folder = tmp_path / "docs"
         folder.mkdir()
@@ -3223,7 +3225,10 @@ class TestThePipeline:
         ).run()
         stricter_check(monkeypatch)
         found = {}
-        for name, cache_dir in (("cache", cache), ("no-cache", None)):
+        for name, cache_dir in (
+            ("cache", cache),
+            ("cold-cache", tmp_path / "cold-response-cache"),
+        ):
             engine = Engine(reading(READ_AGAIN))
             orchestrator = CachedRun(
                 folder,
@@ -3240,7 +3245,7 @@ class TestThePipeline:
                 json.loads(doc.transcription.read_text())["text"],
                 transcriptions(engine),
             )
-            if cache_dir is not None:
+            if name == "cache":
                 transcribe = [
                     (event["event"], event.get("reason"))
                     for event in this_run(
@@ -3257,10 +3262,10 @@ class TestThePipeline:
                 assert transcribe[2][1] == "rejected"
         assert (
             found["cache"]
-            == found["no-cache"]
+            == found["cold-cache"]
             == (
-                2,
-                AWAITING_EQUIVALENCES,
+                0,
+                BATCHED,
                 page_text(READ_AGAIN),
                 1,
             )
@@ -3326,7 +3331,7 @@ class TestThePipeline:
             return orchestrator, code, doc
 
         _, code, _ = run()
-        assert code == 2
+        assert code == 0
         stricter_check(monkeypatch)
         again, code, doc = run()
         assert code == 1
@@ -3429,17 +3434,16 @@ class TestThePipeline:
             doc.state.status for doc in orchestrator.documents()
         }
         # once the other process has ended, the run goes on
-        assert orchestrator.run() == 2
+        assert orchestrator.run() == 0
         assert engine.calls
 
     @pytest.mark.parametrize("why", ["git work tree", "open to other users"])
     def test_a_run_whose_cache_folder_is_refused_stops_before_any_call(
         self, tmp_path, monkeypatch, why
     ):
-        """A run opens its cache when a stage first needs the engine: a
-        folder git would track, or one open to other users, is refused
-        there, and the run stops as a pause does. No document fails for
-        it, and the engine is never asked (#305)."""
+        """Preflight refuses an unsafe cache before recording an invocation
+        or asking an engine; repairing the folder allows the run to start.
+        """
         folder = folder_of_three(tmp_path)
         if why == "git work tree":
             repo = a_repository(tmp_path, monkeypatch)
@@ -3451,21 +3455,20 @@ class TestThePipeline:
             folder, tmp_path / "state", engine=engine, cache_dir=cache,
             log=quiet,
         )  # fmt: skip
-        with pytest.raises(CacheRefused, match=why):
+        with pytest.raises(PreflightFailed, match=why):
             orchestrator.run()
         assert engine.calls == []
         assert this_run(orchestrator, "failed") == []
         assert FAILED not in {
             doc.state.status for doc in orchestrator.documents()
         }
-        last = orchestrator.rundir.manifest()["invocations"][-1]
-        assert (last["outcome"], last["reason"]) == ("paused", "CacheRefused")
+        assert not (orchestrator.rundir.path / "run.json").exists()
         # once the folder can hold the cache, the run goes on
         if why == "git work tree":
             (repo / ".gitignore").write_text("var/\ncache/\n")
         else:
             cache.chmod(0o700)
-        assert orchestrator.run() == 2
+        assert orchestrator.run() == 0
         assert engine.calls
 
     def test_a_run_whose_key_folders_it_cannot_store_in_pauses(self, tmp_path):
@@ -3499,7 +3502,7 @@ class TestThePipeline:
         last = orchestrator.rundir.manifest()["invocations"][-1]
         assert (last["outcome"], last["reason"]) == ("paused", "CacheRefused")
         # once the folders are given back, the run goes on
-        assert orchestrator.run() == 2
+        assert orchestrator.run() == 0
         assert engine.calls
 
     def test_a_scratch_run_whose_cache_git_would_track_stops_before_a_call(
@@ -3576,12 +3579,11 @@ class TestRoleClient:
             != miss["key"]
         )
 
-    def test_without_a_cache_it_is_the_engine(self, tmp_path):
+    def test_resource_without_a_cache_preserves_the_engine(self):
+        from yizkr.pipeline.run_resources import RunResources
+
         engine = Engine()
-        orchestrator = CachedRun(
-            tmp_path, tmp_path / "state", engine=engine, log=quiet
-        )
-        assert orchestrator.role_client("extract") is engine
+        assert RunResources(None).role_client("extract", engine) is engine
 
 
 # -- the chunked extractor through the cache ---------------------------------
