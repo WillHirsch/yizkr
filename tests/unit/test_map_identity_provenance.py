@@ -119,7 +119,11 @@ def operational(f):
 
 
 @pytest.mark.parametrize(
-    "method", sorted(set(METHOD_ITEMS) - {"owner_override"})
+    "method",
+    sorted(
+        set(METHOD_ITEMS)
+        - {"owner_override", "reviewed_assignment", "reviewed_creation"}
+    ),
 )
 def test_map_origins_never_imply_confirmation_and_repeat_exactly(
     tmp_path, method

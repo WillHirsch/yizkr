@@ -9,6 +9,7 @@ from threading import Event
 import pytest
 
 from tests.unit.test_pipeline import FakeWiki
+from yizkr.core.config import Config
 from yizkr.core.wiki import (
     EntityCreation,
     RecoveryEvidenceError,
@@ -282,6 +283,17 @@ def test_existing_write_uses_revision_guard_and_single_attempt():
 
 class ApiClient(WikiClient):
     def __init__(self, answer):
+        super().__init__(
+            Config(
+                wikibase_url="http://wiki.invalid",
+                concept_uri="http://wiki.invalid/entity/",
+                admin_name="",
+                admin_pass="",
+                wdqs_url=None,
+                sparql_url=None,
+                env_file=None,
+            )
+        )
         self.answer = answer
         self.calls = []
 

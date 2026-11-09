@@ -29,6 +29,7 @@ services:
 
   wikibase:
     image: wikibase/wikibase:7
+    command: /yizkr-mutation-guard/entrypoint.sh
     depends_on:
       mysql:
         condition: service_healthy
@@ -50,8 +51,12 @@ services:
       - wiki-config:/config
       - media:/var/www/html/images
       - ./Uploads.php:/var/www/html/LocalSettings.d/91_Uploads.php:ro
+      - ../config/MutationGuard.php:/var/www/html/LocalSettings.d/00_YizkrMutationGuard.php:ro
+      - ../config/mutation-guard:/yizkr-mutation-guard:ro
+      - ./mutation-guard-probe.php:/yizkr-fictional-mutation-guard-probe.php:ro
     healthcheck:
-      test: [CMD, curl, --silent, --fail, http://localhost/wiki/Main_Page]
+      test:
+        [CMD, curl, --silent, --fail, "http://localhost/w/api.php?action=query&meta=siteinfo&format=json"]
       interval: 5s
       timeout: 10s
       retries: 90

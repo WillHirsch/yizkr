@@ -455,6 +455,8 @@ class Docker:
         self.setup_failure = None
         self.cleanup_failure = None
         self.log_failure = None
+        self.guard_probe_failure = None
+        self.guard_probes = []
         monkeypatch.setattr(lane, "run", self.run)
         monkeypatch.setattr(lane, "stage_context", self.stage)
         monkeypatch.setattr(lane.subprocess, "run", self.run)
@@ -530,6 +532,25 @@ class Docker:
             self.active.add(project)
             if group == self.setup_failure:
                 raise subprocess.CalledProcessError(1, args)
+        elif "exec" in args:
+            assert args[-3:] == [
+                "wikibase",
+                "php",
+                "/yizkr-fictional-mutation-guard-probe.php",
+            ]
+            self.guard_probes.append(group)
+            result = {
+                "protocol": "yizkr-mutation-guard-v1",
+                "request_drain": True,
+                "shutdown_drain": True,
+                "restart": True,
+                "stale_capability": True,
+                "invalid_state": True,
+                "database_drain": True,
+            }
+            if self.guard_probe_failure == group:
+                result["database_drain"] = False
+            output = json.dumps(result)
         elif "down" in args:
             self.down.append(project)
             assert_cleanup_covers_all_volumes(args)
@@ -627,6 +648,7 @@ def test_success_runs_both_groups_and_requires_complete_combined_evidence(
 
     assert docker.stages == docker.builds == 1
     assert docker.maximum_running == 2
+    assert docker.guard_probes == ["assignments", "other"]
     assert len(set(docker.up)) == 2
     assert set(docker.finished) == {"assignments", "other"}
     assert docker.evidence()["status"] == "passed"
@@ -634,6 +656,7 @@ def test_success_runs_both_groups_and_requires_complete_combined_evidence(
     assert set(observed["cases"]) == set(lane.REQUIRED_CASES)
     for name, expected in lane.GROUPS.items():
         assert docker.evidence(name)["status"] == "passed"
+        assert docker.evidence(name)["mutation_guard_probe"]["database_drain"]
         observed = lane.verify_results(
             docker.state / name / "results.xml", expected
         )
@@ -802,6 +825,19 @@ def test_failed_setup_cleans_both_projects_even_when_diagnostics_fail(
     assert not any(
         (docker.state / n / "results.xml").exists() for n in lane.GROUPS
     )
+    docker.assert_clean()
+
+
+@pytest.mark.parametrize("group", ["assignments", "other"])
+def test_guard_probe_failure_prevents_checks_and_cleans_projects(
+    docker, group
+):
+    docker.guard_probe_failure = group
+    with pytest.raises(lane.LaneError, match="mutation guard"):
+        lane.execute("run", docker.state)
+    assert docker.evidence()["status"] == "failed"
+    assert not docker.processes
+    assert not (docker.state / "results.xml").exists()
     docker.assert_clean()
 
 

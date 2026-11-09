@@ -38,6 +38,8 @@ METHOD_ITEMS = {
     "adjudicated": "identity_adjudicated",
     "confident_component": "identity_confident_component",
     "owner_override": "identity_owner_override",
+    "reviewed_assignment": "identity_reviewed_assignment",
+    "reviewed_creation": "identity_reviewed_creation",
     "singleton": "identity_singleton",
     "ambiguous": "identity_ambiguous",
     "conflicting": "identity_conflicting",
@@ -54,7 +56,7 @@ class IdentityProvenanceRefused(ValueError):
 class IdentitySource:
     mention_id: str
     artifact_sha1: str
-    kind: str
+    kind: str | None
     binding: RegistryBinding
     method: str
 
@@ -258,7 +260,8 @@ def _targets(
         if correspondence.kind is None:
             # A kindless entity need not have any historical assertion of its
             # own (it may occur only as another claim's object). The verified
-            # map creation authorizes an operational link, not a type claim.
+            # identity authority authorizes an operational link, not a type
+            # claim.
             matches = [
                 s
                 for s in _operational_statements(

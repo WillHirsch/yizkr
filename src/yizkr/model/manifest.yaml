@@ -676,7 +676,7 @@ properties:
     description: original method establishing the recorded identity proposal; separate from subsequent human confirmation or migration
     datatype: wikibase-item
     reference: true
-    accepts: [identity_confident, identity_adjudicated, identity_confident_component, identity_owner_override, identity_singleton, identity_ambiguous, identity_conflicting, identity_unclustered]
+    accepts: [identity_confident, identity_adjudicated, identity_confident_component, identity_owner_override, identity_reviewed_assignment, identity_reviewed_creation, identity_singleton, identity_ambiguous, identity_conflicting, identity_unclustered]
 
   identity_assignment_revision:
     label: identity assignment revision
@@ -1473,6 +1473,14 @@ items:
   identity_owner_override:
     label: owner override identity origin
     description: identity origin established by an explicitly recorded owner override, separate from confirmation of a machine proposal
+
+  identity_reviewed_assignment:
+    label: reviewed assignment identity origin
+    description: identity origin established by an explicit human choice of an existing entity for a source mention in recorded cohort review
+
+  identity_reviewed_creation:
+    label: reviewed creation identity origin
+    description: identity origin established by an explicit human new-entity decision fulfilled by its verified creation receipt
 
   identity_singleton:
     label: singleton identity origin

@@ -163,11 +163,24 @@ def accept_reviewed_assignments(
                 if mention in snapshot.assignments
             }
             authorizations = set(group).intersection(projection.new_entities)
+            fulfilled = set()
+            for decision in decisions.values():
+                if (
+                    decision.outcome == "approve"
+                    and decision.proposal.operation == "new_entity"
+                    and set(decision.proposal.mentions) <= set(group)
+                ):
+                    for entity_id in targets:
+                        if registry.verify_reviewed_creation(
+                            decision, entity_id
+                        ):
+                            fulfilled.add(entity_id)
+            chosen |= fulfilled
             if len(chosen) > 1:
                 raise AssignmentRefused(
                     "accepted entities cannot be merged or reassigned"
                 )
-            if chosen and authorizations:
+            if chosen and authorizations and chosen != fulfilled:
                 raise AssignmentRefused(
                     "creation approval conflicts with an accepted target"
                 )
@@ -258,6 +271,7 @@ def accept_reviewed_assignments(
                 lambda entity_id: (
                     verified.get(entity_id) or registry.binding(entity_id)
                 ),
+                creation=registry.verify_reviewed_creation,
             )
             for entity_id in sorted(used_targets):
                 registry.index_binding(targets[entity_id])

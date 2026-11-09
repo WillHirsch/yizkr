@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import threading
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -120,6 +121,9 @@ class WikiClient:
         self._login = None
         self._vocabulary: tuple[dict[str, str], dict[str, str]] | None = None
         self._labels_read: tuple[dict[str, str], dict[str, str]] | None = None
+        self._mutation_capability: str | None = None
+        self._mutation_thread: int | None = None
+        self._mutation_lock = threading.Lock()
 
     # -- plumbing ---------------------------------------------------------
 
@@ -128,11 +132,22 @@ class WikiClient:
         return f"{self.config.wikibase_url}/w/api.php"
 
     def api_get(self, params: dict) -> dict:
+        self._check_mutation_thread()
         response = requests.get(
             self.api_url,
             params={**params, "format": "json"},
-            headers={"User-Agent": USER_AGENT},
+            headers={
+                "User-Agent": USER_AGENT,
+                **(
+                    {"X-Yizkr-Mutation-Capability": self._mutation_capability}
+                    if self._mutation_capability
+                    else {}
+                ),
+            },
             timeout=60,
+            **(
+                {"allow_redirects": False} if self._mutation_capability else {}
+            ),
         )
         response.raise_for_status()
         data = response.json()
@@ -140,8 +155,43 @@ class WikiClient:
             raise RuntimeError(f"MediaWiki API error: {data['error']}")
         return data
 
+    def _check_mutation_thread(self) -> None:
+        if (
+            self._mutation_thread is not None
+            and self._mutation_thread != threading.get_ident()
+        ):
+            raise RuntimeError(
+                "a protected WikiClient cannot be shared across threads"
+            )
+
+    def mutation_guard_request(self, mode: str, operation_id: str) -> dict:
+        """Call the authenticated server exclusion control without retries."""
+        self._check_mutation_thread()
+        response = self.login.get_session().post(
+            self.api_url,
+            data={
+                "action": "yizkrmutationguard",
+                "mode": mode,
+                "operation": operation_id,
+                "token": self.login.get_edit_token(),
+                "format": "json",
+                "formatversion": "2",
+            },
+            timeout=60,
+        )
+        response.raise_for_status()
+        data = response.json()
+        if "error" in data or not isinstance(
+            data.get("yizkrmutationguard"), dict
+        ):
+            raise RuntimeError(
+                "server mutation exclusion is unavailable or refused"
+            )
+        return data["yizkrmutationguard"]
+
     @property
     def wbi(self):
+        self._check_mutation_thread()
         if self._wbi is None:
             from wikibaseintegrator import WikibaseIntegrator, wbi_login
             from wikibaseintegrator.wbi_config import config as wbi_config

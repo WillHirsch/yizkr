@@ -32,7 +32,9 @@ if TYPE_CHECKING:
         RegistryBinding,
     )
     from yizkr.core.identity_migration import MigrationReceipt
+    from yizkr.core.reviewed_creation import ReviewedCreationAuthorization
     from yizkr.core.wiki import WikiPage
+    from yizkr.pipeline.identity_review import Decision, MentionRevision
 
 PREFIX = "Project:Yizkr write recovery/"
 GENERATION_PAGE = PREFIX + "generation"
@@ -396,6 +398,199 @@ class CreationRegistry:
             )
         return registered
 
+    def _reviewed_creation_title(self, generation, proposal_id):
+        if not re.fullmatch(_HEX, proposal_id):
+            raise ValueError("creation proposal ID must be a durable ID")
+        return (
+            f"{PREFIX}{generation.generation}/reviewed-creations/"
+            f"{proposal_id}/authorization"
+        )
+
+    def reviewed_creation_authorization(
+        self, decision: Decision
+    ) -> ReviewedCreationAuthorization | None:
+        """Read the exact original creation authorization without effects."""
+        from yizkr.core.reviewed_creation import (
+            ReviewedCreationAuthorization,
+            reviewed_creation_operation,
+        )
+
+        reviewed_creation_operation(decision)
+        generation = self.generation
+        if generation is None:
+            return None
+        page = self.client.immutable_page(
+            self._reviewed_creation_title(generation, decision.proposal.id)
+        )
+        if page is None:
+            self._assert_generation(generation)
+            return None
+        authorization = _parse(ReviewedCreationAuthorization, page)
+        if (
+            authorization.generation != generation
+            or authorization.decision.model_dump(mode="json")
+            != decision.model_dump(mode="json")
+        ):
+            raise CreationRefused(
+                "creation authorization differs from its decision"
+            )
+        self._assert_generation(generation)
+        return authorization
+
+    def authorize_reviewed_creation(
+        self,
+        decision: Decision,
+        mention: MentionRevision,
+        *,
+        initial_payload: dict[str, Any],
+        origin: dict[str, Any] | None = None,
+    ) -> ReviewedCreationAuthorization:
+        """Freeze pinned review before creation; the caller owns exclusion.
+
+        This record is no substitute for current review or the enforced graph
+        mutation boundary. It grants no historical assertion and allocates no
+        item. Repeated publication keeps the original observation and origin.
+        """
+        from yizkr.core.instance import require_retained_code
+        from yizkr.core.reviewed_creation import (
+            ReviewedCreationAuthorization,
+            creation_payload_sha256,
+            reviewed_creation_context,
+            reviewed_creation_operation,
+        )
+
+        generation = self.generation
+        if generation is None:
+            raise CreationRefused("reviewed creation requires a generation")
+        proposed = ReviewedCreationAuthorization(
+            generation=generation,
+            decision=decision,
+            mention=mention,
+            context=reviewed_creation_context(decision, mention),
+            operation=reviewed_creation_operation(decision),
+            initial_payload=initial_payload,
+            initial_payload_sha256=creation_payload_sha256(initial_payload),
+            origin=origin or {},
+        )
+        stored = self.reviewed_creation_authorization(decision)
+        if stored is not None:
+            if stored.initial_payload != proposed.initial_payload:
+                raise CreationRefused(
+                    "creation payload changed after authorization"
+                )
+            return stored
+        if any(
+            earlier.mention.id == mention.id
+            for earlier in self.reviewed_creation_authorizations()
+        ):
+            raise CreationRefused(
+                "mention already has another creation authorization"
+            )
+        key = self._key(generation, proposed.operation)
+        if self._intent(generation, key) is not None:
+            raise CreationRefused(
+                "existing creation has no prior review authorization"
+            )
+        require_retained_code(self.client)
+        self._assert_generation(generation)
+        check_cancelled()
+        self.client.create_page_once(
+            self._reviewed_creation_title(generation, decision.proposal.id),
+            _dump(proposed),
+            "ingest: authorize reviewed entity creation",
+        )
+        stored = self.reviewed_creation_authorization(decision)
+        if (
+            stored is None
+            or stored.initial_payload != proposed.initial_payload
+        ):
+            raise CreationRefused(
+                "reviewed creation authorization was not established"
+            )
+        return stored
+
+    def reviewed_creation_authorizations(
+        self,
+    ) -> tuple[ReviewedCreationAuthorization, ...]:
+        """Read candidate context, including unfinished creations."""
+        from yizkr.core.reviewed_creation import ReviewedCreationAuthorization
+
+        generation = self.generation
+        if generation is None:
+            return ()
+        prefix = f"{PREFIX}{generation.generation}/reviewed-creations/"
+        found = {}
+        for title in self.client.page_titles(prefix):
+            namespace, separator, local_title = title.partition(":")
+            match = re.fullmatch(
+                re.escape(prefix.removeprefix("Project:"))
+                + r"([0-9a-f]{32})/authorization",
+                local_title,
+            )
+            if not namespace or not separator or match is None:
+                raise CreationRefused("unrecognized reviewed creation record")
+            page = self.client.immutable_page(
+                self._reviewed_creation_title(generation, match[1])
+            )
+            if page is None or match[1] in found:
+                raise CreationRefused(
+                    "creation authorization is missing or repeated"
+                )
+            authorization = _parse(ReviewedCreationAuthorization, page)
+            if (
+                authorization.generation != generation
+                or authorization.decision.proposal.id != match[1]
+            ):
+                raise CreationRefused(
+                    "creation authorization differs from its locator"
+                )
+            found[match[1]] = authorization
+        self._assert_generation(generation)
+        return tuple(found[key] for key in sorted(found))
+
+    def reviewed_creation_binding(
+        self, authorization: ReviewedCreationAuthorization
+    ) -> EntityBinding | None:
+        """Recover the actual binding without publishing a receipt."""
+        stored = self.reviewed_creation_authorization(authorization.decision)
+        if stored is None or stored != authorization:
+            raise CreationRefused(
+                "creation authorization is unavailable or changed"
+            )
+        generation = stored.generation
+        intent = self._intent(
+            generation, self._key(generation, stored.operation)
+        )
+        if intent is None:
+            return None
+        if intent.payload_hash != stored.initial_payload_sha256:
+            raise CreationRefused(
+                "creation intent differs from reviewed initial payload"
+            )
+        binding = self._binding(generation, intent)
+        self._assert_generation(generation)
+        return binding
+
+    def verify_reviewed_creation(
+        self, decision: Decision, entity_id: str
+    ) -> bool:
+        """Whether this exact approval created the supplied stable entity."""
+        if (
+            decision.proposal.operation != "new_entity"
+            or decision.outcome != "approve"
+        ):
+            return False
+        authorization = self.reviewed_creation_authorization(decision)
+        if authorization is None:
+            return False
+        binding = self.reviewed_creation_binding(authorization)
+        if binding is None or binding.entity_id != entity_id:
+            return False
+        # A read-only recovered binding is not yet a durable receipt. Ordinary
+        # create/reconcile must publish that receipt before assignment.
+        self.verify_binding(binding)
+        return True
+
     def index_binding(self, binding: EntityBinding) -> RegistryBinding:
         """Index a verified creation; never adopt an item through its terms."""
         from yizkr.core.identity_assignments import RegistryBinding
@@ -478,7 +673,12 @@ class CreationRegistry:
                     "assignment chain does not match its generation "
                     "or predecessor"
                 )
-            revisions = validated_revisions(snapshot, commit.delta, bound)
+            revisions = validated_revisions(
+                snapshot,
+                commit.delta,
+                bound,
+                creation=self.verify_reviewed_creation,
+            )
             if revisions != commit.revisions:
                 raise AssignmentRefused(
                     "assignment revisions differ from their authority"
@@ -535,7 +735,12 @@ class CreationRegistry:
             raise StaleAssignments(
                 "assignment head changed; replan before publication"
             )
-        revisions = validated_revisions(snapshot, delta, self.binding)
+        revisions = validated_revisions(
+            snapshot,
+            delta,
+            self.binding,
+            creation=self.verify_reviewed_creation,
+        )
         commit = AssignmentCommit(
             deployment_id=generation.deployment_id,
             generation=generation.generation,
