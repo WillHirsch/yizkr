@@ -1,0 +1,105 @@
+# Birth evidence for reconciliation: every direct date and principal-event
+# date, with rank, precision, bounds, sourcing circumstances and complete
+# reference blocks. Preferred rank hides no normal statement; deprecated
+# statements remain explicitly marked, not active identity evidence.
+# Event participation keeps its own rank and references; witnesses acquire
+# no birth date. A nondeprecated birth type is required for the event route.
+SELECT ?person ?event ?participation ?participationRank ?statement ?rank
+       ?valueKind ?time ?timePrecision ?timeCalendar
+       ?earliest ?earliestPrecision ?earliestCalendar
+       ?latest ?latestPrecision ?latestCalendar ?circumstance
+       ?dateReference ?dateReferenceProperty ?dateReferenceValue
+       ?dateReferenceTime ?dateReferenceTimePrecision ?dateReferenceTimeCalendar
+       ?dateSource ?dateArtifact
+       ?principalReference ?principalReferenceProperty ?principalReferenceValue
+       ?principalReferenceTime ?principalReferenceTimePrecision
+       ?principalReferenceTimeCalendar ?principalSource ?principalArtifact
+WHERE {
+  {
+    ?person p:{P:date_of_birth} ?statement .
+    wd:{P:date_of_birth} wikibase:statementValue ?timeLink ;
+                        wikibase:statementProperty ?valueLink ;
+                        wikibase:novalue ?noValueType .
+  } UNION {
+    ?event p:{P:instance_of} ?typing ;
+           p:{P:participant} ?participation ;
+           p:{P:point_in_time} ?statement .
+    ?typing ps:{P:instance_of} wd:{Q:birth} .
+    FILTER NOT EXISTS { ?typing wikibase:rank wikibase:DeprecatedRank . }
+    ?participation ps:{P:participant} ?person ;
+                   pq:{P:object_has_role} wd:{Q:principal} ;
+                   wikibase:rank ?participationRank .
+    wd:{P:point_in_time} wikibase:statementValue ?timeLink ;
+                        wikibase:statementProperty ?valueLink ;
+                        wikibase:novalue ?noValueType .
+    OPTIONAL {
+      ?participation prov:wasDerivedFrom ?principalReference .
+      OPTIONAL {
+        ?principalReferenceProperty wikibase:reference ?principalReferenceLink .
+        ?principalReference ?principalReferenceLink ?principalReferenceValue .
+        OPTIONAL {
+          ?principalReferenceProperty wikibase:referenceValue ?principalValueLink .
+          ?principalReference ?principalValueLink ?principalValueNode .
+          ?principalValueNode wikibase:timeValue ?principalReferenceTime ;
+                              wikibase:timePrecision ?principalReferenceTimePrecision .
+          FILTER(?principalReferenceTime = ?principalReferenceValue)
+          OPTIONAL { ?principalValueNode wikibase:timeCalendarModel
+                       ?principalReferenceTimeCalendar . }
+        }
+      }
+      OPTIONAL {
+        ?principalReference pr:{P:stated_in} ?principalSource .
+        OPTIONAL { ?principalSource wdt:{P:instance_of} wd:{Q:artifact_fragment} ;
+                                    wdt:{P:part_of} ?principalWhole . }
+        BIND(COALESCE(?principalWhole, ?principalSource) AS ?principalArtifact)
+      }
+    }
+  }
+  ?statement wikibase:rank ?rank .
+  OPTIONAL { ?statement ?valueLink ?rawValue . }
+  BIND(IF(EXISTS { ?statement a ?noValueType }, "novalue",
+          IF(isBlank(?rawValue) || CONTAINS(STR(?rawValue), "/.well-known/genid/"),
+             "somevalue", "time")) AS ?valueKind)
+  OPTIONAL {
+    ?statement ?timeLink ?timeNode .
+    ?timeNode wikibase:timeValue ?time ; wikibase:timePrecision ?timePrecision .
+    OPTIONAL { ?timeNode wikibase:timeCalendarModel ?timeCalendar . }
+  }
+  OPTIONAL {
+    wd:{P:earliest_date} wikibase:qualifierValue ?earliestLink .
+    ?statement ?earliestLink ?earliestNode .
+    ?earliestNode wikibase:timeValue ?earliest ;
+                  wikibase:timePrecision ?earliestPrecision .
+    OPTIONAL { ?earliestNode wikibase:timeCalendarModel ?earliestCalendar . }
+  }
+  OPTIONAL {
+    wd:{P:latest_date} wikibase:qualifierValue ?latestLink .
+    ?statement ?latestLink ?latestNode .
+    ?latestNode wikibase:timeValue ?latest ;
+                wikibase:timePrecision ?latestPrecision .
+    OPTIONAL { ?latestNode wikibase:timeCalendarModel ?latestCalendar . }
+  }
+  OPTIONAL { ?statement pq:{P:sourcing_circumstances} ?circumstance . }
+  OPTIONAL {
+    ?statement prov:wasDerivedFrom ?dateReference .
+    OPTIONAL {
+      ?dateReferenceProperty wikibase:reference ?dateReferenceLink .
+      ?dateReference ?dateReferenceLink ?dateReferenceValue .
+      OPTIONAL {
+        ?dateReferenceProperty wikibase:referenceValue ?dateValueLink .
+        ?dateReference ?dateValueLink ?dateValueNode .
+        ?dateValueNode wikibase:timeValue ?dateReferenceTime ;
+                       wikibase:timePrecision ?dateReferenceTimePrecision .
+        FILTER(?dateReferenceTime = ?dateReferenceValue)
+        OPTIONAL { ?dateValueNode wikibase:timeCalendarModel
+                     ?dateReferenceTimeCalendar . }
+      }
+    }
+    OPTIONAL {
+      ?dateReference pr:{P:stated_in} ?dateSource .
+      OPTIONAL { ?dateSource wdt:{P:instance_of} wd:{Q:artifact_fragment} ;
+                             wdt:{P:part_of} ?dateWhole . }
+      BIND(COALESCE(?dateWhole, ?dateSource) AS ?dateArtifact)
+    }
+  }
+}

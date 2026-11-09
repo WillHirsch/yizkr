@@ -1560,6 +1560,24 @@ SOURCES = (
     ),
 )
 
+# An authored curator scenario for reconciliation boundary tests. It reuses
+# Gustav's existing birth year and the two conflicting days above; this is
+# separate from SOURCES/ASSERTIONS, not another historical witness or a new
+# reading attributed to the register, certificate or family tree.
+BIRTH_UNCERTAINTY_SCENARIO = Source(
+    "birth-uncertainty-scenario",
+    "Authored birth uncertainty scenario",
+    "en",
+    2026,
+    "artifact",
+    text=(
+        "Hypothetical curator scenario: Gustav Löbig's birth was circa "
+        "1919, no earlier than 7 January 1919 and no later than 1 July "
+        "1919. Gustav is the principal; Hildegard Löbig is a witness."
+    ),
+    note="Exercises event date uncertainty and participant roles only.",
+)
+
 # Values the assertions use that the manifest does not hold yet: none at
 # present. `machine_assisted`, the sourcing circumstance of a text that its
 # source says was prepared with machine assistance, joined the manifest

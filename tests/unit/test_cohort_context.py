@@ -6,6 +6,7 @@ import pytest
 
 from tests.unit.test_cohort_matching import source
 from tests.unit.test_graph_projection import graph as graph
+from tests.unit.test_reconcile import fictional_births
 from yizkr.core.reviewed_creation import creation_review_evidence
 from yizkr.core.write_recovery import AmbiguousCreation, write_existing
 from yizkr.pipeline.cohort_context import (
@@ -278,3 +279,32 @@ def test_current_alias_on_kindless_creation_is_a_candidate(graph, tmp_path):
         context, (current,), prepared(tmp_path, (current,))
     )
     assert binding.qid in {c.qid for c in matches.mentions[0].candidates}
+
+
+def test_identity_facts_preserve_evidence_and_ignore_reading_order(graph):
+    _, registry, registered, _, _ = graph
+    projection = capture_cohort_context(registry).projection
+    qid = registered.binding.qid
+    readings = fictional_births(qid)
+
+    def with_births(births):
+        return projection.model_copy(
+            update={
+                "roster": tuple(
+                    row.model_copy(update={"births": births})
+                    if row.qid == qid
+                    else row
+                    for row in projection.roster
+                )
+            }
+        )
+
+    facts = identity_facts(with_births(readings), qid)
+    assert len(facts[0]["births"]) == 2
+    assert facts == identity_facts(with_births(tuple(reversed(readings))), qid)
+    assert facts == identity_facts(with_births((*readings, readings[0])), qid)
+    assert facts != identity_facts(with_births(readings[:1]), qid)
+    changed_rank = readings[0].model_copy(update={"rank": "deprecated"})
+    assert facts != identity_facts(
+        with_births((changed_rank, readings[1])), qid
+    )

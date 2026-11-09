@@ -55,6 +55,7 @@ from yizkr.core.dates import (
 from yizkr.core.wiki import WikiClient
 from yizkr.disagreement import followed
 from yizkr.model.schema import load_acceptance
+from yizkr.pipeline.birth_evidence import BirthEvidence, fetch_birth_evidence
 from yizkr.pipeline.extract import scan_json_objects
 from yizkr.pipeline.llm import CUT_OFF_AT_LIMIT, LlmClient, at_output_limit
 from yizkr.pipeline.names import NOT_PERSONS, appellations_of
@@ -77,11 +78,9 @@ class RosterEntity(BaseModel):
     # an unrecognized kind's label, shown beside its QID to the
     # adjudicator and never read
     kind_label: str = ""
-    # a birth as text at the precision its statement states ("the 19th
-    # century", "1919-01-07"), one sampled per item; a death as every
-    # reading the shared inputs give, each with its bounds, then the
-    # derived dates, "; "-separated (roster_death)
-    birth: str = ""
+    # Every attributed direct/event birth reading, without rank preference.
+    births: tuple[BirthEvidence, ...] = ()
+    # Shared death readings and derived bounds (roster_death).
     death: str = ""
     spouses: list[str] = []
     fathers: list[str] = []
@@ -138,8 +137,10 @@ class RosterEntity(BaseModel):
             parts.append(f"nickname: {', '.join(self.nicknames)}")
         if self.official_names:
             parts.append(f"official name: {', '.join(self.official_names)}")
-        if self.birth:
-            parts.append(f"born: {self.birth}")
+        if self.births:
+            parts.append(
+                "birth evidence: " + " | ".join(b.facts() for b in self.births)
+            )
         if self.death:
             parts.append(f"died: {self.death}")
         if self.spouses:
@@ -154,8 +155,7 @@ class RosterEntity(BaseModel):
 ROSTER_QUERY = """\
 SELECT ?item ?itemLabel ?kind ?kindLabel
        (GROUP_CONCAT(DISTINCT ?alias; separator="|") AS ?aliases)
-       (SAMPLE(?birthDate) AS ?birth) (SAMPLE(?deathDate) AS ?death)
-       (SAMPLE(?birthEventDate) AS ?eventBirth)
+       (SAMPLE(?deathDate) AS ?death)
        (SAMPLE(?deathEventDate) AS ?eventDeath)
        (GROUP_CONCAT(DISTINCT ?spouseDesc; separator="|") AS ?spouses)
        (GROUP_CONCAT(DISTINCT ?fatherDesc; separator="|") AS ?fathers)
@@ -200,14 +200,6 @@ WHERE {{
   # each date read from its best-rank statement's value node, as the
   # truthy wdt: value is, with its precision, and joined to it as
   # "time|precision" so the sample takes both from one statement
-  OPTIONAL {{ ?item p:{date_of_birth} ?birthStatement .
-              ?birthStatement a wikibase:BestRank .
-              wd:{date_of_birth} wikibase:statementValue ?birthLink .
-              ?birthStatement ?birthLink ?birthNode .
-              ?birthNode wikibase:timeValue ?birthTime ;
-                         wikibase:timePrecision ?birthPrecision .
-              BIND(CONCAT(STR(?birthTime), "|", STR(?birthPrecision))
-                   AS ?birthDate) }}
   OPTIONAL {{ ?item p:{date_of_death} ?deathStatement .
               ?deathStatement a wikibase:BestRank .
               wd:{date_of_death} wikibase:statementValue ?deathLink .
@@ -216,24 +208,7 @@ WHERE {{
                          wikibase:timePrecision ?deathPrecision .
               BIND(CONCAT(STR(?deathTime), "|", STR(?deathPrecision))
                    AS ?deathDate) }}
-  # dates asserted via the birth and death events a curator makes
-  # (ADR-0040 Q5), each its principal's alone, at any rank but deprecated:
-  # a witness of one gets no date from it
-  OPTIONAL {{ ?birthEvent p:{participant} ?birthPart ;
-                          wdt:{instance_of} wd:{birth_item} ;
-                          p:{point_in_time} ?birthEventStatement .
-              ?birthPart ps:{participant} ?item ;
-                         pq:{object_has_role} wd:{principal_item} .
-              FILTER NOT EXISTS {{
-                ?birthPart wikibase:rank wikibase:DeprecatedRank
-              }}
-              ?birthEventStatement a wikibase:BestRank .
-              wd:{point_in_time} wikibase:statementValue ?birthEventLink .
-              ?birthEventStatement ?birthEventLink ?birthEventNode .
-              ?birthEventNode wikibase:timeValue ?birthEventTime ;
-                              wikibase:timePrecision ?birthEventPrecision .
-              BIND(CONCAT(STR(?birthEventTime), "|",
-                          STR(?birthEventPrecision)) AS ?birthEventDate) }}
+  # A curator's death event dates its principal alone.
   OPTIONAL {{ ?deathEvent p:{participant} ?deathPart ;
                           wdt:{instance_of} wd:{death_item} ;
                           p:{point_in_time} ?deathEventStatement .
@@ -292,7 +267,6 @@ def fetch_roster(
     kind_key = {qid: key for key, qid in items.items()}
     query = prefix_block(config.concept_uri) + ROSTER_QUERY.format(
         instance_of=properties["instance_of"],
-        date_of_birth=properties["date_of_birth"],
         date_of_death=properties["date_of_death"],
         spouse=properties["spouse"],
         father=properties["father"],
@@ -307,7 +281,6 @@ def fetch_roster(
         official_name=properties["official_name"],
         referred_to_as=properties["referred_to_as"],
         object_has_role=properties["object_has_role"],
-        birth_item=items["birth"],
         death_item=items["death"],
         principal_item=items["principal"],
     )
@@ -315,6 +288,9 @@ def fetch_roster(
     # may be (ADR-0033)
     runner = runner or sparql.runner(config, timeout=120)
     bindings = runner(query)
+    births = fetch_birth_evidence(
+        runner, properties, items, config.concept_uri
+    )
     deaths = roster_deaths(runner, properties, items, config.concept_uri)
 
     def field(binding: dict, name: str) -> str:
@@ -344,11 +320,9 @@ def fetch_roster(
                 kind_label=(
                     "" if kind_qid in kind_key else field(binding, "kindLabel")
                 ),
-                # direct statements win; event-derived dates fill gaps;
-                # each at the precision its statement states. A death is
-                # every reading the shared inputs give (roster_deaths),
-                # with its bounds, where the vocabulary lets them be read
-                birth=date(binding, "birth", "eventBirth"),
+                births=births.get(
+                    field(binding, "item").rsplit("/", 1)[-1], ()
+                ),
                 death=roster_death(
                     date(binding, "eventDeath")
                     if deaths is not None
