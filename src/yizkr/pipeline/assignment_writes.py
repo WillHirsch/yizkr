@@ -8,6 +8,7 @@ its base revision. No entity is minted or given implicit aliases/kind claims.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -326,6 +327,7 @@ def apply_reviewed_claims(
     client,
     *,
     record_dir: Path,
+    admit: Callable[[], None] | None = None,
 ) -> ApplicationResult:
     """Apply current approval, retaining partial receipts on interruption.
 
@@ -334,6 +336,8 @@ def apply_reviewed_claims(
     refuse; legacy bulk/row approval is never substituted for these decisions.
     An uncertain update is reread before any retry. If support is absent after
     an intervening item edit, the old intent cannot be rebased automatically.
+    Callers may recheck external source admission after fresh validation with
+    ``admit``; its refusal precedes any shared plan or graph effect.
     """
     expected = _reviewed_scope(prepared)
     registry = CreationRegistry(client)
@@ -362,6 +366,8 @@ def apply_reviewed_claims(
         reference = _freeze(plan, record_dir)
         require_retained_code(client)
         _authority(registry, fresh)
+        if admit is not None:
+            admit()
         plan = registry.record_application_plan(plan)
         # Another host can reserve the same meaning first. Retain its exact
         # producer/application evidence through recovery and subsequent writes.

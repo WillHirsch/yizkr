@@ -8,7 +8,7 @@ writers. Historical claims retain their separate review and support receipts.
 from __future__ import annotations
 
 import json
-from collections.abc import Collection
+from collections.abc import Callable, Collection
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -354,6 +354,7 @@ def apply_cohort_additions(
     operation_id: str,
     record_dir: Path,
     scope: Collection[str] | None = None,
+    admit: Callable[[], None] | None = None,
 ) -> CohortApplication:
     """Accept identities and publish their origins; do not approve claims.
 
@@ -361,6 +362,8 @@ def apply_cohort_additions(
     the next choice inspect its predecessor as a candidate. Retry with the same
     review store, source products, capability path and operation ID. No saved
     projection, local lock or caller-supplied evidence substitutes for capture.
+    A caller may recheck external inputs through ``admit`` after guarded
+    preparation, before any creation, assignment or provenance publication.
     """
     from yizkr.pipeline.cohort_provenance import publish_cohort_assignment
 
@@ -376,6 +379,8 @@ def apply_cohort_additions(
             properties["media_sha1"],
             {mentions[m].observation.artifact for m in selected},
         )
+        if admit is not None:
+            admit()
         with store.pin_projection(
             current.review.projection, list(mentions.values())
         ):

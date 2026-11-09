@@ -11,10 +11,19 @@ import json
 
 import pytest
 import requests
+from wikibaseintegrator import wbi_helpers
 from wikibaseintegrator.datatypes import Item
+from wikibaseintegrator.wbi_enums import WikibaseRank
 
 from tests.fixtures.semantic_acceptance import birth_batch, source_case
 from yizkr.claims import ArtifactRef, GivenName, PersonStructure, Surname
+from yizkr.core.instance import (
+    KEPT_STATE_PAGE,
+    carries_kept_marker,
+    kept_path,
+    mark_kept,
+    watermark,
+)
 from yizkr.core.mutation_guard import (
     CAPABILITY_HEADER,
     MutationGuardError,
@@ -43,6 +52,8 @@ from yizkr.pipeline.review_stages import (
     ReviewSource,
 )
 from yizkr.pipeline.run_provenance import read_record
+from yizkr.pipeline.text_ingestion import TextIngestion
+from yizkr.pipeline.text_products import TextSettings
 from yizkr.pipeline.transcribe import TranscribedPage, Transcription
 
 from .test_write_query import _synchronize
@@ -53,6 +64,23 @@ WHEN = "2026-01-01T12:00:00Z"
 
 class InterruptedCreation(BaseException):
     """Stop after a real item write but before its registry receipt."""
+
+
+class TextAnswers:
+    """Fixed fictional answers exercise real parsers, not model quality."""
+
+    model_identifier = "authored-fictional-retained-text"
+
+    def __init__(self, *answers):
+        self.answers = iter(answers)
+        self.calls = 0
+
+    def complete(self, prompt, image_paths=()):
+        self.calls += 1
+        return next(self.answers)
+
+    def reject(self, response, reason):
+        return False
 
 
 def _source(client, directory, key, suffix):
@@ -206,6 +234,231 @@ def _claim(store, request, registry, directory):
     )
     assert repeated.receipts == written.receipts
     return written.receipts[0]
+
+
+def _retained_text_source(client, directory, target, old_support, monkeypatch):
+    """A retained source uses saved products and recovers a lost receipt."""
+    from yizkr.pipeline import assigned_support
+    from yizkr.pipeline.assignment_writes import ApplicationInterrupted
+
+    case = source_case("birth-extract-1938")
+    source = directory / "retained-birth-extract.txt"
+    source.write_text(case.text + "\nRetained fictional certificate copy.\n")
+    artifact = ArtifactRef.from_path(source)
+    exclusions = directory / "fictional-exclusions.txt"
+    exclusions.write_text("# Explicitly empty for repository fiction.\n")
+    batch = birth_batch(case.key)
+    entity = batch.entities[0]
+    entity.label = "Gustav"
+    entity.aliases = ["Gustav"]
+    entity.mention_lines = [1]
+    entity.structure = PersonStructure(given=[GivenName(written="Gustav")])
+    claim = batch.claims[0].model_copy(
+        update={
+            "source": batch.claims[0].source.model_copy(
+                update={"artifact": artifact, "page_number": None}
+            )
+        }
+    )
+    extractor = TextAnswers(
+        json.dumps(
+            {
+                "entities": [entity.model_dump(mode="json")],
+                "preparation": None,
+            }
+        ),
+        claim.model_dump_json() + '\n{"done":true}',
+    )
+    critic = TextAnswers('{"done":true}')
+    properties, _ = client.vocabulary()
+    item = client.wbi.item.get(target.qid)
+    (birth,) = item.claims.get(properties["date_of_birth"])
+    birth.rank = WikibaseRank.PREFERRED
+    item.labels.set("en", "Curator's corrected Gustav identity")
+    item.descriptions.set("en", "Curator's retained certificate annotation")
+    write_existing(item, summary="fictional curator corrections to retain")
+    before = item.get_json()
+    (old_birth,) = before["claims"][properties["date_of_birth"]]
+    database = directory / "retained-review.sqlite"
+    products_dir = directory / "retained-text"
+    marker = kept_path(client.config)
+    assert not marker.exists() and not carries_kept_marker(client)
+    original_write = assigned_support.write_existing
+    written = []
+    attempted_receipts = []
+
+    def counted_write(item, **kwargs):
+        result = original_write(item, **kwargs)
+        written.append(item.id)
+        return result
+
+    def lose_receipt(registry, receipt):
+        attempted_receipts.append(receipt)
+        raise OSError("fictional interruption after retained support write")
+
+    try:
+        mark_kept(client, "fictional retained-ingestion curator")
+        assert marker.exists() and carries_kept_marker(client)
+        with ReviewStore(database) as store:
+            workflow = TextIngestion(
+                source,
+                products_dir,
+                client=client,
+                review_store=store,
+                exclusions_file=exclusions,
+            )
+            products = workflow.prepare(
+                settings=TextSettings(strategy="chunked", language="de"),
+                extractor_client=extractor,
+                critic_client=critic,
+            )
+            assert (extractor.calls, critic.calls) == (2, 1)
+            assert tuple(
+                stage.stage for stage in products.critique.provenance.stages
+            ) == ("transcription", "extraction", "critique")
+            registration = workflow.prepare_registration(
+                "certificate", "Retained fictional birth certificate"
+            )
+            workflow.register_source(
+                registration,
+                expected_digest=registration.digest,
+                actor="fictional source curator",
+            )
+            _synchronize(client)
+            prepared = workflow.prepare_identities(
+                (
+                    ReviewProposal(
+                        operation="assign",
+                        mentions=(
+                            MentionKey(
+                                artifact_sha1=artifact.sha1,
+                                local_id="gustav",
+                            ),
+                        ),
+                        target=target,
+                    ),
+                )
+            )
+            (review_source,) = prepared.request.sources
+            assert review_source.reading.text == source.read_text()
+            assert review_source.reading.artifact == artifact
+            assert review_source.batch.claims[0].source.page_number is None
+            identity_decision = _approve(store, prepared)
+            accepted = workflow.apply_identities(("gustav",))
+            mention = prepared.review.mentions[artifact.sha1, "gustav"].id
+            assignment = accepted.acceptance.snapshot.assignments[mention]
+            assert assignment.entity_id == target.entity_id
+            historical = workflow.prepare_claims((0,))
+            (reviewed_claim,) = historical.claims
+            assert reviewed_claim.decision is None
+            record_claim_decisions(
+                store,
+                historical,
+                [
+                    ClaimDecisionInput(
+                        proposal_id=reviewed_claim.proposal.id,
+                        expected_digest=reviewed_claim.proposal.digest,
+                        outcome="approve",
+                        actor="fictional retained-claim curator",
+                        time=WHEN,
+                    )
+                ],
+            )
+            with monkeypatch.context() as patch:
+                patch.setattr(
+                    assigned_support, "write_existing", counted_write
+                )
+                patch.setattr(
+                    CreationRegistry,
+                    "record_application_receipt",
+                    lose_receipt,
+                )
+                with pytest.raises(ApplicationInterrupted) as stopped:
+                    workflow.apply_claims((0,))
+            assert len(written) == len(attempted_receipts) == 1
+            assert stopped.value.receipts == ()
+
+        # Resume with fresh graph/review clients and no model-response cache.
+        client = WikiClient(client.config)
+        with ReviewStore(database) as store:
+            workflow = TextIngestion(
+                source,
+                products_dir,
+                client=client,
+                review_store=store,
+                exclusions_file=exclusions,
+            )
+            assert workflow.prepare() == products
+            with monkeypatch.context() as patch:
+                patch.setattr(
+                    assigned_support, "write_existing", counted_write
+                )
+                recovered = workflow.apply_claims((0,))
+            assert recovered.plan_id == stopped.value.plan_id
+            assert len(written) == 1, "uncertain historical write was resent"
+            (receipt,) = recovered.receipts
+            assert receipt == attempted_receipts[0]
+            assert receipt.statement_guid == old_support.statement_guid
+            assert receipt.primary_hash != old_support.primary_hash
+            after = client.wbi.item.get(target.qid).get_json()
+            assert after["labels"] == before["labels"]
+            assert after["descriptions"] == before["descriptions"]
+            (current_birth,) = after["claims"][properties["date_of_birth"]]
+            assert {
+                key: value
+                for key, value in current_birth.items()
+                if key != "references"
+            } == {
+                key: value
+                for key, value in old_birth.items()
+                if key != "references"
+            }
+            references = {
+                reference["hash"]: reference
+                for reference in current_birth["references"]
+            }
+            assert all(
+                references[reference["hash"]] == reference
+                for reference in old_birth["references"]
+            )
+            assert receipt.primary_hash in references
+            assert old_support.primary_hash in references
+            _synchronize(client)
+            frozen = watermark(client)
+            workflow.register_source(
+                registration,
+                expected_digest=registration.digest,
+                actor="fictional source curator",
+            )
+            carried = workflow.prepare_identities()
+            assert carried.review.proposals[0].digest == (
+                identity_decision.proposal.digest
+            )
+            repeated = workflow.apply_identities(("gustav",))
+            assert (
+                repeated.acceptance.snapshot.assignments[mention] == assignment
+            )
+            assert workflow.apply_claims((0,)) == recovered
+            assert store.get_decision(identity_decision.proposal.id) == (
+                identity_decision
+            )
+            assert watermark(client) == frozen
+            assert (extractor.calls, critic.calls) == (2, 1)
+    finally:
+        # Restore this isolated test stack's disposable mode for later cases.
+        try:
+            if carries_kept_marker(client):
+                wbi_helpers.mediawiki_api_call_helper(
+                    data={
+                        "action": "delete",
+                        "title": KEPT_STATE_PAGE,
+                        "reason": "fictional retained-ingestion cleanup",
+                        "token": client.login.get_edit_token(),
+                    },
+                    login=client.login,
+                )
+        finally:
+            marker.unlink(missing_ok=True)
 
 
 def _guard_rejects_competing_and_raw_writes(client, directory, target):
@@ -527,3 +780,5 @@ def test_protected_cohort_choices_claims_and_creation_recovery(
         assert created_support.qid == recovered.qid
         assert created_support.statement_guid != support.statement_guid
         assert store.get_decision(confirmed.proposal.id) == confirmed
+
+    _retained_text_source(client, tmp_path, target, support, monkeypatch)

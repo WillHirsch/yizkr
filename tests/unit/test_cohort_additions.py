@@ -242,6 +242,62 @@ def test_creation_retry_keeps_original_approval_receipt_and_assignment(
         assert events[0] == "begin" and events[-1] == "end"
 
 
+def test_external_admission_refuses_before_creation_or_assignment_effects(
+    graph, tmp_path, monkeypatch
+):
+    wiki, registry, _, _, _ = graph
+    events = []
+    guarded = False
+
+    @contextmanager
+    def guard(*args, **kwargs):
+        nonlocal guarded
+        guarded = True
+        events.append("guard")
+        try:
+            yield None
+        finally:
+            guarded = False
+            events.append("released")
+
+    def source_check(*args):
+        assert guarded
+        events.append("source-check")
+        return {}
+
+    def admission():
+        assert guarded
+        assert events == ["guard", "source-check"]
+        raise ReviewRefused("source became excluded during preparation")
+
+    with ReviewStore(tmp_path / "review.sqlite") as store:
+        request = new_request(source())
+        prepared = additions.prepare_cohort_additions(store, request, registry)
+        approve(store, prepared)
+        before = dict(wiki._recovery_pages)
+        writes = wiki.wbi.item.writes
+        assignments = registry.assignment_snapshot()
+        monkeypatch.setattr(additions, "protected_mutation", guard)
+        monkeypatch.setattr(additions, "unique_source_qids", source_check)
+        with pytest.raises(ReviewRefused, match="source became excluded"):
+            additions.apply_cohort_additions(
+                store,
+                request,
+                registry,
+                state_path=tmp_path / "guard.json",
+                operation_id="fictional-admission",
+                record_dir=tmp_path / "records",
+                admit=admission,
+            )
+        assert events == ["guard", "source-check", "released"]
+        assert not guarded
+        assert wiki.wbi.item.writes == writes
+        assert wiki._recovery_pages == before
+        assert registry.assignment_snapshot() == assignments
+        assert registry.reviewed_creation_authorizations() == ()
+        assert not (tmp_path / "records").exists()
+
+
 def test_refresh_preserves_original_proposal_producer(graph, tmp_path):
     _, registry, target, _, _ = graph
     from yizkr.core.provenance import ProcessRecord, StageProvenance
