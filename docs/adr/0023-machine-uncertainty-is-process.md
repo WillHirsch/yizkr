@@ -2,8 +2,7 @@
 
 > **Temporary deprecated material — TODO [#732](https://github.com/WillHirsch/yizkr/issues/732):** this document still mixes current design details with development history and superseded prescriptions. Its historical material is not authoritative for new policy; use [REQUIREMENTS](../REQUIREMENTS.md), [CONTRACT](../CONTRACT.md) and the implemented code. Remove this note only after rewriting the document as current guidance with necessary rationale, or consolidating it elsewhere and deleting this file. The linked task tracks removal of all remaining historical and obsolete passages.
 
-Status: **accepted** — design settled through an adversarial design panel (three approaches, each critiqued, synthesised); implemented: a `Finding.axis` field, a review-CSV column, an `accept-all` disposition + writer edit summary, and the `under-witnessed-statements.rq` query, live-validated on a fictional fixture (#23; see §5 for the two row-shape fixes that validation made). Renumbered from local ADR-0022 when reconciling with origin (#18). **Amends ADR-0022** (its §6 per-name uncertainty treatment is _generalised_, not overturned) and **ADR-0013** (the extraction critic's `Finding` gains an `axis`). Sibling to **ADR-0020** ("don't store a derived inference"). Cites ADR-0002 (coexistence), ADR-0003 (dual provenance), and MODELING.md (a human decision's process is the MediaWiki edit history).  
-Amended by #136 (2026-09-27): the disagreement report now pairs only values from different artifacts (§4).  
+Status: accepted. The critic's axes and the under-witnessed query support reappraisal; approval follows the [current contract](../CONTRACT.md) and [durable review APIs](../IDENTITY_REVIEW.md). Amended by #136 (2026-09-27): the disagreement report now pairs only values from different artifacts (§4).  
 Amended by #386 (2026-09-29): a critic finding is a validated record that names its entity, claim and alias by id and gives its `axis` itself, with a category from a fixed list; nothing is derived from a `target` string any more (§3).  
 Amended by #465 (2026-10-05): the fixed list gains `unsupported_containment`, a place's `part_of` claim that its excerpt does not state for that place (ADR-0009); the critic sees each `part_of` claim's excerpt beside the claims to check it (§3).  
 Amended by #515 (2026-10-23, ADR-0038 §8.3): `unsupported_containment` also covers a time on a `part_of` claim (a point in time, a start or end time, a bound of one, or circa) that its excerpt does not state for the containment, such as the document's own date or the date of an event at the place; the critic sees each `part_of` claim's time beside its excerpt (§3).  
@@ -15,7 +14,7 @@ Superseded in part by [ADR-0035](0035-mention-records.md) (owner decision 2026-0
 
 ## Context
 
-A reviewer needs to find and re-appraise the machine's most contentious decisions — above all the ones that entered with little human scrutiny (auto-/bulk-accepted through `accept-all`). ADR-0022 §6 proposed surfacing this as a per-_name_ uncertainty self-report across bespoke axes (spelling / type / composition / identity). That was rightly challenged as **hand-crafted treatment of one corner of the schema**: those axes are nothing but the universal parts of _any_ statement — **subject / predicate / value / existence** — so a name-specific vector is redundant. The real question became whether there is a **fully generalised** representation of equal-or-greater expressiveness, and whether it should be **graph-resident** so downstream reappraisal is a SPARQL query.
+A reviewer needs to inspect machine interpretations and their evidence. The critic can identify concerns about a statement's subject, predicate, value or existence, and surface those concerns alongside the proposed claim. A finding is advisory process information, not approval.
 
 The current model draws a deliberate line, which this ADR makes explicit and keeps:
 
@@ -70,18 +69,13 @@ Ship `queries/under-witnessed-statements.rq` (rendered by `publish.py`) — mach
 
 Amended by #23 (2026-09-27), from its live validation: the queue returns **one row per statement** (it projects the statement node, the reviewer's handle for re-appraisal), so two same-value statements that differ only by a qualifier — distinct assertions under ADR-0002 — are no longer collapsed into one row; and a time value carries its **stated precision**, so a year-precision date is not displayed as 1 January of that year (rule 5). The selection criteria above are unchanged.
 
-### 6. Capture the bulk-accept subset off-graph
-
-`accept_all` (claims branch) writes `decision="bulk-accept"` to the durable reviewed CSV — add `bulk-accept` to the APPROVE token set — so the disposition is distinguishable from a per-row human `approve`; `apply_review` threads the mode so the writer emits a distinct edit summary (e.g. `ingest: bulk-accepted claim`). MediaWiki RecentChanges/history plus the ADR-0019 reviewed CSVs are then the bulk-accept reappraisal queue — matching ADR-0020's "read where it matters, don't store," and MODELING.md's assignment of a human decision's _process_ to the edit history. No graph node, no export surface, no staleness.
-
 ## Rulings
 
 1. **No graph-resident machine confidence, contentiousness, or doubt** — the graph stays machine-confidence-free.
 2. **Four axes → existing homes** (§1); no per-attribute confidence vector.
 3. **The critic gains an `axis`**, generalising ADR-0022 §6 into a per-property review-layer channel.
 4. **Coexistence is cross-source value multiplicity only** — never predicate hedging or single-source value-doubt (either would corrupt `disagreement-report.rq`).
-5. **Reappraisal = a structural query + an off-graph bulk-accept signal**; the query is a low-scrutiny _queue_, not a contentiousness ranking, and the predicate axis is not queryable.
-6. **Any future graph-resident acceptance fact is a run-item `ratification_mode` only, behind its own ADR** — never a per-statement marker or a confidence number.
+5. **Reappraisal uses a structural query and inspectable review products**; the query is a queue, not a contentiousness ranking, and the predicate axis is not queryable.
 
 ## Consequences
 
@@ -89,7 +83,6 @@ Amended by #23 (2026-09-27), from its live validation: the queue returns **one r
 - **Rank rule 4 and ADR-0020 honored by construction** — no stored scalar can shadow rank or go stale.
 - **One general mechanism**, not a name corner: the critic `axis` covers every property; the reappraisal query covers every machine write; the name case is a `VALUES` filter.
 - **A genuine, accepted loss**: no stored ranking of how contentious the machine _felt_ an item to be. Documented, not hidden.
-- **Reliance on durable `var/` artifacts** (ADR-0019) for the bulk-accept audit dimension — if those are lost, that provenance is unrecoverable (unlike a graph fact); this is the accepted trade of the no-new-node design.
 
 ## Rejected and deferred alternatives
 
@@ -97,11 +90,8 @@ Amended by #23 (2026-09-27), from its live validation: the queue returns **one r
 - **A `contested_axis` / `assessment_confidence` _reference_ snak** — a quantity reference snak materialises `prv:` value-node triples that `backup.py`'s predicate-suffix strip does not remove cleanly (it would rely on the orphan sweep), an added export-correctness cost the core design avoids by adding nothing. Rejected.
 - **A per-statement `provisional_acceptance` marker** — puts _human_ review-process into the graph, which MODELING.md assigns to the MediaWiki edit history; reprises the stored-stale-inference antipattern (a later per-row re-review would not clear it); and manufactures a de-facto vouched/provisional _trust tier_ that source-first neutrality is designed to resist. Rejected.
 - **Coexisting single-source candidate statements** for value or predicate doubt — corrupt the flagship disagreement report (§4). Rejected.
-- **A single item-valued `ratification_mode` fact on the extraction-_run_ item** — _deferred_, not adopted. Only if a pure-SPARQL bulk-accept filter later proves operationally necessary; it carries no PII and rides existing run-item handling, but it extends process-provenance-in-graph from _extraction_ to _acceptance_, reintroduces an ADR-0020-shaped staleness risk, and mis-models a review-_episode_ fact onto a _run_ item — so it must be justified in its own ADR. See #65.
 
 ## Open questions
 
-- Whether a run-item `ratification_mode` is ever worth its own ADR (only if the off-graph CSV + edit-history join proves operationally painful). See #65.
 - **Unmatched-entity subject-doubt** (ADR-0022 open Q2): a brand-new entity with no blocking candidate generates no equivalences row, so a low-confidence _invented_ subject gets no identity-uncertainty surfacing through the reconcile gate — this needs the lightweight unmatched-entity review view ADR-0022 already flagged. See #112 and #137.
-- **Retention policy for `var/` reviewed CSVs** (ADR-0019): the bulk-accept reappraisal dimension depends on these durable artifacts. See #100.
 - The under-witnessed query counts **multi-run corroboration by the same model** as "witnessed"; whether to discount same-model corroboration when scoping by run/model is a query-refinement question, not a schema one. See #137.

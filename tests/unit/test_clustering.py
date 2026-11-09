@@ -5667,7 +5667,7 @@ class TestTheStage:
         """
         through_the_batches = {
             "yizkr.claims",
-            "yizkr.pipeline.orchestrate",
+            "yizkr.pipeline.document_state",
             "yizkr.pipeline.stages",
         }
         metadata_only = {"yizkr.pipeline.run_provenance"}

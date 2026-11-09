@@ -36,7 +36,6 @@ from yizkr.pipeline.faces import (
     proposals_to_batch,
 )
 from yizkr.pipeline.review import (
-    accept_all,
     apply_review,
     claim_id,
     export_review_csv,
@@ -223,8 +222,12 @@ def test_face_confirmation_binds_the_displayed_person_and_region(
     export_review_csv(proposed, sheet)
     undecided, _ = apply_review(proposed, sheet)
     assert undecided.claims == []
-    with pytest.raises(ValueError):
-        accept_all(sheet, tmp_path / "bulk.csv")
+    with sheet.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(["claim_id", "decision"])
+        writer.writerow([claim_id(proposed.claims[0]), "bulk-accept"])
+    with pytest.raises(ValueError, match="unsupported bulk-accept"):
+        apply_review(proposed, sheet)
 
     # Confirm Wastl's association only; Hilde's remains a proposal.
     (wastl,) = [

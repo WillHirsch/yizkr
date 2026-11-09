@@ -2,7 +2,7 @@
 
 `pipeline.text_ingestion.TextIngestion` provides a Python workflow for one plain-text source: prepare durable readings and proposals, explicitly register the source, review its identities, then separately review and apply historical claims. It preserves existing assignments, QIDs, evidence and curator edits. It neither resets the graph nor authorizes a keeper transition.
 
-The caller supplies a `WikiClient`, a shared `ReviewStore`, a source path, a workspace and an explicit exclusions file. Model clients are borrowed only during preparation; the caller owns their configuration, cancellation and cleanup. This is a developer API. The folder CLI retains its existing map-bound behavior; a general ingestion UI and multi-format orchestration are separate capabilities.
+The caller supplies a `WikiClient`, a shared `ReviewStore`, a source path, a workspace and an explicit exclusions file. Model clients are borrowed only during preparation; the caller owns their configuration, cancellation and cleanup. This is a developer API. Standalone map-bound write commands retain their guards; a general ingestion UI and multi-format retained orchestration are separate capabilities.
 
 ## Preconditions and data products
 

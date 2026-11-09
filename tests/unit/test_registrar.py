@@ -1057,7 +1057,7 @@ class TestRegisterArtifact:
 # the portrait's title as a file name made on some systems keeps it:
 # decomposed (NFD), which the instance stores composed (NFC)
 NFD_TITLE = unicodedata.normalize("NFD", TITLE)
-FROM_FILE = "ingested by `yizkr ingest run` from portrait-1890s.png"
+FROM_FILE = "ingested by `yizkr scratch run` from portrait-1890s.png"
 
 
 class TestTermsInTheStoredForm:
@@ -1967,7 +1967,7 @@ class TestCutsKeepWholeLetters:
     def test_a_description_cut_keeps_whole_letters(self, tmp_path):
         wiki = StoringWiki()
         description = (
-            "ingested by `yizkr ingest run` from Brief"
+            "ingested by `yizkr scratch run` from Brief"
             + "x" * 13
             + " "
             + ", ".join([STRESSED] * 12)
@@ -3180,7 +3180,7 @@ class TestRegisterDerivedMedia:
         assert wiki.asked == []
 
 
-# -- the write's registration of a document (Orchestrator._step_register) ----
+# -- the write's registration of a document (ScratchDriver._step_register) ----
 
 
 def _source_png(shade: int) -> bytes:
@@ -3246,19 +3246,19 @@ def parts_of(wiki, whole: str) -> dict[str, dict[str, list[str]]]:
 
 class TestStepRegister:
     """The orchestrator registers a document as its write begins
-    (Orchestrator._step_register), through the registrar, on the in-memory
+    (ScratchDriver._step_register), through the registrar, on the in-memory
     wiki."""
 
     @staticmethod
     def orchestrator(tmp_path, wiki, files=(), exclusions=None):
-        from yizkr.pipeline.orchestrate import Orchestrator
+        from yizkr.pipeline.scratch import ScratchDriver
 
         folder = tmp_path / "corpus"
         folder.mkdir(parents=True)
         for name, data in files:
             (folder / name).write_bytes(data)
         lines: list[str] = []
-        orchestrator = Orchestrator(
+        orchestrator = ScratchDriver(
             folder,
             tmp_path / "state",
             exclusions=exclusions or ExclusionList(),
@@ -3277,7 +3277,7 @@ class TestStepRegister:
         entity = wiki.entities[qid]
         assert label_of(wiki, qid) == "portrait-1890s"
         assert entity["descriptions"]["en"]["value"] == (
-            "ingested by `yizkr ingest run` from portrait-1890s.png"
+            "ingested by `yizkr scratch run` from portrait-1890s.png"
         )
         assert strings(wiki, qid, "media_sha1") == [doc.sha1]
         assert strings(wiki, qid, "instance_of") == [ITEMS["artifact"]]
@@ -3287,8 +3287,8 @@ class TestStepRegister:
         assert wiki.writes == writes
 
     def test_a_long_file_name_is_described_within_the_limit(self, tmp_path):
-        """The description "ingested by `yizkr ingest run` from <file
-        name>" passes 250 characters for a name of more than 214: it is
+        """The description "ingested by `yizkr scratch run` from <file
+        name>" passes 250 characters for a name of more than 213: it is
         cut, ending in "…", and the artifact is made (StoringWiki refuses
         a longer term)."""
         wiki = StoringWiki()
@@ -3298,7 +3298,7 @@ class TestStepRegister:
         (doc,) = orchestrator.documents()
         qid = orchestrator._step_register(doc)
         entity = wiki.entities[qid]
-        whole = f"ingested by `yizkr ingest run` from {name}"
+        whole = f"ingested by `yizkr scratch run` from {name}"
         assert len(whole) > 250
         assert entity["descriptions"]["en"]["value"] == (
             whole[:249].rstrip() + "…"
@@ -3420,7 +3420,7 @@ class TestStepRegister:
         self, tmp_path, monkeypatch, kind
     ):
         """Current exclusions refuse all source types before preparation."""
-        from yizkr.pipeline.orchestrate import DocumentRun
+        from yizkr.pipeline.document_state import DocumentRun
 
         wiki = Untouchable()
         orchestrator, _ = self.orchestrator(tmp_path, wiki)

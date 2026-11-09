@@ -188,7 +188,7 @@ def test_each_reader_refuses_an_unsupported_date_naming_itself(fields, why):
 
 
 def test_the_sheet_and_reconcile_render_a_date_without_adjudication():
-    # the adjudication stage imports clustering, orchestrate and llm; the
+    # the adjudication stage imports clustering, scratch and llm; the
     # review sheet and the reconcile roster need none of them for a date
     code = """
 import sys
@@ -216,7 +216,7 @@ loaded = sorted(
     if name in (
         "yizkr.pipeline.adjudication",
         "yizkr.pipeline.clustering",
-        "yizkr.pipeline.orchestrate",
+        "yizkr.pipeline.scratch",
     )
 )
 print(loaded)

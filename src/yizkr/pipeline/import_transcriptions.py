@@ -1,7 +1,7 @@
 """Archived transcriptions adopted for a scratch run's calls:
 `yizkr scratch import-transcriptions` (ADR-0032 §9).
 
-**The archive** is a state directory that `yizkr ingest run` left: one
+**The archive** is a saved document-product directory: one
 folder per source file, holding the document's `state.json` (its source's
 `file`, and the SHA-1 of its bytes, `content_sha1`) and its views, the
 transcription (`transcription.json`: its `text` and `engine`, and the
@@ -23,7 +23,7 @@ LLM cache. A transcription the vision route made (its `engine` is
 the answer to that call. The import stores it in the cache as an
 adoption (ADR-0032 §9): under the key of the call the run is to make,
 which the transcribe role's client keys exactly as the run's does
-(Orchestrator.role_client: the engine, the model, the effort, the pinned
+(RunResources: the engine, the model, the effort, the pinned
 claude CLI, the cache), with the key's components and with provenance
 backfilled from the archive. The run's call is then a hit whose reason is
 `adopted`, in its events, and no engine is asked; the transcription view
@@ -122,6 +122,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from yizkr.claims import ArtifactRef
 from yizkr.core.corpus import (
     MISSING_LIST,
     ExclusionConfigError,
@@ -130,6 +131,7 @@ from yizkr.core.corpus import (
     is_excluded,
 )
 from yizkr.pipeline.cancellation import check_cancelled
+from yizkr.pipeline.run_resources import MODEL_VARIABLE, RunResources
 from yizkr.pipeline.stages import sha256_text
 
 # the files of an archive the import reads: a document folder's state and
@@ -490,7 +492,6 @@ def _run_model() -> str:
     """The model the scratch run transcribes with, which the adoptions'
     keys name: ImportRefused when none is configured, or an alias, both of
     which a scratch run refuses too."""
-    from yizkr.pipeline.orchestrate import MODEL_VARIABLE
     from yizkr.pipeline.rundir import model_alias
 
     model = os.environ.get(MODEL_VARIABLE) or None
@@ -653,9 +654,7 @@ def _engines(entry: dict[str, Any]) -> bool:
 
 
 class _Adopter:
-    """The transcribe role's client, as the run's (Orchestrator.
-    role_client), and what it keys the run's calls for (`keyed`, once it
-    has keyed one)."""
+    """A borrowed transcribe client and the metadata of calls it keys."""
 
     def __init__(self, client: Any, cache_dir: Path) -> None:
         self.client = client
@@ -774,9 +773,6 @@ class _Adopter:
             role=ROLE,
         )
 
-    def close(self) -> None:
-        self.client.close()
-
 
 def _preflight(scans: Iterable[Path]) -> None:
     """The PDF renderer, when a scan to check is a PDF: the check counts
@@ -822,7 +818,15 @@ def import_transcriptions(
     engine cannot serve the pass (llm.PassPaused). `log` takes the
     corpus's discovery lines, which name its files. Returns what became of
     each media's transcriptions."""
-    from yizkr.pipeline.orchestrate import Orchestrator
+    from yizkr.pipeline.cancellation import current_cancellation
+    from yizkr.pipeline.document_state import (
+        discover_documents,
+        validate_source_owners,
+    )
+    from yizkr.pipeline.media_stages import (
+        PreparationRequest,
+        prepare_container,
+    )
 
     check_cancelled()
     if exclusions is None:
@@ -907,21 +911,33 @@ def import_transcriptions(
             media.setdefault(sha1, _Media(sha1, [])).records.append(record)
 
     with tempfile.TemporaryDirectory(prefix="yizkr-import-") as scratch:
-        # the orchestrator is asked for the corpus's documents, as the run
-        # finds them, and for the transcribe role's client; it writes
-        # nothing to its state directory
-        orchestrator = Orchestrator(
-            corpus,
-            Path(scratch) / "state",
-            llm=llm,
-            extract_effort=extract_effort,
-            cache_dir=cache_dir,
-            exclusions=exclusions,
-            log=log,
+        exclusions = follow_decks(exclusions, corpus)
+        docs = discover_documents(
+            corpus, Path(scratch) / "state", exclusions=exclusions, log=log
         )
+
+        def prepare(doc):
+            prepared = prepare_container(
+                PreparationRequest(
+                    source=doc.source,
+                    expected_artifact=ArtifactRef(sha1=doc.sha1),
+                    existing_directory=doc.dir,
+                    excluded=lambda sha1, names=(): any(
+                        is_excluded(exclusions, name=name, sha1=sha1)
+                        for name in names or (None,)
+                    ),
+                )
+            )
+            return (
+                None
+                if prepared is None
+                else (prepared.inventory, prepared.data)
+            )
+
+        validate_source_owners(docs, prepare)
         scans = {
             doc.known_sha1: doc.source
-            for doc in orchestrator.documents()
+            for doc in docs
             if doc.unreadable is None and doc.kind in ("media", "pdf")
         }
         adopt: list[_Media] = []
@@ -943,16 +959,26 @@ def import_transcriptions(
         keyed = None
         if adopt or withdraw:
             _preflight(found.scan for found in adopt if found.scan)
+            resources = RunResources(cache_dir)
             try:
-                check_cancelled()
-                client = orchestrator.role_client(ROLE)
-            except RuntimeError as exc:
-                raise ImportRefused(
-                    f"the transcribe role's engine client cannot start, and "
-                    f"the keys need it: {exc}"
-                ) from None
-            adopter = _Adopter(client, cache_dir)
-            try:
+                try:
+                    check_cancelled()
+                    client = resources.role_client(
+                        ROLE,
+                        resources.engine(
+                            ROLE,
+                            engine=llm,
+                            effort=extract_effort,
+                            cancellation=current_cancellation(),
+                        ),
+                    )
+                except RuntimeError as exc:
+                    raise ImportRefused(
+                        "the transcribe role's engine client cannot start, "
+                        "and "
+                        f"the keys need it: {exc}"
+                    ) from None
+                adopter = _Adopter(client, cache_dir)
                 for found in adopt:
                     check_cancelled()
                     outcomes.append(adopter.adopt(found))
@@ -960,9 +986,9 @@ def import_transcriptions(
                     check_cancelled()
                     if adopter.withdraw(found):
                         withdrawn.add(found.sha1)
+                keyed = adopter.keyed
             finally:
-                adopter.close()
-            keyed = adopter.keyed
+                resources.close()
         outcomes += [
             Outcome(
                 LEFT_OUT,

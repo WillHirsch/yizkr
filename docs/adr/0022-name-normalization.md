@@ -22,7 +22,7 @@ Three adversarial design passes (recorded in the run's workflow transcripts) est
 - **But composition ≠ kind.** There are _three_ axes, not two, and they differ in decidability: **composition role** (which token is the fixed part vs. the alternating part) is prescribed by the notation — the `/` fixes "Hildegard" and alternates the surname, so `Hildegard Löbig` is a _licensed_ composition, not a fabrication; **kind** (given vs. family) needs name-order convention and is never asserted; **type** (birth vs. married vs. official) needs a marker and is recorded only where marked. The earlier "never compose permutations" ban folded composition into kind and over-reached.
 - **The LLM is the right primary normalizer.** The semantic work — stripping "born / née / geb. / z domu / urodzona / …" across languages and scripts, reading licensed compositions, inferring `Gustl`~`Gustav` from context, and emitting a typed name _with a located source excerpt_ (which a label-parser cannot produce) — is the LLM's comparative advantage; it already reads the whole document. A hand-coded multilingual marker lexicon in Python is exactly the brittle parsing to avoid. A deterministic layer is still wanted, but as a thin validator, not the semantic engine.
 
-Binding principles: source-first (ADR-0002/0003 — never assert structure a source did not, never conflate source and process provenance), ADR-0011's anti-doubling ruling, ADR-0020 privacy, and ADR-0019's file-based, reconstructable, **auditable** pipeline.
+Binding principles: source-first (ADR-0002/0003 — never assert structure a source did not, never conflate source and process provenance), ADR-0011's anti-doubling ruling, ADR-0020 privacy, and the [ingestion contract](../INGESTION_CONTRACT.md)'s durable products and attributable decisions.
 
 ## Decision
 
@@ -70,11 +70,9 @@ The "live flow is the eval" strategy (§7) only has teeth if a reviewer can _see
 
 No new graph property is needed for this; it is per-decision metadata the LLM emits, carried by the existing `confidence` field and the critic/critique_notes channel.
 
-### 7. Validation is the live review flow, not a synthetic eval
+### 7. Inspectable results and verification
 
-> **Extended by ADR-0025.** ADR-0025 reaffirms this ruling and extends it to the whole corpus. In the development stage the live flow is the whole-corpus scratch run: its run report, its diff against the latest run on main, and the views of its graph are where errors show, each attributable to a stage and to the key component that changed, and fixes go into the pipeline, never into the graph. No gold set or synthetic eval is built. From the keeper run on, cluster review and ratification are the human review this section relies on.
-
-No toy eval set is built. The pipeline is file-based and auditable (ADR-0019): every machine-written claim references its extraction-run item, every intermediate (transcription, entity manifest, batch, critique) is a durable, inspectable file, and normalization decisions surface — with their confidence (§6) — in the review CSV. So a normalization error is **visible**, **attributable to the pass that made it**, and becomes the basis for refining that pass's prompt or the validator. This spends the human review that is happening anyway on real, representative cases rather than on toy examples that may not generalise.
+Transcriptions, entity manifests, batches and critique products remain inspectable, and historical writes carry source and process provenance. Normalization errors can therefore be traced to their inputs and processing configuration. Use the [current verification policy](../TESTING.md) to select focused semantic checks, observed model outputs and corpus comparisons according to the change and unresolved risk.
 
 ## Rulings
 

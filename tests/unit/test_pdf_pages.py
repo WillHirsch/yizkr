@@ -24,13 +24,13 @@ import pytest
 
 from tests.fixtures import example_universe as u
 from tests.fixtures import pdfs, records
+from tests.fixtures.document_processing import ScriptedDriver, quiet, this_run
 from tests.fixtures.records import page_text, record_answer, record_page
 from tests.unit.test_llmcache import (
     CachedRun,
     Engine,
     pipeline_answers,
 )
-from tests.unit.test_orchestrate import ScriptedOrchestrator, quiet, this_run
 from tests.unit.test_run_provenance import fixed_capture  # noqa: F401
 from tests.unit.test_scratch import TEXT, Corpus, a_run, fakes  # noqa: F401
 from tests.unit.test_scratch_estimate import (  # noqa: F401
@@ -46,23 +46,22 @@ from tests.unit.test_scratch_estimate import run as run_scratch
 from yizkr.claims import ClaimBatch
 from yizkr.core.corpus import ExclusionList
 from yizkr.pipeline import estimate, llm, transcribe, transcription_check
-from yizkr.pipeline.estimate import Estimator, StageCalls
-from yizkr.pipeline.language import detect_language
-from yizkr.pipeline.orchestrate import (
-    AWAITING_CLAIMS,
+from yizkr.pipeline.document_state import (
+    BATCHED,
     FAILED,
     PAGED,
     TRANSCRIPTION_VOLATILE,
     DocumentRun,
     ExcerptRun,
-    Orchestrator,
 )
+from yizkr.pipeline.estimate import Estimator, StageCalls
+from yizkr.pipeline.language import detect_language
 from yizkr.pipeline.presentation import (
     DERIVED_MEDIA,
     derived_transcription,
 )
 from yizkr.pipeline.rundir import RunDir, RunSettingsConflict
-from yizkr.pipeline.scratch import EXIT_OK, LATEST, runs_in
+from yizkr.pipeline.scratch import EXIT_OK, LATEST, ScratchDriver, runs_in
 from yizkr.pipeline.stages import content_hash, sha1_file
 from yizkr.pipeline.textlayer import png
 from yizkr.pipeline.transcribe import (
@@ -72,6 +71,8 @@ from yizkr.pipeline.transcribe import (
     TranscribedPage,
     Transcription,
 )
+
+pytestmark = pytest.mark.usefixtures("fixed_capture")
 
 
 def saved_sources(directory):
@@ -123,7 +124,7 @@ def renderer(monkeypatch):
     """The PDF renderer on the host, as far as a run's preflight can tell.
     A run with a PDF refuses to start without poppler-utils, which reads a
     PDF whole for the claude-code engine; here a scripted engine reads
-    every file, so no poppler tool runs (test_orchestrate.py's
+    every file, so no poppler tool runs (test_scratch.py's
     TestPreflight holds the preflight itself)."""
     monkeypatch.setattr(transcribe, "require_pdf_renderer", lambda *a: None)
 
@@ -266,13 +267,34 @@ def run(
     **options,
 ) -> CachedRun:
     options.setdefault("log", quiet)
-    # no identity proposals, so that each document goes on to its claims
-    options.setdefault("proposals", 0)
     orchestrator = CachedRun(
         corpus, tmp_path / state, engine=reader, **options
     )
     orchestrator.run()
     return orchestrator
+
+
+def recheck_containers(tmp_path, corpus, reader, *, exclusions):
+    """Recheck saved source products against a changed exclusion policy.
+
+    These are stage API checks: resuming an entire run intentionally rejects
+    a changed policy. Every processing operation uses production dispatch.
+    """
+    from tests.fixtures.document_processing import prepare_document
+
+    driver = CachedRun(
+        corpus,
+        tmp_path / "state",
+        engine=reader,
+        exclusions=exclusions,
+        log=quiet,
+    )
+    driver._gather_embedded()
+    docs = driver.documents()
+    for doc in docs:
+        prepare_document(driver, doc, until="critique")
+    driver._known_excerpts(docs)
+    return driver
 
 
 def document(orchestrator: CachedRun, name: str) -> DocumentRun:
@@ -285,7 +307,7 @@ def transcription_of(doc: DocumentRun) -> Transcription:
     return Transcription.model_validate_json(doc.transcription.read_text())
 
 
-def excerpt_of(orchestrator: Orchestrator, sha1: str) -> ExcerptRun:
+def excerpt_of(orchestrator: ScratchDriver, sha1: str) -> ExcerptRun:
     """The excerpt the orchestrator's run found for an image."""
     return orchestrator._excerpts[sha1]
 
@@ -304,7 +326,7 @@ class TestTheRoute:
         reader = Reader({})
         orchestrator = run(tmp_path, corpus, reader)
         doc = document(orchestrator, "family-history-2008.pdf")
-        assert doc.state.status == AWAITING_CLAIMS
+        assert doc.state.status == BATCHED
         assert reader.read == []
         transcription = transcription_of(doc)
         first = "\n".join(pdfs.lines(FIRST))
@@ -427,7 +449,7 @@ class TestTheRoute:
         reader = Reader({image_sha1: EXTRACT})
         first = run(tmp_path, corpus, reader)
         doc = document(first, "birth-extract-1938.pdf")
-        assert doc.state.status == AWAITING_CLAIMS, doc.state.error
+        assert doc.state.status == BATCHED, doc.state.error
         assert reader.names() == [f"{image_sha1}.jpg"]
         transcription = transcription_of(doc)
         assert page_methods(transcription) == [
@@ -601,14 +623,12 @@ class TestTheRoute:
         """The transcribe role's engine starts only for a page or an image
         to read by vision: the run manifest records no client for it."""
 
-        class Starting(ScriptedOrchestrator):
-            _llm = Orchestrator._llm
+        class Starting(ScriptedDriver):
+            _llm = ScratchDriver._llm
 
         monkeypatch.setattr(llm, "make_client", lambda *a, **k: Reader({}))
         corpus = folder(tmp_path, family_history_2008=history())
-        orchestrator = Starting(
-            corpus, tmp_path / "state", proposals=0, log=quiet
-        )
+        orchestrator = Starting(corpus, tmp_path / "state", log=quiet)
         orchestrator.run()
         roles = orchestrator.rundir.manifest()["roles"]
         assert roles["transcribe"]["client"] is None
@@ -743,7 +763,7 @@ class TestImages:
             ),
             "booklet.pdf",
         )
-        assert doc.state.status == AWAITING_CLAIMS
+        assert doc.state.status == BATCHED
         assert reader.read == []
         transcription = transcription_of(doc)
         assert LETTER_SHA1 not in transcription.text
@@ -759,7 +779,7 @@ class TestImages:
         reader = Reader({LETTER_SHA1: Raw(REFUSAL)})
         orchestrator = run(tmp_path, corpus, reader)
         doc = document(orchestrator, "booklet.pdf")
-        assert doc.state.status == AWAITING_CLAIMS
+        assert doc.state.status == BATCHED
         (done,) = [
             event
             for event in this_run(orchestrator, "done")
@@ -783,7 +803,7 @@ class TestImages:
         corpus = folder(tmp_path, booklet=booklet(broken))
         orchestrator = run(tmp_path, corpus, Reader({}))
         doc = document(orchestrator, "booklet.pdf")
-        assert doc.state.status == AWAITING_CLAIMS
+        assert doc.state.status == BATCHED
         (done,) = [
             event
             for event in this_run(orchestrator, "done")
@@ -2094,7 +2114,7 @@ class TestReuse:
         corpus = folder(tmp_path, note=pdfs.pdf([typed(FIRST), note]))
         reader = Reader({})
         doc = document(run(tmp_path, corpus, reader), "note.pdf")
-        assert doc.state.status == AWAITING_CLAIMS
+        assert doc.state.status == BATCHED
         assert REFUSAL in transcription_of(doc).text
         stricter_check(monkeypatch, "The ink has faded")
         again = run(tmp_path, corpus, reader)

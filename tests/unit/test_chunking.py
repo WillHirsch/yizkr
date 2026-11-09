@@ -13,6 +13,7 @@ import threading
 
 import pytest
 
+from tests.unit.test_run_provenance import fixed_capture  # noqa: F401
 from yizkr.claims import ArtifactRef, ClaimBatch, EntityRecord
 from yizkr.pipeline.anomalies import batch_findings, load_config
 from yizkr.pipeline.cancellation import RunCancelled
@@ -32,6 +33,7 @@ from yizkr.pipeline.chunking import (
     prefix_local_ids,
     unit_text,
 )
+from yizkr.pipeline.document_state import FAILED
 from yizkr.pipeline.extract import LlmClaimExtractor
 from yizkr.pipeline.llm import (
     ConversationChanged,
@@ -40,9 +42,10 @@ from yizkr.pipeline.llm import (
     cached_client,
     open_cache,
 )
-from yizkr.pipeline.orchestrate import FAILED
 from yizkr.pipeline.rundir import NEEDS_ATTENTION, StageState, run_state
 from yizkr.pipeline.transcribe import Transcription
+
+pytestmark = pytest.mark.usefixtures("fixed_capture")
 
 # a two-person document: one claimable line per person, one logistics line
 DOC = "\n".join(
@@ -2315,17 +2318,17 @@ class TestExtractionsWithoutClaims:
 
 
 class TestTheExtractionStage:
-    """Under `ingest run`, with tests/unit/test_orchestrate.py's scripted
-    orchestrator: an extraction that fails for want of a usable answer
+    """Through scratch processing with authored responses: an extraction
+    that fails for want of a usable answer
     fails its stage, with a `failed` event that gives the reason, and the
     document fails; a claim-free one is done and needs attention, and a
     later run that reuses its view reports it the same (#45)."""
 
     @staticmethod
     def orchestrator(tmp_path, text: str, answers: dict[str, str]):
-        from tests.unit.test_orchestrate import (
+        from tests.fixtures.document_processing import (
+            ScriptedDriver,
             ScriptedModel,
-            ScriptedOrchestrator,
             quiet,
         )
 
@@ -2350,14 +2353,14 @@ class TestTheExtractionStage:
                     raise answers[role]
                 return answers[role]
 
-        class Orchestrator(ScriptedOrchestrator):
+        class ScratchDriver(ScriptedDriver):
             def _llm(self, role, doc):
                 return Model(self.calls, doc.source.name)
 
         folder = tmp_path / "docs"
         folder.mkdir()
         (folder / "page.txt").write_text(text)
-        return Orchestrator(folder, tmp_path / "state", log=quiet)
+        return ScratchDriver(folder, tmp_path / "state", log=quiet)
 
     @pytest.mark.parametrize(
         ("shape", "keys"),
@@ -2370,7 +2373,7 @@ class TestTheExtractionStage:
     def test_an_unreadable_answer_fails_the_stage_in_every_run(
         self, tmp_path, shape, keys
     ):
-        from tests.unit.test_orchestrate import this_run
+        from tests.fixtures.document_processing import this_run
 
         orchestrator = self.orchestrator(
             tmp_path,
@@ -2430,7 +2433,7 @@ class TestTheExtractionStage:
     def test_a_claim_free_extraction_needs_attention_in_every_run(
         self, tmp_path, text, answers, why
     ):
-        from tests.unit.test_orchestrate import this_run
+        from tests.fixtures.document_processing import this_run
 
         orchestrator = self.orchestrator(tmp_path, text, answers)
         orchestrator.run()

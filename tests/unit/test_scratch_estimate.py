@@ -57,19 +57,16 @@ from yizkr import cli
 from yizkr.core.corpus import ExclusionConfigError, ExclusionList
 from yizkr.pipeline import estimate, llm, scratch, stage_planning
 from yizkr.pipeline.chunking import parse_chunk_response, parse_chunk_unread
+from yizkr.pipeline.document_state import CHECKED_ROUTES, ProcessingUnavailable
 from yizkr.pipeline.estimate import FIRST_TURNS, Estimator, StageCalls
 from yizkr.pipeline.llmcache import CacheRefused
-from yizkr.pipeline.orchestrate import (
-    CHECKED_ROUTES,
-    Orchestrator,
-    ProcessingUnavailable,
-)
 from yizkr.pipeline.rundir import RunDir, RunSettingsConflict
 from yizkr.pipeline.scratch import (
     EXIT_FAILED,
     EXIT_OK,
     LATEST,
     PreflightFailed,
+    ScratchDriver,
     ScratchRefused,
 )
 
@@ -1989,7 +1986,7 @@ class _Looked(Exception):
 class TestCheckedRoutes:
     """The estimate checks a reused transcription again on exactly the
     routes the driver does (#616): Estimator._transcription and
-    Estimator._stale_stages as Orchestrator._transcription, one list,
+    Estimator._stale_stages as ScratchDriver._transcription, one list,
     CHECKED_ROUTES. Each looks the view up through a stand-in that notes
     whether it was handed a recheck; nothing is read or run."""
 
@@ -2017,11 +2014,11 @@ class TestCheckedRoutes:
 
             return look
 
-        monkeypatch.setattr(Orchestrator, "_route", lambda self, doc: route)
+        monkeypatch.setattr(ScratchDriver, "_route", lambda self, doc: route)
         monkeypatch.setattr(
             estimate, "route_transcription", lambda source, correction: route
         )
-        monkeypatch.setattr(Orchestrator, "_reused_view", looked("driver"))
+        monkeypatch.setattr(ScratchDriver, "_reused_view", looked("driver"))
         source = tmp_path / "a-letter.txt"
         source.write_text(LETTER)
         doc = SimpleNamespace(
@@ -2032,7 +2029,7 @@ class TestCheckedRoutes:
             batch=Path("batch.json"),
             critique=Path("critique.json"),
         )
-        driver = object.__new__(Orchestrator)
+        driver = object.__new__(ScratchDriver)
         driver._views = {}
         with pytest.raises(_Looked):
             driver._transcription(doc)

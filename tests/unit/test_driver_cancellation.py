@@ -9,7 +9,6 @@ from tests.unit.test_pdf_exclusions import EXTRACT
 from tests.unit.test_registrar import PORTRAIT, RESCAN
 from yizkr.core.corpus import ExclusionList
 from yizkr.pipeline.cancellation import current_cancellation
-from yizkr.pipeline.orchestrate import Orchestrator
 from yizkr.pipeline.rundir import RunDir, run_state
 from yizkr.pipeline.scratch import ScratchDriver
 from yizkr.pipeline.workers import WorkerShutdownTimeout
@@ -125,43 +124,6 @@ def test_cancelled_reading_cannot_publish_a_late_result(tmp_path, monkeypatch):
     )
 
 
-def test_parallel_run_abort_stops_workers_and_never_dispatches_the_queue(
-    tmp_path, monkeypatch
-):
-    folder = sources(tmp_path)
-    (folder / "c-letter.txt").write_text(EXTRACT)
-    driver = Orchestrator(
-        folder,
-        tmp_path / "run",
-        exclusions=ExclusionList(),
-        serial=True,
-        extract_concurrency=2,
-        log=lambda *_args, **_kwargs: None,
-    )
-    started = []
-    lock = threading.Lock()
-    both = threading.Event()
-
-    def advance(doc, *, stop_after_extract=False):
-        assert stop_after_extract
-        with lock:
-            started.append(doc.source.name)
-            if len(started) == 2:
-                both.set()
-        assert both.wait(HANG_GUARD)
-        driver.rundir.request("abort")
-        signal = current_cancellation()
-        assert signal is not None and signal.wait(HANG_GUARD)
-        signal.check()
-
-    monkeypatch.setattr(driver, "advance", advance)
-    assert driver.run() == 2
-    assert set(started) == {"a-portrait.png", "b-portrait.png"}
-    assert not any(
-        thread.name == "yizkr-run-control" for thread in threading.enumerate()
-    )
-
-
 def test_uncooperative_worker_timeout_ends_invocation_without_further_dispatch(
     tmp_path, monkeypatch
 ):
@@ -222,44 +184,6 @@ def test_pause_does_not_cancel_active_call_or_poison_resumed_work(
     assert not any(
         event.get("event") == "cancelled" for event in driver.rundir.events()
     )
-
-
-def test_cancelled_reviewed_write_records_stop_without_claiming_rollback(
-    tmp_path, monkeypatch
-):
-    from tests.unit.test_orchestrate import approve_all_claims, make_run
-
-    driver = make_run(tmp_path, proposals=0)
-    assert driver.run() == 2
-    (doc,) = driver.documents()
-    approve_all_claims(doc)
-    approved = doc.review_reviewed.read_bytes()
-    completed_effects = []
-    write = driver._step_write
-
-    def interrupted_write(subject, batch, accepted=None):
-        completed_effects.append(subject.sha1)
-        driver.rundir.request("abort", stage="write")
-        signal = current_cancellation()
-        assert signal is not None and signal.wait(HANG_GUARD)
-        signal.check()
-
-    monkeypatch.setattr(driver, "_step_write", interrupted_write)
-    assert driver.run() == 2
-    (doc,) = driver.documents()
-    assert completed_effects == [doc.sha1]
-    assert doc.state.artifact_qid == "Q100"
-    assert doc.state.status == "paused"
-    assert not doc.write_result.exists()
-    assert doc.review_reviewed.read_bytes() == approved
-    assert run_state(driver.rundir)[(doc.sha1, "write")].status == "cancelled"
-    assert driver.rundir.manifest()["invocations"][-1]["outcome"] == "stopped"
-    monkeypatch.setattr(driver, "_step_write", write)
-    assert driver.run() == 0
-    (doc,) = driver.documents()
-    assert doc.write_result.exists()
-    assert completed_effects == [doc.sha1]
-    assert doc.review_reviewed.read_bytes() == approved
 
 
 def test_scoped_cancellation_cannot_return_as_complete(tmp_path, monkeypatch):

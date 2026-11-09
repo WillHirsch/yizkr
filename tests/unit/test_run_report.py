@@ -60,8 +60,8 @@ from yizkr.claims import (
 )
 from yizkr.pipeline import llm, report
 from yizkr.pipeline.chunking import _set_aside_note
+from yizkr.pipeline.document_state import slugify
 from yizkr.pipeline.monitor import RunMonitor
-from yizkr.pipeline.orchestrate import slugify
 from yizkr.pipeline.report import (
     COMPUTED,
     HELD,
@@ -3590,7 +3590,7 @@ class TestCallsAndTime:
         ) in render_markdown(built["aggregate"])
 
     def test_a_run_without_the_cache_counts_its_call_events(self, tmp_path):
-        """A run made without the LLM cache (`ingest run --no-cache`) has
+        """An archived run made without the LLM cache has
         no cache events: its calls that reached the engine are its call
         events, as the monitor counts them."""
         plan = manifest()
@@ -4284,7 +4284,7 @@ class TestWhatSourcesSayOfArtifacts:
         ]
         (directory / "batch.json").write_text(json.dumps(view))
         # the confirmation is saved in the resolved batch alone, as
-        # orchestrate writes it (DocumentRun.resolved)
+        # scratch writes it (DocumentRun.resolved)
         resolved = json.loads(json.dumps(view))
         for entity in resolved["entities"]:
             if entity["id"] == "u2":

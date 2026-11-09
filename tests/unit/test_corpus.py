@@ -3,7 +3,7 @@
 Offline; every corpus is a temp folder of fictional documents from the
 example universe (docs/EXAMPLES.md). The list fails closed: a configured
 list that cannot be read, or a line that would silently match nothing,
-is an error, and `ingest run` refuses to start without a list.
+is an error, and `scratch run` refuses to start without a list.
 """
 
 from __future__ import annotations
@@ -215,47 +215,6 @@ def run_cli(*argv):
 
 
 class TestCli:
-    def test_ingest_run_refuses_without_a_list(self, env, corpus):
-        with pytest.raises(SystemExit, match=EXCLUDE_FILE_VAR):
-            run_cli("ingest", "run", str(corpus))
-
-    def test_ingest_run_checks_the_list_before_the_folder(self, env, tmp_path):
-        with pytest.raises(SystemExit, match=EXCLUDE_FILE_VAR):
-            run_cli("ingest", "run", str(tmp_path / "no such folder"))
-
-    def test_ingest_run_defaults_to_the_corpus(
-        self, env, corpus, tmp_path, monkeypatch
-    ):
-        from yizkr.pipeline.orchestrate import Orchestrator
-
-        listed_file = tmp_path / "exclude.txt"
-        listed_file.write_text("*address*book*\n")
-        env.write_text(
-            f"{CORPUS_DIR_VAR}={corpus}\n{EXCLUDE_FILE_VAR}={listed_file}\n"
-        )
-        seen = {}
-
-        def fake_run(self):
-            seen["folder"] = self.folder
-            seen["exclusions"] = self.exclusions
-            seen["documents"] = [d.source.name for d in self.documents()]
-            return 0
-
-        monkeypatch.setattr(Orchestrator, "run", fake_run)
-        assert run_cli("ingest", "run", "--state", str(tmp_path / "s")) == 0
-        assert seen["folder"] == corpus
-        assert seen["exclusions"].patterns == ("*address*book*",)
-        assert seen["documents"] == ["postcard-1938.txt"]
-
-    def test_ingest_run_needs_a_folder_or_the_corpus_setting(
-        self, env, tmp_path
-    ):
-        listed_file = tmp_path / "exclude.txt"
-        listed_file.write_text("")
-        env.write_text(f"{EXCLUDE_FILE_VAR}={listed_file}\n")
-        with pytest.raises(SystemExit, match=CORPUS_DIR_VAR):
-            run_cli("ingest", "run")
-
     def test_a_single_step_runs_without_a_list(self, env, corpus, tmp_path):
         # the single steps are debugging tools: no list, no refusal
         out = tmp_path / "transcription.json"
@@ -498,7 +457,7 @@ class TestOneDeckSelection:
         """Every call of follow_decks, by whichever path, recorded on its
         way to the real function."""
         import yizkr.core.corpus as corpus_module
-        import yizkr.pipeline.orchestrate as orchestrate
+        import yizkr.pipeline.scratch as scratch
 
         real = corpus_module.follow_decks
         seen = []
@@ -508,27 +467,27 @@ class TestOneDeckSelection:
             return real(exclusions, folder)
 
         monkeypatch.setattr(corpus_module, "follow_decks", spy)
-        monkeypatch.setattr(orchestrate, "follow_decks", spy)
+        monkeypatch.setattr(scratch, "follow_decks", spy)
         return seen
 
     def test_every_path_holds_the_one_function(self):
         import yizkr.core.corpus as corpus_module
         import yizkr.pipeline.import_transcriptions as imports
-        import yizkr.pipeline.orchestrate as orchestrate
+        import yizkr.pipeline.scratch as scratch
 
-        assert orchestrate.follow_decks is corpus_module.follow_decks
+        assert scratch.follow_decks is corpus_module.follow_decks
         assert imports.follow_decks is corpus_module.follow_decks
 
     def test_a_run_asks_it_of_its_folder(self, tmp_path, calls):
         """The run's list is what follow_decks makes of it for the run's
         folder, and a file of the bytes a glob names in a deck is left
         out of the documents."""
-        from yizkr.pipeline.orchestrate import Orchestrator
+        from yizkr.pipeline.scratch import ScratchDriver
 
         folder = tmp_path / "corpus"
         talk(folder)
         (folder / "album-photograph.png").write_bytes(TALK_IMAGE)
-        orchestrator = Orchestrator(
+        orchestrator = ScratchDriver(
             folder,
             tmp_path / "state",
             exclusions=self.LISTED,
@@ -543,10 +502,10 @@ class TestOneDeckSelection:
         assert names == [TALK]
 
     def test_a_run_without_a_list_asks_nothing(self, tmp_path, calls):
-        from yizkr.pipeline.orchestrate import Orchestrator
+        from yizkr.pipeline.scratch import ScratchDriver
 
         talk(tmp_path / "corpus")
-        orchestrator = Orchestrator(
+        orchestrator = ScratchDriver(
             tmp_path / "corpus",
             tmp_path / "state",
             log=lambda *args, **kwargs: None,
@@ -861,11 +820,11 @@ class TestSingleVisionStepRefusesADeck:
     def test_a_run_fails_a_renamed_deck_rather_than_send_it(self, tmp_path):
         """A run routes a deck called as an image to vision, and the
         transcriber's refusal fails that document closed."""
-        from tests.unit.test_orchestrate import ScriptedOrchestrator, quiet
+        from tests.fixtures.document_processing import ScriptedDriver, quiet
 
         engine = Engine()
 
-        class Run(ScriptedOrchestrator):
+        class Run(ScriptedDriver):
             def _llm(self, role, doc):
                 return engine
 

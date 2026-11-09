@@ -153,7 +153,7 @@ BY = "anomaly"
 RECHECK_EVENT = "anomaly-recheck"
 ERROR_EVENT = "anomaly-error"
 
-# the stages the checks look at (yizkr.pipeline.orchestrate)
+# the stages the checks look at (yizkr.pipeline.document_state)
 TRANSCRIPTION = "transcription"
 EXTRACTION = "extraction"
 CRITIQUE = "critique"
@@ -2343,7 +2343,7 @@ def _document_dirs(state_dir: Path) -> Iterator[tuple[Path, str | None]]:
     their source gives (None), then the excerpts' directories, in
     EXCERPTS_DIR, each of kind EXCERPT. A directory set aside (a
     dot-prefixed name) is skipped."""
-    from yizkr.pipeline.orchestrate import EXCERPT, EXCERPTS_DIR
+    from yizkr.pipeline.document_state import EXCERPT, EXCERPTS_DIR
 
     for parent, kind in (
         (state_dir, None),
@@ -2362,7 +2362,7 @@ def _recorded(state_dir: Path) -> Iterator[_Recorded]:
     """The document directories of a state directory, the excerpts'
     included (_document_dirs), whose state.json names a source and the
     SHA-1 it was last processed at; anything else is skipped."""
-    from yizkr.pipeline.orchestrate import DocumentRun
+    from yizkr.pipeline.document_state import DocumentRun
 
     for directory, placed in _document_dirs(state_dir):
         state = _read_json(directory / "state.json")

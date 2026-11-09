@@ -36,7 +36,7 @@ Non-GEDCOM documents run transcription, extraction and critique in that order. G
 
 The barrier waits until every document has completed its required stages or failed. Corpus stages receive only completed documents: `needs attention` qualifies, while a failed document does not. A pause or abort that leaves unfinished stages holds the barrier. The driver prioritizes one canary of each kind, then schedules the remaining documents stage by stage. Image extraction, including a canary, waits for its matching container transcriptions so that interpretation context does not depend on discovery order. The data dependencies below do not imply that every document runs end to end before the next starts.
 
-Implementation: [document stages and paths](../src/yizkr/pipeline/orchestrate.py), [scratch scheduling](../src/yizkr/pipeline/scratch.py) and [corpus write stages](../src/yizkr/pipeline/scratchwrite.py).
+Implementation: [document stages and paths](../src/yizkr/pipeline/scratch.py), [scratch scheduling](../src/yizkr/pipeline/scratch.py) and [corpus write stages](../src/yizkr/pipeline/scratchwrite.py).
 
 ## The document views and their consumers
 
@@ -108,7 +108,7 @@ Separate image extraction retains interpretation context from verified contiguou
 
 Eligibility follows current exclusions independently of preparation and reading success. Unattempted, unsupported, failed and successfully empty readings remain distinct. Incomplete structure or undetermined eligibility cannot authorize model input. Missing canonical bytes or ambiguous ownership block the affected source; a newly encoded representation retains the established owner through recorded lineage. Whole-document PDF vision sends only checked page pixels.
 
-Recovering missing inventory alone preserves unchanged products and reviews. First adoption of a legacy excerpt reading that lacks source-part attribution currently treats the added structured support as a changed review basis: extraction is regenerated and dependent review is conservatively requeued even when the owner and text remain unchanged. Previous review decisions remain recoverable in the set-aside CSV; automatic approval carry-forward for this first adoption is not implemented.
+Recovering missing inventory alone preserves unchanged products. Adopting an excerpt reading that lacks source-part attribution adds structured support to its dependencies, so extraction and dependent critique are regenerated even when the owner and text remain unchanged. Scratch processing grants no human approval; durable review decisions remain separate.
 
 The vision response is a `TranscriptionRecord`: document class and pages with physical page index, printed page number, status, text, languages and notes. Code validates it and constructs the persisted `Transcription`. Its page records locate text within the assembled reading; `source_context` links attributed spans and image occurrences to inventory parts. PPTX speaker notes retain separate source support even though the readable transcript includes them behind a notes marker. Model page notes remain process commentary. Text-file and correction transcriptions have no page records; an unlocated container correction cannot establish source-part attribution automatically.
 
@@ -122,7 +122,7 @@ The pipeline does not write `D/derived-media.json`. One kept from an existing ru
 
 An independently read image can become an excerpt document when it has a transcribed or illegible document page. Images that are wholly blank or not document pages, excluded images and images already represented by corpus files do not become excerpts. Repeated placements share the bound media owner while retaining every occurrence. The container keeps its own text; the image's claims cite its bound owner and source-part support. Excerpt extraction and critique then produce their own `batch.json` and `critique.json`. Ambiguous body/notes or compiler/inner-source support makes extraction incomplete; any supported claims remain diagnostic and are not accepted for writing.
 
-Implementation: [typed preparation, reading and excerpt operations](../src/yizkr/pipeline/media_stages.py), [scheduling and publication](../src/yizkr/pipeline/orchestrate.py), [transcribers](../src/yizkr/pipeline/transcribe.py), [transcription record](../src/yizkr/pipeline/transcription_record.py) and [container readers](../src/yizkr/pipeline/containers.py).
+Implementation: [typed preparation, reading and excerpt operations](../src/yizkr/pipeline/media_stages.py), [scheduling and publication](../src/yizkr/pipeline/scratch.py), [transcribers](../src/yizkr/pipeline/transcribe.py), [transcription record](../src/yizkr/pipeline/transcription_record.py) and [container readers](../src/yizkr/pipeline/containers.py).
 
 ### Interpretation context for scanned pages
 
@@ -174,7 +174,7 @@ If the engine answered but its entity manifest remains unusable after its attemp
 
 An exhausted chunk failure fails the document's extraction stage. Salvaged claims are kept only in the diagnostic envelope `D/extraction/incomplete.json`; they cannot supply an accepted batch. A previous batch file can remain after a failed refresh, but the failed document is excluded from corpus-stage inputs. Extraction also fails when its merged batch has no claims because output could not be parsed or all claims were rejected. Accepted claim-free output can produce an empty batch with attention. These outcomes are distinct from individual unreadable or rejected objects in an otherwise usable batch.
 
-Implementation: [chunked extraction](../src/yizkr/pipeline/chunking.py), [claim parsing and validation](../src/yizkr/pipeline/extract.py) and [stage orchestration](../src/yizkr/pipeline/orchestrate.py).
+Implementation: [chunked extraction](../src/yizkr/pipeline/chunking.py), [claim parsing and validation](../src/yizkr/pipeline/extract.py) and [stage orchestration](../src/yizkr/pipeline/scratch.py).
 
 ## Source preparation: how the document says its text was made
 
@@ -205,7 +205,7 @@ A valid finding names an entity, optionally a claim, alias or place container, a
 
 Scratch writing consumes the original batch regardless of the critic's concerns. A stage failure can prevent the document completing its required stages, but findings or `needs attention` alone do not. An empty critique can mean no concerns or an unfinished answer: the shared operation reports completeness explicitly, and `D/state.json` records it under `detail.stage_results.critique`, alongside stage attention for unfinished output. Findings from an incomplete answer remain advisory and create no approval. A batch with no entities and no claims needs no critique model call.
 
-Implementation: [critic](../src/yizkr/pipeline/critique.py) and [critique persistence](../src/yizkr/pipeline/orchestrate.py).
+Implementation: [critic](../src/yizkr/pipeline/critique.py) and [critique persistence](../src/yizkr/pipeline/scratch.py).
 
 ## GEDCOM: a deterministic route to the same batch contract
 
@@ -227,7 +227,7 @@ Freshness uses the same planner and persisted generation record as text stages. 
 
 Scratch execution and estimation use the discovered documents' declared stages within `--until` to select model and cache preflight. A GEDCOM-only run stopping at extraction needs neither a provider login/model configuration nor the LLM cache; it still checks exclusions, run storage and anomaly configuration. A corpus stage declaring `calls_engine`, such as clustering, retains the engine checks even when every document is GEDCOM. Estimation counts no GEDCOM model call. Reports continue to read recorded completed `gedcom` stages and the same batch/diagnostic fields in historical runs.
 
-Implementation: [shared GEDCOM operation](../src/yizkr/pipeline/gedcom_stages.py), [GEDCOM adapter](../src/yizkr/pipeline/gedcom.py), [stage declarations and freshness](../src/yizkr/pipeline/stage_planning.py) and [caller-owned publication](../src/yizkr/pipeline/orchestrate.py).
+Implementation: [shared GEDCOM operation](../src/yizkr/pipeline/gedcom_stages.py), [GEDCOM adapter](../src/yizkr/pipeline/gedcom.py), [stage declarations and freshness](../src/yizkr/pipeline/stage_planning.py) and [caller-owned publication](../src/yizkr/pipeline/scratch.py).
 
 ## Clustering: deterministic evidence and model adjudication
 

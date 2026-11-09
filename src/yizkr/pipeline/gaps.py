@@ -60,7 +60,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from yizkr.pipeline.orchestrate import DUPLICATE, EXCERPTS_DIR
+from yizkr.pipeline.document_state import DUPLICATE, EXCERPTS_DIR
 from yizkr.pipeline.stages import atomic_write_text
 
 ROLLUP_FILE = "gaps-rollup.csv"

@@ -1012,7 +1012,7 @@ class Driver:
     def role_client(self, role, *, events=None):
         assert role == ROLE
         self.clients += 1
-        # as the orchestrator makes it (Orchestrator.role_client)
+        # as the execution owner makes it (RunResources.role_client)
         observed = observed_client(self.engine, role=role, events=events)
         cache = open_cache(
             self.cache, refresh=self.refresh, epochs=self.epochs

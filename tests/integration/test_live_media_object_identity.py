@@ -174,7 +174,7 @@ def write_export(
     client, tmp_path, order: str, text: str | None = None, identity=None
 ):
     """The export, `text` or the template's for `order`, registered by its
-    hash, then written as `ingest run` writes it: its batch, citing the
+    hash, then written through BatchWriter: its batch, citing the
     export by that hash, with `identity`, or its own identity map."""
     batch, qids = export_batch(client, tmp_path, order, text)
     return write_mapped(

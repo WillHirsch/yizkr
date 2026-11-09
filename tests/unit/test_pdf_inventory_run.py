@@ -26,18 +26,21 @@ from tests.unit.test_pdf_pages import (
     run,
     vision_page,
 )
+from tests.unit.test_run_provenance import fixed_capture  # noqa: F401
 from yizkr.core.corpus import ExclusionList
 from yizkr.pipeline.container_inventory import (
     CONTAINER_INVENTORY,
     read_inventory,
 )
+from yizkr.pipeline.document_state import BATCHED, FAILED
 from yizkr.pipeline.estimate import Estimator, _Made
-from yizkr.pipeline.orchestrate import AWAITING_CLAIMS, FAILED
 from yizkr.pipeline.presentation import (
     derived_transcription,
     read_derived_media,
 )
 from yizkr.pipeline.textlayer import png
+
+pytestmark = pytest.mark.usefixtures("fixed_capture")
 
 
 def saved(doc):
@@ -60,7 +63,7 @@ def test_native_pdf_records_original_parts_and_actual_image_reading(tmp_path):
         ),
         "family-booklet-2011.pdf",
     )
-    assert doc.state.status == AWAITING_CLAIMS, doc.state.error
+    assert doc.state.status == BATCHED, doc.state.error
     inventory = saved(doc)
     (part,) = embedded(inventory)
     assert part.byte_object.sha1 != LETTER_SHA1
@@ -101,7 +104,7 @@ def test_contextual_representations_do_not_invent_distinct_source_owners(
         ),
         "family-booklet-2011.pdf",
     )
-    assert doc.state.status == AWAITING_CLAIMS, doc.state.error
+    assert doc.state.status == BATCHED, doc.state.error
     (part,) = embedded(saved(doc))
     assert {rep.byte_object.sha1 for rep in part.representations} == digests
     assert reader.read == []
@@ -132,7 +135,7 @@ def test_whole_pdf_publishes_inventory_before_model_and_keeps_render_lineage(
 
     reader = InspectingReader({"birth-extract-1938.pdf": EXTRACT})
     doc = document(run(tmp_path, corpus, reader), "birth-extract-1938.pdf")
-    assert doc.state.status == AWAITING_CLAIMS, doc.state.error
+    assert doc.state.status == BATCHED, doc.state.error
     inventory = saved(doc)
     assert any(p.kind == "page_body" for p in inventory.parts)
     representations = [r for p in inventory.parts for r in p.representations]
@@ -157,8 +160,7 @@ def test_reused_whole_pdf_keeps_or_restores_prepared_lineage(tmp_path, damage):
         if rep.method == "rendered-pdf-v1"
     )
     before = {
-        path: path.read_bytes()
-        for path in (first.transcription, first.batch, first.review)
+        path: path.read_bytes() for path in (first.transcription, first.batch)
     }
     if damage == "missing-record":
         (first.dir / CONTAINER_INVENTORY).unlink()
@@ -167,7 +169,7 @@ def test_reused_whole_pdf_keeps_or_restores_prepared_lineage(tmp_path, damage):
     again = document(
         run(tmp_path, corpus, RefusingReader({})), "birth-extract-1938.pdf"
     )
-    assert again.state.status == AWAITING_CLAIMS, again.state.error
+    assert again.state.status == BATCHED, again.state.error
     assert {path: path.read_bytes() for path in before} == before
     assert representation in [
         rep for part in saved(again).parts for rep in part.representations
@@ -198,9 +200,7 @@ def test_whole_pdf_blank_outcome_does_not_count_page_markers_as_content(
 @pytest.mark.parametrize(
     "damage", ["missing", "version", "original-bytes", "representation"]
 )
-def test_recovery_keeps_unchanged_readings_proposals_and_reviews(
-    tmp_path, damage
-):
+def test_recovery_keeps_unchanged_readings_and_proposals(tmp_path, damage):
     corpus = folder(tmp_path, family_booklet_2011=booklet())
     first = document(
         run(tmp_path, corpus, Reader({LETTER_SHA1: EXCERPT})),
@@ -208,8 +208,7 @@ def test_recovery_keeps_unchanged_readings_proposals_and_reviews(
     )
     inventory = saved(first)
     before = {
-        path: path.read_bytes()
-        for path in (first.transcription, first.batch, first.review)
+        path: path.read_bytes() for path in (first.transcription, first.batch)
     }
     manifest = first.dir / CONTAINER_INVENTORY
     if damage == "missing":
@@ -230,7 +229,7 @@ def test_recovery_keeps_unchanged_readings_proposals_and_reviews(
         run(tmp_path, corpus, RefusingReader({})),
         "family-booklet-2011.pdf",
     )
-    assert restored.state.status == AWAITING_CLAIMS, restored.state.error
+    assert restored.state.status == BATCHED, restored.state.error
     assert {path: path.read_bytes() for path in before} == before
     recovered = saved(restored)
     assert [p.id for p in recovered.parts] == [p.id for p in inventory.parts]
@@ -286,7 +285,7 @@ def test_failed_image_reading_remains_distinct_from_unattempted(tmp_path):
         ),
         "family-booklet-2011.pdf",
     )
-    assert doc.state.status == AWAITING_CLAIMS, doc.state.error
+    assert doc.state.status == BATCHED, doc.state.error
     (part,) = embedded(saved(doc))
     assert part.eligibility.state == "allowed"
     assert part.reading.state == "failed"

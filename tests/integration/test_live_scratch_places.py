@@ -57,7 +57,7 @@ from yizkr.core.corpus import ExclusionList
 from yizkr.core.instance import clear_contents, read_record, recorded_contents
 from yizkr.core.wiki import WikiClient
 from yizkr.pipeline import places, registrar, scratchwrite, writer
-from yizkr.pipeline.orchestrate import DocumentRun
+from yizkr.pipeline.document_state import DocumentRun
 from yizkr.pipeline.scratch import CORPUS_DIR, CorpusContext, ScratchDriver
 from yizkr.pipeline.transcribe import Transcription
 from yizkr.pipeline.transcription_record import (

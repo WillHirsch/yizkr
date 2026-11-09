@@ -45,13 +45,10 @@ from yizkr.pipeline.llm import (
 )
 from yizkr.pipeline.resolve import resolve_batch
 from yizkr.pipeline.review import (
-    APPROVE,
     CSV_COLUMNS,
-    accept_all,
     apply_review,
     claim_id,
     export_review_csv,
-    is_bulk_accepted,
 )
 from yizkr.pipeline.transcribe import (
     HtrPlatformAdapter,
@@ -1239,6 +1236,18 @@ class TestReviewRoundTrip:
         assert [claim_id(c) for c in approved.claims] == [ids[0]]
         assert any("no decision" in w for w in warnings)
 
+    @pytest.mark.parametrize("token", ["bulk-accept", " Bulk-Accept "])
+    def test_whole_sheet_token_cannot_approve_a_claim(self, tmp_path, token):
+        source = batch()
+        csv_path = tmp_path / "review.csv"
+        export_review_csv(source, csv_path)
+        self.edit_csv(
+            csv_path,
+            lambda rows: [{**row, "decision": token} for row in rows],
+        )
+        with pytest.raises(ValueError, match="unsupported bulk-accept"):
+            apply_review(source, csv_path)
+
     def test_reordered_csv_still_applies_by_id(self, tmp_path):
         source = batch()
         csv_path = tmp_path / "review.csv"
@@ -1383,167 +1392,6 @@ def _write_equivalences_csv(path, rows):
             writer.writerow(
                 {field: row.get(field, "") for field in EQUIVALENCE_FIELDS}
             )
-
-
-class TestAcceptAll:
-    """`accept_all` fills the decision column, ratifying the machine: a
-    claims sheet round-trips through apply_review as a full approval; an
-    equivalences sheet ratifies each verdict rather than merging all."""
-
-    def test_fills_every_decision_and_apply_review_approves_all(
-        self, tmp_path
-    ):
-        source = batch()
-        review_csv = tmp_path / "review.csv"
-        export_review_csv(source, review_csv)  # decisions start empty
-
-        reviewed_csv = tmp_path / "review.reviewed.csv"
-        result = accept_all(review_csv, reviewed_csv)
-        assert result.mode == "claims"
-        assert result.total == len(source.claims)
-        assert result.approved == len(source.claims)
-
-        with open(reviewed_csv, newline="") as f:
-            reviewed_rows = list(csv.DictReader(f))
-        assert reviewed_rows
-        assert all(
-            r["decision"].strip().lower() in APPROVE for r in reviewed_rows
-        )
-
-        approved, warnings = apply_review(source, reviewed_csv)
-        assert len(approved.claims) == len(source.claims)
-        assert warnings == []
-
-    def test_keeps_every_cell_but_the_decision(self, tmp_path):
-        source = TestReviewRoundTrip.booklet_batch()
-        review_csv = tmp_path / "review.csv"
-        export_review_csv(source, review_csv)
-        reviewed_csv = tmp_path / "review.reviewed.csv"
-        accept_all(review_csv, reviewed_csv)
-
-        def without_decisions(path):
-            with open(path, newline="") as f:
-                return [
-                    {k: v for k, v in row.items() if k != "decision"}
-                    for row in csv.DictReader(f)
-                ]
-
-        exported = without_decisions(review_csv)
-        assert [row["printed_page"] for row in exported] == ["4", "4", "", ""]
-        assert without_decisions(reviewed_csv) == exported
-
-    def test_equivalences_ratifies_verdicts_not_blanket_approve(
-        self, tmp_path
-    ):
-        # ratify the machine per row: same->approve, distinct->reject,
-        # uncertain->blank; a `same` against two items is a contradiction
-        # left blank (it must not merge). Verifies the reviewed file is
-        # applicable: only the lone `same` survives read_approved_equivalences.
-        from yizkr.pipeline.reconcile import read_approved_equivalences
-
-        src = tmp_path / "equivalences.csv"
-        _write_equivalences_csv(
-            src,
-            [
-                {"entity_id": "e1", "qid": "Q10", "verdict": "same"},
-                {"entity_id": "e2", "qid": "Q20", "verdict": "distinct"},
-                {"entity_id": "e3", "qid": "Q30", "verdict": "uncertain"},
-                # e4 judged "same" against two items -> contradiction
-                {"entity_id": "e4", "qid": "Q40", "verdict": "same"},
-                {"entity_id": "e4", "qid": "Q41", "verdict": "same"},
-            ],
-        )
-        out = tmp_path / "equivalences.reviewed.csv"
-        result = accept_all(src, out)
-        assert result.mode == "equivalences"
-        assert (result.approved, result.rejected, result.uncertain) == (
-            1,
-            1,
-            1,
-        )
-        assert result.conflicted == 2
-
-        with open(out, newline="") as f:
-            by_pair = {
-                (r["entity_id"], r["qid"]): r["decision"]
-                for r in csv.DictReader(f)
-            }
-        assert by_pair[("e1", "Q10")] == "approve"
-        assert by_pair[("e2", "Q20")] == "reject"
-        assert by_pair[("e3", "Q30")] == ""
-        assert by_pair[("e4", "Q40")] == "" and by_pair[("e4", "Q41")] == ""
-
-        # applicable and conflict-free: only e1 is an approved merge
-        assert read_approved_equivalences(out) == {"e1": "Q10"}
-
-    def test_refuses_a_non_equivalences_verdict_csv(self, tmp_path):
-        # a reconcile-places sheet has verdict+decision but no entity_id
-        places = tmp_path / "places.csv"
-        places.write_text("qid_a,qid_b,verdict,decision\nQ1,Q2,same,\n")
-        with pytest.raises(ValueError, match="no 'entity_id'"):
-            accept_all(places, tmp_path / "out.csv")
-
-    def test_preserves_claim_ids_and_other_columns(self, tmp_path):
-        # only `decision` changes — claim_id (the content hash apply_review
-        # matches on) and every other column stay byte-identical
-        source = batch()
-        review_csv = tmp_path / "review.csv"
-        export_review_csv(source, review_csv)
-        with open(review_csv, newline="") as f:
-            before = {r["claim_id"]: dict(r) for r in csv.DictReader(f)}
-
-        reviewed_csv = tmp_path / "review.reviewed.csv"
-        accept_all(review_csv, reviewed_csv)
-        with open(reviewed_csv, newline="") as f:
-            after = {r["claim_id"]: dict(r) for r in csv.DictReader(f)}
-
-        assert before.keys() == after.keys()
-        for cid, row in after.items():
-            assert row["decision"] == "bulk-accept"  # ADR-0023 disposition
-            for col, value in before[cid].items():
-                if col != "decision":
-                    assert row[col] == value
-
-    def test_rejects_a_non_review_csv(self, tmp_path):
-        bad = tmp_path / "not-a-review.csv"
-        bad.write_text("a,b\n1,2\n")
-        with pytest.raises(ValueError, match="not a review CSV"):
-            accept_all(bad, tmp_path / "out.csv")
-
-    def test_bulk_accept_disposition_round_trips(self, tmp_path):
-        # ADR-0023: a pristine accept-all sheet is detectable for the write
-        # path (which marks its edits low-scrutiny), and still approves.
-        source = batch()
-        review_csv = tmp_path / "review.csv"
-        export_review_csv(source, review_csv)
-        reviewed = tmp_path / "review.reviewed.csv"
-        accept_all(review_csv, reviewed)
-
-        assert is_bulk_accepted(reviewed)
-        approved, warnings = apply_review(source, reviewed)
-        assert len(approved.claims) == len(source.claims)
-        assert warnings == []
-
-    def test_human_touch_demotes_bulk_accept(self, tmp_path):
-        source = batch()
-        review_csv = tmp_path / "review.csv"
-        export_review_csv(source, review_csv)
-        reviewed = tmp_path / "review.reviewed.csv"
-        accept_all(review_csv, reviewed)
-
-        def flip_one(rows):
-            rows[0]["decision"] = "approve"  # a per-row human decision
-            return rows
-
-        TestReviewRoundTrip.edit_csv(reviewed, flip_one)
-        assert not is_bulk_accepted(reviewed)  # no longer a pristine sheet
-
-    def test_is_bulk_accepted_false_for_missing_or_plain(self, tmp_path):
-        assert not is_bulk_accepted(tmp_path / "nope.csv")
-        source = batch()
-        plain = tmp_path / "review.csv"
-        export_review_csv(source, plain)  # decisions empty
-        assert not is_bulk_accepted(plain)
 
 
 class TestCritiqueNotes:

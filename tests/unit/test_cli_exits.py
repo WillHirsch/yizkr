@@ -41,7 +41,6 @@ from yizkr.pipeline.llm import (
     UsageLimitReached,
 )
 from yizkr.pipeline.llmcache import CacheInUse, CacheRefused
-from yizkr.pipeline.orchestrate import Orchestrator
 from yizkr.pipeline.rundir import RunSettingsConflict
 
 # one of each pause the engine and its cache raise, each with its message
@@ -1150,30 +1149,15 @@ class TestIngestExtract:
         assert not out.exists()
 
 
-class TestIngestRun:
-    @staticmethod
-    def configure(tmp_path, monkeypatch) -> None:
-        """An empty never-ingest list, and no corpus folder configured."""
-        from yizkr.core.corpus import CORPUS_DIR_VAR, EXCLUDE_FILE_VAR
-
-        listed = tmp_path / "exclude.txt"
-        listed.write_text("")
-        env_file = tmp_path / "test.env"
-        env_file.write_text(f"{EXCLUDE_FILE_VAR}={listed}\n")
-        monkeypatch.setenv("YIZKR_ENV_FILE", str(env_file))
-        monkeypatch.delenv(EXCLUDE_FILE_VAR, raising=False)
-        monkeypatch.delenv(CORPUS_DIR_VAR, raising=False)
-
+class TestCommandDispatch:
     def run(self, tmp_path, monkeypatch, step) -> int:
-        """`ingest run` on an empty folder, its run stubbed by `step`."""
-        self.configure(tmp_path, monkeypatch)
-        folder = tmp_path / "docs"
-        folder.mkdir(exist_ok=True)
-        monkeypatch.setattr(Orchestrator, "run", lambda self: step())
+        monkeypatch.setattr(cli, "cmd_extract", lambda args: step())
         return cli.main(
             [
-                *("ingest", "run", str(folder)),
-                *("--state", str(tmp_path / "state"), "--no-cache"),
+                "ingest",
+                "extract",
+                "--transcription",
+                str(tmp_path / "page.json"),
             ]
         )
 
@@ -1224,21 +1208,10 @@ class TestIngestRun:
     @pytest.mark.parametrize(
         "status", [EXIT_OK, EXIT_FAILED, EXIT_STOPPED], ids=str
     )
-    def test_the_runs_own_status_is_its_exit_status(
+    def test_the_commands_status_is_its_exit_status(
         self, tmp_path, monkeypatch, status
     ):
         assert self.run(tmp_path, monkeypatch, lambda: status) == status
-
-    def test_its_own_refusal_is_a_refusal(self, tmp_path, monkeypatch, capsys):
-        self.configure(tmp_path, monkeypatch)
-        missing = tmp_path / "no-such-folder"
-
-        status = cli.main(
-            ["ingest", "run", str(missing), "--state", str(tmp_path / "s")]
-        )
-
-        assert status == EXIT_REFUSED
-        assert capsys.readouterr().err == f"{missing} is not a directory\n"
 
     def test_an_unanticipated_error_is_a_failure(self, tmp_path, monkeypatch):
         def step():
@@ -1247,20 +1220,3 @@ class TestIngestRun:
         # Python prints its traceback and exits 1, EXIT_FAILED
         with pytest.raises(RuntimeError):
             self.run(tmp_path, monkeypatch, step)
-
-
-class TestAnotherCommand:
-    """main is the backstop of every command, not of `ingest run` alone."""
-
-    def test_a_pause_from_a_single_step_stops(self, monkeypatch, capsys):
-        pause = CacheInUse(Path("var/llm-cache"), {"pid": 4711})
-
-        def cmd_extract(args):
-            raise pause
-
-        monkeypatch.setattr(cli, "cmd_extract", cmd_extract)
-        status = cli.main(
-            ["ingest", "extract", "--transcription", "page.json"]
-        )
-        assert status == EXIT_STOPPED
-        assert capsys.readouterr().err == f"{pause}\n"

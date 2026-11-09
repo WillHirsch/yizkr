@@ -5,9 +5,9 @@ import json
 import pytest
 
 from tests.fixtures import pdfs
+from tests.fixtures.document_processing import quiet
 from tests.unit.test_container_consumers import container_corpus
 from tests.unit.test_llmcache import CachedRun
-from tests.unit.test_orchestrate import quiet
 from tests.unit.test_pdf_pages import (
     EXCERPT,
     LETTER_IMAGE,
@@ -53,7 +53,9 @@ def test_edited_image_reading_is_regenerated_before_reuse(
     reader = Reader({LETTER_SHA1: EXCERPT})
     restored = document(run(tmp_path, corpus, reader), name)
     assert restored.state.error is None
-    assert any(sha1 == LETTER_SHA1 for _, sha1 in reader.read)
+    # Invalid persisted evidence is regenerated from the intact response
+    # cache; it never becomes authoritative merely because it exists.
+    assert reader.read == []
     assert "Wastl" not in json.loads(path.read_text())["text"]
 
 

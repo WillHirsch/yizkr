@@ -1,31 +1,29 @@
-"""Generation changes preserve unchanged evidence and human decisions.
+"""Generation records track inputs and preserve reusable products.
 
-The existing fictional scripted runner exercises real reading, extraction,
-critique and review transitions. Its graph transport is a stand-in; these
-checks make no claim about model quality or durable graph recovery.
+The production scratch stage dispatcher uses authored model answers. These
+checks cover publication and freshness; durable consent has its own suites.
 """
 
 import json
 
 import pytest
 
-from tests.unit.test_orchestrate import (
-    ScriptedOrchestrator,
+from tests.fixtures.document_processing import (
+    ScriptedDriver,
     completed_run,
     engine_steps,
     make_run,
-    wiki_steps,
+    prepare_document,
 )
 from yizkr.claims import ClaimBatch
 from yizkr.pipeline import stage_planning
-from yizkr.pipeline.orchestrate import FAILED
+from yizkr.pipeline.document_state import FAILED
 
 
-def decisions(doc):
-    return {
-        path.name: path.read_bytes()
-        for path in (doc.equivalences_reviewed, doc.review_reviewed)
-    }
+def process(driver):
+    """Dispatch document stages without changing the run's saved settings."""
+    (doc,) = driver.documents()
+    return prepare_document(driver, doc, until="critique")
 
 
 @pytest.mark.parametrize(
@@ -36,30 +34,26 @@ def decisions(doc):
         ({"epochs": {"extract": 1}}, ["manifest", "chunk"]),
     ],
 )
-def test_configuration_change_recomputes_without_revoking_same_decisions(
+def test_processing_change_recomputes_without_replacing_identical_products(
     tmp_path, settings, expected_calls
 ):
     first = completed_run(tmp_path)
     (doc,) = first.documents()
-    before = decisions(doc)
     batch = doc.batch.read_bytes()
 
     changed = make_run(tmp_path, **settings)
-    assert changed.run() == 0
+    assert process(changed) != FAILED
     assert engine_steps(changed.calls) == expected_calls
-    assert wiki_steps(changed.calls) == []
     (doc,) = changed.documents()
-    assert decisions(doc) == before
     assert doc.batch.read_bytes() == batch
     assert not list(doc.dir.glob("*.superseded*"))
 
 
-def test_legacy_processing_metadata_is_rebuilt_without_discarding_review(
+def test_missing_processing_metadata_is_rebuilt_without_replacing_products(
     tmp_path,
 ):
     first = completed_run(tmp_path)
     (doc,) = first.documents()
-    before = decisions(doc)
     saved = json.loads(doc.derivations.path.read_text())
     del saved["processing"]
     doc.derivations.path.write_text(json.dumps(saved))
@@ -70,11 +64,9 @@ def test_legacy_processing_metadata_is_rebuilt_without_discarding_review(
     ).plan
     assert plan.action == "recompute"
     assert "missing-processing" in plan.reasons
-    assert upgraded.run() == 0
+    assert process(upgraded) != FAILED
     assert engine_steps(upgraded.calls) == ["manifest", "chunk", "critique"]
-    assert wiki_steps(upgraded.calls) == []
     (doc,) = upgraded.documents()
-    assert decisions(doc) == before
     assert set(json.loads(doc.derivations.path.read_text())["processing"]) == {
         "transcription.json",
         "batch.json",
@@ -87,7 +79,6 @@ def test_failed_new_generation_does_not_mark_previous_batch_current(
 ):
     first = completed_run(tmp_path)
     (doc,) = first.documents()
-    before = decisions(doc)
     batch = doc.batch.read_bytes()
     previous = stage_planning.processing_dependencies
 
@@ -101,12 +92,10 @@ def test_failed_new_generation_does_not_mark_previous_batch_current(
         stage_planning, "processing_dependencies", new_processing
     )
     failing = make_run(tmp_path, fail_step="manifest")
-    assert failing.run() == 1
+    assert process(failing) == FAILED
     (failed,) = failing.documents()
     assert failed.state.status == FAILED
     assert failed.batch.read_bytes() == batch
-    assert decisions(failed) == before
-    assert wiki_steps(failing.calls) == []
     plan = failing._inspect_view(
         failed, failed.batch, ClaimBatch.model_validate_json
     ).plan
@@ -116,11 +105,9 @@ def test_failed_new_generation_does_not_mark_previous_batch_current(
     )
 
     retry = make_run(tmp_path)
-    assert retry.run() == 0
+    assert process(retry) != FAILED
     assert engine_steps(retry.calls) == ["manifest", "chunk"]
-    assert wiki_steps(retry.calls) == []
     (retried,) = retry.documents()
-    assert decisions(retried) == before
     assert (
         retry._inspect_view(
             retried, retried.batch, ClaimBatch.model_validate_json
@@ -134,7 +121,6 @@ def test_uninspectable_processing_blocks_before_dispatch(
 ):
     first = completed_run(tmp_path)
     (doc,) = first.documents()
-    before = decisions(doc)
     batch = doc.batch.read_bytes()
     recorded = doc.derivations.path.read_bytes()
 
@@ -149,11 +135,10 @@ def test_uninspectable_processing_blocks_before_dispatch(
         ).plan.action
         == "blocked"
     )
-    assert blocked.run() == 1
+    assert process(blocked) == FAILED
     assert not blocked.calls
     assert doc.batch.read_bytes() == batch
     assert doc.derivations.path.read_bytes() == recorded
-    assert decisions(doc) == before
 
 
 def test_generation_keeps_dependencies_observed_before_computation(
@@ -168,7 +153,7 @@ def test_generation_keeps_dependencies_observed_before_computation(
             result["resources"]["pipeline/extract.py"] = observed
         return result
 
-    extract = ScriptedOrchestrator._step_extract
+    extract = ScriptedDriver._step_extract
 
     def changing_resource(self, doc, transcription):
         nonlocal observed
@@ -178,11 +163,9 @@ def test_generation_keeps_dependencies_observed_before_computation(
         return result
 
     monkeypatch.setattr(stage_planning, "processing_dependencies", processing)
-    monkeypatch.setattr(
-        ScriptedOrchestrator, "_step_extract", changing_resource
-    )
+    monkeypatch.setattr(ScriptedDriver, "_step_extract", changing_resource)
     driver = make_run(tmp_path)
-    assert driver.run() == 2
+    assert driver.run() == 0
     (doc,) = driver.documents()
     stored = json.loads(doc.derivations.path.read_text())["processing"]
     assert stored["batch.json"]["resources"]["pipeline/extract.py"] == (
@@ -202,12 +185,14 @@ def test_generation_keeps_dependencies_observed_before_computation(
     )
 
 
-def test_invalid_processing_section_rebuilds_with_review_preserved(tmp_path):
+def test_invalid_processing_section_rebuilds_without_replacing_products(
+    tmp_path,
+):
     first = completed_run(tmp_path)
     (doc,) = first.documents()
-    before = decisions(doc)
     contents = json.loads(doc.derivations.path.read_text())
     contents["processing"] = None
     doc.derivations.path.write_text(json.dumps(contents))
-    assert make_run(tmp_path).run() == 0
-    assert decisions(doc) == before
+    before = doc.batch.read_bytes()
+    assert process(make_run(tmp_path)) != FAILED
+    assert doc.batch.read_bytes() == before

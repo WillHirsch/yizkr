@@ -216,8 +216,8 @@ def merged(client, tmp_path_factory):
 
 @pytest.fixture(scope="module")
 def exported(client, tmp_path_factory):
-    """The export, registered by its hash and written as `ingest run`
-    writes it: (the export's item, the write's result)."""
+    """The export, registered by its hash and written through BatchWriter:
+    (the export's item, the write's result)."""
     path = tmp_path_factory.mktemp("export") / f"integration-{MARK}.ged"
     path.write_bytes(EXPORT.encode())
     registered = Registrar(client).register_artifact(

@@ -132,7 +132,7 @@ def _call_imports(
 def imported_modules(source: str, module: str) -> Iterator[str]:
     """Every module a source file imports, by its full dotted name, from
     its import statements and its literal calls of importing functions.
-    `module` is the file's own dotted name (`yizkr.pipeline.orchestrate`,
+    `module` is the file's own dotted name (`yizkr.pipeline.scratch`,
     or `yizkr.pipeline.__init__` for a package's __init__), for relative
     imports."""
     is_package = module.endswith(".__init__")
@@ -231,7 +231,7 @@ def test_only_engine_execution_imports_the_cache():
 
 # -- planted imports are caught ---------------------------------------------
 
-PIPELINE_MODULE = "yizkr.pipeline.orchestrate"
+PIPELINE_MODULE = "yizkr.pipeline.scratch"
 
 
 @pytest.mark.parametrize(
@@ -288,7 +288,7 @@ def test_a_planted_import_is_caught(source):
         (
             "import importlib\n"
             "importlib.import_module('.llmcache', package=__package__)\n",
-            "yizkr.pipeline.orchestrate",
+            "yizkr.pipeline.scratch",
         ),
         (
             "from importlib import import_module as load\n"
@@ -350,7 +350,7 @@ def test_a_planted_import_fails_the_tree(tmp_path):
     package.mkdir(parents=True)
     (package / "__init__.py").write_text("")
     (package / "llm.py").write_text("from .llmcache import wrap\n")
-    target = package / "orchestrate.py"
+    target = package / "scratch.py"
     target.write_text("from . import llm\n")
     assert set(importers(tree)) == {"yizkr/pipeline/llm.py"}
     target.write_text(
@@ -358,4 +358,4 @@ def test_a_planted_import_fails_the_tree(tmp_path):
         + "\n\nimport importlib\n\n"
         + "importlib.import_module('.llmcache', package=__package__)\n"
     )
-    assert "yizkr/pipeline/orchestrate.py" in importers(tree)
+    assert "yizkr/pipeline/scratch.py" in importers(tree)

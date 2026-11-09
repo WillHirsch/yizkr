@@ -148,6 +148,10 @@ from yizkr.pipeline.anomalies import (
 from yizkr.pipeline.clustering import WEDDING_KINDS
 from yizkr.pipeline.critique import AXES, CATEGORIES, Finding
 from yizkr.pipeline.critique import entry as critique_entry
+from yizkr.pipeline.document_state import (
+    EXCERPT,
+    EXCERPTS_DIR,
+)
 from yizkr.pipeline.llm import OUTPUT_LIMIT, ROLE_STAGES, USAGE_TOKENS
 from yizkr.pipeline.monitor import (
     _CLASS_NAME,
@@ -158,10 +162,6 @@ from yizkr.pipeline.monitor import (
     _value,
     failure_label,
     reason_label,
-)
-from yizkr.pipeline.orchestrate import (
-    EXCERPT,
-    EXCERPTS_DIR,
 )
 from yizkr.pipeline.rundir import (
     ALERTS,
@@ -3198,8 +3198,8 @@ def _aggregate_content(
     }
 
 
-# the batch a curator's approved equivalences resolve (orchestrate's
-# DocumentRun.resolved), where a confirmed subject is recorded
+# Saved document directories may include an explicitly resolved batch.
+# Reporting reads those recorded subject forms without granting write consent.
 RESOLVED_BATCH = "batch.resolved.json"
 
 

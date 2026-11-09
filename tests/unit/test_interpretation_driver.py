@@ -5,21 +5,23 @@ from datetime import UTC, datetime
 import pytest
 
 from tests.fixtures import pdfs
-from tests.unit.test_orchestrate import approve_all_claims, make_batch
+from tests.fixtures.document_processing import make_batch
 from tests.unit.test_pdf_exclusions import (
     EXTRACT,
     TITLE,
     RecordingClient,
     scan,
 )
+from tests.unit.test_run_provenance import fixed_capture  # noqa: F401
 from yizkr.claims import ClaimBatch, ExtractionRunMetadata
 from yizkr.core.corpus import ExclusionList
 from yizkr.pipeline import text_stages
 from yizkr.pipeline.estimate import CHUNKS, Estimator, _keyed, _Made, _Tally
 from yizkr.pipeline.llm import cached_client, open_cache, read_cache
-from yizkr.pipeline.orchestrate import Orchestrator
 from yizkr.pipeline.review import export_review_csv
 from yizkr.pipeline.scratch import ScratchDriver
+
+pytestmark = pytest.mark.usefixtures("fixed_capture")
 
 
 def inputs(tmp_path, *, standalone):
@@ -228,47 +230,6 @@ def test_context_appearance_change_and_removal_invalidate_both_views(
     assert target.derivations.current(target.critique)
 
 
-def test_ordinary_parallel_preparation_reads_each_parent_only_once(
-    tmp_path,
-    monkeypatch,
-):
-    folder = inputs(tmp_path, standalone=True)
-    driver = Orchestrator(
-        folder,
-        tmp_path / "run",
-        exclusions=ExclusionList(),
-        extract_concurrency=2,
-        log=lambda *_a, **_k: None,
-    )
-    monkeypatch.setattr(driver, "_llm", lambda *_a: RecordingClient())
-    docs = driver.documents()
-    driver.rundir.start(documents=[])
-    driver._prepare_context_containers()
-    readings = dict(driver._interpretation_readings)
-    assert len(readings) == 2
-    # The normal parallel extraction workers ask their own transcription
-    # again; the preparation phase must have completed publication already.
-    from concurrent.futures import ThreadPoolExecutor
-
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        actual = list(
-            pool.map(
-                driver._transcription,
-                [doc for doc in docs if doc.kind == "pdf"],
-            )
-        )
-    assert {id(value) for value in actual} == {
-        id(value) for value in readings.values()
-    }
-    assert (
-        sum(
-            event["event"] == "done" and event.get("stage") == "transcription"
-            for event in driver.rundir.events()
-        )
-        == 2
-    )
-
-
 def test_estimate_context_is_read_only_and_future_readings_are_unknown(
     tmp_path,
     monkeypatch,
@@ -365,12 +326,12 @@ def test_unchanged_claims_preserve_approval_after_context_refresh(
     target.derivations.record(target.batch)
     target.critique.write_text("[]")
     target.derivations.record(target.critique)
-    export_review_csv(batch, target.review)
-    target.derivations.record(target.review)
-    approve_all_claims(target)
-    target.approved.write_text(batch.model_dump_json())
-    assert target.derivations.consents(target.review_reviewed)
-    decision = target.review_reviewed.read_bytes()
+    export_review_csv(batch, target.dir.joinpath("review.csv"))
+    target.dir.joinpath("review.reviewed.csv").write_text(
+        "fictional retained decision\n"
+    )
+    target.dir.joinpath("approved.json").write_text(batch.model_dump_json())
+    decision = target.dir.joinpath("review.reviewed.csv").read_bytes()
     calls = []
 
     def extract(request, client=None, **kwargs):
@@ -401,9 +362,8 @@ def test_unchanged_claims_preserve_approval_after_context_refresh(
     driver._derive(target)
     driver._critique(target, batch)
     assert calls == ["extract", "critique"]
-    assert target.review_reviewed.read_bytes() == decision
-    assert target.derivations.consents(target.review_reviewed)
-    assert target.approved.exists()
+    assert target.dir.joinpath("review.reviewed.csv").read_bytes() == decision
+    assert target.dir.joinpath("approved.json").exists()
     driver._derive(target)
     driver._critique(target, batch)
     assert calls == ["extract", "critique"]

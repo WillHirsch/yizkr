@@ -18,7 +18,7 @@ Start here:
 - `docs/adr/` – focused design guidance and rationale; remaining historical material is marked with open removal tasks and is not an authority for new policy
 - `docs/MODELING.md` – Wikibase modeling conventions
 - `docs/EXAMPLES.md` – the one fictional example universe every example comes from
-- `src/yizkr/pipeline/README.md` – **how ingestion works end to end**: the `yizkr ingest run` loop and its two human review gates
+- `src/yizkr/pipeline/README.md` – **how ingestion works end to end**: disposable rebuilds, reviewed text-source additions and shared stage operations
 - `deploy/` – Wikibase Suite deployment (Docker Compose + runbook)
 - `docs/runbooks/stack-recovery.md` – recovering a stopped or crashed stack: volume archives first, then the database, the full stack, the derived indexes and a smoke test, and a backup only where the stage or a decision asks for one
 - `src/yizkr/` – the tooling package: model manifest + bootstrap (`model/`), the claim JSON contract (`claims.py`), the ingestion pipeline (`pipeline/`), and the SPARQL query library (`queries/`)

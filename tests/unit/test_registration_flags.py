@@ -9,8 +9,8 @@ as MediaWiki lists them by their SHA-1), or its title is the label of an
 item with no hash (`unhashed-title`). An item with no hash has no `media
 SHA-1` and names a `media file`, or is an `instance of` an artifact
 kind, as a GEDCOM media object's item is. A flag changes nothing
-registration finds or writes, and `ingest run` raises it as an alert of
-the write. On an instance that only registration and the GEDCOM import
+registration finds or writes, and the scratch writer raises it as an alert
+of the write. On an instance that only registration and the GEDCOM import
 have filled, as every scratch instance is, shared-file is never raised,
 and unhashed-title only for a scan or derived medium registered under
 exactly a GEDCOM media object's label.
@@ -1457,7 +1457,7 @@ def test_an_excerpts_write_raises_its_pdfs_flags_on_the_excerpt(tmp_path):
     from tests.unit.test_container_citations import common_record
     from yizkr.claims import ArtifactRef
     from yizkr.pipeline.container_sources import project_sources
-    from yizkr.pipeline.orchestrate import ExcerptRun
+    from yizkr.pipeline.document_state import ExcerptRun
 
     pdf_bytes = b"%PDF synthetic family history of 2008"
     wiki = FakeWiki()
@@ -2912,14 +2912,11 @@ class TestTheSideRuleNamesTheLabel:
 
     def test_resolve_matches_nothing_by_label(self, tmp_path):
         """A registered artifact holds Sebastian's name and a person's item
-        Hildegard's: the resolve step, of `ingest run` and of `yizkr
-        ingest resolve`, leaves every ref local and reads nothing of the
-        instance (#109)."""
-        from types import SimpleNamespace
+        Hildegard's: `yizkr ingest resolve` leaves every ref local and
+        reads nothing of the instance (#109)."""
 
         from yizkr import cli
         from yizkr.claims import ClaimBatch
-        from yizkr.pipeline.orchestrate import Orchestrator
 
         wiki = WritingWiki()
         Registrar(wiki).register_artifact(
@@ -2930,10 +2927,6 @@ class TestTheSideRuleNamesTheLabel:
             ("instance_of", WritingWiki.ITEMS["human"], None),
         )
         batch = family_gedcom(wiki, TWO_PEOPLE_GEDCOM)
-        doc = SimpleNamespace(equivalences_reviewed=tmp_path / "none.csv")
-        step = SimpleNamespace(client=None, log=lambda *a, **k: None)
-
-        assert Orchestrator._step_resolve(step, doc, batch) == batch
 
         path = tmp_path / "batch.json"
         path.write_text(batch.model_dump_json())
@@ -3433,77 +3426,75 @@ class TestTheReviewsProbes:
 
 
 class TestTheWriteStepRaisesTheFlag:
+    @staticmethod
+    def scratch_run(tmp_path, monkeypatch, text, *, rescan=False):
+        from tests.unit.test_scratch_write import Run, batch
+        from yizkr.claims import ArtifactRef
+        from yizkr.pipeline.gedcom import adapt_gedcom
+
+        run = Run(tmp_path, monkeypatch)
+        portrait = run.add("studio-portrait-1890s.png", PORTRAIT, batch())
+        portrait.state.title = TITLE
+        if rescan:
+            second = run.add("studio-portrait-rescan.png", RESCAN, batch())
+            second.state.title = f"{TITLE} [media object]"
+        exported = adapt_gedcom(
+            text, artifact=ArtifactRef.from_bytes(text.encode())
+        ).batch
+        doc = run.add("example-family.ged", text.encode(), exported)
+        run.past_the_barrier(until="write")
+        return run, doc
+
     def test_the_flag_is_an_alert_of_the_gedcoms_write(
         self, tmp_path, monkeypatch
     ):
-        """Raised as registration raises it: on the GEDCOM's write, the
-        artifact as its item, the media object's item against it, and the
-        artifact's own SHA-1 as its medium (docs/ANOMALIES.md)."""
-        from tests.unit.test_write_step import WriteStep
+        """The scratch register stage registers the scan before the GEDCOM
+        writer creates its separate media object and publishes the flag."""
         from yizkr.pipeline import rundir
 
         monkeypatch.setattr(
             rundir, "_now", lambda: "2026-10-02T09:00:00+00:00"
         )
-        wiki = WritingWiki()
-        artifact = Registrar(wiki).register_artifact(
-            scan(tmp_path, PORTRAIT), "photograph", TITLE
-        )
-        batch = family_gedcom(wiki)
-        step = WriteStep(tmp_path, wiki, "example-family.ged")
-        step.doc.source.parent.mkdir(parents=True, exist_ok=True)
-        step.doc.source.write_text(FAMILY_GEDCOM)
-        step.review(batch, decide=lambda row: "approve")
+        run, doc = self.scratch_run(tmp_path, monkeypatch, FAMILY_GEDCOM)
 
-        summary = step.write(batch)
-
+        summary = run.record("write")["documents"][doc.sha1]
         media_object = summary["created_items"]["md1"]
-        (alert,) = step.orchestrator.rundir.alerts()
+        artifact = run.record("register")["documents"][sha1(PORTRAIT)]
+        (alert,) = run.driver.rundir.alerts()
         assert alert["check"] == UNHASHED_TITLE
         assert alert["stage"] == "write"
-        assert alert["subject"] == step.doc.sha1[:12]
-        assert alert["kind"] == step.doc.kind
-        assert alert["artifact"] == artifact.artifact_qid
+        assert alert["subject"] == doc.sha1[:12]
+        assert alert["kind"] == doc.kind
+        assert alert["artifact"] == artifact
         assert alert["others"] == [media_object]
         assert alert["medium"] == sha1(PORTRAIT)[:12]
         assert any(
-            line.strip()
-            == f"flagged {UNHASHED_TITLE}: item {artifact.artifact_qid}, "
+            line.strip() == f"flagged {UNHASHED_TITLE}: item {artifact}, "
             f"against {media_object}"
-            for line in step.lines
+            for line in run.lines
         )
 
     def test_a_refused_media_objects_flag_is_an_alert_of_the_write(
         self, tmp_path, monkeypatch
     ):
-        """A media object that may join neither the item under its label
-        nor the one under its tagged label is refused before the first
-        write, the rest of the export written, and the scan under its
-        label raised against the item under its tagged label."""
-        from tests.unit.test_write_step import WriteStep
+        """A media object that may join neither registered scan is refused;
+        the remaining GEDCOM claim writes and the refusal raises its flag."""
         from yizkr.pipeline import rundir
 
         monkeypatch.setattr(
             rundir, "_now", lambda: "2026-10-02T09:00:00+00:00"
         )
-        wiki = WritingWiki()
-        plain, tagged = (
-            TestAGedcomsMediaObjectAndARegisteredArtifact().both_labels_registered(
-                wiki
-            )
+        run, doc = self.scratch_run(
+            tmp_path, monkeypatch, TWO_PEOPLE_GEDCOM, rescan=True
         )
-        batch = family_gedcom(wiki, TWO_PEOPLE_GEDCOM)
-        step = WriteStep(tmp_path, wiki, "example-family.ged")
-        step.doc.source.parent.mkdir(parents=True, exist_ok=True)
-        step.doc.source.write_text(TWO_PEOPLE_GEDCOM)
-        step.review(batch, decide=lambda row: "approve")
 
-        summary = step.write(batch)
-
-        assert len(summary["refused"]) == 1
+        summary = run.record("write")["documents"][doc.sha1]
+        registered = run.record("register")["documents"]
+        plain, tagged = registered[sha1(PORTRAIT)], registered[sha1(RESCAN)]
+        assert summary["refused"] == 1
         assert summary["written"] == 1
         assert "md1" not in summary["created_items"]
-        (alert,) = step.orchestrator.rundir.alerts()
+        (alert,) = run.driver.rundir.alerts()
         assert alert["check"] == UNHASHED_TITLE
         assert alert["artifact"] == plain
         assert alert["others"] == [tagged]
@@ -3657,23 +3648,6 @@ class TestWhatResolveAndAWriteRead:
         ]
         wiki.forget()
         return wiki, people, artifact, exported
-
-    def test_the_resolve_step_reads_nothing(self, tmp_path):
-        from types import SimpleNamespace
-
-        from yizkr.pipeline.orchestrate import Orchestrator
-
-        wiki, *_ = self.instance(tmp_path)
-        doc = SimpleNamespace(equivalences_reviewed=tmp_path / "none.csv")
-        step = SimpleNamespace(client=wiki, log=lambda *a, **k: None)
-        batch = naming("Unrelated person 0007", TITLE)
-
-        assert Orchestrator._step_resolve(step, doc, batch) == batch
-
-        assert wiki.label_reads == []
-        assert wiki.claims_of == []
-        assert wiki.whole_reads == []
-        assert wiki.items_read == []
 
     def test_a_write_reads_the_labels_once(self, tmp_path):
         """The GEDCOM written after the scan: its media object is placed

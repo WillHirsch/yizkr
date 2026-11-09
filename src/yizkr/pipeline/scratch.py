@@ -5,17 +5,17 @@ A scratch run is one run directory under the runs directory
 (`var/scratch/<run id>/` by default), with fresh state directories: every
 document's views are made again in it by the code under test, and every
 model call goes through the LLM cache, which answers the calls the code
-leaves the same (ADR-0032). The run directory is the orchestrator's
-state directory and run directory at once (yizkr.pipeline.orchestrate,
+leaves the same (ADR-0032). The run directory holds document state
+and invocation records together (yizkr.pipeline.document_state and
 yizkr.pipeline.rundir), so the live monitor (yizkr.pipeline.monitor)
 follows it as it follows any run.
 
 **Stages.** Each document takes the per-document stages its kind plans
-(orchestrate.DOCUMENT_STAGES): transcription, which the transcription
+(stage_planning.DOCUMENT_STAGES): transcription, which the transcription
 check guards, extraction and the critique; or the GEDCOM adapter for a
 .ged file. An independent image source a PDF places on any page, or a
 deck paints on a slide, read on its own, is a document of its own, an
-excerpt (orchestrate.ExcerptRun), which takes the same stages once its
+excerpt (document_state.ExcerptRun), which takes the same stages once its
 container's transcription has found it, and joins the run plan then.
 Nothing before the barrier reads or writes the wiki: no artifact is
 registered before the register stage, and a deck's or a PDF's image
@@ -120,6 +120,8 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
+import functools
+import hashlib
 import json
 import os
 import re
@@ -128,14 +130,31 @@ import socket
 import stat
 import subprocess
 import sys
+import threading
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections import Counter
+from collections.abc import (
+    Callable,
+    Collection,
+    Iterable,
+    Iterator,
+    Mapping,
+    Sequence,
+)
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from yizkr.core.corpus import MISSING_LIST, ExclusionConfigError
+from yizkr.claims import ArtifactRef, ClaimBatch
+from yizkr.core.config import Config
+from yizkr.core.corpus import (
+    MISSING_LIST,
+    ExclusionConfigError,
+    ExclusionList,
+    follow_decks,
+    is_excluded,
+)
 
 # the CLI's exit statuses (yizkr.core.exits), which the scratch commands
 # return
@@ -143,27 +162,57 @@ from yizkr.core.exits import EXIT_FAILED as EXIT_FAILED
 from yizkr.core.exits import EXIT_INTERRUPTED as EXIT_INTERRUPTED
 from yizkr.core.exits import EXIT_OK as EXIT_OK
 from yizkr.core.exits import EXIT_STOPPED as EXIT_STOPPED
-from yizkr.pipeline.cancellation import RunCancelled, check_cancelled
-from yizkr.pipeline.orchestrate import (
+from yizkr.core.wiki import WikiClient
+from yizkr.pipeline import stage_planning
+from yizkr.pipeline.cancellation import (
+    Cancellation,
+    RunCancelled,
+    cancellation_scope,
+    check_cancelled,
+    current_cancellation,
+)
+from yizkr.pipeline.document_state import (
+    BATCH_VOLATILE,
     BATCHED,
+    CHECKED_ROUTES,
     DUPLICATE,
+    EXCERPT,
     FAILED,
-    MODEL_VARIABLE,
+    PAGED,
     PAUSED,
     PDF,
+    PENDING,
+    REUSED,
+    TRANSCRIPTION_VOLATILE,
     DocumentRun,
+    DocumentState,
     ExcerptRun,
-    Orchestrator,
+    ProcessingUnavailable,
+    ViewInspection,
+    _findings,
+    _read_by_page,
+    _set_aside,
+    _supersede,
+    _unreadable_critique,
+    _write_view,
+    discover_documents,
+    route_transcription,
+    validate_source_owners,
 )
+from yizkr.pipeline.run_resources import MODEL_VARIABLE, RunResources
 from yizkr.pipeline.rundir import (
     ABORT,
     CONTROL,
     DEVELOPMENT_STAGE,
+    DOCUMENT_FAILED,
     DONE,
     MANIFEST,
     NEEDS_ATTENTION,
     PAUSE,
     RESUME,
+    RUN_END,
+    RUN_INTERRUPTED,
+    SET_ASIDE,
     ControlState,
     DispatchStopped,
     ModelAliasRefused,
@@ -172,6 +221,7 @@ from yizkr.pipeline.rundir import (
     code_version,
     exclusions_record,
     fold_control,
+    model_alias,
     run_state,
     settings_conflicts,
     summarise,
@@ -185,7 +235,12 @@ from yizkr.pipeline.stage_planning import (
     batch_stage,
     stages_for,
 )
-from yizkr.pipeline.stages import read_jsonl
+from yizkr.pipeline.stages import (
+    atomic_write_text,
+    content_hash,
+    read_jsonl,
+    sha1_file,
+)
 from yizkr.pipeline.workers import WorkerShutdownTimeout
 
 # the run manifest's mode for a scratch run
@@ -197,7 +252,7 @@ DEFAULT_CACHE = Path("var/llm-cache")
 # records itself in; no run directory's name starts with a dot
 LOCK_FILE = ".lock"
 # the directory of the run directory the corpus stages keep their outputs
-# in, one directory each; the orchestrator gives no document its name
+# in, one directory each; document directories use other names
 CORPUS_DIR = "corpus"
 # the event that says the run is past the barrier
 BARRIER = "barrier"
@@ -787,19 +842,19 @@ def choose_run(
 # -- the driver ---------------------------------------------------------------
 
 
-class ScratchDriver(Orchestrator):
+class ScratchDriver:
     """Runs one scratch run in `run_dir` (the module docstring says how).
 
-    The per-document stages are the orchestrator's own, taken one stage of
-    one document at a time; `run` replaces the orchestrator's loop and its
-    gates. `until` names the stage the run stops after: a per-document
+    The driver schedules shared document-stage APIs one stage of one
+    document at a time, then runs the corpus stages after their barrier.
+    `until` names the stage the run stops after: a per-document
     stage (`gedcom` stops with `extraction`, the rank they share) or a
     corpus stage. `corpus_stages` defaults to CORPUS_STAGES and
     `kept_state` to KEPT_STATE. `cache_dir` is required: every model call
     of a scratch run goes through the LLM cache. `min_free` is the free
     space, in bytes, the preflight asks for. `clock`, `sleep` and `poll`
-    serve the waits (for a resume, and for the subscription); the other
-    options are the orchestrator's. A scratch run keeps its settings."""
+    serve the waits (for a resume, and for the subscription); the remaining
+    options configure document processing. A scratch run keeps its settings."""
 
     # the command an artifact's description says ingested it
     command = "yizkr scratch run"
@@ -819,20 +874,84 @@ class ScratchDriver(Orchestrator):
         sleep: Callable[[float], Any] | None = None,
         poll: float = POLL_SECONDS,
         llm: str = "claude-code",
-        **options: Any,
+        artifact_type: str = "artifact",
+        language: str = "auto",
+        fallback_language: str = "en",
+        chunk_concurrency: int = 3,
+        extract_effort: str = "low",
+        review_effort: str = "high",
+        extract_model: str | None = None,
+        env_file: Path | None = None,
+        exclusions: ExclusionList | None = None,
+        refresh: Collection[str] = (),
+        epochs: Mapping[str, int] | None = None,
+        cancellation: Cancellation | None = None,
+        log=print,
     ) -> None:
         if cache_dir is None:
             raise ValueError(
                 "a scratch run takes every model call through the LLM cache"
             )
-        super().__init__(
-            folder,
-            run_dir,
-            llm=llm,
-            cache_dir=cache_dir,
-            fixed_settings=True,
-            **options,
+        self.folder = folder
+        # the never-ingest list. run() refuses to start without one:
+        # an empty ExclusionList is an explicit configuration, None is none.
+        self.exclusions = exclusions
+        self.state_dir = run_dir
+        self.rundir = RunDir(run_dir)
+        self.cache_dir = cache_dir
+        self.refresh = tuple(sorted(set(refresh)))
+        self.epochs = dict(epochs or {})
+        self.llm = llm
+        self.artifact_type = artifact_type
+        self.language = language
+        self.fallback_language = fallback_language
+        self.chunk_concurrency = chunk_concurrency
+        # reasoning effort per phase: mechanical bulk steps (transcription,
+        # extraction) run low; the judgment step, the critique, runs high
+        # — where the thinking is cheap and the decision matters.
+        self.extract_effort = extract_effort
+        self.review_effort = review_effort
+        # per-phase model: claim extraction is a high-volume, structured
+        # task where source discipline (extract only what the source
+        # asserts) matters more than raw capability, so it can run a
+        # distinct model from the run's main one — which stays on the
+        # critique. None inherits the main model. See docs/adr/0016.
+        self.extract_model = extract_model
+        self.env_file = env_file
+        self.log = log
+        self._config: Config | None = None
+        self._client: WikiClient | None = None
+        # media SHA-1 -> the batch made or reused in this invocation
+        self._derived: dict[str, ClaimBatch] = {}
+        # (media SHA-1, view name) -> the view as made or reused in this
+        # run: each view is decided once per run, a refreshed one made
+        # again once
+        self._views: dict[tuple[str, str], Any] = {}
+        # Dependencies admitted before computation, recorded only after the
+        # product is published. Later edits cannot relabel an old computation
+        # as having used the newly changed resources or configuration.
+        self._view_dependencies: dict[tuple[Path, str], ViewInspection] = {}
+        # image SHA-1 -> the excerpt found for it in this run
+        # (_excerpts_of): one document however many containers place it
+        self._excerpts: dict[str, ExcerptRun] = {}
+        self._unavailable_excerpts: set[str] = set()
+        # Frozen from every admitted current container before reading begins.
+        # Discovery of excerpt readings must not choose their context scope.
+        self._interpretation_parents: dict[str, tuple[DocumentRun, ...]] = {}
+        self._interpretation_contexts: dict[str, Any] = {}
+        self._interpretation_readings: dict[str, Any] = {}
+        self._interpretation_pending: set[str] = set()
+        self._interpretation_failed: set[str] = set()
+        self.resources = RunResources(
+            cache_dir, refresh=self.refresh, epochs=self.epochs
         )
+        self._cancellation_parent = cancellation or current_cancellation()
+        self.cancellation = Cancellation(parent=self._cancellation_parent)
+        self._cancellation_used = False
+        self._control_active = False
+        self._active_work: dict[Cancellation, tuple[str, str | None]] = {}
+        self._cancellation_lock = threading.Lock()
+
         self.run_id = run_id or Path(run_dir).name
         self.corpus_stages = tuple(
             CORPUS_STAGES if corpus_stages is None else corpus_stages
@@ -1420,9 +1539,9 @@ class ScratchDriver(Orchestrator):
     # -- one document -------------------------------------------------------
 
     def _prepare(self, doc: DocumentRun) -> None:
-        """Ready the document's directory once in the invocation, as the
-        orchestrator does before a document's stages, without its
-        registration: a directory whose source bytes changed, or whose
+        """Ready the document directory once before its stages.
+
+        A directory whose source bytes changed, or whose
         files nothing records, is set aside and started afresh (ADR-0010);
         the directory's record comes first; and a presentation's common
         source inventory is published before reading."""
@@ -1467,11 +1586,11 @@ class ScratchDriver(Orchestrator):
         return {key for key, role in made.items() if role in self.refresh}
 
     def _run_stage(self, doc, stage, compute, attention=None):
-        """The orchestrator's stage, noting a view it makes under a
+        """The document stage, noting a view it makes under a
         refresh of its role. The view is written and recorded after the
         stage, so the refresh is recorded only once it is saved
         (_dispatch_one): one whose view was never saved is made again."""
-        result = super()._run_stage(doc, stage, compute, attention)
+        result = self._execute_stage(doc, stage, compute, attention)
         role = STAGE_ROLES.get(stage)
         if role in self.refresh:
             self._refreshing.append((doc, stage, role))
@@ -1501,15 +1620,20 @@ class ScratchDriver(Orchestrator):
         deciding whether to reuse it does not change the run's settings.
         """
         refreshed = (doc.sha1, stage) in self._refreshed
-        return super()._refresh_requested(doc, role, stage) and not refreshed
+        return self._role_refreshed(doc, role, stage) and not refreshed
 
     def _run_stage_of(self, doc: DocumentRun, stage: str) -> None:
         """One per-document stage of one document, through the
-        orchestrator's views: made, or reused when it stands."""
+        saved document products: made, or reused when it stands."""
         self._prepare(doc)
         if stage == "transcription":
             self._transcription(doc)
-            doc.state.status = TRANSCRIBED
+            # Replaying a current reading must not rewrite a completed
+            # document's state merely to move its progress backwards.
+            if doc.state.status != BATCHED or not doc.derivations.current(
+                doc.batch
+            ):
+                doc.state.status = TRANSCRIBED
         elif stage == batch_stage(doc.kind).name:
             self._batches[doc.sha1] = self._derive(doc)
             doc.state.status = BATCHED
@@ -1930,6 +2054,7 @@ class ScratchDriver(Orchestrator):
         # plan; the others join it as their containers' transcriptions find
         # them
         self._excerpts, self._queued = {}, set()
+        self._unavailable_excerpts = set()
         self._corpus_sha1s = frozenset(doc.sha1 for doc in docs)
         known = self._known_excerpts(taken)
 
@@ -1937,6 +2062,15 @@ class ScratchDriver(Orchestrator):
         fields = self._fields([*docs, *known], canaries)
         past = self._past_barrier_only(fields, [*taken, *known])
         if past:
+            unavailable = self._unavailable_excerpts - {
+                excerpt.sha1 for excerpt in known
+            }
+            if unavailable:
+                raise ScratchRefused(
+                    "saved source images need repair, but the code differs "
+                    "from the run's: resume with its original code to "
+                    "repair the document products, or start a new run"
+                )
             if self.refresh:
                 raise ScratchRefused(
                     "the code differs from the run's, so this invocation "
@@ -2122,6 +2256,1925 @@ class ScratchDriver(Orchestrator):
             except RunCancelled:
                 return EXIT_STOPPED
             carry = True
+
+    @property
+    def config(self) -> Config:
+        if self._config is None:
+            self._config = Config.load(self.env_file)
+        return self._config
+
+    @property
+    def client(self) -> WikiClient:
+        if self._client is None:
+            self._client = WikiClient(self.config)
+        return self._client
+
+    def _engine(self, role: str) -> Any:
+        effort, model = self._engine_settings(role)
+        return self.resources.engine(
+            role,
+            engine=self.llm,
+            effort=effort,
+            model=model,
+            cancellation=self.cancellation,
+            rundir=self.rundir,
+            fixed_settings=True,
+        )
+
+    def _llm_cache(self) -> Any:
+        return self.resources.response_cache()
+
+    def role_client(
+        self, role: str, *, events: Callable[..., Any] | None = None
+    ) -> Any:
+        return self.resources.role_client(
+            role, self._engine(role), events=events
+        )
+
+    def _close_engines(self) -> None:
+        self.resources.close()
+
+    def _engine_settings(self, role: str) -> tuple[str, str | None]:
+        """(effort, model override) for a role: transcribe, extract,
+        critique."""
+        if role == "critique":
+            return self.review_effort, None
+        if role == "extract":
+            return self.extract_effort, self.extract_model
+        return self.extract_effort, None
+
+    def _configured_model(self, role: str) -> tuple[str | None, str]:
+        """(model, where it is configured) for a role: its own model (the
+        extraction model), else $YIZKR_LLM_MODEL; None when neither names
+        one and the engine runs a default of its own."""
+        _effort, model = self._engine_settings(role)
+        if model:
+            return model, "the extraction model (--extract-model)"
+        return os.environ.get(MODEL_VARIABLE) or None, f"${MODEL_VARIABLE}"
+
+    def _refuse_model_aliases(
+        self, roles: Sequence[str] = MODEL_ROLES
+    ) -> None:
+        """Refuse a run whose configuration names a model by an alias
+        (rundir.model_alias): the engine would choose the model, and
+        neither the run manifest nor the LLM cache's keys could say
+        which."""
+        refused = {}
+        for role in roles:
+            model, where = self._configured_model(role)
+            if model_alias(model):
+                refused.setdefault((where, model), []).append(role)
+        if refused:
+            raise ModelAliasRefused(
+                "; ".join(
+                    f"{where} names the model {model!r} for "
+                    f"{', '.join(roles)}, an alias"
+                    for (where, model), roles in refused.items()
+                )
+                + ". The engine resolves an alias to a model of its own "
+                "choosing, which neither the run manifest nor the LLM "
+                "cache's keys can name. Configure the full model id "
+                "instead, such as claude-sonnet-5."
+            )
+
+    def _llm(self, role: str, doc: DocumentRun):
+        """The engine for one role, as one document's stages see it
+        (`role_client`), with what the cache does and every call that
+        reaches the engine reported to the run directory under the
+        document's SHA-1."""
+        return self.role_client(
+            role,
+            events=functools.partial(
+                self.rundir.emit, subject=doc.sha1, kind=doc.kind
+            ),
+        )
+
+    def documents(self) -> list[DocumentRun]:
+        self._gather_embedded()
+        docs = discover_documents(
+            self.folder,
+            self.state_dir,
+            exclusions=self.exclusions,
+            log=self.log,
+        )
+        self._check_container_owners(docs)
+        return docs
+
+    def _check_container_owners(self, docs: Sequence[DocumentRun]) -> None:
+        validate_source_owners(docs, self._container_preparation)
+        self._index_interpretation_parents(docs)
+
+    def _index_interpretation_parents(
+        self, docs: Sequence[DocumentRun]
+    ) -> None:
+        from yizkr.pipeline.container_sources import image_page_source
+
+        parents: dict[str, dict[str, DocumentRun]] = {}
+        seen = set()
+        for doc in docs:
+            if doc.unreadable is not None or doc.sha1 in seen:
+                continue
+            seen.add(doc.sha1)
+            try:
+                projection = self._container_sources(doc)
+            except Exception:
+                # A preparation failure supplies no verified correspondence.
+                continue
+            if projection is None:
+                continue
+            for body in projection.inventory.parts:
+                if body.kind != "page_body":
+                    continue
+                located = image_page_source(projection, body)
+                if located is not None:
+                    source, _part, _placement = located
+                    parents.setdefault(source.owner.sha1, {})[doc.sha1] = doc
+        self._interpretation_parents = {
+            owner: tuple(values[key] for key in sorted(values))
+            for owner, values in parents.items()
+        }
+        self._interpretation_contexts = {}
+        self._interpretation_readings = {}
+
+    def _interpretation_context(self, doc: DocumentRun, transcription):
+        """Build interpretation inputs from completed readings only."""
+        parents = self._interpretation_parents.get(doc.sha1, ())
+        if not parents:
+            return None
+        from yizkr.pipeline.interpretation_context import (
+            ContainerReadings,
+            ContextGap,
+            build_interpretation_context,
+        )
+
+        containers, unavailable = [], []
+        for parent in parents:
+            try:
+                sources = self._container_sources(parent)
+            except Exception:
+                sources = None
+            if sources is None:
+                unavailable.append(
+                    ContextGap(
+                        container=ArtifactRef(sha1=parent.sha1),
+                        reason="container preparation unavailable",
+                    )
+                )
+                continue
+            reading = self._interpretation_readings.get(parent.sha1)
+            images = (
+                self._interpretation_images(parent, sources)
+                if reading is not None
+                else {}
+            )
+            containers.append(ContainerReadings(sources, reading, images))
+        context = build_interpretation_context(transcription, containers)
+        return context.model_copy(
+            update={"gaps": (*context.gaps, *unavailable)}
+        )
+
+    def _interpretation_images(self, parent: DocumentRun, sources):
+        from yizkr.pipeline.transcribe import Transcription
+
+        images = {}
+        for owner, source in sources.sources.items():
+            if (
+                source.readable
+                and source.reading_path is not None
+                and self._image_failure(parent, owner) is None
+            ):
+                # Unreadable products remain explicit gaps in the builder.
+                with contextlib.suppress(OSError, ValueError):
+                    images[owner] = Transcription.model_validate_json(
+                        (parent.dir / source.reading_path).read_bytes()
+                    )
+        return images
+
+    def _prepare_interpretation_context(self, doc: DocumentRun, transcription):
+        """Publish the separate current input before any downstream reuse."""
+        context = self._interpretation_context(doc, transcription)
+        self._interpretation_contexts[doc.sha1] = context
+        path = doc.interpretation_context
+        if context is None:
+            if path.exists():
+                path.unlink()
+                doc.derivations.forget(path)
+        else:
+            data = context.model_dump(mode="json")
+            _write_view(path, json.dumps(data, indent=2, sort_keys=True))
+            doc.derivations.set_content(path.name, content_hash(data))
+        return context
+
+    def _gather_embedded(self) -> None:
+        """Give the never-ingest list the SHA-1s of the images its globs
+        name, by their names in the archive, in the folder's decks, in
+        place of any it was given before. The decks are selected and
+        hashed by corpus.follow_decks, the one function the single-file
+        steps and the transcription import ask too, so every path asks the
+        list a run asks. This comes before any container's images are
+        read, so the reader (`_excluded_image`) and the write's registrar,
+        which both ask this list, keep those bytes out of every deck and
+        PDF that holds them as they are, and out of the run as a file of
+        their own (ADR-0008). A deck the list excludes is asked too: its
+        members are hashed in memory and nothing of it is kept, so listing
+        a deck never frees the bytes a glob names in it. A deck that
+        cannot be read as an archive, or a folder that cannot be listed,
+        refuses the run (ExclusionConfigError), since the bytes its globs
+        would name cannot be known."""
+        if self.exclusions is None:
+            return
+        self.exclusions = follow_decks(self.exclusions, self.folder)
+
+    @contextlib.contextmanager
+    def _cancellation_scope(self):
+        """Own the invocation signal and its control-file watcher."""
+        if self._cancellation_used:
+            self.cancellation = Cancellation(parent=self._cancellation_parent)
+        self._cancellation_used = True
+        finished = threading.Event()
+        invocation_signal = self.cancellation
+
+        def watch():
+            while not finished.wait(0.1):
+                if not self._control_active:
+                    continue
+                try:
+                    control = self.rundir.control()
+                    if finished.is_set():
+                        return
+                    if control.scopes.get("run") == "aborted":
+                        invocation_signal.cancel("run aborted")
+                    with self._cancellation_lock:
+                        active = list(self._active_work.items())
+                    for token, (stage, kind) in active:
+                        for scope in (f"stage:{stage}", f"kind:{kind}"):
+                            if control.scopes.get(scope) == "aborted":
+                                token.cancel(f"{scope} aborted")
+                                break
+                except Exception as exc:
+                    if not finished.is_set():
+                        invocation_signal.cancel(exception=exc)
+                    return
+
+        watcher = threading.Thread(
+            target=watch, name="yizkr-run-control", daemon=True
+        )
+        watcher.start()
+        try:
+            with cancellation_scope(self.cancellation):
+                self.cancellation.check()
+                yield
+        except KeyboardInterrupt as exc:
+            self.cancellation.cancel(exception=exc)
+            raise
+        finally:
+            self._control_active = False
+            finished.set()
+            watcher.join(timeout=1.0)
+            self.cancellation.close()
+
+    def _cancellation_reason(self, exc: RunCancelled) -> str:
+        """Keep native control reasons; never copy arbitrary exception text."""
+        reason = str(exc)
+        control = self.rundir.control()
+        if any(
+            state == "aborted" and reason == f"{scope} aborted"
+            for scope, state in control.scopes.items()
+        ):
+            return reason
+        return type(exc).__name__
+
+    @contextlib.contextmanager
+    def _stage_cancellation(self, stage: str, kind: str | None = None):
+        """Bind borrowed calls to the active stage's abort scope."""
+        token = Cancellation(
+            parent=current_cancellation() or self.cancellation
+        )
+        with self._cancellation_lock:
+            self._active_work[token] = (stage, kind)
+        try:
+            with cancellation_scope(token):
+                if self._control_active:
+                    control = self.rundir.control()
+                    if control.scopes.get("run") == "aborted":
+                        self.cancellation.cancel("run aborted")
+                    for scope in (f"stage:{stage}", f"kind:{kind}"):
+                        if control.scopes.get(scope) == "aborted":
+                            token.cancel(f"{scope} aborted")
+                            break
+                token.check()
+                yield token
+                token.check()
+        finally:
+            with self._cancellation_lock:
+                self._active_work.pop(token, None)
+            token.close()
+
+    def _execute_stage(
+        self,
+        doc: DocumentRun,
+        stage: str,
+        compute: Callable[[], Any],
+        attention: Callable[[Any], Sequence[str]] | None = None,
+    ) -> Any:
+        """Run one stage of a document as the run directory records it.
+
+        The stage is dispatched only while the control file lets it and
+        the document's kind through (DispatchStopped otherwise), and an
+        event says when it starts, when it is done (with the reasons its
+        output needs attention, if any) and when it fails, with the
+        reason. The reasons are kept in the document's state, for the
+        runs that reuse the stage's view."""
+        check_cancelled()
+        where = {"subject": doc.sha1, "kind": doc.kind, "stage": stage}
+        control = self.rundir.control()
+        stopped = control.stopped(stage=stage, kind=doc.kind)
+        if stopped:
+            self.rundir.emit("held", reason=stopped, **where)
+            raise DispatchStopped(f"{stage} not dispatched: {stopped}")
+        self.rundir.emit("started", **where)
+        typed_result = stage in {
+            "transcription",
+            "extraction",
+            "gedcom",
+            "critique",
+        }
+        if typed_result:
+            detail = dict(doc.state.detail or {})
+            outcomes = dict(detail.get("stage_results") or {})
+            outcomes.pop(stage, None)
+            doc.state.detail = detail | {"stage_results": outcomes}
+        try:
+            with self._stage_cancellation(stage, doc.kind):
+                result = compute()
+        except BaseException as exc:
+            if typed_result:
+                from yizkr.pipeline.llm import PassPaused
+
+                outcomes = doc.state.detail["stage_results"]
+                # Preserve an explicit incomplete result and its diagnostics;
+                # otherwise an earlier successful attempt cannot describe this
+                # failed, paused or cancelled computation.
+                if (
+                    stage not in outcomes
+                    or outcomes[stage]["status"] == "complete"
+                ):
+                    outcomes[stage] = {
+                        "status": "paused"
+                        if isinstance(exc, PassPaused)
+                        else "cancelled"
+                        if isinstance(exc, (KeyboardInterrupt, RunCancelled))
+                        else "failed"
+                    }
+            if isinstance(exc, RunCancelled):
+                self.rundir.emit(
+                    "cancelled", reason=self._cancellation_reason(exc), **where
+                )
+            if isinstance(exc, Exception):
+                reason = f"{type(exc).__name__}: {exc}"
+                self.rundir.emit("failed", reason=reason[:500], **where)
+                from yizkr.pipeline import anomalies
+
+                anomalies.failed(self.rundir, doc, stage)
+            raise
+        reasons = list(attention(result)) if attention is not None else []
+        detail = dict(doc.state.detail or {})
+        noted = dict(detail.pop("attention", None) or {})
+        noted.pop(stage, None)
+        if reasons:
+            noted[stage] = reasons
+        doc.state.detail = detail | ({"attention": noted} if noted else {})
+        self.rundir.emit("done", attention=reasons or None, **where)
+        return result
+
+    def _role_refreshed(self, doc: DocumentRun, role: str, stage: str) -> bool:
+        """Whether invocation policy requires this view to be recomputed."""
+        return role in self.refresh
+
+    def _processing_dependencies(
+        self, doc: DocumentRun, stage: str, *, route: str | None = None
+    ) -> dict[str, Any]:
+        """Observe declared generation inputs without creating a client."""
+        from yizkr.pipeline.textlayer import is_pdf_input
+
+        descriptor = stage_planning.STAGES[stage]
+        configuration = {}
+        if descriptor.process != "deterministic":
+            route = route or self._route(doc)
+            if stage == "transcription":
+                from yizkr.pipeline.media_stages import (
+                    excerpt_dependencies,
+                    preparation_dependencies,
+                )
+
+                configuration.update(
+                    route=route,
+                    language=self.language,
+                    fallback_language=self.fallback_language,
+                )
+                prepared = (
+                    self._media_preparation(doc)
+                    if doc.kind != "text"
+                    else None
+                )
+                if prepared is not None:
+                    configuration["preparation"] = preparation_dependencies(
+                        prepared
+                    )
+                if route == EXCERPT:
+                    candidates = self._excerpt_candidates(doc)
+                    if not candidates:
+                        raise OSError(
+                            "no current verified container image reading"
+                        )
+                    configuration["excerpt"] = excerpt_dependencies(
+                        candidates[0]
+                    )
+            if stage != "transcription" or route in {"vision", PAGED}:
+                role = descriptor.role
+                effort, _ = self._engine_settings(role)
+                model, _ = self._configured_model(role)
+                configuration.update(
+                    engine=self.llm,
+                    model=model,
+                    effort=effort if self.llm != "anthropic" else None,
+                    epoch=self.epochs.get(role, 0),
+                )
+            if stage == "extraction":
+                from yizkr.pipeline.text_stages import ExtractionRequest
+
+                configuration.update(
+                    strategy="chunked",
+                    budget=ExtractionRequest.budget,
+                    retries=ExtractionRequest.retries,
+                    concurrency=self.chunk_concurrency,
+                    read_preparation=True,
+                )
+        return stage_planning.processing_dependencies(
+            stage,
+            configuration=configuration,
+            source_sha1=doc.sha1,
+            document_kind=PDF
+            if doc.kind not in {"text", "gedcom"} and is_pdf_input(doc.source)
+            else doc.kind,
+        )
+
+    def _require_processing_dependencies(
+        self, doc: DocumentRun, stage: str, *, route: str | None = None
+    ) -> dict[str, Any]:
+        """Observe required processing inputs before a stage may execute."""
+        try:
+            return self._processing_dependencies(doc, stage, route=route)
+        except OSError as exc:
+            raise ProcessingUnavailable(
+                f"cannot inspect {stage} processing dependencies: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
+
+    def _inspect_view(
+        self,
+        doc: DocumentRun,
+        view: Path,
+        load: Callable[[str], Any],
+        recheck: Callable[[Any], str | None] | None = None,
+    ) -> ViewInspection:
+        """Observe and plan reuse without writing or creating a client.
+
+        Execution and estimation share this observation and pure decision.
+        Review binding is deliberately outside this path: observing a view
+        cannot authorize it. Downstream stages compare semantic products
+        after a producer runs, not the producer's generation fingerprint.
+        """
+        role, stage = doc.views[view]
+        recorded = doc.derivations._load()
+        inputs = doc.derivations._inputs(view)
+        if (
+            stage in {"extraction", "critique"}
+            and doc.sha1 in self._interpretation_contexts
+        ):
+            context = self._interpretation_contexts[doc.sha1]
+            if context is None:
+                inputs.pop(doc.interpretation_context.name, None)
+            else:
+                inputs[doc.interpretation_context.name] = content_hash(
+                    context.model_dump(mode="json")
+                )
+        try:
+            processing = self._require_processing_dependencies(doc, stage)
+        except ProcessingUnavailable as exc:
+            return ViewInspection(
+                stage_planning.plan_view(
+                    exists=view.is_file(),
+                    recorded_inputs=None,
+                    current_inputs={},
+                    blocked_reason="processing-unavailable",
+                ),
+                blocked_reason=str(exc),
+            )
+        plan = stage_planning.plan_view(
+            exists=view.is_file(),
+            recorded_inputs=recorded["derived"].get(view.name),
+            current_inputs=inputs,
+            recorded_processing=recorded["processing"].get(view.name),
+            processing=processing,
+            refresh=self._refresh_requested(doc, role, stage),
+        )
+        if plan.action != "reuse":
+            return ViewInspection(plan, processing=processing, inputs=inputs)
+        try:
+            value = load(view.read_text())
+        except (OSError, ValueError, RecursionError):
+            return ViewInspection(
+                stage_planning.FreshnessPlan(
+                    "recompute", ("unreadable-output",), ()
+                ),
+                processing=processing,
+                inputs=inputs,
+            )
+        failure = recheck(value) if recheck is not None else None
+        if failure is not None:
+            return ViewInspection(
+                stage_planning.FreshnessPlan(
+                    "recompute", ("invalid-output",), ()
+                ),
+                invalid_reason=failure,
+                processing=processing,
+                inputs=inputs,
+            )
+        return ViewInspection(
+            plan, value, processing=processing, inputs=inputs
+        )
+
+    def _record_view(self, doc: DocumentRun, view: Path) -> None:
+        """Record a published product and its generation dependencies."""
+        check_cancelled()
+        observed = self._view_dependencies.pop((doc.dir, view.name))
+        doc.derivations.record(
+            view, inputs=observed.inputs, processing=observed.processing
+        )
+
+    def _reused_view(
+        self,
+        doc: DocumentRun,
+        view: Path,
+        load: Callable[[str], Any],
+        recheck: Callable[[Any], str | None] | None = None,
+    ) -> Any:
+        """The document's `view`, loaded, when the shared plan reuses it.
+
+        Inputs and migrated processing dependencies must match, refresh
+        must not request recomputation, and `recheck` must pass. A reuse is an
+        event, with the attention reasons noted when the view was made.
+        A view `recheck` fails is moved aside, never deleted, with a
+        `set-aside` event that gives the reason, and its record is
+        forgotten. None when the view is to be made."""
+        check_cancelled()
+        _role, stage = doc.views[view]
+        inspected = self._inspect_view(doc, view, load, recheck)
+        inspected.require_value()
+        if inspected.plan.action == "recompute":
+            self._view_dependencies[(doc.dir, view.name)] = inspected
+        failure = inspected.invalid_reason
+        if failure is not None:
+            kept = _supersede(view)
+            doc.derivations.forget(view)
+            self.rundir.emit(
+                SET_ASIDE,
+                subject=doc.sha1,
+                kind=doc.kind,
+                stage=stage,
+                reason=failure[:500],
+                kept=kept.name if kept is not None else None,
+            )
+            self.log(
+                f"  {doc.source.name}: {view.name} fails its check now "
+                f"({failure}); kept as "
+                f"{kept.name if kept is not None else 'nothing'}, making it "
+                f"again"
+            )
+            return None
+        if inspected.plan.action != "reuse":
+            return None
+        loaded = inspected.value
+        noted = (doc.state.detail or {}).get("attention") or {}
+        self.rundir.emit(
+            REUSED,
+            subject=doc.sha1,
+            kind=doc.kind,
+            stage=stage,
+            attention=noted.get(stage) or None,
+        )
+        from yizkr.pipeline import anomalies
+
+        anomalies.reused(self.rundir, doc, stage, loaded)
+        return loaded
+
+    def _step_register(self, doc: DocumentRun) -> str:
+        """Register the document as its write begins (ADR-0025 §2): its
+        artifact item, found or made by the SHA-1 of the source's bytes
+        (ADR-0010), and for a deck its slides as page fragments, and for a
+        deck or a PDF the image sources its common container inventory
+        binds (yizkr.pipeline.container_sources), each by the SHA-1 of its
+        own bytes and part of the container on each slide or page that
+        paints it (ADR-0008). A source that no longer
+        has the bytes the run read, or that is on the never-ingest list,
+        is refused before anything is registered or uploaded, and an
+        embedded image the list names is left out
+        (yizkr.pipeline.registrar). An excerpt is registered as the
+        derived medium of each container that places it, each container
+        registered first. Returns the artifact's QID.
+
+        An item the registrar flags as maybe an older artifact (another
+        item names a file that holds its bytes, or its title is the label
+        of an item with no hash; RegistrationFlag) is raised as an alert
+        of the write on the document, its check the flag's kind, for a
+        person to look at, the flags of a registration cut short by an
+        error or an interrupt included. An item is flagged on each write
+        while the condition holds, whether registration made it or found
+        it, so a flag a killed process never raised is raised by the next
+        write. The alert holds ids and hashes alone: `artifact`, the
+        item; `others`, the items it may be; `medium`, the first 12 hex
+        digits of the item's media SHA-1 (docs/ANOMALIES.md)."""
+        from yizkr.pipeline.registrar import Registrar
+
+        registrar = Registrar(self.client, exclusions=self.exclusions)
+        try:
+            return self._register_document(registrar, doc)
+        finally:
+            self._raise_flags(doc, registrar.flags)
+
+    def _raise_flags(self, doc: DocumentRun, flags: Iterable[Any]) -> None:
+        """Raise each RegistrationFlag in `flags` as an alert of the write on
+        `doc`, its check the flag's kind, and log it (_step_register)."""
+        for flag in flags:
+            self.rundir.alert(
+                stage="write",
+                check=flag.kind,
+                subject=doc.sha1[:12],
+                value=True,
+                carried=False,
+                kind=doc.kind,
+                artifact=flag.artifact,
+                others=list(flag.others),
+                medium=flag.sha1[:12],
+            )
+            self.log(
+                f"  flagged {flag.kind}: item {flag.artifact}, "
+                f"against {', '.join(flag.others)}"
+            )
+
+    def _register_document(self, registrar: Any, doc: DocumentRun) -> str:
+        """The document's QID, as `_step_register` registers it."""
+        from yizkr.pipeline.registrar import ExcludedMedia
+
+        if not isinstance(doc, ExcerptRun):
+            return self._register(registrar, doc)[0]
+        found = None
+        for container in doc.containers:
+            derived = self._register(registrar, container)[1]
+            found = found or derived.get(doc.sha1)
+        if found is None:
+            raise ExcludedMedia(
+                f"image {doc.sha1[:12]} is on the never-ingest list, or no "
+                "container that places it records it: nothing of it was "
+                "registered"
+            )
+        return found
+
+    def _register(self, registrar: Any, doc: DocumentRun) -> tuple[str, dict]:
+        """(the document's QID, its derived media's QIDs by SHA-1), as
+        `_step_register` registers a document that is not an excerpt. The
+        derived media are kept by the document's SHA-1 too
+        (registered_media), for the write of its claims."""
+        registrar.check_media_source(doc.source, sha1=doc.sha1)
+        self._record_container_inventory(doc)
+        artifact_type = self.artifact_type
+        pages = 0
+        if doc.kind == "presentation":
+            # a deck is a compound artifact: its slides ARE the page
+            # fragments (ADR-0008), so claim locators point into slides
+            artifact_type = "presentation"
+            pages = len(self._presentation(doc).slides)
+        elif doc.kind == "gedcom":
+            artifact_type = "genealogical_report"
+        result = registrar.register_artifact(
+            doc.source,
+            artifact_type=artifact_type,
+            title=doc.state.title,
+            description=(
+                f"ingested by `{self.command}` from {doc.source.name}"
+            ),
+            pages=pages,
+            sha1=doc.sha1,
+        )
+        sources = self._container_sources(doc)
+        derived: dict[str, str] = {}
+        if sources is not None:
+            derived = registrar.register_container_sources(
+                sources, doc.dir, title=doc.state.title
+            )
+            self.registered_media()[doc.sha1] = dict(derived)
+            left_out = len(sources.sources) - len(derived)
+            self.log(
+                f"  derived media: {len(derived)} registered"
+                + (
+                    f", {left_out} left out (never-ingest list)"
+                    if left_out
+                    else ""
+                )
+            )
+        return result.artifact_qid, derived
+
+    def registered_media(self) -> dict[str, dict[str, str]]:
+        """The derived media registered by the run, by the SHA-1 of
+        their container: each medium's QID by its SHA-1 (_register). They
+        are what a container's `caption` claims may take as their subject
+        (ADR-0039 §2.1, yizkr.pipeline.writer)."""
+        if not hasattr(self, "_registered_media"):
+            self._registered_media: dict[str, dict[str, str]] = {}
+        return self._registered_media
+
+    def _container_sources(self, doc: DocumentRun):
+        """Current eligible sources, occurrences and readings; no publication.
+
+        All consumers observe the same original-source preparation and current
+        policy. A legacy media record is only a verified migration input.
+        """
+        from yizkr.pipeline.container_sources import project_sources
+
+        prepared = self._container_preparation(doc)
+        if prepared is None:
+            return None
+        inventory, data = prepared
+        return project_sources(
+            inventory, doc.dir, data=data, excluded=self._excluded_image
+        )
+
+    def _media_preparation(self, doc: DocumentRun):
+        """Current deterministic preparation, shared by readers and reuse."""
+        from yizkr.pipeline.media_stages import (
+            PreparationRequest,
+            prepare_container,
+        )
+
+        if not hasattr(self, "_media_preparations"):
+            self._media_preparations = {}
+        key = (doc.dir, doc.sha1)
+        if key not in self._media_preparations:
+            self._media_preparations[key] = prepare_container(
+                PreparationRequest(
+                    source=doc.source,
+                    expected_artifact=ArtifactRef(sha1=doc.sha1),
+                    existing_directory=doc.dir,
+                    excluded=self._excluded_image,
+                )
+            )
+        return self._media_preparations[key]
+
+    def _presentation(self, doc: DocumentRun):
+        prepared = self._media_preparation(doc)
+        if prepared is None or prepared.presentation is None:
+            raise ValueError("source has no prepared presentation")
+        return prepared.presentation
+
+    def _container_preparation(self, doc: DocumentRun):
+        """Expose current preparation without publishing persisted views."""
+        prepared = self._media_preparation(doc)
+        if prepared is None:
+            return None
+        # Readers can add representations and outcomes to this preparation.
+        return prepared.inventory, prepared.data
+
+    def _record_container_inventory(self, doc: DocumentRun) -> None:
+        """Publish source correspondence while retaining human products."""
+        from yizkr.pipeline.container_inventory import keep_inventory
+
+        prepared = self._container_preparation(doc)
+        if prepared is not None:
+            inventory, data = prepared
+            keep_inventory(inventory, data, doc.dir)
+
+    def _pdf_inventory(self, doc: DocumentRun):
+        prepared = self._media_preparation(doc)
+        if prepared is None or prepared.pdf is None:
+            raise ValueError("source has no prepared PDF")
+        return prepared.pdf
+
+    def _record_pdf_inventory(self, doc: DocumentRun) -> None:
+        """Publish PDF source parts before choosing or reusing a reading.
+
+        Missing metadata and damaged representations are rebuilt without
+        invalidating an unchanged transcription, proposal or review.
+        """
+        from yizkr.pipeline.container_inventory import (
+            keep_inventory,
+            read_inventory,
+        )
+        from yizkr.pipeline.textlayer import PdfExclusionError, is_pdf_input
+
+        if is_pdf_input(doc.source):
+            prepared = self._pdf_inventory(doc)
+            previous = read_inventory(doc.dir)
+            if (
+                previous is not None
+                and previous.source == prepared.inventory.source
+            ):
+                parts = {part.id: part for part in prepared.inventory.parts}
+                for old in previous.parts:
+                    part = parts.get(old.id)
+                    if part is None or part.kind not in {
+                        "container_source",
+                        "page_body",
+                    }:
+                        continue
+                    try:
+                        prepared.guard(
+                            {part.locator.position}
+                            if part.kind == "page_body"
+                            else None
+                        )
+                    except PdfExclusionError:
+                        continue
+                    for representation in old.representations:
+                        if (
+                            representation.file is not None
+                            and representation.method
+                            in {
+                                "rendered-pdf-v1",
+                                "pdfium-page-render",
+                                "pdf-page-image",
+                            }
+                            and representation.eligibility.state == "allowed"
+                            and not any(
+                                current.method == representation.method
+                                for current in part.representations
+                            )
+                        ):
+                            part.representations.append(representation)
+                            prepared.data[representation.byte_object.sha1] = (
+                                doc.dir / representation.file
+                            ).read_bytes()
+            keep_inventory(prepared.inventory, prepared.data, doc.dir)
+
+    def _restore_pdf_representations(self, doc: DocumentRun, transcription):
+        """Recreate missing prepared bytes without making another model call.
+
+        The caller has validated the saved reading. These are current source
+        representations, not proof of an unrecorded historical model payload.
+        """
+        from tempfile import TemporaryDirectory
+
+        from yizkr.pipeline.textlayer import prepare_pdf_vision, read_pages
+
+        prepared = self._pdf_inventory(doc)
+        if transcription.input_representation == "rendered-pdf-v1":
+            if any(
+                rep.method == "rendered-pdf-v1"
+                for part in prepared.inventory.parts
+                for rep in part.representations
+            ):
+                return
+            with TemporaryDirectory(
+                prefix="yizkr-pdf-inventory-"
+            ) as directory:
+                prepare_pdf_vision(
+                    doc.source,
+                    Path(directory),
+                    self._excluded_image,
+                    inventory=prepared,
+                )
+        else:
+            needed = {
+                page.page
+                for page in transcription.pages or ()
+                if page.provenance.method == "vision"
+            }
+            if not any(
+                not prepared.page_parts[number].representations
+                for number in needed
+            ):
+                return
+            with TemporaryDirectory(
+                prefix="yizkr-pdf-inventory-"
+            ) as directory:
+                read_pages(
+                    doc.source,
+                    Path(directory),
+                    excluded=self._excluded_image,
+                    inventory=prepared,
+                )
+        self._record_pdf_inventory(doc)
+
+    def _keep_inventory_readings(
+        self, doc: DocumentRun, reading=None, transcription=None
+    ) -> None:
+        """Record actual image outcomes beside the structural inventory.
+
+        Native text belongs to the producer. Image success requires a
+        validated reading of those bytes, including an explicitly empty
+        reading. Reconstructing missing inventory can adopt an existing
+        valid reading without making another model call.
+        """
+        from yizkr.pipeline.container_inventory import (
+            ReadingOutcome,
+            keep_inventory,
+        )
+        from yizkr.pipeline.presentation import derived_transcription
+        from yizkr.pipeline.transcribe import Transcription
+
+        if transcription is not None and doc.kind == PDF:
+            self._restore_pdf_representations(doc, transcription)
+        prepared = self._container_preparation(doc)
+        if prepared is None:
+            return
+        inventory, data = prepared
+        if inventory.source.sha1 != doc.sha1:
+            raise ValueError("container inventory is missing or invalid")
+        observed = (
+            {image.sha1: image for image in reading.images}
+            if reading is not None
+            else {}
+        )
+        for part in inventory.parts:
+            binding = part.owner_binding
+            if (
+                part.kind != "embedded_resource"
+                or binding is None
+                or part.ownership_issue is not None
+                or part.eligibility.state != "allowed"
+                or part.reading.state == "unsupported"
+            ):
+                continue
+            sha1 = binding.artifact.sha1
+            image = observed.get(sha1)
+            if image is not None and image.failure is not None:
+                part.reading = ReadingOutcome(
+                    state="failed", reason=image.failure
+                )
+                continue
+            path = derived_transcription(doc.dir, sha1)
+            if not path.is_file() or path.is_symlink():
+                if part.reading.state != "failed":
+                    part.reading = ReadingOutcome(state="unattempted")
+                continue
+            failure = self._image_failure(
+                doc, sha1, verify_product=image is None
+            )
+            if failure is not None:
+                part.reading = ReadingOutcome(state="failed", reason=failure)
+                continue
+            reading_data = path.read_bytes()
+            image_transcription = Transcription.model_validate_json(
+                reading_data
+            )
+            record = image_transcription.record()
+            empty = not any(page.text.strip() for page in record.pages)
+            part.reading = ReadingOutcome(
+                state="read",
+                method=image_transcription.engine,
+                empty=empty,
+                product=path.relative_to(doc.dir).as_posix(),
+                product_sha256=hashlib.sha256(reading_data).hexdigest(),
+            )
+        if inventory.container == "pdf" and transcription is not None:
+            pages = {page.page: page for page in transcription.pages or ()}
+            digest = hashlib.sha256(doc.transcription.read_bytes()).hexdigest()
+            for part in inventory.parts:
+                if (
+                    part.kind == "container_source"
+                    and transcription.input_representation == "rendered-pdf-v1"
+                ):
+                    part.reading = ReadingOutcome(
+                        state="read",
+                        method=transcription.engine,
+                        empty=not any(
+                            page.text.strip()
+                            for page in transcription.record().pages
+                        ),
+                        product=doc.transcription.name,
+                        product_sha256=digest,
+                    )
+                if part.kind != "page_body":
+                    continue
+                page = pages.get(part.locator.position)
+                if page is not None:
+                    part.reading = ReadingOutcome(
+                        state="read",
+                        method=page.provenance.engine,
+                        empty=not transcription.text[
+                            page.start : page.end
+                        ].strip(),
+                        product=doc.transcription.name,
+                        product_sha256=digest,
+                    )
+        keep_inventory(inventory, data, doc.dir)
+
+    def _step_batch(self, doc: DocumentRun) -> ClaimBatch:
+        """Dispatch the batch producer declared by the document's plan."""
+        producers = {
+            "gedcom": self._step_gedcom,
+            "extraction": lambda doc: self._step_extract(
+                doc, self._transcription(doc)
+            ),
+        }
+        return producers[stage_planning.batch_stage(doc.kind).name](doc)
+
+    def _step_gedcom(self, doc: DocumentRun) -> ClaimBatch:
+        from yizkr.pipeline.gedcom import format_unsupported_tags
+        from yizkr.pipeline.gedcom_stages import GedcomRequest, derive_gedcom
+
+        def compute():
+            result = derive_gedcom(
+                GedcomRequest(doc.source, ArtifactRef(sha1=doc.sha1))
+            )
+            self._record_stage_result(doc, "gedcom", result)
+            return result
+
+        result = self._run_stage(doc, "gedcom", compute)
+        detail = doc.state.detail or {}
+        # the adapter is deterministic: say what it could not adapt when
+        # that is news, not on every run
+        if (
+            detail.get("gedcom_warnings") != result.warnings
+            or detail.get("gedcom_unsupported") != result.unsupported_tags
+            or detail.get("gedcom_outcomes") != result.outcomes
+        ):
+            for warning in result.warnings:
+                self.log(f"  {doc.source.name}: {warning}", file=sys.stderr)
+            if result.unsupported_tags:
+                self.log(
+                    f"  {doc.source.name}: unsupported GEDCOM tags: "
+                    + format_unsupported_tags(result.unsupported_tags),
+                    file=sys.stderr,
+                )
+            if result.outcomes:
+                self.log(
+                    f"  {doc.source.name}: GEDCOM outcomes: "
+                    + format_unsupported_tags(result.outcomes),
+                    file=sys.stderr,
+                )
+        doc.state.detail = detail | {
+            "gedcom_warnings": result.warnings,
+            "gedcom_unsupported": result.unsupported_tags,
+            "gedcom_outcomes": result.outcomes,
+        }
+        return result.require_complete()
+
+    def _transcription(self, doc: DocumentRun):
+        """The document's transcription view, reused when it stands
+        (`_reused_view`) and made otherwise, then recorded with its
+        canonical content hash; once per run. A transcription made by a
+        route whose transcriber checks its output (CHECKED_ROUTES) is
+        checked again when it is reused: the check may have become
+        stricter since the view was made, and one it now fails is made
+        again (`_transcription_failure`)."""
+        from yizkr.pipeline.transcribe import Transcription
+
+        memo = (doc.sha1, doc.transcription.name)
+        if memo in self._views:
+            return self._views[memo]
+        from yizkr.pipeline.textlayer import is_pdf_input
+
+        if doc.transcription.is_file():
+            self._record_pdf_inventory(doc)
+        checked = self._route(doc) in CHECKED_ROUTES or is_pdf_input(
+            doc.source
+        )
+        transcription = self._reused_view(
+            doc,
+            doc.transcription,
+            Transcription.model_validate_json,
+            recheck=(
+                functools.partial(self._transcription_failure, doc)
+                if checked
+                else None
+            ),
+        )
+        if transcription is None:
+            transcription = self._step_transcribe(doc)
+            doc.derivations.set_content(
+                doc.transcription.name,
+                content_hash(
+                    transcription.model_dump(mode="json"),
+                    volatile=TRANSCRIPTION_VOLATILE,
+                ),
+            )
+            self._record_view(doc, doc.transcription)
+            from yizkr.pipeline import anomalies
+
+            anomalies.stored(self.rundir, doc, "transcription", transcription)
+        located = self._locate_transcription(doc, transcription)
+        if located.source_context != transcription.source_context:
+            transcription = located
+            _write_view(
+                doc.transcription, transcription.model_dump_json(indent=2)
+            )
+            doc.derivations.set_content(
+                doc.transcription.name,
+                content_hash(
+                    transcription.model_dump(mode="json"),
+                    volatile=TRANSCRIPTION_VOLATILE,
+                ),
+            )
+        if self._container_preparation(doc) is not None:
+            self._keep_inventory_readings(doc, transcription=transcription)
+        self._views[memo] = transcription
+        return transcription
+
+    def _locate_transcription(self, doc: DocumentRun, transcription):
+        """Attach source correspondence verified from current preparation."""
+        from yizkr.pipeline.container_sources import source_context
+
+        if isinstance(doc, ExcerptRun):
+            return self._locate_excerpt(doc, transcription)
+        sources = self._container_sources(doc)
+        if sources is None:
+            return transcription
+        return transcription.model_copy(
+            update={"source_context": source_context(transcription, sources)}
+        )
+
+    def _excerpt_candidates(self, doc: ExcerptRun):
+        """Verified readings in the existing deterministic placement order."""
+        return [
+            check.reading
+            for container in doc.containers
+            if (check := self._image_reading(container, doc.sha1)).reading
+            is not None
+        ]
+
+    def _locate_excerpt(self, doc: ExcerptRun, transcription):
+        """Bind excerpt readings to verified original image parts."""
+        from yizkr.pipeline.container_sources import image_source_context
+        from yizkr.pipeline.source_context import SourceContext
+        from yizkr.pipeline.transcribe import reading_digest
+
+        context = SourceContext(
+            container=ArtifactRef(sha1=doc.containers[0].sha1),
+            limitations=["excerpt has no matching verified container reading"],
+        )
+        for candidate in self._excerpt_candidates(doc):
+            # Language resolution can change without changing the image text.
+            kept = candidate.transcription.model_copy(
+                update={"language": transcription.language}
+            )
+            if reading_digest(kept) != reading_digest(transcription):
+                continue
+            context = image_source_context(transcription, candidate.supports)
+            break
+        return transcription.model_copy(update={"source_context": context})
+
+    def _route(self, doc: DocumentRun) -> str:
+        """The route the document's transcription takes: an excerpt's is
+        the reading its container made of it (EXCERPT), unless a curator's
+        correction routes it to the correction."""
+        route = route_transcription(doc.source, doc.correction)
+        if isinstance(doc, ExcerptRun) and route == "vision":
+            return EXCERPT
+        return route
+
+    def _transcription_failure(
+        self, doc: DocumentRun, transcription
+    ) -> str | None:
+        """Why the transcription check fails `transcription` of the
+        document now, or None when it passes. A vision transcription made
+        whole is checked with its record, and fails without one; a text
+        file's, which has none, by its text. A container read page by page
+        (a PDF's, a deck's) is checked where the vision engine read it:
+        each page it read, with the page's one-page record
+        (`Transcription.page_record`), as its reading was checked when the
+        page was made, so that a page the record calls blank needs no
+        text; and the transcription of each image placed within a page
+        that the document's directory keeps (`_image_failure`). Its pages
+        read from the file's own text (a PDF's text layer, a deck's slide
+        XML) are the document's own text and are never checked. It is made
+        again, too, when what it marks is not kept whole beside it
+        (`_reading_failure`). A transcription that passes carries the flag
+        of the check made now, or none (the first vision page's, for a
+        container read page by page),
+        since a check changed since it was made may flag it otherwise; the
+        flag is no part of its content. It reads files only, and writes
+        none."""
+        from yizkr.pipeline.textlayer import VISION, is_pdf_input
+        from yizkr.pipeline.transcribe import check_vision_page, is_paged
+        from yizkr.pipeline.transcription_check import (
+            TranscriptionCheckFailed,
+            check_transcription,
+            is_pdf,
+            media_page_count,
+        )
+
+        if is_pdf_input(doc.source):
+            from yizkr.pipeline.transcribe import pdf_reading_failure
+
+            failure = pdf_reading_failure(
+                doc.source,
+                transcription,
+                self._excluded_image,
+                inventory=self._pdf_inventory(doc),
+            )
+            if failure is not None:
+                return failure
+            if self._route(doc) not in CHECKED_ROUTES:
+                # A curator's correction remains exempt from model-answer
+                # quality checks; it still needs source admission above.
+                return None
+        if not is_paged(transcription):
+            sources = self._container_sources(doc)
+            if sources is not None and any(
+                source.readable for source in sources.sources.values()
+            ):
+                return "container has independent source readings to prepare"
+            check = check_transcription(
+                transcription.text,
+                pages=media_page_count(doc.source),
+                record=transcription.record(),
+                expect_record=transcription.engine.startswith("llm-vision:"),
+                whole_pdf=is_pdf(doc.source),
+            )
+            if not check.passed:
+                return str(TranscriptionCheckFailed(check))
+            transcription.flag = check.signature if check.flagged else None
+            return None
+        flag = None
+        for page in transcription.pages or ():
+            if page.provenance.method == VISION:
+                check = check_vision_page(transcription, page)
+                if not check.passed:
+                    return (
+                        f"{TranscriptionCheckFailed(check)} (page {page.page})"
+                    )
+                if check.flagged and flag is None:
+                    flag = check.signature
+            for sha1 in page.images:
+                failure = self._image_failure(doc, sha1)
+                if failure is not None:
+                    return failure
+        failure = self._reading_failure(doc, transcription)
+        if failure is None:
+            transcription.flag = flag
+        return failure
+
+    def _reading_failure(self, doc: DocumentRun, transcription) -> str | None:
+        """Verify marked readings against eligible structural sources.
+
+        Inventory reconstruction and an absent legacy media record do not
+        invalidate a reading. Changed source selection or missing image
+        readings do: no stored marker grants admission by itself.
+        """
+        from yizkr.pipeline.presentation import derived_transcription
+
+        images = list(
+            dict.fromkeys(
+                sha1
+                for page in transcription.pages or ()
+                for sha1 in page.images
+            )
+        )
+        if doc.kind == "presentation" and transcription.pages is None:
+            return "it has no pages, one per slide"
+        projection = self._container_sources(doc)
+        if projection is None:
+            return None if not images else "reading has no container inventory"
+        if doc.kind == "presentation" and any(
+            body.text is None
+            or body.reading.state in {"failed", "unsupported"}
+            for body in projection.bodies
+        ):
+            return "current slide content or background is unresolved"
+        from yizkr.pipeline.container_sources import image_page_source
+        from yizkr.pipeline.containers import IMAGE_SOURCE
+
+        image_pages = {
+            body.locator.position
+            for body in projection.bodies
+            if image_page_source(projection, body) is not None
+        }
+        for page in transcription.pages or ():
+            if (page.page in image_pages) != (
+                page.provenance.method == IMAGE_SOURCE
+            ):
+                return "the reading's image-source page routes have changed"
+        for sha1 in images:
+            source = projection.sources.get(sha1)
+            if source is None or self._excluded_image(sha1, source.names):
+                return (
+                    f"image {sha1[:12]} has no eligible bound source in "
+                    "the current inventory"
+                )
+        expected = {
+            sha1
+            for sha1, source in projection.sources.items()
+            if source.readable
+        }
+        placed = {
+            sha1
+            for sha1 in expected
+            if any(
+                p.occurrence == "paint"
+                for p in projection.sources[sha1].placements
+            )
+        }
+        if set(images) != placed:
+            return (
+                "the reading's images differ from the independent sources "
+                "in the current inventory"
+            )
+        for sha1 in expected:
+            if not derived_transcription(doc.dir, sha1).exists():
+                return (
+                    f"image {sha1[:12]} has no transcription of its own, so "
+                    "it is read again"
+                )
+            failure = self._image_failure(doc, sha1)
+            if failure is not None:
+                return failure
+        return None
+
+    def _image_reading(
+        self, doc: DocumentRun, sha1: str, *, verify_product: bool = True
+    ):
+        """Verify a saved image product against current source preparation."""
+        from yizkr.pipeline.media_stages import verify_image_reading
+
+        return verify_image_reading(
+            self._container_sources(doc),
+            sha1,
+            doc.dir,
+            verify_product=verify_product,
+        )
+
+    def _image_failure(
+        self, doc: DocumentRun, sha1: str, *, verify_product: bool = True
+    ) -> str | None:
+        return self._image_reading(
+            doc, sha1, verify_product=verify_product
+        ).failure
+
+    def _step_transcribe(self, doc: DocumentRun):
+        """Read through the shared operation, then publish its products."""
+        from yizkr.pipeline.textlayer import is_pdf_input
+        from yizkr.pipeline.transcribe import is_paged
+
+        def transcribe():
+            self._record_pdf_inventory(doc)
+            result = self._transcribe(doc, self._route(doc))
+            try:
+                transcription = result.require_complete()
+                check_cancelled()
+                self._record_pdf_inventory(doc)
+                if result.products is not None:
+                    self._keep_reading(doc, result.products)
+                resolution = result.resolution
+                doc.state.detail = (doc.state.detail or {}) | {
+                    "language": {
+                        "code": resolution.code,
+                        "source": resolution.source,
+                        "confidence": resolution.confidence,
+                    }
+                }
+                changed = _write_view(
+                    doc.transcription, transcription.model_dump_json(indent=2)
+                )
+                if is_pdf_input(doc.source):
+                    self._keep_inventory_readings(
+                        doc, transcription=transcription
+                    )
+                if is_paged(transcription) and changed:
+                    self.log(
+                        f"  {doc.source.name}: {_read_by_page(transcription)}"
+                    )
+                if self.language == "auto" and changed:
+                    self.log(
+                        f"  {doc.source.name}: language "
+                        f"{resolution.describe()}"
+                    )
+            finally:
+                result.close()
+            self._record_stage_result(doc, "transcription", result)
+            return result
+
+        result = self._run_stage(
+            doc,
+            "transcription",
+            transcribe,
+            attention=lambda result: result.attention,
+        )
+        return result.transcription
+
+    def _transcribe(self, doc: DocumentRun, method: str):
+        """Construct a shared read request without publishing any products."""
+        from yizkr.pipeline.media_stages import (
+            ExcerptReadRequest,
+            MediaReadRequest,
+            MediaReadResult,
+            read_excerpt,
+            read_media,
+        )
+        from yizkr.pipeline.text_stages import TextReadRequest, read_text
+        from yizkr.pipeline.textlayer import check_pdf_vision, is_pdf_input
+
+        if method == EXCERPT:
+            return read_excerpt(
+                ExcerptReadRequest(
+                    owner=ArtifactRef(sha1=doc.sha1),
+                    candidates=self._excerpt_candidates(doc),
+                    language=self.language,
+                    fallback_language=self.fallback_language,
+                )
+            )
+        if method in {PAGED, "vision"}:
+            return read_media(
+                MediaReadRequest(
+                    source=doc.source,
+                    route=method,
+                    expected_artifact=ArtifactRef(sha1=doc.sha1),
+                    language=self.language,
+                    fallback_language=self.fallback_language,
+                    prepared=self._media_preparation(doc),
+                    excluded=self._excluded_image,
+                ),
+                client=functools.partial(self._llm, "transcribe", doc),
+            )
+        if method not in {"text-file", "correction"}:
+            raise ValueError(f"unknown transcription route: {method}")
+        if method == "correction" and is_pdf_input(doc.source):
+            check_pdf_vision(
+                doc.source,
+                self._excluded_image,
+                inventory=self._pdf_inventory(doc),
+            )
+        result = read_text(
+            TextReadRequest(
+                source=doc.source,
+                text_file=doc.correction
+                if method == "correction"
+                else doc.source,
+                language=self.language,
+                fallback_language=self.fallback_language,
+                correction=method == "correction",
+            )
+        )
+        return MediaReadResult(
+            transcription=result.transcription,
+            resolution=result.resolution,
+            dependencies=result.dependencies,
+        )
+
+    def _excluded_image(self, sha1: str, names: Sequence[str] = ()) -> bool:
+        """Does the never-ingest list name an image a paged container
+        places on a page, by the SHA-1 of its bytes or by any of its
+        `names` (a deck's image's names in the archive, which its globs
+        match, as registration matches them)? Its SHA-1 is named too when
+        a glob names those bytes in any deck of the folder
+        (`_gather_embedded`), so a PDF's image is asked of a deck's names
+        for its bytes. Such an image is never read on its own, kept as the
+        container's reading of it, or extracted."""
+        return self.exclusions is not None and any(
+            is_excluded(self.exclusions, name=name, sha1=sha1)
+            for name in names or [None]
+        )
+
+    def _keep_reading(self, doc: DocumentRun, reading) -> None:
+        """Publish image readings beside the source inventory.
+
+        Reading paths retain their supported compatibility names. Source and
+        placement authority is the common inventory; no image-only record is
+        reconstructed from transcription markers.
+        """
+        from yizkr.pipeline.presentation import derived_transcription
+
+        self._record_container_inventory(doc)
+        for image in reading.images:
+            path = derived_transcription(doc.dir, image.sha1)
+            if path.exists() and self._image_failure(doc, image.sha1):
+                _supersede(path)
+            if image.transcription is not None:
+                _write_view(
+                    path, image.transcription.model_dump_json(indent=2)
+                )
+        self._keep_inventory_readings(doc, reading)
+
+    def _step_extract(self, doc: DocumentRun, transcription) -> ClaimBatch:
+        from yizkr.pipeline import text_stages
+
+        # Run ingestion requires the entity manifest for identity/review,
+        # so its explicit strategy is chunked even for a short document.
+        results: list[text_stages.ExtractionResult] = []
+
+        def extract() -> ClaimBatch:
+            pointer = doc.pointed()
+            result = text_stages.extract(
+                text_stages.ExtractionRequest(
+                    transcription=transcription,
+                    artifact=ArtifactRef(sha1=doc.sha1),
+                    strategy="chunked",
+                    state_dir=doc.extraction,
+                    diagnostic_dump=doc.extraction / "incomplete.json",
+                    concurrency=self.chunk_concurrency,
+                    read_preparation=True,
+                    pointer=pointer,
+                    context=self._interpretation_contexts.get(doc.sha1),
+                ),
+                None
+                if pointer is None
+                and text_stages.empty_container_reading(transcription)
+                else self._llm("extract", doc),
+                log=self.log,
+            )
+            results.append(result)
+            self._record_stage_result(doc, "extraction", result)
+            return result.require_complete()
+
+        batch = self._run_stage(
+            doc,
+            "extraction",
+            extract,
+            attention=lambda _batch: results[0].attention,
+        )
+        doc.gaps_found = results[0].gaps
+        return batch
+
+    @staticmethod
+    def _record_stage_result(doc: DocumentRun, stage: str, result) -> None:
+        """Keep execution outcomes beside the existing view dependency record.
+
+        This describes computed products; Derivations remains the authority
+        for persisted-view reuse and the caller publishes the accepted view.
+        """
+        check_cancelled()
+        detail = dict(doc.state.detail or {})
+        outcomes = dict(detail.get("stage_results") or {})
+        outcomes[stage] = {
+            "status": result.status,
+            "dependencies": result.dependencies,
+            "artifacts": [str(path) for path in result.artifacts],
+        }
+        doc.state.detail = detail | {"stage_results": outcomes}
+
+    def _surface_gaps(self, doc: DocumentRun) -> None:
+        """Render the extraction's gap log to a per-document review CSV."""
+        gaps = doc.gaps_found
+        if not gaps:
+            return
+        import csv as _csv
+
+        with open(doc.gaps, "w", newline="") as handle:
+            writer = _csv.DictWriter(
+                handle,
+                fieldnames=["subject", "predicate", "object", "evidence"],
+            )
+            writer.writeheader()
+            writer.writerows(gaps)
+        self.log(
+            f"  gaps: {len(gaps)} relation(s) no property expresses "
+            f"(review {doc.gaps.name})"
+        )
+
+    def _critique(self, doc: DocumentRun, batch: ClaimBatch) -> None:
+        """The batch's critique view (ADR-0013), reused when it stands
+        (`_reused_view`) and made otherwise, then recorded."""
+        self._prepare_interpretation_context(doc, self._transcription(doc))
+        if (
+            self._reused_view(
+                doc, doc.critique, _findings, recheck=_unreadable_critique
+            )
+            is not None
+        ):
+            return
+        findings = self._step_critique(doc, batch)
+        check_cancelled()
+        changed = _write_view(
+            doc.critique,
+            json.dumps(
+                [finding.model_dump(mode="json") for finding in findings],
+                indent=2,
+            ),
+        )
+        self._record_view(doc, doc.critique)
+        from yizkr.pipeline import anomalies
+
+        anomalies.stored(self.rundir, doc, "critique", findings)
+        if findings and changed:
+            from yizkr.pipeline.critique import Invalid, note
+
+            invalid = sum(isinstance(f, Invalid) for f in findings)
+            self.log(
+                f"  critique: {len(findings) - invalid} concern(s) flagged "
+                f"for review"
+                + (f", {invalid} invalid kept as given" if invalid else "")
+            )
+            for finding in findings[:6]:
+                self.log(
+                    "    - "
+                    + (
+                        f"invalid: {'; '.join(finding.why)}"
+                        if isinstance(finding, Invalid)
+                        else note(finding)
+                    ),
+                    file=sys.stderr,
+                )
+
+    def _step_critique(self, doc: DocumentRun, batch: ClaimBatch):
+        """The extraction critic's findings on the batch, each citation
+        read where it stands in the document's transcription (ADR-0003).
+        A critique the engine gave up on at its output limit has none, and
+        needs attention, so that neither this run nor one that reuses the
+        view takes it for a sound extraction's."""
+        from yizkr.pipeline import text_stages
+
+        results: list[text_stages.CritiqueResult] = []
+        transcription = self._transcription(doc)
+
+        def critique():
+            result = text_stages.critique(
+                text_stages.CritiqueRequest(
+                    batch=batch,
+                    transcription=transcription,
+                    context=self._interpretation_contexts.get(doc.sha1),
+                ),
+                self._llm("critique", doc),
+            )
+            results.append(result)
+            self._record_stage_result(doc, "critique", result)
+            return result.findings
+
+        return self._run_stage(
+            doc,
+            "critique",
+            critique,
+            attention=lambda _findings: results[0].attention,
+        )
+
+    def _excerpts_of(
+        self, doc: DocumentRun, corpus: Collection[str]
+    ) -> list[ExcerptRun]:
+        """The excerpts of a container read page by page (ExcerptRun), by
+        their bound media owners, from the current source projection: each
+        eligible independent source that has a reading of its own
+        which passes the check (`_image_failure`), and which shows a page
+        of a document (`_image_shows_a_page`): an image whose record calls
+        every page blank (a photograph with no writing) or not a document
+        page (a colour chart) holds nothing to extract. An illegible one
+        is an excerpt, so that a reader sees it was there. An image the
+        never-ingest list names is left out, asked again here, and so is
+        one whose bytes a document of the corpus has (`corpus`, their
+        SHA-1s): that document is the witness, and its bytes are not
+        extracted again (ADR-0010). Each is found or made by its SHA-1
+        among the run's excerpts, so an image that several containers place
+        is one excerpt, with each of them among its containers. Reads files
+        only, and writes none."""
+        try:
+            projection = self._container_sources(doc)
+        except Exception:
+            # A failed original-source preparation is reported by the
+            # document's stage. It cannot authorize any excerpt discovery.
+            return []
+        if projection is None:
+            return []
+        found = []
+        for sha1, medium in sorted(projection.sources.items()):
+            if (
+                sha1 in corpus
+                or medium.reading_path is None
+                or not medium.readable
+                or not self._image_shows_a_page(doc, sha1)
+            ):
+                continue
+            # A saved inventory can outlive its materialized bytes. Admit
+            # only the original source owner; the parent stage reconstructs
+            # missing, unreadable or mismatched files before arrivals recur.
+            try:
+                actual_sha1 = sha1_file(doc.dir / medium.file)
+            except OSError:
+                self._unavailable_excerpts.add(sha1)
+                continue
+            if actual_sha1 != sha1:
+                self._unavailable_excerpts.add(sha1)
+                continue
+            excerpt = self._excerpts.get(sha1)
+            if excerpt is None:
+                excerpt = self._excerpts[sha1] = ExcerptRun(
+                    sha1, doc, medium, self.state_dir
+                )
+                excerpt._sha1 = actual_sha1
+            else:
+                excerpt.placed_by(doc)
+            found.append(excerpt)
+        return found
+
+    def _image_shows_a_page(self, doc: DocumentRun, sha1: str) -> bool:
+        """Whether the reading the document's directory keeps of the image
+        with this SHA-1, one that passes the check, shows a page of a
+        document: its record calls some page transcribed or illegible,
+        not every page blank or not a document page (a reading with no
+        record is judged by its text alone, and does)."""
+        from yizkr.pipeline.transcription_record import (
+            BLANK,
+            NOT_A_DOCUMENT_PAGE,
+        )
+
+        checked = self._image_reading(doc, sha1)
+        if checked.reading is None:
+            return False
+        record = checked.reading.transcription.record()
+        nothing = {BLANK, NOT_A_DOCUMENT_PAGE}
+        return record is None or not set(record.statuses()) <= nothing
+
+    def _plan_excerpts(self, excerpts: Sequence[ExcerptRun]) -> None:
+        """Add the excerpts the run plan does not hold yet to it, as the
+        documents they are, each with its stages (docs/RUN_MANIFEST.md):
+        they are found as their containers' transcriptions are made."""
+        manifest = self.rundir.manifest()
+        planned = list(manifest.get("documents") or [])
+        known = {
+            entry.get("sha1") for entry in planned if isinstance(entry, dict)
+        }
+        added = [
+            {
+                "sha1": excerpt.sha1,
+                "file": excerpt.source.name,
+                "kind": excerpt.kind,
+                "stages": list(DOCUMENT_STAGES[excerpt.kind]),
+            }
+            for excerpt in excerpts
+            if excerpt.sha1 not in known
+        ]
+        if added:
+            self.rundir.update_manifest(documents=planned + added)
+
+    def _update_batch_view(self, doc: DocumentRun, batch: ClaimBatch) -> bool:
+        """Write `batch.json` for the current batch; True when its content
+        differs from the batch the document's derived files were made from.
+
+        Content is compared by canonical hash (run timestamps left out),
+        so an identical recompute invalidates nothing: a deleted view
+        rebuilt with the same content, as the cache or the GEDCOM adapter
+        gives it, included."""
+        digest = content_hash(
+            batch.model_dump(mode="json"), volatile=BATCH_VOLATILE
+        )
+        recorded = doc.derivations.content(doc.batch.name)
+        if recorded is None and doc.batch.exists():
+            try:
+                existing = ClaimBatch.model_validate_json(
+                    doc.batch.read_text()
+                )
+                recorded = content_hash(
+                    existing.model_dump(mode="json"), volatile=BATCH_VOLATILE
+                )
+            except ValueError:
+                recorded = None
+        if recorded == digest:
+            if not doc.batch.exists():
+                atomic_write_text(doc.batch, batch.model_dump_json(indent=2))
+            doc.derivations.set_content(doc.batch.name, digest)
+            return False
+        atomic_write_text(doc.batch, batch.model_dump_json(indent=2))
+        doc.derivations.set_content(doc.batch.name, digest)
+        return True
+
+    def _derive(self, doc: DocumentRun) -> ClaimBatch:
+        """Bring the transcription and proposed batch up to date.
+
+        A view that stands is reused; a changed batch invalidates its
+        downstream critique and gap products. The caller schedules critique
+        separately, after a complete batch is available.
+        """
+        if any(
+            parent.sha1 in self._interpretation_pending
+            for parent in self._interpretation_parents.get(doc.sha1, ())
+        ):
+            raise DispatchStopped(
+                "interpretation context transcription is held"
+            )
+        producer = stage_planning.batch_stage(doc.kind)
+        if "transcription.json" in producer.input_artifacts:
+            self._prepare_interpretation_context(doc, self._transcription(doc))
+        batch = self._reused_view(
+            doc, doc.batch, ClaimBatch.model_validate_json
+        )
+        changed = False
+        if batch is None:
+            batch = self._step_batch(doc)
+            check_cancelled()
+            changed = self._update_batch_view(doc, batch)
+            self._record_view(doc, doc.batch)
+            from yizkr.pipeline import anomalies
+
+            anomalies.stored(self.rundir, doc, doc.views[doc.batch][1], batch)
+        if changed:
+            stale = (doc.gaps, doc.critique)
+            for path in stale:
+                path.unlink(missing_ok=True)
+            doc.derivations.forget(*stale)
+            doc.state.status = BATCHED
+            doc.save()
+            self.log(f"  batch: {len(batch.claims)} claims")
+            # open-schema harness (ADR-0013): surface unmappable relations
+            self._surface_gaps(doc)
+        elif doc.state.status in (PENDING, FAILED, PAUSED):
+            # A current batch clears a prior preparation failure or pause.
+            doc.state.status = BATCHED
+            doc.save()
+        return batch
+
+    def _save(self, doc: DocumentRun) -> str | None:
+        """Save the document's state (DocumentRun.save): None when it was
+        saved or needed no save, else why it could not be saved."""
+        try:
+            doc.save()
+        except OSError as exc:
+            return f"its state could not be saved ({_why(exc)})"
+        return None
+
+    def _fail(
+        self, doc: DocumentRun, reason: str, *, save: bool = True
+    ) -> None:
+        """Fail the document, and only it, for `reason`: in its state
+        (saved where its directory has its record, DocumentRun.save; a
+        save that cannot be made adds why to the reason, and the run goes
+        on), in the log, and in a `document-failed` event that names it by
+        its file and, once its source has been read, its SHA-1. It is the
+        event of every document that fails, whether a stage failed (which
+        has its own `failed` event too) or something outside its stages
+        did: its source, its state.json, its first record or the save of
+        its state, say. `save` is False for a state that could not be saved
+        just now."""
+        doc.state.status = FAILED
+        doc.state.error = reason
+        unsaved = self._save(doc) if save else None
+        if unsaved is not None:
+            reason = f"{reason}; {unsaved}"
+        self.rundir.emit(
+            DOCUMENT_FAILED,
+            file=doc.source.name,
+            subject=doc.known_sha1,
+            kind=doc.kind,
+            reason=reason[:500],
+        )
+        self.log(f"  {doc.source.name}: FAILED — {reason}", file=sys.stderr)
+
+    def _set_aside(self, doc: DocumentRun, why: str) -> None:
+        """Move the document's directory aside whole and start it afresh,
+        saying so in the log and in a `set-aside` event that names the
+        document, by its file and its SHA-1."""
+        kept = _set_aside(doc.dir)
+        doc.state = DocumentState(file=str(doc.source), title=doc.source.stem)
+        self.rundir.emit(
+            SET_ASIDE,
+            file=doc.source.name,
+            subject=doc.sha1,
+            kind=doc.kind,
+            reason=why,
+            kept=kept.name,
+        )
+        self.log(
+            f"  {doc.source.name}: {why}; the old directory is kept as "
+            f"{kept.name}; re-ingesting"
+        )
+
+    def _roles(self) -> dict[str, dict[str, Any]]:
+        """Each role as the run configures it, for the run manifest; the
+        role's engine client adds what it applies when it starts."""
+        roles = {}
+        for role in MODEL_ROLES:
+            effort, _model = self._engine_settings(role)
+            roles[role] = {
+                "model": self._configured_model(role)[0],
+                "effort": effort,
+                "epoch": self.epochs.get(role, 0),
+                "refresh": role in self.refresh,
+                "client": None,
+            }
+        return roles
+
+    def run(self) -> int:
+        with self._cancellation_scope():
+            return self._run()
+
+    def _end_invocation(
+        self,
+        docs: Sequence[DocumentRun],
+        outcome: str,
+        *,
+        reason: str | None = None,
+    ) -> None:
+        """End the invocation, however it ended: its outcome (rundir.
+        OUTCOMES) and reason in the run manifest, and then the same outcome
+        and reason, with the count of the documents' statuses, in the event
+        that closes its events: `run-interrupted` for Ctrl-C, `run-end`
+        otherwise. So a reader of the events alone tells an invocation that
+        ended, a paused or refused one included, from one still running;
+        only a killed one ends with neither."""
+        statuses = dict(Counter(doc.state.status for doc in docs))
+        self.rundir.end(outcome, reason=reason)
+        self.rundir.emit(
+            RUN_INTERRUPTED if outcome == "interrupted" else RUN_END,
+            outcome=outcome,
+            reason=reason,
+            statuses=statuses,
+        )
 
 
 def scratch_run(

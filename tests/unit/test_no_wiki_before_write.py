@@ -1,40 +1,14 @@
-"""No wiki reads or writes before the write (#128; ADR-0025 §2).
+"""Current pre-write stages make no graph reads or writes.
 
-Every step a document takes before the write runs here against a wiki
-that refuses. The orchestrator's wiki client and connection settings are
-stubs that fail on any read or write; no wiki client can be made and no
-connection settings loaded; every connection setting read from the
-environment names a closed loopback port; and no name lookup or socket
-connect succeeds. So a request to the wiki or its query service is
-refused whether its URL comes from a client, from the settings or from
-a host name, and a request to a host that cannot be resolved is refused
-at its lookup, before it could fail on its own. Each refusal is recorded
-before it raises: the orchestrator isolates a document's failure, and a
-step could swallow one, so the tests assert that nothing was asked of
-the wiki, not only that nothing raised.
-
-The steps are those #128 lists that have code: transcription (by vision,
-from a text file, from slide text and from a curator's correction) and
-its check, extraction (entity manifest, chunks, critique), the GEDCOM
-adapter, a deck's slide text and container inventory, the reconcile
-step, the per-document adjudication (`reconcile.adjudicate`) given a roster,
-corpus clustering (#105), the scratch driver's corpus stage, over the
-batches those steps made, and the adjudication of its ambiguous pairs
-(#106) through a fake engine. Flags have no code yet; #112 requires them
-to run under this refusing wiki. One
-step before the write that is outside that list still uses the wiki in
-`ingest run`, and the orchestrator here replaces it: the resolve step's
-exact-label read, which goes with the identity-map writer (#109).
-Registration is part of the write (#103), so nothing here replaces it: a
-document stops at the claim-review gate, the write is never reached, and
-the refusing wiki shows that nothing is registered before it.
-
-Every document and deck is fictional (docs/EXAMPLES.md).
+Fictional text, media, GEDCOM and container sources run through transcription,
+extraction and critique; corpus clustering and adjudication consume their
+results. The wiki client, connection settings, DNS and network connections all
+refuse access and record any attempt, including one swallowed by a stage.
+Registration is reserved for graph writing and is never reached here.
 """
 
 from __future__ import annotations
 
-import csv
 import hashlib
 import json
 import os
@@ -48,6 +22,7 @@ from pathlib import Path
 import pytest
 
 from tests.fixtures import example_universe as u
+from tests.fixtures.document_processing import IsolatedDriver
 from tests.fixtures.records import record_answer
 from tests.unit.test_presentation import (
     DECK_TIME,
@@ -57,6 +32,7 @@ from tests.unit.test_presentation import (
     rels_xml,
     slide_xml,
 )
+from tests.unit.test_run_provenance import fixed_capture  # noqa: F401
 from yizkr.claims import ClaimBatch
 from yizkr.core.config import Config
 from yizkr.core.corpus import ExclusionList
@@ -67,13 +43,10 @@ from yizkr.pipeline.container_inventory import (
     read_inventory,
 )
 from yizkr.pipeline.container_sources import project_sources
-from yizkr.pipeline.orchestrate import (
-    AWAITING_CLAIMS,
+from yizkr.pipeline.document_state import (
     BATCHED,
-    DOCUMENT_STAGES,
     REUSED,
     DocumentState,
-    Orchestrator,
 )
 from yizkr.pipeline.presentation import (
     DERIVED_MEDIA_DIR,
@@ -85,13 +58,20 @@ from yizkr.pipeline.presentation import (
     unpack_pptx,
 )
 from yizkr.pipeline.reconcile import (
-    EQUIVALENCE_FIELDS,
     RosterEntity,
     adjudicate,
     block_candidates,
 )
 from yizkr.pipeline.rundir import DONE, run_state
-from yizkr.pipeline.scratch import CORPUS_STAGES, CorpusContext
+from yizkr.pipeline.scratch import (
+    CORPUS_STAGES,
+    CorpusContext,
+    ScratchDriver,
+    ScratchRefused,
+)
+from yizkr.pipeline.stage_planning import DOCUMENT_STAGES
+
+pytestmark = pytest.mark.usefixtures("fixed_capture")
 
 SOURCES = {source.key: source for source in u.SOURCES}
 RUN = {
@@ -400,11 +380,8 @@ def quiet(*args, **kwargs) -> None:
     pass
 
 
-class BeforeTheWrite(Orchestrator):
-    """`ingest run`'s orchestrator with the wiki refusing and the engine
-    scripted. The resolve step, which uses the wiki and is not a step
-    #128 covers, is replaced: it leaves the batch as it is. Registration,
-    part of the write, is not replaced."""
+class BeforeTheWrite(IsolatedDriver):
+    """Production scratch stages with a scripted model and refusing wiki."""
 
     def __init__(self, folder: Path, state_dir: Path, refusals, **kwargs):
         kwargs.setdefault("exclusions", ExclusionList())
@@ -415,11 +392,8 @@ class BeforeTheWrite(Orchestrator):
     def _llm(self, role, doc):
         return ScriptedEngine(doc.sha1, *PEOPLE[doc.source.name])
 
-    def _step_resolve(self, doc, batch):
-        return batch
 
-
-def this_run(orchestrator: Orchestrator, name: str) -> set[tuple[str, str]]:
+def this_run(orchestrator: ScratchDriver, name: str) -> set[tuple[str, str]]:
     """(document SHA-1, stage) of each event `name` of the orchestrator's
     latest invocation."""
     return {
@@ -434,7 +408,7 @@ def stages(doc) -> set[tuple[str, str]]:
     return {(doc.sha1, stage) for stage in DOCUMENT_STAGES[doc.kind]}
 
 
-def the_deck(orchestrator: Orchestrator):
+def the_deck(orchestrator: ScratchDriver):
     (deck,) = [
         doc for doc in orchestrator.documents() if doc.kind == "presentation"
     ]
@@ -473,7 +447,7 @@ def test_every_step_before_the_write_leaves_the_wiki_alone(tmp_path, refusals):
     orchestrator = BeforeTheWrite(
         corpus(tmp_path), tmp_path / "state", refusals
     )
-    assert orchestrator.run() == 2  # every document waits for claim review
+    assert orchestrator.run() == 0
 
     assert refusals.asked == []
     docs = orchestrator.documents()
@@ -485,13 +459,9 @@ def test_every_step_before_the_write_leaves_the_wiki_alone(tmp_path, refusals):
     ]
     states = run_state(orchestrator.rundir)
     for doc in docs:
-        assert doc.state.status == AWAITING_CLAIMS, doc.state.error
+        assert doc.state.status == BATCHED, doc.state.error
         assert {states[stage].status for stage in stages(doc)} == {DONE}
-        # the reconcile step proposed nothing, so the identity gate had
-        # nothing to review, and the claims went on to their review sheet
-        with open(doc.equivalences, newline="") as handle:
-            assert list(csv.reader(handle)) == [EQUIVALENCE_FIELDS]
-        assert doc.review.exists()
+        assert doc.batch.exists()
 
 
 def test_rerunning_reuses_and_rechecks_the_views_without_the_wiki(
@@ -505,7 +475,7 @@ def test_rerunning_reuses_and_rechecks_the_views_without_the_wiki(
     # every view stands, and the vision and text-file transcriptions are
     # checked again as they are reused
     again = BeforeTheWrite(folder, tmp_path / "state", refusals)
-    assert again.run() == 2
+    assert again.run() == 0
     docs = again.documents()
     for doc in docs:
         assert stages(doc) <= this_run(again, REUSED)
@@ -519,7 +489,7 @@ def test_rerunning_reuses_and_rechecks_the_views_without_the_wiki(
         SOURCES["postcard-1938"].text.replace("\n", "\n\n")
     )
     corrected = BeforeTheWrite(folder, tmp_path / "state", refusals)
-    assert corrected.run() == 2
+    assert corrected.run() == 0
     assert {
         (postcard.sha1, "transcription"),
         (postcard.sha1, "extraction"),
@@ -553,7 +523,7 @@ def test_every_transcription_names_its_document_by_its_bytes(
         return found
 
     first = BeforeTheWrite(folder, tmp_path / "state", refusals)
-    assert first.run() == 2
+    assert first.run() == 0
     assert {kind: route for kind, (route, _) in views(first).items()} == {
         "media": "llm-vision",
         "presentation": "pptx-adapter",
@@ -564,40 +534,9 @@ def test_every_transcription_names_its_document_by_its_bytes(
         SOURCES["postcard-1938"].text.replace("\n", "\n\n")
     )
     corrected = BeforeTheWrite(folder, tmp_path / "state", refusals)
-    assert corrected.run() == 2
+    assert corrected.run() == 0
     assert views(corrected)["text"][0] == "correction"
     assert refusals.asked == []
-
-
-def test_serial_extraction_in_parallel_leaves_the_wiki_alone(
-    tmp_path, refusals
-):
-    """Serial mode's extract-all pass (ADR-0019) runs documents in
-    parallel, a deck's inventory recorded among them, and asks nothing of
-    the wiki."""
-    orchestrator = BeforeTheWrite(
-        corpus(tmp_path),
-        tmp_path / "state",
-        refusals,
-        serial=True,
-        extract_concurrency=2,
-    )
-    assert orchestrator.run() == 2
-
-    assert refusals.asked == []
-    deck = the_deck(orchestrator)
-    assert read_inventory(deck.dir).source.sha1 == deck.sha1
-    docs = orchestrator.documents()
-    states = run_state(orchestrator.rundir)
-    for doc in docs:
-        assert {states[stage].status for stage in stages(doc)} == {DONE}
-    # the first in sequence waits for claim review, and the rest for it
-    assert sorted(doc.state.status for doc in docs) == [
-        AWAITING_CLAIMS,
-        BATCHED,
-        BATCHED,
-        BATCHED,
-    ]
 
 
 def test_a_pdf_s_excerpt_leaves_the_wiki_alone(
@@ -608,7 +547,7 @@ def test_a_pdf_s_excerpt_leaves_the_wiki_alone(
     the write."""
     from tests.unit.test_pdf_pages import LETTER_SHA1, booklet
     from yizkr.pipeline import transcribe
-    from yizkr.pipeline.orchestrate import EXCERPT
+    from yizkr.pipeline.document_state import EXCERPT
 
     # a scripted engine reads the image; no poppler tool runs
     monkeypatch.setattr(transcribe, "require_pdf_renderer", lambda *a: None)
@@ -621,11 +560,11 @@ def test_a_pdf_s_excerpt_leaves_the_wiki_alone(
             return ScriptedEngine(doc.sha1, *PEOPLE["postcard-1938.txt"])
 
     orchestrator = Booklet(folder, tmp_path / "state", refusals)
-    assert orchestrator.run() == 2
+    assert orchestrator.run() == 0
     assert refusals.asked == []
     excerpt = orchestrator._excerpts[LETTER_SHA1]
     assert excerpt.kind == EXCERPT
-    assert excerpt.state.status == AWAITING_CLAIMS, excerpt.state.error
+    assert excerpt.state.status == BATCHED, excerpt.state.error
     states = run_state(orchestrator.rundir)
     assert {states[stage].status for stage in stages(excerpt)} == {DONE}
 
@@ -636,7 +575,7 @@ def test_a_deck_s_excerpt_leaves_the_wiki_alone(tmp_path, refusals):
     the write, on a first run or a second that reuses their views."""
     from tests.unit.test_deck_excerpts import library_talk
     from tests.unit.test_pdf_pages import LETTER_SHA1
-    from yizkr.pipeline.orchestrate import EXCERPT
+    from yizkr.pipeline.document_state import EXCERPT
 
     folder = tmp_path / "decks"
     folder.mkdir()
@@ -648,11 +587,11 @@ def test_a_deck_s_excerpt_leaves_the_wiki_alone(tmp_path, refusals):
 
     for _run in range(2):
         orchestrator = Talk(folder, tmp_path / "state", refusals)
-        assert orchestrator.run() == 2
+        assert orchestrator.run() == 0
         assert refusals.asked == []
         excerpt = orchestrator._excerpts[LETTER_SHA1]
         assert excerpt.kind == EXCERPT
-        assert excerpt.state.status == AWAITING_CLAIMS, excerpt.state.error
+        assert excerpt.state.status == BATCHED, excerpt.state.error
         states = run_state(orchestrator.rundir)
         assert {states[stage].status for stage in stages(excerpt)} == {DONE}
 
@@ -703,7 +642,7 @@ def test_corpus_clustering_asks_nothing_of_the_wiki(tmp_path, refusals):
     orchestrator = BeforeTheWrite(
         corpus(tmp_path), tmp_path / "state", refusals
     )
-    assert orchestrator.run() == 2
+    assert orchestrator.run() == 0
     (stage,) = [stage for stage in CORPUS_STAGES if stage.name == "clustering"]
     assert not stage.touches_wiki
     logged: list[str] = []
@@ -927,6 +866,26 @@ class TestTheRecordIsCurrentWhileItIsWhole:
 
         recorded, _, deck = self.run_twice(tmp_path, refusals, lose)
         self.assert_made_again(recorded, deck)
+
+    def test_other_code_cannot_omit_an_excerpt_needing_repair(
+        self, tmp_path, refusals, monkeypatch
+    ):
+        from yizkr.pipeline import scratch
+
+        folder = deck_alone(tmp_path)
+        first = BeforeTheWrite(folder, tmp_path / "state", refusals)
+        assert first.run() == 0
+        self.portrait(the_deck(first)).unlink()
+        recorded = first.rundir.manifest()
+        other = dict(recorded["code"], commit="f" * 40, dirty=False)
+        monkeypatch.setattr(scratch, "code_version", lambda: other)
+        before = (first.state_dir / "run.json").read_bytes()
+
+        resumed = BeforeTheWrite(folder, first.state_dir, refusals)
+        with pytest.raises(ScratchRefused, match="source images need repair"):
+            resumed.run()
+        assert (first.state_dir / "run.json").read_bytes() == before
+        assert refusals.asked == []
 
     def test_a_truncated_medium_is_made_again(self, tmp_path, refusals):
         def truncate(deck):

@@ -2,12 +2,10 @@
 
 import pytest
 
-from tests.fixtures.semantic_acceptance import birth_batch, source_case
-from tests.unit.test_orchestrate import (
-    approve_all_claims,
-    approve_all_equivalences,
-    make_run,
+from tests.fixtures.document_processing import (
+    completed_run,
 )
+from tests.fixtures.semantic_acceptance import birth_batch, source_case
 from tests.unit.test_run_provenance import producer
 from tests.unit.test_scratch_places import PlaceRun
 from tests.unit.test_text_stages import ScriptedClient, birth_answer
@@ -88,29 +86,12 @@ def test_provenance_preserves_actual_extraction_and_critique_cache_keys(
         cache.close()
 
 
-def test_identical_batch_with_new_process_evidence_keeps_existing_approvals(
+def test_identical_batch_keeps_original_product_and_critique_provenance(
     tmp_path, monkeypatch
 ):
-    driver = make_run(tmp_path)
-    driver.run()
+    driver = completed_run(tmp_path)
     (doc,) = driver.documents()
-    approve_all_equivalences(doc)
-    driver.run()
-    (doc,) = driver.documents()
-    approve_all_claims(doc)
-    driver.run()
-    (doc,) = driver.documents()
-    kept = {
-        path: path.read_bytes()
-        for path in (
-            doc.batch,
-            doc.equivalences_reviewed,
-            doc.review_reviewed,
-            doc.approved,
-        )
-    }
-    assert doc.derivations.consents(doc.equivalences_reviewed)
-    assert doc.derivations.consents(doc.review_reviewed)
+    kept = {path: path.read_bytes() for path in (doc.batch, doc.critique)}
     proposed = ClaimBatch.model_validate_json(doc.batch.read_text())
     proposed.extraction_run.provenance = producer()
     doc.derivations.forget(doc.batch)
@@ -123,10 +104,8 @@ def test_identical_batch_with_new_process_evidence_keeps_existing_approvals(
     assert driver._derive(doc) == proposed
     assert calls == ["recompute"]
     assert {path: path.read_bytes() for path in kept} == kept
-    assert doc.derivations.consents(doc.equivalences_reviewed)
-    assert doc.derivations.consents(doc.review_reviewed)
     assert doc.derivations.current(doc.batch)
-    assert doc.derivations.current(doc.review)
+    assert doc.derivations.current(doc.critique)
 
 
 @pytest.mark.write_side

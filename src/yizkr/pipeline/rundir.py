@@ -19,7 +19,7 @@ a torn last line before its own record, so a writer that dies mid-write
 loses only the record it was writing wherever the lock holds
 (_append_line says where it does not). Every stage start,
 completion and failure is an event, and so is every view a run reuses
-(yizkr.pipeline.orchestrate), every answer the LLM cache gives or cannot
+(yizkr.pipeline.scratch), every answer the LLM cache gives or cannot
 give (yizkr.pipeline.llmcache) and every call that reaches the engine,
 with what its stream reported of it (yizkr.pipeline.llm); the driver,
 the live monitor, the anomaly checks and pacing all read and write these
@@ -30,8 +30,8 @@ what the cache did and what the engine's calls used.
 The manifest records settings and hashes, never a prompt or any document
 content. It describes the run as its latest invocation ran it. A run
 that must keep its settings across invocations (``fixed_settings``)
-refuses an invocation that asks for others (RunSettingsConflict); one
-that may change them, as `ingest run` may, records the latest.
+refuses an invocation that asks for others (RunSettingsConflict).
+Callers that allow settings changes record the latest values.
 
 Run state per document and stage is derived from the run manifest and
 the events alone (never from file modification times or a per-document

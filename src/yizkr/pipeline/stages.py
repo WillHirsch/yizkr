@@ -1,9 +1,9 @@
 """Content hashes and atomic writes for the pipeline's files.
 
-The stages before the review gates write plain-file views of their
+Document stages write plain-file views of their
 outputs into each document's directory, and `derivations.json` records
 what every derived file was made from by content hash
-(yizkr.pipeline.orchestrate). These helpers give those files, the run
+(yizkr.pipeline.document_state). These helpers give those files, the run
 directory (yizkr.pipeline.rundir) and the LLM cache
 (yizkr.pipeline.llmcache) one canonical serialisation to hash, and
 writes that readers see whole or not at all.

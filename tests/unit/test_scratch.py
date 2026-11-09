@@ -35,10 +35,10 @@ from tests.unit.test_no_wiki_before_write import (  # noqa: F401
 from yizkr import cli
 from yizkr.claims import ClaimBatch
 from yizkr.core.corpus import ExclusionConfigError, ExclusionList
-from yizkr.pipeline import clustering, llm, monitor, orchestrate, scratch
+from yizkr.pipeline import clustering, document_state, llm, monitor, scratch
 from yizkr.pipeline.cancellation import current_cancellation
+from yizkr.pipeline.document_state import directory_names
 from yizkr.pipeline.llm import CliVersionMismatch, UsageLimitReached
-from yizkr.pipeline.orchestrate import directory_names
 from yizkr.pipeline.presentation import slide_transcript, unpack_pptx
 from yizkr.pipeline.rundir import (
     CANCELLED,
@@ -63,6 +63,7 @@ from yizkr.pipeline.scratch import (
     ScratchRefused,
     ScratchRunInUse,
 )
+from yizkr.pipeline.stage_planning import VIEWS
 from yizkr.pipeline.stages import read_jsonl
 
 SOURCES = {source.key: source for source in u.SOURCES}
@@ -307,6 +308,11 @@ def fakes(monkeypatch, tmp_path) -> Fakes:
     claude CLI that is installed and logged in, as far as the preflight
     can tell: a credentials file in a config directory of the test's own,
     so nothing reads the developer's own login."""
+    from yizkr.pipeline import run_provenance
+
+    monkeypatch.setattr(
+        run_provenance, "now", lambda: datetime(2026, 1, 1, tzinfo=UTC)
+    )
     fake = Fakes()
 
     def make_client(engine, *, effort=None, model=None, **kwargs):
@@ -727,7 +733,7 @@ class TestOrder:
         (folder / "corpus.txt").write_text(SOURCES["postcard-1938"].text)
         names = directory_names([folder / "corpus.txt"], tmp_path / "run")
         assert names[folder / "corpus.txt"] != CORPUS_DIR
-        assert CORPUS_DIR in orchestrate._RUN_FILES
+        assert CORPUS_DIR in document_state._RUN_FILES
 
 
 # -- fresh state directories, through the LLM cache ---------------------------
@@ -867,7 +873,7 @@ class TestControl:
         assert completed == set(first) - {(photo, "transcription")}
         photo_source = corpus.folder / PHOTO
         photo_dir = run / directory_names([photo_source], run)[photo_source]
-        assert not (photo_dir / orchestrate.VIEWS["transcription"]).exists()
+        assert not (photo_dir / VIEWS["transcription"]).exists()
         assert events(run)[-1]["event"] == "run-end"
         # it says how to read the run, and how to resume it
         assert f"report: yizkr stages state {run}" in said
@@ -887,7 +893,7 @@ class TestControl:
         assert set(fakes.calls[len(asked) :]) & set(asked) == {
             ("vision", PHOTO)
         }
-        assert (photo_dir / orchestrate.VIEWS["transcription"]).is_file()
+        assert (photo_dir / VIEWS["transcription"]).is_file()
         assert statuses(run) == {DONE}
 
     def test_a_paused_slice_waits_while_the_other_slices_go_on(

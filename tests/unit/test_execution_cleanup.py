@@ -5,7 +5,7 @@ import pytest
 from yizkr.core.corpus import ExclusionList
 from yizkr.pipeline.cancellation import RunCancelled
 from yizkr.pipeline.estimate import Estimator
-from yizkr.pipeline.orchestrate import Orchestrator
+from yizkr.pipeline.scratch import ScratchDriver
 
 
 class Resource:
@@ -18,7 +18,7 @@ class Resource:
             raise self.failure
 
 
-@pytest.fixture(params=[Orchestrator, Estimator])
+@pytest.fixture(params=[ScratchDriver, Estimator])
 def execution_owner(request, tmp_path):
     owner = request.param(
         tmp_path / "sources", tmp_path / "run", exclusions=ExclusionList()
@@ -28,7 +28,7 @@ def execution_owner(request, tmp_path):
         if isinstance(owner, Estimator):
             owner._clients, owner._as_is = clients, sessions
             return owner._close_clients
-        owner._engines, owner._cache = clients, sessions
+        owner.resources.engines, owner.resources.cache = clients, sessions
         return owner._close_engines
 
     return install
@@ -99,3 +99,48 @@ def test_session_cleanup_failure_is_reported_after_clients_stop(
         close()
     assert caught.value is failure
     assert closed == ["engine", "sessions"]
+
+
+def test_rejected_engine_cleanup_preserves_settings_error_and_retries(
+    tmp_path, monkeypatch
+):
+    from yizkr.pipeline import llm
+    from yizkr.pipeline.run_resources import RunResources
+
+    closed = []
+    rejected = Resource("rejected", closed, OSError("private detail"))
+    accepted = Resource("accepted", closed)
+    clients = iter([rejected, accepted])
+    monkeypatch.setattr(llm, "make_client", lambda *a, **k: next(clients))
+    primary = ValueError("recorded settings differ")
+
+    class Recording:
+        calls = 0
+
+        def record_engine(self, *args, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise primary
+
+    resources = RunResources(tmp_path / "cache")
+    resources.cache = Resource("cache", closed)
+    recording = Recording()
+    with pytest.raises(ValueError) as caught:
+        resources.engine(
+            "extract", engine="fictional", effort="low", rundir=recording
+        )
+    assert caught.value is primary
+    assert "OSError" in primary.__notes__[0]
+    assert "private detail" not in primary.__notes__[0]
+    assert (
+        resources.engine(
+            "extract", engine="fictional", effort="low", rundir=recording
+        )
+        is accepted
+    )
+    with pytest.raises(OSError):
+        resources.close()
+    assert closed == ["rejected", "accepted", "rejected"]
+    rejected.failure = None
+    resources.close()
+    assert closed == ["rejected", "accepted", "rejected", "rejected", "cache"]

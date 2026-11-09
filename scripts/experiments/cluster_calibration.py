@@ -1,20 +1,15 @@
 #!/usr/bin/env python3
-"""Offline corpus-clustering calibration for corpus-level identity (#71).
+"""Offline corpus-clustering calibration.
 
-Measures, over a cohort's extraction manifests plus a GEDCOM export, how
-the corpus-level identity decision (ADR-0027) would behave BEFORE it is
-built: how many candidate pairs each blocking strategy produces, what the
-within-manifest cannot-link constraints and the lifted kin edges prune,
-what transitive closure does with the rest, and how many adjudication
-calls and owner review rows follow. No LLM calls, no graph access, no
-writes except to ``--out``.
+Measures candidate-pair counts, constraints, closure and estimated review
+work across alternative blocking strategies for extraction manifests and
+a GEDCOM export. It makes no LLM calls, accesses no graph, and writes only
+to the explicitly supplied output directory.
 
-The recommended variants (the kin-surname person key, the first-component
-place token, GEDCOM anchoring, the lifted cannot-link constraints) are
-promoted into the scratch driver's clustering stage,
-``src/yizkr/pipeline/clustering.py`` (#105), whose thresholds live in
-``clustering.yaml`` beside it; this script keeps every variant it
-compared, for recalibration.
+Production clustering lives in ``src/yizkr/pipeline/clustering.py`` with
+its thresholds in ``clustering.yaml``. This script compares blocking
+variants for recalibration; its deterministic classifications are sizing
+proxies, not identity approvals.
 
 Inputs (all paths are arguments; nothing is read from the repo):
 
@@ -102,15 +97,11 @@ from yizkr.pipeline.reconcile import (
     PLACE_KIND,
     PairFacts,
     PlaceContainment,
-    RosterEntity,
     _batch_candidates,
     _batch_pair_facts,
-    block_candidates,
     entity_facts,
-    entity_name_keys,
     impossible_pair,
 )
-from yizkr.pipeline.sequencing import sequence_documents
 
 HUMAN = "human"
 # kinds whose identity is anchored by who took part, not by a name
@@ -1148,69 +1139,6 @@ def prompt_tokens(
     return sizes
 
 
-@dataclass
-class SerialResult:
-    order: list[str]
-    rows_per_artifact: list[int]
-    calls: int
-
-    @property
-    def rows(self) -> int:
-        return sum(self.rows_per_artifact)
-
-
-def simulate_serial(
-    manifests: list[Manifest],
-    pairs_per_call: int,
-    merged_into: dict[str, str] | None = None,
-) -> SerialResult:
-    """The current per-artifact path (ADR-0019 serial order): each
-    artifact's entities are blocked by ``block_candidates`` against every
-    earlier artifact's extracted entities, and every blocked pair is one
-    equivalences-CSV row. ``merged_into`` (mention uid -> cluster id)
-    folds an approved match into its existing roster item, appending the
-    new aliases, as the writer does; without it nothing ever merges."""
-    by_sha = {m.sha1: m for m in manifests}
-    keyed = [
-        (
-            m.sha1,
-            set().union(
-                *(entity_name_keys(e) for e in m.batch.entities if e.extract)
-            ),
-        )
-        for m in manifests
-    ]
-    order = [str(sha) for sha in sequence_documents(keyed)]
-    roster: list[RosterEntity] = []
-    by_cluster: dict[str, RosterEntity] = {}
-    rows: list[int] = []
-    calls = 0
-    for sha1 in order:
-        batch = by_sha[sha1].batch
-        candidates = block_candidates(batch.entities, roster, batch=batch)
-        rows.append(sum(len(found) for found in candidates.values()))
-        calls += len(_batch_candidates(candidates, pairs_per_call))
-        for entity in batch.entities:
-            if not entity.extract:
-                continue
-            uid = mention_uid(sha1, entity.id)
-            cluster = (merged_into or {}).get(uid)
-            if cluster and cluster in by_cluster:
-                existing = by_cluster[cluster]
-                existing.aliases.extend([entity.label, *entity.aliases])
-                continue
-            item = RosterEntity(
-                qid=f"Q{len(roster) + 1}",
-                label=entity.label,
-                aliases=list(entity.aliases),
-                kind=entity.kind,
-            )
-            roster.append(item)
-            if cluster:
-                by_cluster[cluster] = item
-    return SerialResult(order, rows, calls)
-
-
 # -- homonyms -----------------------------------------------------------------
 
 
@@ -1619,20 +1547,6 @@ def strategy_summary(
     return summary
 
 
-def collapse_map(result: StrategyResult) -> dict[str, str]:
-    """Mention uid -> id of its confident-only cluster (a stand-in for
-    what the owner would approve in the per-artifact path)."""
-    confident = {
-        p for p, klass in result.pair_class.items() if klass == "confident"
-    }
-    uids = {uid for pair in confident for uid in pair}
-    return {
-        uid: members[0]
-        for members in components(uids, confident)
-        for uid in members
-    }
-
-
 def run_experiment(
     run_dirs: list[Path],
     gedcom: Path | None,
@@ -1723,12 +1637,6 @@ def run_experiment(
         for variant in PLACE_KEY_VARIANTS
     }
     homonyms = homonym_groups(mentions)
-    serial_plain = simulate_serial(all_manifests, pairs_per_call)
-    serial_merged = simulate_serial(
-        all_manifests,
-        pairs_per_call,
-        collapse_map(results["gedcom-anchored"]),
-    )
     verdicts = (
         verdict_calibration(
             verdict_dirs,
@@ -1783,23 +1691,12 @@ def run_experiment(
                 for g in homonyms[:EXAMPLES]
             ],
         },
-        "per_artifact_serial": {
-            "artifacts": len(serial_plain.order),
-            "rows_no_merges": serial_plain.rows,
-            "calls_no_merges": serial_plain.calls,
-            "rows_confident_merged": serial_merged.rows,
-            "calls_confident_merged": serial_merged.calls,
-            "max_rows_one_artifact": max(
-                serial_plain.rows_per_artifact, default=0
-            ),
-        },
         "verdicts": summarize_verdicts(verdicts) if verdicts else None,
     }
     detail = {
         "index": index,
         "results": results,
         "homonyms": homonyms,
-        "serial": (serial_plain, serial_merged),
         "verdict_rows": verdicts or [],
     }
     return summary, detail
@@ -1976,20 +1873,6 @@ def render_report(summary: dict) -> str:
                 )
                 + "."
             )
-    serial = summary["per_artifact_serial"]
-    lines += [
-        "",
-        "### Per-artifact path for comparison",
-        "",
-        f"Simulated serial per-artifact reconcile (`block_candidates` "
-        f"against every earlier artifact, greedy order, one CSV row per "
-        f"blocked pair): {serial['rows_no_merges']} rows and "
-        f"{serial['calls_no_merges']} calls if nothing merges; "
-        f"{serial['rows_confident_merged']} rows and "
-        f"{serial['calls_confident_merged']} calls if every confident "
-        f"cluster merges. The largest single artifact produces "
-        f"{serial['max_rows_one_artifact']} rows.",
-    ]
     verdicts = summary.get("verdicts")
     if verdicts:
         lines += render_verdicts(verdicts, inputs)
@@ -2191,30 +2074,6 @@ def write_outputs(out: Path, summary: dict, detail: dict) -> None:
                     ),
                 }
                 for group in detail["homonyms"]
-            ),
-        ),
-    )
-    serial_plain, serial_merged = detail["serial"]
-    _private_file(
-        out / "serial.csv",
-        _csv_text(
-            ["position", "artifact", "rows_no_merges", "rows_merged"],
-            (
-                {
-                    "position": position,
-                    "artifact": sha1[:8],
-                    "rows_no_merges": plain,
-                    "rows_merged": merged,
-                }
-                for position, (sha1, plain, merged) in enumerate(
-                    zip(
-                        serial_plain.order,
-                        serial_plain.rows_per_artifact,
-                        serial_merged.rows_per_artifact,
-                        strict=True,
-                    ),
-                    start=1,
-                )
             ),
         ),
     )

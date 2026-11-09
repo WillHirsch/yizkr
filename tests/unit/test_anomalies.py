@@ -34,6 +34,7 @@ import pytest
 import yaml
 
 from tests.fixtures import example_universe as u
+from tests.fixtures.document_processing import IsolatedDriver
 from tests.fixtures.real_time import real_time_uses
 from tests.fixtures.records import record_answer
 from tests.unit.conftest import RecordedTimer
@@ -58,7 +59,6 @@ from yizkr.pipeline.chunking import (
 from yizkr.pipeline.critique import Finding
 from yizkr.pipeline.fingerprints import cluster_id
 from yizkr.pipeline.language import resolve_language
-from yizkr.pipeline.orchestrate import Orchestrator
 from yizkr.pipeline.rundir import ALERTS, RunDir, fold_control
 from yizkr.pipeline.transcribe import Transcription
 from yizkr.pipeline.transcription_check import (
@@ -108,7 +108,7 @@ def sha1_of(name: str) -> str:
 @dataclass
 class Doc:
     """What the checks read of a document: a stand-in for
-    orchestrate.DocumentRun, its views under `dir`."""
+    scratch.DocumentRun, its views under `dir`."""
 
     dir: Path
     name: str
@@ -3495,7 +3495,7 @@ class TestNewAndCarried:
         assert checks_raised(run) == ["zero-claims"]
 
 
-# -- the orchestrator's hooks -------------------------------------------------
+# -- scratch stage hooks -------------------------------------------------
 
 
 def quiet(*args, **kwargs):
@@ -3511,7 +3511,7 @@ class Refusing:
         return "I'm unable to assist with this request."
 
 
-class Run(Orchestrator):
+class Run(IsolatedDriver):
     """The wiki steps scripted; transcription runs for real (a text file
     as itself, an image through `vision`); extraction returns a fixed
     batch through its stage, and the critic `findings` findings for the
@@ -3547,9 +3547,6 @@ class Run(Orchestrator):
         ] * self.findings.get(doc.source.name, 0)
         return self._run_stage(doc, "critique", lambda: found)
 
-    def _step_resolve(self, doc, batch):
-        return batch
-
 
 def a_folder(tmp_path, **files) -> Path:
     folder = tmp_path / "docs"
@@ -3572,7 +3569,7 @@ def by_invocation(run: RunDir) -> dict[str, list[tuple[str, str]]]:
     return alerts
 
 
-class TestTheOrchestrator:
+class TestScratchStageChecks:
     def test_a_transcription_is_checked_as_it_is_stored(self, tmp_path):
         orchestrator = Run(
             a_folder(tmp_path, photo_txt=STUDIO), tmp_path / "state"
@@ -3646,8 +3643,20 @@ class TestTheOrchestrator:
         # six scans, each of other bytes: identical bytes are one artifact
         images = {f"page{n}_png": b"\x89PNG %d" % n for n in range(1, 7)}
         folder = a_folder(tmp_path, zbrief_txt=NATURALISATION, **images)
-        orchestrator = Run(folder, tmp_path / "state", vision=Refusing())
+        waits = []
+
+        def stop_waiting(seconds):
+            waits.append(seconds)
+            assert len(waits) == 1
+            orchestrator.rundir.request(
+                "abort", kind="media", reason="fictional inspection complete"
+            )
+
+        orchestrator = Run(
+            folder, tmp_path / "state", vision=Refusing(), sleep=stop_waiting
+        )
         orchestrator.run()
+        assert waits
         run = orchestrator.rundir
         failed = [
             event["subject"]
@@ -3662,7 +3671,10 @@ class TestTheOrchestrator:
         assert failed == [doc.sha1 for doc in media[:4]]
         alert = only(run, "kind-failures")
         assert (alert["value"], alert["limit"]) == (4, 3.0)
-        assert [r["scope"] for r in requests(run)] == ["kind:media"]
+        assert [(r["action"], r["scope"]) for r in requests(run)] == [
+            ("pause", "kind:media"),
+            ("abort", "kind:media"),
+        ]
         # the text document went through its stages
         (text,) = [d for d in orchestrator.documents() if d.kind == "text"]
         done = [
@@ -3736,7 +3748,8 @@ class TestTheOrchestrator:
         )
         orchestrator.run()
         (doc,) = orchestrator.documents()
-        assert doc.state.status == "awaiting claim review"
+        assert doc.state.status == "batched"
+        assert doc.batch.exists() and doc.critique.exists()
         errors = [
             event
             for event in orchestrator.rundir.events()

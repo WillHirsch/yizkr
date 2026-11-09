@@ -38,13 +38,13 @@ from yizkr.pipeline.chunking import (
     parse_chunk_response,
     parse_chunk_unread,
 )
+from yizkr.pipeline.document_state import slugify
 from yizkr.pipeline.extract import (
     JsonScan,
     _trailing_comma,
     scan_json_answer,
     scan_json_objects,
 )
-from yizkr.pipeline.orchestrate import slugify
 
 # Hildegard's manifest entry, as a model writes it: one trailing comma
 # closing her aliases, another closing the entity list

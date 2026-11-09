@@ -59,8 +59,8 @@ does not record, so the next invocation resets again, and writes every
 document afresh.
 
 **register** registers each document whose batch the write will take,
-as `ingest run` registers a document at its write (the orchestrator's
-_step_register): its artifact item, a deck's slides, and the image
+through `ScratchDriver._step_register`: its artifact item, a deck's
+slides, and the image
 sources of a deck or a PDF that its container inventory binds, each by
 the SHA-1 of its bytes, with registration's flags raised as alerts of
 the write. Its record keeps

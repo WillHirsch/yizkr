@@ -17,8 +17,8 @@ from pathlib import Path
 import pytest
 
 from tests.fixtures import example_universe as u
+from tests.fixtures.document_processing import make_run
 from tests.fixtures.identity import write_mapped
-from tests.unit.test_orchestrate import make_run
 from tests.unit.test_pipeline import MEDIA_SHA1, PROPERTIES, RUN
 from tests.unit.test_pipeline import FakeWiki as PipelineWiki
 from tests.unit.test_run_report import (
@@ -36,9 +36,9 @@ from yizkr.core.verbatim import Transcript
 from yizkr.model.schema import load_manifest
 from yizkr.pipeline import chunking, preparation
 from yizkr.pipeline.chunking import ChunkedClaimExtractor
+from yizkr.pipeline.document_state import FAILED, DocumentRun, slugify
 from yizkr.pipeline.estimate import _Extractor, _Keyed, _Tally
 from yizkr.pipeline.extract import vocabulary_prompt_lines
-from yizkr.pipeline.orchestrate import FAILED, DocumentRun, slugify
 from yizkr.pipeline.transcribe import (
     PageProvenance,
     TranscribedPage,

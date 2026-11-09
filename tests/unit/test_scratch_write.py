@@ -46,7 +46,7 @@ from yizkr.core.instance import (
     write_state_dir,
 )
 from yizkr.pipeline import report, scratch, scratchwrite
-from yizkr.pipeline.orchestrate import DocumentRun
+from yizkr.pipeline.document_state import DocumentRun
 from yizkr.pipeline.rundir import PROGRESS
 from yizkr.pipeline.scratch import CORPUS_DIR, CorpusContext, ScratchDriver
 from yizkr.pipeline.scratchwrite import ScratchWriteRefused
@@ -484,7 +484,7 @@ class TestTheWrite:
 
     def test_writing_makes_no_model_call(self, run):
         run.past_the_barrier()
-        assert run.driver._engines == {}
+        assert run.driver.resources.engines == {}
 
     def test_it_writes_under_the_live_stack_lock(self, run):
         run.past_the_barrier()
@@ -1289,12 +1289,12 @@ class TestTheKey:
         assert _key(run, exclusions=ExclusionList()) != key
 
     def test_another_kind_is_another_key(self, keyed, monkeypatch):
-        from yizkr.pipeline import orchestrate
+        from yizkr.pipeline import document_state
 
         run, key = keyed
         # the same file, read as another kind of document
         monkeypatch.setattr(
-            orchestrate, "document_kind", lambda source: "text"
+            document_state, "document_kind", lambda source: "text"
         )
         assert _key(run, exclusions=ExclusionList()) != key
 
@@ -1318,7 +1318,7 @@ class TestTheKey:
             "pipeline/review.py",
             "pipeline/clustering.py",
             "pipeline/presentation.py",
-            "pipeline/orchestrate.py",
+            "pipeline/document_state.py",
             "pipeline/clustering.yaml",
             "pipeline/gedcom_placeholders.yaml",
             "pipeline/prompts/extraction.md",

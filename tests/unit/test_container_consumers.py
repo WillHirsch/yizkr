@@ -33,6 +33,7 @@ from tests.unit.test_pdf_pages import (
     run,
     typed,
 )
+from tests.unit.test_run_provenance import fixed_capture  # noqa: F401
 from yizkr.claims import ArtifactRef, PlacementSupport, SourceSupport
 from yizkr.core.corpus import ExclusionList
 from yizkr.pipeline import transcribe
@@ -44,13 +45,13 @@ from yizkr.pipeline.container_inventory import (
 )
 from yizkr.pipeline.container_sources import prepare_sources, project_sources
 from yizkr.pipeline.critique import artifact_places
+from yizkr.pipeline.document_state import BATCHED
 from yizkr.pipeline.extract import (
     ExtractionFailed,
     cite_artifact,
     placed_by,
     placed_lines,
 )
-from yizkr.pipeline.orchestrate import WRITTEN
 from yizkr.pipeline.pdf_inventory import inventory_pdf
 from yizkr.pipeline.presentation import (
     DERIVED_MEDIA,
@@ -58,7 +59,6 @@ from yizkr.pipeline.presentation import (
     DerivedMedium,
     unpack_pptx,
 )
-from yizkr.pipeline.review import accept_all
 from yizkr.pipeline.source_context import (
     LocatedReading,
     PlacedSource,
@@ -73,6 +73,8 @@ from yizkr.pipeline.text_stages import (
 )
 from yizkr.pipeline.textlayer import png
 from yizkr.source_structure import StructuralLocator
+
+pytestmark = pytest.mark.usefixtures("fixed_capture")
 
 
 @pytest.fixture(autouse=True)
@@ -118,16 +120,16 @@ def test_container_metadata_recovery_preserves_approved_products(
     container = document(first, name)
     excerpt = excerpt_of(first, LETTER_SHA1)
     for subject in (container, excerpt):
-        accept_all(subject.review, subject.review_reviewed)
+        subject.dir.joinpath("review.reviewed.csv").write_text(
+            "fictional retained decision\n"
+        )
     products = {
         path: path.read_bytes()
         for subject in (container, excerpt)
         for path in (
             subject.transcription,
             subject.batch,
-            subject.resolved,
-            subject.review,
-            subject.review_reviewed,
+            subject.dir.joinpath("review.reviewed.csv"),
         )
     }
     (container.dir / missing).unlink(missing_ok=True)
@@ -135,8 +137,8 @@ def test_container_metadata_recovery_preserves_approved_products(
     restored_container = document(again, name)
     restored_excerpt = excerpt_of(again, LETTER_SHA1)
     assert restored_excerpt.dir == excerpt.dir
-    assert restored_container.state.status == WRITTEN
-    assert restored_excerpt.state.status == WRITTEN
+    assert restored_container.state.status == BATCHED
+    assert restored_excerpt.state.status == BATCHED
     assert {path: path.read_bytes() for path in products} == products
 
 
@@ -206,7 +208,7 @@ def test_presentation_reader_refuses_preparation_from_another_source(tmp_path):
 
 def test_legacy_excerpt_gains_current_source_support_without_vision(tmp_path):
     """Older readings gain typed support without another vision call."""
-    from yizkr.pipeline.orchestrate import (
+    from yizkr.pipeline.document_state import (
         BATCH_VOLATILE,
         TRANSCRIPTION_VOLATILE,
     )
@@ -247,8 +249,10 @@ def test_legacy_excerpt_gains_current_source_support_without_vision(tmp_path):
         excerpt.batch.name, content_hash(old_batch, volatile=BATCH_VOLATILE)
     )
     excerpt.derivations.record(excerpt.batch)
-    accept_all(excerpt.review, excerpt.review_reviewed)
-    approved = excerpt.review_reviewed.read_bytes()
+    excerpt.dir.joinpath("review.reviewed.csv").write_text(
+        "fictional retained decision\n"
+    )
+    approved = excerpt.dir.joinpath("review.reviewed.csv").read_bytes()
 
     class NoVision(Reader):
         def complete(self, prompt, image_paths=()):
@@ -265,11 +269,7 @@ def test_legacy_excerpt_gains_current_source_support_without_vision(tmp_path):
         support = claim["source"]["support"]
         assert support["container"]["sha1"] == container.sha1
         assert support["placements"]
-    assert not current.review_reviewed.exists()
-    assert any(
-        path.read_bytes() == approved
-        for path in current.dir.glob("review.reviewed.superseded-*.csv")
-    )
+    assert current.dir.joinpath("review.reviewed.csv").read_bytes() == approved
 
 
 NOTES = "Gustl finally has his visa."
