@@ -14,6 +14,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -113,6 +114,38 @@ CONTROLS = (
     "deploy/config/mutation-guard",
 )
 
+# Run once in an ephemeral test-image container. This exercises production
+# admission against the image's actual Git state, including a tracked edit.
+CODE_ADMISSION_PROBE = """
+import json
+from pathlib import Path
+import yizkr
+from yizkr.core.instance import require_clean_code
+
+before = require_clean_code()
+source = Path(yizkr.__file__)
+original = source.read_bytes()
+try:
+    source.write_bytes(original + b'\\n# fictional executable change probe\\n')
+    try:
+        require_clean_code()
+    except ValueError as error:
+        if 'verified clean software' not in str(error):
+            raise
+    else:
+        raise RuntimeError('retained admission accepted an executable edit')
+finally:
+    source.write_bytes(original)
+after = require_clean_code()
+if after != before:
+    raise RuntimeError('source snapshot changed during admission probe')
+print(json.dumps({
+    'runtime_snapshot_kind': 'fictional-source-snapshot',
+    'runtime_snapshot_commit': before['commit'],
+    'dirty_code_refused': True,
+}))
+"""
+
 
 class LaneError(Exception):
     """The required lane could not establish its boundary checks."""
@@ -209,6 +242,35 @@ def stage_context(repo: Path, destination: Path) -> str:
         destination / "deploy/fictional-integration/Uploads.php",
     )
     return digest.hexdigest()
+
+
+def runtime_code_evidence(output: str) -> dict:
+    """Validate fixture-image evidence without relabeling the host revision."""
+    try:
+        value = json.loads(output)
+    except ValueError as exc:
+        raise LaneError(
+            "runtime code admission probe returned invalid JSON"
+        ) from exc
+    if (
+        not isinstance(value, dict)
+        or set(value)
+        != {
+            "runtime_snapshot_kind",
+            "runtime_snapshot_commit",
+            "dirty_code_refused",
+        }
+        or value["runtime_snapshot_kind"] != "fictional-source-snapshot"
+        or not isinstance(value["runtime_snapshot_commit"], str)
+        or not re.fullmatch(
+            r"[a-f0-9]{40}|[a-f0-9]{64}", value["runtime_snapshot_commit"]
+        )
+        or value["dirty_code_refused"] is not True
+    ):
+        raise LaneError(
+            "runtime code admission probe did not establish evidence"
+        )
+    return value
 
 
 def verify_results(path: Path, required=None) -> dict:
@@ -659,6 +721,29 @@ def execute(command: str, state: Path, *, sequential=False) -> None:
                 if ca_bundle:
                     build += ["--secret", f"id=proxy_ca,src={ca_bundle}"]
                 run([*build, str(context)], env=env)
+                probe_group = active[0]
+                probe_group.cleaned = False
+                code_probe = run(
+                    [
+                        *probe_group.compose,
+                        "run",
+                        "--rm",
+                        "--no-deps",
+                        "--name",
+                        f"{probe_group.project}-code-admission",
+                        "tests",
+                        "python",
+                        "-c",
+                        CODE_ADMISSION_PROBE,
+                    ],
+                    env=env,
+                    capture=True,
+                    timeout=120,
+                )
+                runtime_code = runtime_code_evidence(code_probe.stdout)
+                evidence.update(runtime_code)
+                for group in active:
+                    group.evidence.update(runtime_code)
                 for group in active:
                     group.cleaned = False
                     group.started = time.monotonic()

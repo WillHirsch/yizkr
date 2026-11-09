@@ -48,6 +48,42 @@ def test_identity_approval_alone_has_no_application_effect(case, tmp_path):
     assert snapshot(case) == before
 
 
+@pytest.mark.parametrize("completed", [False, True])
+def test_external_admission_is_rechecked_after_preparation_without_effects(
+    case, tmp_path, monkeypatch, completed
+):
+    prepared = approved(case)
+    if completed:
+        apply(case, prepared, tmp_path)
+    before = snapshot(case)
+    current = {"excluded": False, "checked": 0}
+    original = assignment_writes.prepare_claim_review
+
+    def prepare_then_exclude(*args, **kwargs):
+        result = original(*args, **kwargs)
+        current["excluded"] = True
+        return result
+
+    def admit():
+        current["checked"] += 1
+        if current["excluded"]:
+            raise ReviewRefused("fictional source is now excluded")
+
+    monkeypatch.setattr(
+        assignment_writes, "prepare_claim_review", prepare_then_exclude
+    )
+    with pytest.raises(ReviewRefused, match="now excluded"):
+        apply_reviewed_claims(
+            case.store,
+            prepared,
+            case.wiki,
+            record_dir=tmp_path / "records",
+            admit=admit,
+        )
+    assert current["checked"] == 1
+    assert snapshot(case) == before
+
+
 def test_exact_receipt_reuses_completed_effect_after_reopen(case, tmp_path):
     prepared = approved(case)
     result = apply(case, prepared, tmp_path)

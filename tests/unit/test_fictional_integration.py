@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 import select
+import shutil
 import signal
 import subprocess
 import sys
@@ -95,6 +96,94 @@ def test_build_context_contains_only_selected_repository_inputs(
     assert lane.stage_context(source_repo, context) == first_hash
     put(source_repo, "src/yizkr/example.py", "VALUE = 'changed fixture'\n")
     assert lane.stage_context(source_repo, context) != first_hash
+
+
+def test_runtime_code_probe_uses_real_git_and_detects_executable_edits(
+    tmp_path,
+):
+    snapshot = tmp_path / "snapshot"
+    shutil.copytree(
+        SCRIPT.parents[1] / "src",
+        snapshot / "src",
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+    )
+    (snapshot / ".gitignore").write_text("__pycache__/\n*.py[cod]\n")
+    env = {
+        **os.environ,
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_AUTHOR_DATE": "2026-01-01T00:00:00+0000",
+        "GIT_COMMITTER_DATE": "2026-01-01T00:00:00+0000",
+        "PYTHONPATH": str(snapshot / "src"),
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "YIZKR_ENV_FILE": "/nonexistent",
+    }
+    for args in (
+        ["init", "--quiet", "--initial-branch=fictional-integration"],
+        ["add", "."],
+        [
+            "-c",
+            "user.name=Fictional Integration",
+            "-c",
+            "user.email=fictional@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--quiet",
+            "--message=Fictional source snapshot",
+        ],
+    ):
+        subprocess.run(["git", *args], cwd=snapshot, env=env, check=True)
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=snapshot,
+        env=env,
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout.strip()
+    original = (snapshot / "src/yizkr/__init__.py").read_bytes()
+    probe = subprocess.run(
+        [sys.executable, "-c", lane.CODE_ADMISSION_PROBE],
+        cwd=snapshot,
+        env=env,
+        check=True,
+        text=True,
+        capture_output=True,
+        timeout=30,
+    )
+    assert lane.runtime_code_evidence(probe.stdout) == {
+        "runtime_snapshot_kind": "fictional-source-snapshot",
+        "runtime_snapshot_commit": commit,
+        "dirty_code_refused": True,
+    }
+    assert (snapshot / "src/yizkr/__init__.py").read_bytes() == original
+    subprocess.run(
+        ["git", "diff", "--exit-code"],
+        cwd=snapshot,
+        env=env,
+        check=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        "not-json",
+        "{}",
+        "[]",
+        json.dumps(
+            {
+                "runtime_snapshot_kind": "fictional-source-snapshot",
+                "runtime_snapshot_commit": "unknown",
+                "dirty_code_refused": True,
+            }
+        ),
+    ],
+)
+def test_runtime_code_evidence_refuses_incomplete_probe(output):
+    with pytest.raises(lane.LaneError, match="runtime code admission"):
+        lane.runtime_code_evidence(output)
 
 
 @pytest.mark.parametrize("outside_directory", [False, True])
@@ -457,6 +546,8 @@ class Docker:
         self.log_failure = None
         self.guard_probe_failure = None
         self.guard_probes = []
+        self.runtime_code_probes = 0
+        self.runtime_code_failure = False
         monkeypatch.setattr(lane, "run", self.run)
         monkeypatch.setattr(lane, "stage_context", self.stage)
         monkeypatch.setattr(lane.subprocess, "run", self.run)
@@ -532,6 +623,18 @@ class Docker:
             self.active.add(project)
             if group == self.setup_failure:
                 raise subprocess.CalledProcessError(1, args)
+        elif "run" in args and "-c" in args:
+            assert "--no-deps" in args and "--rm" in args
+            assert args[-1] == lane.CODE_ADMISSION_PROBE
+            self.runtime_code_probes += 1
+            self.active.add(project)
+            output = json.dumps(
+                {
+                    "runtime_snapshot_kind": "fictional-source-snapshot",
+                    "runtime_snapshot_commit": "f" * 40,
+                    "dirty_code_refused": not self.runtime_code_failure,
+                }
+            )
         elif "exec" in args:
             assert args[-3:] == [
                 "wikibase",
@@ -647,15 +750,25 @@ def test_success_runs_both_groups_and_requires_complete_combined_evidence(
     lane.execute("run", docker.state)
 
     assert docker.stages == docker.builds == 1
+    assert docker.runtime_code_probes == 1
     assert docker.maximum_running == 2
     assert docker.guard_probes == ["assignments", "other"]
     assert len(set(docker.up)) == 2
     assert set(docker.finished) == {"assignments", "other"}
     assert docker.evidence()["status"] == "passed"
+    assert docker.evidence()["revision"] == "fixture-revision"
+    assert docker.evidence()["source_sha256"] == "fixture-source-hash"
+    assert docker.evidence()["runtime_snapshot_commit"] == "f" * 40
+    assert (
+        docker.evidence()["runtime_snapshot_kind"]
+        == "fictional-source-snapshot"
+    )
+    assert docker.evidence()["dirty_code_refused"] is True
     observed = lane.verify_results(docker.state / "results.xml")
     assert set(observed["cases"]) == set(lane.REQUIRED_CASES)
     for name, expected in lane.GROUPS.items():
         assert docker.evidence(name)["status"] == "passed"
+        assert docker.evidence(name)["runtime_snapshot_commit"] == "f" * 40
         assert docker.evidence(name)["mutation_guard_probe"]["database_drain"]
         observed = lane.verify_results(
             docker.state / name / "results.xml", expected
@@ -683,10 +796,22 @@ def test_sequential_mode_keeps_both_fresh_groups_and_all_required_cases(
 
     assert docker.maximum_running == 1
     assert docker.stages == docker.builds == 1
+    assert docker.runtime_code_probes == 1
     assert len(set(docker.up)) == 2
     assert lane.verify_results(docker.state / "results.xml")["passed"] == len(
         lane.REQUIRED_CASES
     )
+    docker.assert_clean()
+
+
+def test_runtime_code_admission_failure_prevents_service_startup(docker):
+    docker.runtime_code_failure = True
+    with pytest.raises(lane.LaneError, match="runtime code admission"):
+        lane.execute("run", docker.state)
+    assert docker.runtime_code_probes == 1
+    assert docker.up == []
+    assert not docker.processes
+    assert docker.evidence()["status"] == "failed"
     docker.assert_clean()
 
 
