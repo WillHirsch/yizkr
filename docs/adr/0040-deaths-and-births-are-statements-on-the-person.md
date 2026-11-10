@@ -31,7 +31,7 @@ Its build is follow-up B (§8), which lands with follow-up A's fixture cases. Un
   - Validation refuses a death or birth property on anything but a person.
   - An unknown-value `date_of_death` is death evidence, because a source stated the death.
   - `age_at_death` is death evidence (Q1).
-  - A union `ended_by_death_of` a person releases that person (Q9).
+  - A union `ended_by_death_of` a person can establish death for privacy only through a cited source that does not also call that person widowed (§5).
   - A death event a curator makes still releases its principal (Q5).
 
 ## Context
@@ -205,12 +205,10 @@ It gives no death statement for the spouse: the end is the evidence (Q9), and th
 - **Where one phrase is both markers** (the 1958 letter's "вдова Вашего покойного брата Рудольфа"; the 1952 letter's "widdo … ús sillige heit"), the union end alone stands for the death: no unknown-value `date_of_death` is added beside it. The survivor's civil status is given, as for any widow marker.
 - **A marker that names no spouse** ("Löbig, Ursula, Wwe.") gives the civil status alone.
 - **"His late wife" with no widowhood marked** (the 1905 certificate) gives her unknown-value `date_of_death` ("the late", §2.3) and the marriage, and no union end (Q12). Views derive the end (Q2).
-- **The guard** (lean-only, raised with Q9's answer). Validation refuses an `ended_by_death_of` whose value the same batch calls `widowed`.
-  - It needs no excerpt match, so it catches a slip even when the model quotes the two claims a little differently.
-  - It loses a correct link only in a rare record of a widower who later died in a second marriage (hypothetically, Eugen as "Witwer der Cäcilie", and a second marriage ended by his own death). That fails closed.
-  - The advisory critic checks it too.
-  - **What a refusal costs.** Under Q5 a widow marker gives no death statement. So when the guard refuses a link, the late spouse keeps no death evidence from that marker, and stays possibly living (fails closed).
-  - **What it cannot check.** A death record's "Ehefrau des Eugen" need not come with a `civil_status` `widowed`, so the guard may have nothing to compare. The critic checks that the value is the person whose death the record states.
+- **Review without rejecting history.** When one source artifact gives a person `civil_status` `widowed` and names that person as a union's `ended_by_death_of`, a deterministic advisory asks the reviewer to check survivor/deceased attribution. It appears on that union-end claim's CSV row, in durable claim review and in writer warnings. Unrelated source artifacts do not trigger it, and neither assertion is refused because of the advisory.
+  - Civil status names no union. Shared source, page, excerpt or date cannot establish that the person survived the particular marriage being described: one passage can recount successive marriages or contain genuine disagreement. The check does not infer chronology or decide which assertion is true.
+  - The model critic separately checks that a union end names the deceased partner. The deterministic advisory does not require a model call or an exact excerpt match; it can flag ambiguous history and cannot detect a misreading with no widowhood claim to compare.
+  - **Privacy remains separate.** Preserving an assertion does not make it sufficient for privacy release. The source-specific rule in §5 withholds an ambiguous union-end citation from that decision without deleting the history.
 
 #### 2.6 The derived end of a union
 
@@ -305,12 +303,12 @@ Its `main_subject` → "Rudolf's death" names a death item, which this ADR remov
 
 **An unknown value is a truthy value**, so the check releases its person. The site's `?deceased` (`EXISTS { ?person wdt:<date of death> [] }`) and the export's `PERSON_FACTS_QUERY` with `_DEATH_BINDINGS` already read it that way. It counts only because a source stated the death (§2.2), and the build tests it live. A deprecated unknown value, or a "no value", releases no one.
 
-**A union `ended_by_death_of` a person releases that person** (Q9, reversed by the owner: "Sounds like proof that she died to me").
+**A union `ended_by_death_of` can establish death for its named partner, subject to its source evidence.**
 
-- **How it is read.** In `core/privacy.read_evidence` (around :793-825 at 5198df2), into `LifeEvidence.died`, which the badge and the export combine. It is not added to `DEATH_EVIDENCE_PROPERTIES`, which reads the subject and would make the union a person. It is read at its truthy value, item values only (lean-only).
-- **Its risk.** A value misplaced on the survivor releases a widow or widower who may be living. §2.5's guard refuses a value the same batch calls `widowed`, and the critic checks it.
-  - A refused link costs the late spouse that marker's death evidence, which fails closed.
-  - The guard cannot check a death record's "Ehefrau des Eugen". There the critic checks that the value is the person whose death the record states.
+- **How it is read.** `core/privacy.read_evidence` reads truthy item-valued union ends into `LifeEvidence.died`, shared by the badge and export. A deprecated statement, a no-value statement or an unknown value releases no one. It is not part of `DEATH_EVIDENCE_PROPERTIES`, which reads the subject and would make the union a person.
+- **Source-specific ambiguity.** The union end needs at least one historical `stated_in` source that does not also support a nondeprecated `civil_status` `widowed` statement for the named person. The check follows person redirects and considers normal-rank widowhood even when another status has preferred rank. A process reference is not independent historical support; missing historical references cannot establish release.
+- **Independent evidence still counts.** Another cited source without that ambiguity can support the union end, and the person's own qualifying death evidence remains usable. A widowhood assertion from an unrelated source is no veto on later death evidence.
+- **Conservative limit.** A single source may correctly describe someone surviving one spouse and dying during a later marriage. Those assertions remain stored, but that source's union-end evidence alone does not release the person. The schema does not attach a widowhood status to a specific union, so the privacy check does not infer the missing relationship. This is a privacy limitation, not a rejection of historical evidence or a curator-set living flag.
 
 **Subjects.** Validation refuses `date_of_death`, `place_of_death`, `cause_of_death`, `burial_place`, `age_at_death`, `date_of_birth` and `place_of_birth` on a subject that is neither `human` nor `unclassified_entity` (Q11).
 
@@ -368,7 +366,7 @@ Build B (the PR's follow-up) carries these changes. In brief:
   - the refusals of §2, §3, §5 and §7;
   - `parentage` on anything but `father`, `mother` and `child`;
   - an `ended_by_death_of` that names neither of the couple, where the batch names them;
-  - §2.5's guard (a value the same batch calls `widowed`);
+  - §2.5's source-specific widowhood advisory, surfaced separately from refusals;
   - any claim in the batch whose value is an `extract` false person (§2.8);
   - the principal-and-informant check goes;
   - new reject reasons.
@@ -417,7 +415,7 @@ Build B (the PR's follow-up) carries these changes. In brief:
   - a union `ended_by_death_of`, with a count of the people it alone releases;
   - the birth cutoff.
 
-  It also counts derived bounds by kind of source. All of these are counted on the written graph, as disagreements are, and the report and the diff carry them. The links the guard refuses never reach the graph, so they are counted with the reject reasons. Today none of these tools counts possibly-living people or releases.
+  It also counts derived bounds by kind of source. These counts come from the written graph, as disagreements do, and the report and diff carry them. Widowhood advisories are not validation rejects. Union-end release counts include only the source evidence that passes §5's privacy check.
 
 - **Disagreement** (`disagreement.py`, `disagreement-report.rq`):
   - an unknown value is set aside and never listed;
@@ -533,10 +531,7 @@ Build B (the PR's follow-up) carries these changes. In brief:
 8. **A `birth` or `death` entity in a manifest.** For example, a 1941 certificate's manifest that lists "Death of Rudolf". _Decided (owner, 2026-10-24): the lean._
    - **As decided.** It is dropped alone and counted, and never fails the manifest turn (§7). Reason: failing the turn would send the document to line-range segmentation with no manifest, and a death certificate makes such an entity likely.
    - **Alternative:** fail the turn, as ADR-0039 §10.1(b) does for an artifact kind.
-9. **`ended_by_death_of` as death evidence.** _Decided, reversed (owner, 2026-10-24): yes, for its value_ ("Sounds like proof that she died to me").
-   - **How it is read.** In `read_evidence`, not through `DEATH_EVIDENCE_PROPERTIES` (§5).
-   - **The guard.** §2.5's guard (a value the same batch calls `widowed` is refused) keeps a misplaced value off the survivor, and the critic checks it too.
-   - **The drafted lean was no**, since the marker would also have given the spouse's own `date_of_death`. Under Q5 it gives none, so the end is the evidence.
+9. **`ended_by_death_of` as death evidence.** The end names the partner whose death the source states. Privacy reads qualifying source evidence through `read_evidence`, not through `DEATH_EVIDENCE_PROPERTIES` (§5). Same-source widowhood/death ambiguity prompts review without rejecting either assertion (§2.5), and that source alone cannot establish privacy release. A widow marker gives no separate `date_of_death` for the late spouse, so a qualifying union end remains usable death evidence.
 10. **An unknown value with no excerpt.** _Decided (owner, 2026-10-24): the lean._
     - **As decided.** Refused and counted, since nothing else shows what the source said. For example, "the late Felix" given as an unknown value with no excerpt is refused.
     - **Alternative:** accepted like any claim.
@@ -574,8 +569,8 @@ Build B (the PR's follow-up) carries these changes. In brief:
 - **one phrase that is both markers** (§2.5) gives the union end and still the survivor's `civil_status` `widowed`;
 - **the derivation as one rule** (§2.4): a death statement with no date is bounded by its document's own date; a stated widowhood date replaces it for the late spouse; neither is ever narrower than the date it comes from; an undated or open-ended document gives no bound;
 - **a burial gives no "died by"** (§2.4, Q3);
-- **a simpler guard** (§2.5, Q9): validation refuses an `ended_by_death_of` whose value the same batch calls `widowed`;
-- **`ended_by_death_of` read at its truthy value,** item values only (§5, Q9);
+- **source-specific widowhood review** (§2.5): preserve the assertions and ask the reviewer to check possible survivor/deceased confusion;
+- **`ended_by_death_of` read at its truthy value,** item values only, with qualifying historical source evidence for privacy (§5);
 - **Q6's scope** (§2.8): the rule covers a record's apparatus (certificates, registers, forms), so a doctor whom a letter names stays; and every unnamed reporter or certifier is not made.
 
 ## Consequences

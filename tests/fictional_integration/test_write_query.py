@@ -14,9 +14,19 @@ from types import SimpleNamespace
 import pytest
 from wikibaseintegrator.datatypes import Item, String
 from wikibaseintegrator.models import Reference
+from wikibaseintegrator.wbi_enums import ActionIfExists, WikibaseRank
 
+from tests.fixtures import widowhood
 from tests.fixtures.semantic_acceptance import birth_batch, source_case
-from yizkr.claims import Claim, ItemValue, LocalRef, QidRef
+from yizkr.backup import exclusion_report
+from yizkr.claims import (
+    Claim,
+    ItemValue,
+    LocalRef,
+    QidRef,
+    TimeValue,
+    validate_against_manifest,
+)
 from yizkr.core import sparql
 from yizkr.core.provenance import ProcessRecord, RecordRef
 from yizkr.core.write_recovery import (
@@ -382,6 +392,177 @@ def _query_births(client, person, expected):
     return actual
 
 
+def _widowhood_history(client, directory):
+    """Preserve historical assertions while privacy assesses their support."""
+    properties, items = client.vocabulary()
+    registry = CreationRegistry(client)
+    refs = {}
+    for key, label, kind in widowhood.ENTITIES:
+        entity = client.wbi.item.new()
+        entity.labels.set("en", label)
+        entity.descriptions.set("en", "fictional alternate widowhood history")
+        entity.claims.add(
+            Item(prop_nr=properties["instance_of"], value=items[kind])
+        )
+        made = registry.create(
+            {"kind": "fictional-widowhood", "entity": key},
+            entity,
+            summary="fictional widowhood boundary fixture",
+        )
+        refs[key] = QidRef(qid=made.qid)
+
+    sources = {}
+    for key in (widowhood.HISTORY, widowhood.INDEPENDENT):
+        source = widowhood.source_case(key)
+        path = directory / f"{key}.txt"
+        path.write_bytes(source.source_bytes)
+        registered = register_artifact(
+            client,
+            media_path=path,
+            artifact_type="artifact",
+            title=source.title,
+            pages=1,
+        )
+        sources[key] = registered.artifact_qid
+
+    history = widowhood.history_batch(refs, include_misreading=True)
+    assert validate_against_manifest(history) == []
+    writer = BatchWriter(client, record_dir=directory / "widowhood-records")
+    result = writer.write_batch(history)
+    assert result.refused == []
+    assert result.written == len(history.claims) == 9
+    qids = [ref.qid for ref in refs.values()]
+    before = client.fetch_claims(qids)
+
+    def source_ids(statement):
+        return {
+            snak["datavalue"]["value"]["id"]
+            for reference in statement.get("references", [])
+            for snak in reference["snaks"].get(properties["stated_in"], [])
+        }
+
+    ended = properties["ended_by_death_of"]
+    for union, expected in (
+        ("first_union", {refs["caecilie"].qid, refs["eugen"].qid}),
+        ("second_union", {refs["eugen"].qid}),
+    ):
+        statements = before[refs[union].qid][ended]
+        assert len(statements) == len(expected)
+        assert {
+            statement["mainsnak"]["datavalue"]["value"]["id"]
+            for statement in statements
+        } == expected
+        assert all(statement["rank"] == "normal" for statement in statements)
+        assert all(
+            source_ids(statement) == {sources[widowhood.HISTORY]}
+            for statement in statements
+        )
+
+    # A fresh writer repeats all assertions, including the suspect one.
+    fresh = type(client)(client.config)
+    again = BatchWriter(
+        fresh, record_dir=directory / "widowhood-records"
+    ).write_batch(history)
+    assert again.refused == []
+    assert again.written == again.referenced == 0
+    assert again.skipped == len(history.claims)
+    assert fresh.fetch_claims(qids) == before
+
+    # A later preferred status must not hide the normal-rank widowhood
+    # from the privacy-only ambiguity check.
+    person = client.wbi.item.get(refs["eugen"].qid)
+    married = Item(prop_nr=properties["civil_status"], value=items["married"])
+    married.rank = WikibaseRank.PREFERRED
+    support = Reference()
+    support.add(
+        Item(prop_nr=properties["stated_in"], value=sources[widowhood.HISTORY])
+    )
+    married.references.add(support)
+    person.claims.add(
+        married, action_if_exists=ActionIfExists.APPEND_OR_REPLACE
+    )
+    write_existing(person, summary="fictional curator preferred later status")
+    statuses = client.fetch_claims([refs["eugen"].qid])[refs["eugen"].qid][
+        properties["civil_status"]
+    ]
+    assert {
+        statement["mainsnak"]["datavalue"]["value"]["id"]: statement["rank"]
+        for statement in statuses
+    } == {items["widowed"]: "normal", items["married"]: "preferred"}
+    assert all(
+        source_ids(statement) == {sources[widowhood.HISTORY]}
+        for statement in statuses
+    )
+
+    def privacy(*, eugen_released):
+        _synchronize(client)
+        report = exclusion_report(
+            client.config, vocabulary=client.vocabulary()
+        )
+        assert refs["caecilie"].qid in report.included
+        assert refs["ursula"].qid in report.excluded
+        target = report.included if eugen_released else report.excluded
+        assert refs["eugen"].qid in target
+
+    privacy(eugen_released=False)
+
+    independent = widowhood.history_batch(refs, independent=True)
+    corroborated = writer.write_batch(independent)
+    assert corroborated.refused == []
+    assert corroborated.referenced == 1
+    assert corroborated.written == 0
+    (second_end,) = client.fetch_claims([refs["second_union"].qid])[
+        refs["second_union"].qid
+    ][ended]
+    assert source_ids(second_end) == set(sources.values())
+    privacy(eugen_released=True)
+
+    # Deprecated independent support cannot release him. Leaving only a
+    # process reference on the wrong first-union end must not manufacture
+    # an independent historical witness either.
+    second = client.wbi.item.get(refs["second_union"].qid)
+    (second_end,) = second.claims.get(ended)
+    second_end.rank = WikibaseRank.DEPRECATED
+    write_existing(second, summary="fictional curator deprecated union end")
+    first = client.wbi.item.get(refs["first_union"].qid)
+    wrong = next(
+        statement
+        for statement in first.claims.get(ended)
+        if statement.mainsnak.datavalue["value"]["id"] == refs["eugen"].qid
+    )
+    wrong.references.clear()
+    process = Reference()
+    process.add(
+        Item(
+            prop_nr=properties["inferred_from_extraction_run"],
+            value=result.run_qid,
+        )
+    )
+    wrong.references.add(process)
+    write_existing(first, summary="fictional process-only union reference")
+    privacy(eugen_released=False)
+
+    # Holding ambiguous union support does not suppress independent direct
+    # death evidence when the actual export predicate assesses the graph.
+    source = widowhood.source_case(widowhood.INDEPENDENT)
+    direct = independent.model_copy(
+        update={
+            "claims": [
+                Claim(
+                    subject=refs["eugen"],
+                    property="date_of_death",
+                    value=TimeValue(year=1909, month=3, day=16),
+                    source=source.source_ref(source.text),
+                )
+            ]
+        }
+    )
+    direct_result = writer.write_batch(direct)
+    assert direct_result.refused == []
+    assert direct_result.written == 1
+    privacy(eugen_released=True)
+
+
 def test_fictional_write_query_roundtrip(
     fictional_client, tmp_path, monkeypatch
 ):
@@ -604,3 +785,4 @@ def test_fictional_write_query_roundtrip(
     _assert_unratified_rows(client, rows, identity, origin, person, kindless)
     uri = client.config.concept_uri + "/entity/"
     assert {row["record"]["value"] for row in rows} == {uri + origin[0]}
+    _widowhood_history(client, tmp_path)

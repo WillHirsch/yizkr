@@ -1581,6 +1581,40 @@ BIRTH_UNCERTAINTY_SCENARIO = Source(
     note="Exercises curator combination, date uncertainty and event roles.",
 )
 
+# Alternate, explicitly hypothetical history for widowhood validation. These
+# passages are separate from SOURCES/ASSERTIONS and do not amend the family.
+WIDOWHOOD_SCENARIOS = (
+    Source(
+        "widowhood-remarriage-scenario",
+        "Authored widowhood and remarriage narrative",
+        "en",
+        2026,
+        "artifact",
+        text=(
+            "Hypothetical alternate history: Eugen Löbig became a widower "
+            "when his wife Cäcilie died in 1902. He then married Ursula "
+            "Löbig. Their marriage ended with Eugen's death in 1909, "
+            "leaving Ursula widowed."
+        ),
+        note=(
+            "One passage describes two unions. A deliberately incorrect "
+            "machine reading also ends the first union by Eugen's death."
+        ),
+    ),
+    Source(
+        "widowhood-independent-scenario",
+        "Authored independent remarriage record",
+        "en",
+        2026,
+        "artifact",
+        text=(
+            "Hypothetical independent record: Eugen Löbig died on "
+            "16 March 1909 while married to Ursula Löbig."
+        ),
+        note="Independent support for the second union's end and death date.",
+    ),
+)
+
 # Values the assertions use that the manifest does not hold yet: none at
 # present. `machine_assisted`, the sourcing circumstance of a text that its
 # source says was prepared with machine assistance, joined the manifest

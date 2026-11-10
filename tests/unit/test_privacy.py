@@ -1136,7 +1136,7 @@ class TestReadEvidence:
             "PREFIXES\n" + BIRTHS_QUERY.format(**properties),
             "PREFIXES\n" + participants_query(properties, items),
             "PREFIXES\n" + birth_event_dates_query(properties, items),
-            "PREFIXES\n" + ended_by_death_query(properties),
+            "PREFIXES\n" + ended_by_death_query(properties, items),
         ]
 
     def test_no_birth_event_reads_no_event_dates(self):
@@ -1168,8 +1168,21 @@ class TestReadEvidence:
         # and the value is read through its redirect
         query = " ".join(ENDED_BY_DEATH_QUERY.split())
         assert "?union wdt:{ended_by_death_of} ?named ." in query
+        assert "?end a wikibase:BestRank" in query
         assert "FILTER(isIRI(?named))" in query
         assert "?named {same_as}* ?person ." in query
+
+    def test_the_union_end_query_uses_the_instances_source_and_status_keys(
+        self,
+    ):
+        properties, items = self.vocabulary()
+        query = ended_by_death_query(properties, items)
+        assert f"pr:{properties['stated_in']} ?citedSource" in query
+        assert f"ps:{properties['civil_status']}" in query
+        assert f"wd:{items['widowed']}" in query
+        assert "{stated_in}" not in query
+        assert "{civil_status}" not in query
+        assert "{widowed}" not in query
 
     def test_an_instance_without_the_property_reads_no_end(self):
         calls = []

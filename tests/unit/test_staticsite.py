@@ -784,7 +784,7 @@ class TestTheBadgeReadsEveryBirth:
             prefix_block(config().concept_uri)
             + participants_query(properties, items),
             prefix_block(config().concept_uri)
-            + ended_by_death_query(properties),
+            + ended_by_death_query(properties, items),
         ]
 
 

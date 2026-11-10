@@ -27,6 +27,7 @@ from yizkr.claims import (
     SourceReference,
     VocabRef,
     validate_against_manifest,
+    widowhood_review_notes,
 )
 from yizkr.core.identity_assignments import (
     AssignmentRevision,
@@ -338,6 +339,10 @@ def prepare_claim_review(
     ) != len(selections):
         raise ReviewRefused("claim review needs a nonempty, unique selection")
     sources = {source.artifact_sha1: source for source in request.sources}
+    concerns = {
+        sha1: widowhood_review_notes(source.batch)
+        for sha1, source in sources.items()
+    }
     selected = []
     wanted = set()
     for selection in selections:
@@ -347,6 +352,11 @@ def prepare_claim_review(
                 "claim selection is absent from current products"
             )
         claim = source.batch.claims[selection.index]
+        concern = concerns[selection.artifact_sha1].get(selection.index)
+        if concern and concern not in selection.warnings:
+            selection = selection.model_copy(
+                update={"warnings": (*selection.warnings, concern)}
+            )
         if (
             claim.source.artifact.sha1 != source.artifact_sha1
             or source.reading is None

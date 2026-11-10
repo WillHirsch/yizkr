@@ -1012,8 +1012,8 @@ def validate_against_manifest(
       ADR-0040): an entity of a kind no extraction makes (`birth`,
       `death`), the unknown value's rules, a death or birth property on a
       subject that is no person, `parentage` on a property that is no
-      parent's or child's, a union `ended_by_death_of` someone the batch
-      calls widowed or who is neither of the couple it names, and a value
+      parent's or child's, a union `ended_by_death_of` someone who is
+      neither of the couple it names, and a value
       naming a person the entity manifest leaves out;
     * a claim of a property the manifest marks `document_subject` has
       one of the subjects document_subject_form names: its own source,
@@ -1557,15 +1557,13 @@ ARTIFACT_KIND = "artifact_kind"
 # excerpt (Q10); a death or birth property on a subject that is no person
 # (Q11); `parentage` on a property that is no parent's or child's; a union
 # `ended_by_death_of` someone who is neither of the couple the batch
-# names; one ended by the death of someone the batch calls widowed (§2.5's
-# guard); a value naming a person the entity manifest leaves out (§2.8).
+# names; a value naming a person the entity manifest leaves out (§2.8).
 VITAL_KIND = "vital_kind"
 UNKNOWN_VALUE = "unknown_value"
 UNKNOWN_EXCERPT = "unknown_excerpt"
 VITAL_SUBJECT = "vital_subject"
 PARENTAGE_PROPERTY = "parentage_property"
 END_NOT_PARTNER = "end_not_partner"
-WIDOWED_END = "widowed_end"
 LEFT_OUT_PERSON = "left_out_person"
 VITAL_REASONS = (
     VITAL_KIND,
@@ -1574,7 +1572,6 @@ VITAL_REASONS = (
     VITAL_SUBJECT,
     PARENTAGE_PROPERTY,
     END_NOT_PARTNER,
-    WIDOWED_END,
     LEFT_OUT_PERSON,
 )
 # the codes a problem ends in, so reject_reasons reads them back
@@ -1703,10 +1700,6 @@ def vital_problems(
       where the batch names its participants: those whose role is
       `spouse` or `partner` (COUPLE_ROLES), or every participant where
       none has either role (Q2, ADR-0036);
-    * a union `ended_by_death_of` someone whose `civil_status` the same
-      batch gives as `widowed`: §2.5's guard, which needs no excerpt
-      match, and fails closed in the rare record of a widower who later
-      died in a second marriage;
     * an item value, of the claim or of a qualifier, naming a person
       (`human`) the entity manifest marks `extract` false, by its local id
       or by the QID its record carries: an official or a witness the
@@ -1747,7 +1740,6 @@ def vital_problems(
     }
     participants: dict[str, set[str]] = {}
     coupled: dict[str, set[str]] = {}
-    widowed: set[str] = set()
     for claim in batch.claims:
         if not isinstance(claim.value, ItemValue):
             continue
@@ -1762,12 +1754,6 @@ def vital_problems(
                 for qualifier in claim.qualifiers
             ):
                 coupled.setdefault(union, set()).add(partner)
-        elif (
-            claim.property == "civil_status"
-            and isinstance(claim.value.value, VocabRef)
-            and claim.value.value.key == "widowed"
-        ):
-            widowed.add(key(claim.subject))
 
     couples = {
         union: coupled.get(union) or every
@@ -1891,15 +1877,55 @@ def vital_problems(
                     f".value: names neither of the couple the batch gives "
                     f"the union (ADR-0040 Q2) [{END_NOT_PARTNER}]"
                 )
-            if late in widowed:
-                problems.append(
-                    f".value: the same batch gives this partner the civil "
-                    f"status widowed, so they are the survivor, not the "
-                    f"partner who died (ADR-0040 §2.5) [{WIDOWED_END}]"
-                )
         if problems:
             found[index] = problems
     return found
+
+
+def widowhood_review_notes(batch: ClaimBatch) -> dict[int, str]:
+    """Flag possible survivor/deceased confusion without rejecting history.
+
+    Civil status names no union. Even one passage can describe successive
+    marriages or conflicting readings, so sharing a source warrants review,
+    not a claim that either assertion is false. Unrelated sources do not
+    trigger this concern. Privacy evaluates the stored source evidence
+    separately; accepting a claim is not permission to disclose it.
+    """
+    qids = {entity.id: entity.qid for entity in batch.entities if entity.qid}
+
+    def person(ref):
+        if isinstance(ref, LocalRef):
+            return (
+                ("qid", qids[ref.local_id])
+                if ref.local_id in qids
+                else ("local", ref.local_id)
+            )
+        if isinstance(ref, QidRef):
+            return ("qid", ref.qid)
+        return None
+
+    widowed = {
+        (person(claim.subject), claim.source.artifact.sha1)
+        for claim in batch.claims
+        if claim.property == "civil_status"
+        and isinstance(claim.value, ItemValue)
+        and isinstance(claim.value.value, VocabRef)
+        and claim.value.value.key == "widowed"
+        and person(claim.subject) is not None
+    }
+    return {
+        index: (
+            "Review widowhood/death attribution: this source also calls "
+            "the named person widowed. Check whether the union end names "
+            "the deceased partner or the survivor, allowing for successive "
+            "marriages and source disagreement. Both assertions are retained; "
+            "privacy is assessed separately."
+        )
+        for index, claim in enumerate(batch.claims)
+        if claim.property == "ended_by_death_of"
+        and isinstance(claim.value, ItemValue)
+        and (person(claim.value.value), claim.source.artifact.sha1) in widowed
+    }
 
 
 def reject_reasons(problems: Iterable[str]) -> list[str]:

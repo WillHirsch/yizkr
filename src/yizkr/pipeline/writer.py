@@ -486,6 +486,7 @@ from yizkr.claims import (
     load_vocabulary,
     source_support_locators,
     vital_problems,
+    widowhood_review_notes,
 )
 from yizkr.core.dates import UnsupportedDate
 from yizkr.core.provenance import ProcessRecord
@@ -1572,7 +1573,7 @@ def pre_plan_refusals(
       it is not taken, with a bound, or with no excerpt; a death or birth
       property on a subject that is no person; `parentage` on a property
       that is no parent's or child's; a union `ended_by_death_of` someone
-      the batch calls widowed or who is neither of its couple; a value
+      who is neither of its couple; a value
       naming a person the entity manifest leaves out (`vital_rule`);
     * a subject the subject rules refuse (subject_refusal, with `placed`,
       the artifacts given as each source's placed media, and
@@ -4026,6 +4027,11 @@ class BatchWriter:
         # instance cannot hold, and the terms it may keep in another form,
         # each skipped wherever the writer would record it
         warnings = self._unknown_kinds(batch, refused)
+        warnings += [
+            f"claim {index}: {note}"
+            for index, note in widowhood_review_notes(batch).items()
+            if index not in refused
+        ]
         warnings += [
             *refusals.values(),
             *blocked,

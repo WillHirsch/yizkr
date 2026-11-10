@@ -117,7 +117,7 @@ A marriage is its own entity, bounded by events; the spouse link is derived from
   Amended by ADR-0040, 2026-10-24:
   - The partner's death is that partner's own statements.
   - The partner named by `ended_by_death_of` follows the person rule through `PERSON_VALUE_PROPERTIES`, never as a bound: it stays out of `backup.UNION_BOUNDS`.
-  - `ended_by_death_of` is death evidence for the partner it names (ADR-0040's Q9). A partner it alone releases is kept when the union is left out, without the statement that released them.
+  - `ended_by_death_of` is death evidence for the partner it names only when its historical source evidence passes ADR-0040 §5's privacy check. A partner it alone releases is kept when the union is left out, without the statement that released them.
 - **Display.** A person's timeline (`person-timeline.rq`) lists the events that start and end the person's unions, so weddings and divorces are events of both spouses. The site shows each person's derived spouses and partners, each with every source that states it (R6). Weddings and divorces reach the places map by their `location`. (Amended by ADR-0040, 2026-10-24: a union with no stated end shows "no source states how it ended", with each partner's death statements and their sources, and beside them the end derived from the partners' death spans, labelled as derived (ADR-0040 §2.6).)
 
 ### 7. Residences, occupations and other periods
