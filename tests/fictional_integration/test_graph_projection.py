@@ -7,7 +7,7 @@ import copy
 import pytest
 from wikibaseintegrator.datatypes import Item, MonolingualText, String, Time
 from wikibaseintegrator.models import Reference
-from wikibaseintegrator.wbi_enums import WikibaseRank
+from wikibaseintegrator.wbi_enums import ActionIfExists, WikibaseRank
 
 from tests.fictional_integration.test_write_query import _synchronize
 from tests.fixtures import example_universe as u
@@ -128,7 +128,9 @@ def _birth_fixture(registry, principal, witness):
         birth.rank = rank
         birth_support[key] = reference(key, assertion.excerpt)
         birth.references.add(birth_support[key])
-        person.claims.add(birth)
+        person.claims.add(
+            birth, action_if_exists=ActionIfExists.APPEND_OR_REPLACE
+        )
     write_existing(person, summary="fictional plural birth readings")
 
     source = u.BIRTH_UNCERTAINTY_SCENARIO
@@ -153,7 +155,9 @@ def _birth_fixture(registry, principal, witness):
             )
             for key in ("birth-extract-1938", "naturalisation-1952"):
                 participant.references.add(birth_support[key])
-        event.claims.add(participant)
+        event.claims.add(
+            participant, action_if_exists=ActionIfExists.APPEND_OR_REPLACE
+        )
     when = Time(
         prop_nr=properties["point_in_time"],
         time="+1919-01-01T00:00:00Z",
