@@ -806,6 +806,8 @@ def principals_by_event(
 # status: being married later does not erase earlier widowhood. References
 # to processes do not supply historical support. Missing support fails closed.
 # Resolve redirects for the person and source so aliases cannot evade the hold.
+# MINUS computes incompatible person/source pairs independently, preserving
+# redirect-path semantics without correlated property-path evaluation.
 ENDED_BY_DEATH_QUERY = """\
 SELECT DISTINCT ?person
 WHERE {{
@@ -821,7 +823,7 @@ WHERE {{
   ?citedSource {same_as}* ?source .
   FILTER NOT EXISTS {{ ?source {same_as} ?laterSource . }}
   FILTER(REGEX(STR(?source), "/entity/Q[1-9][0-9]*$"))
-  FILTER NOT EXISTS {{
+  MINUS {{
     ?statusPerson {same_as}* ?person ;
                   p:{civil_status} ?status .
     ?status ps:{civil_status}/{same_as}* wd:{widowed} ;

@@ -482,6 +482,17 @@ def _widowhood_history(client, directory):
         married, action_if_exists=ActionIfExists.APPEND_OR_REPLACE
     )
     write_existing(person, summary="fictional curator preferred later status")
+    statuses = client.fetch_claims([refs["eugen"].qid])[refs["eugen"].qid][
+        properties["civil_status"]
+    ]
+    assert {
+        statement["mainsnak"]["datavalue"]["value"]["id"]: statement["rank"]
+        for statement in statuses
+    } == {items["widowed"]: "normal", items["married"]: "preferred"}
+    assert all(
+        source_ids(statement) == {sources[widowhood.HISTORY]}
+        for statement in statuses
+    )
 
     def privacy(*, eugen_released):
         _synchronize(client)
