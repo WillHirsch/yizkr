@@ -97,6 +97,8 @@ class BirthReference(_Record):
 class BirthParticipation(_Record):
     statement: str
     rank: Rank
+    circumstances: tuple[str, ...] = ()
+    determination_methods: tuple[str, ...] = ()
     references: tuple[BirthReference, ...] = ()
 
 
@@ -109,6 +111,7 @@ class BirthEvidence(_Record):
     earliest: tuple[BirthTime, ...] = ()
     latest: tuple[BirthTime, ...] = ()
     circumstances: tuple[str, ...] = ()
+    determination_methods: tuple[str, ...] = ()
     references: tuple[BirthReference, ...] = ()
     event: str | None = None
     participation: BirthParticipation | None = None
@@ -153,17 +156,41 @@ class BirthEvidence(_Record):
             parts.append(
                 "sourcing_circumstances=" + ", ".join(self.circumstances)
             )
+        parts.extend(_determination_facts(self.determination_methods))
         parts.extend(_reference_facts(self.references))
         if self.participation is not None:
             parts.append(
                 f"principal={self.person} via {self.participation.statement} "
                 f"rank={self.participation.rank}"
             )
+            if self.participation.circumstances:
+                parts.append(
+                    "principal sourcing_circumstances="
+                    + ", ".join(self.participation.circumstances)
+                )
+            parts.extend(
+                "principal " + text
+                for text in _determination_facts(
+                    self.participation.determination_methods
+                )
+            )
             parts.extend(
                 "principal " + text
                 for text in _reference_facts(self.participation.references)
             )
         return "; ".join(parts)
+
+
+def _determination_facts(methods):
+    return tuple(
+        f"determination_method={method}"
+        + (
+            " (curator combination; no cited source states the value alone)"
+            if method == "combined_from_sources"
+            else ""
+        )
+        for method in methods
+    )
 
 
 def _reference_facts(references):
@@ -208,6 +235,18 @@ def _unique(values):
     """Canonical order independent of joins, query order or duplicate rows."""
     return tuple(
         sorted(set(values), key=lambda value: value.model_dump_json())
+    )
+
+
+def _item_values(rows, name, item_keys):
+    return tuple(
+        sorted(
+            {
+                item_keys.get(_short(value), _short(value))
+                for row in rows
+                if (value := _cell(row, name))
+            }
+        )
     )
 
 
@@ -308,14 +347,9 @@ def from_rows(
             latest=_unique(
                 time for r in found if (time := _time(r, "latest")) is not None
             ),
-            circumstances=tuple(
-                sorted(
-                    {
-                        item_keys.get(_short(value), _short(value))
-                        for r in found
-                        if (value := _cell(r, "circumstance"))
-                    }
-                )
+            circumstances=_item_values(found, "circumstance", item_keys),
+            determination_methods=_item_values(
+                found, "determinationMethod", item_keys
             ),
             references=_references(found, "date", property_keys),
             event=_short(_cell(row, "event")) or None,
@@ -323,6 +357,12 @@ def from_rows(
                 BirthParticipation(
                     statement=participation,
                     rank=_rank(row, "participationRank"),
+                    circumstances=_item_values(
+                        found, "principalCircumstance", item_keys
+                    ),
+                    determination_methods=_item_values(
+                        found, "principalDeterminationMethod", item_keys
+                    ),
                     references=_references(found, "principal", property_keys),
                 )
                 if participation

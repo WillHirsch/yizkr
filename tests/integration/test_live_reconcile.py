@@ -290,14 +290,25 @@ def test_roster_dates_round_trip_at_their_precision(client, config, written):
     roster = fetch_roster(client, config)
     elder = _by_label(roster, ELDER)
     younger = _by_label(roster, YOUNGER)
-    # direct statements, at century and decade precision
-    assert (elder.birth, elder.death) == ("the 19th century", "the 1890s")
-    # a birth event's point in time, at decade precision, and a death
-    # event's, at year precision, fill the gaps
-    assert (younger.birth, younger.death) == ("the 1850s", "1938")
-    # as the adjudicator reads them
-    assert "born: the 19th century; died: the 1890s" in elder.facts()
-    assert "born: the 1850s; died: 1938" in younger.facts()
+    # Direct and principal-event readings retain precision and attribution.
+    (direct,) = elder.births
+    (event,) = younger.births
+    assert (direct.value.text(), elder.death) == (
+        "the 19th century",
+        "the 1890s",
+    )
+    assert direct.event is None
+    assert (event.value.text(), younger.death) == ("the 1850s", "1938")
+    assert event.event == _by_label(roster, BIRTH).qid
+    for reading in (direct, event):
+        assert reading.rank == "normal"
+        assert written in {
+            source.source
+            for reference in reading.references
+            for source in reference.sources
+        }
+    assert "the 19th century" in elder.facts()
+    assert "the 1850s" in younger.facts()
     # a death its source states without its date
     assert _by_label(roster, BROTHER).death == "date not stated"
 

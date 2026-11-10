@@ -93,6 +93,7 @@ def _birth_fixture(registry, principal, witness):
         return support
 
     person = client.wbi.item.get(principal)
+    birth_support = {}
     for key, value, precision, rank in (
         (
             "birth-extract-1938",
@@ -125,7 +126,8 @@ def _birth_fixture(registry, principal, witness):
             calendarmodel="http://www.wikidata.org/entity/Q1985727",
         )
         birth.rank = rank
-        birth.references.add(reference(key, assertion.excerpt))
+        birth_support[key] = reference(key, assertion.excerpt)
+        birth.references.add(birth_support[key])
         person.claims.add(birth)
     write_existing(person, summary="fictional plural birth readings")
 
@@ -142,6 +144,15 @@ def _birth_fixture(registry, principal, witness):
             Item(prop_nr=properties["object_has_role"], value=items[role])
         )
         participant.references.add(support)
+        if role == "principal":
+            participant.qualifiers.add(
+                Item(
+                    prop_nr=properties["determination_method"],
+                    value=items["combined_from_sources"],
+                )
+            )
+            for key in ("birth-extract-1938", "naturalisation-1952"):
+                participant.references.add(birth_support[key])
         event.claims.add(participant)
     when = Time(
         prop_nr=properties["point_in_time"],
@@ -167,7 +178,15 @@ def _birth_fixture(registry, principal, witness):
             value=items["circa"],
         )
     )
+    when.qualifiers.add(
+        Item(
+            prop_nr=properties["determination_method"],
+            value=items["combined_from_sources"],
+        )
+    )
     when.references.add(support)
+    for key in ("birth-extract-1938", "naturalisation-1952"):
+        when.references.add(birth_support[key])
     event.claims.add(when)
     event_qid = registry.create(
         {"kind": "fictional-graph-projection-birth-event"},
@@ -268,13 +287,32 @@ def test_recorded_graph_projection_replays_and_refuses_stale_capture(
             for bound in event.latest
         ] == [("1919-07-01T00:00:00Z", 11)]
         assert "circa" in event.circumstances
+        assert event.determination_methods == ("combined_from_sources",)
         assert event.participation.rank == "normal"
+        assert event.participation.determination_methods == (
+            "combined_from_sources",
+        )
         assert event.participation.statement != event.statement
+        assert (
+            len(event.references) == len(event.participation.references) == 3
+        )
         assert {
             source.source
             for reference in event.participation.references
             for source in reference.sources
-        } == {sources[u.BIRTH_UNCERTAINTY_SCENARIO.key]}
+        } == {
+            sources[key]
+            for key in (
+                "birth-extract-1938",
+                "naturalisation-1952",
+                u.BIRTH_UNCERTAINTY_SCENARIO.key,
+            )
+        }
+        for reading in (direct["normal"], direct["preferred"]):
+            assert not reading.determination_methods
+            (support,) = reading.references
+            assert support in event.references
+            assert support in event.participation.references
         for reading, source_key in (
             (direct["normal"], "birth-extract-1938"),
             (direct["preferred"], "naturalisation-1952"),
@@ -282,7 +320,14 @@ def test_recorded_graph_projection_replays_and_refuses_stale_capture(
             (event, u.BIRTH_UNCERTAINTY_SCENARIO.key),
         ):
             assert reading.person == first.qid
-            (support,) = reading.references
+            (support,) = [
+                reference
+                for reference in reading.references
+                if any(
+                    row.source == sources[source_key]
+                    for row in reference.sources
+                )
+            ]
             assert {row.source for row in support.sources} == {
                 sources[source_key]
             }
@@ -317,6 +362,10 @@ def test_recorded_graph_projection_replays_and_refuses_stale_capture(
         assert "1919-01-07" in candidate.facts()
         assert "1919-07-01" in candidate.facts()
         assert "circa" in candidate.facts()
+        assert (
+            "determination_method=combined_from_sources" in candidate.facts()
+        )
+        assert "no cited source states the value alone" in candidate.facts()
         assert "deprecated" in candidate.facts()
         assert "not active identity evidence" in candidate.facts()
 

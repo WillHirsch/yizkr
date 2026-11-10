@@ -105,7 +105,7 @@ flowchart LR
     matcher --> result["CohortMatchResult JSON<br/>candidates, retained targets, blockers"]
 ```
 
-The roster carries every direct birth statement and every birth-event date linked through principal participation, with statement identity, rank, source references, date precision and uncertainty. Normal and preferred statements coexist; collection selects neither a canonical date nor a preferred representation. Deprecated evidence remains explicitly marked as inactive. Birth disagreements are shown to adjudication and human review, never used to prune candidates automatically. The same evidence reaches both reconciliation commands and recorded cohort matching.
+The roster carries every direct birth statement and every birth-event date linked through principal participation, with statement identity, rank, source references, date precision, uncertainty and determination methods. Curator-combined readings remain distinguishable from values stated by their sources. Normal and preferred statements coexist; collection selects neither a canonical date nor a preferred representation. Deprecated evidence remains explicitly marked as inactive. Birth disagreements are shown to adjudication and human review, never used to prune candidates automatically. The same evidence reaches both reconciliation commands and recorded cohort matching.
 
 Saved projections must use the current roster selector (`roster-v2`). A rejected selector requires a fresh capture before matching; incomplete sampled evidence cannot be upgraded without reading the graph. Recapture changes the planning product, not existing accepted assignments or historical claims.
 

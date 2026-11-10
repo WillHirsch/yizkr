@@ -16,7 +16,11 @@ PROPERTIES = {
     "transcription_excerpt": "P3",
     "inferred_from_extraction_run": "P4",
 }
-ITEMS = {"circa": "Q50", "machine_assisted": "Q51"}
+ITEMS = {
+    "circa": "Q50",
+    "machine_assisted": "Q51",
+    "combined_from_sources": "Q52",
+}
 
 
 def uri(value):
@@ -139,6 +143,54 @@ def test_bounds_are_plural_not_reduced_to_a_hull_or_a_preferred_reading():
     assert "earliest_date=1870" in text
     assert "latest_date=the 1880s" in text
     assert "circa" in text and "machine_assisted" in text
+
+
+@pytest.mark.parametrize("event", [False, True])
+def test_curator_combination_keeps_its_method_and_separate_references(event):
+    base = row(
+        determinationMethod=uri(ROOT + "/entity/Q52"),
+        **(
+            {
+                "event": uri(ROOT + "/entity/Q40"),
+                "participation": uri(ROOT + "/entity/statement/principal"),
+                "participationRank": uri(
+                    "http://wikiba.se/ontology#NormalRank"
+                ),
+                "principalDeterminationMethod": uri(ROOT + "/entity/Q52"),
+                "principalCircumstance": uri(ROOT + "/entity/Q51"),
+            }
+            if event
+            else {}
+        ),
+    )
+    rows = reference_rows(base) + reference_rows(
+        base, reference="r-b", source="Q11"
+    )
+    # More than one method remains explicit, including an unrecognized
+    # curator vocabulary item; duplicate joins do not create extra methods.
+    other = [
+        dict(r, determinationMethod=uri(ROOT + "/entity/Q99")) for r in rows
+    ]
+    result = from_rows(rows + other + rows, PROPERTIES, ITEMS)
+    (birth,) = result["Q1"]
+    assert birth.determination_methods == ("Q99", "combined_from_sources")
+    assert {ref.sources[0].source for ref in birth.references} == {
+        "Q10",
+        "Q11",
+    }
+    text = birth.facts()
+    assert "determination_method=Q99" in text
+    assert "determination_method=combined_from_sources" in text
+    assert "no cited source states the value alone" in text
+    if event:
+        assert birth.participation.determination_methods == (
+            "combined_from_sources",
+        )
+        assert birth.participation.circumstances == ("machine_assisted",)
+        assert "principal determination_method=combined_from_sources" in text
+        assert "principal sourcing_circumstances=machine_assisted" in text
+    assert BirthEvidence.model_validate_json(birth.model_dump_json()) == birth
+    assert from_rows(reversed(rows + other), PROPERTIES, ITEMS) == result
 
 
 @pytest.mark.parametrize(

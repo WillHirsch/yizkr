@@ -1,13 +1,17 @@
 # Birth evidence for reconciliation: every direct date and principal-event
-# date, with rank, precision, bounds, sourcing circumstances and complete
-# reference blocks. Preferred rank hides no normal statement; deprecated
+# date, with rank, precision, bounds, determination methods, sourcing
+# circumstances and complete reference blocks. A curator's combination
+# remains distinct from what any one reference states.
+# Preferred rank hides no normal statement; deprecated
 # statements remain explicitly marked, not active identity evidence.
-# Event participation keeps its own rank and references; witnesses acquire
-# no birth date. A nondeprecated birth type is required for the event route.
+# Event participation keeps its own rank, method, circumstances and
+# references; witnesses acquire no birth date. A nondeprecated birth type
+# is required for the event route.
 SELECT ?person ?event ?participation ?participationRank ?statement ?rank
        ?valueKind ?time ?timePrecision ?timeCalendar
        ?earliest ?earliestPrecision ?earliestCalendar
        ?latest ?latestPrecision ?latestCalendar ?circumstance
+       ?determinationMethod ?principalDeterminationMethod ?principalCircumstance
        ?dateReference ?dateReferenceProperty ?dateReferenceValue
        ?dateReferenceTime ?dateReferenceTimePrecision ?dateReferenceTimeCalendar
        ?dateSource ?dateArtifact
@@ -29,6 +33,10 @@ WHERE {
     ?participation ps:{P:participant} ?person ;
                    pq:{P:object_has_role} wd:{Q:principal} ;
                    wikibase:rank ?participationRank .
+    OPTIONAL { ?participation pq:{P:determination_method}
+                              ?principalDeterminationMethod . }
+    OPTIONAL { ?participation pq:{P:sourcing_circumstances}
+                              ?principalCircumstance . }
     wd:{P:point_in_time} wikibase:statementValue ?timeLink ;
                         wikibase:statementProperty ?valueLink ;
                         wikibase:novalue ?noValueType .
@@ -80,6 +88,7 @@ WHERE {
     OPTIONAL { ?latestNode wikibase:timeCalendarModel ?latestCalendar . }
   }
   OPTIONAL { ?statement pq:{P:sourcing_circumstances} ?circumstance . }
+  OPTIONAL { ?statement pq:{P:determination_method} ?determinationMethod . }
   OPTIONAL {
     ?statement prov:wasDerivedFrom ?dateReference .
     OPTIONAL {

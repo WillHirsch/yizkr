@@ -1519,6 +1519,7 @@ class TestRosterKinds:
                         "sourcing_circumstances",
                         "stated_in",
                         "part_of",
+                        "determination_method",
                     ),
                     1,
                 )
