@@ -1,15 +1,18 @@
 """Current scoped evidence, rather than saved absence, governs additions."""
 
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 
 from tests.unit.test_cohort_matching import assignment_request, source
 from tests.unit.test_graph_projection import _person
 from tests.unit.test_graph_projection import graph as graph
-from yizkr.core.write_recovery import write_existing
+from tests.unit.test_reconcile import fictional_births
+from yizkr.core.write_recovery import CreationRegistry, write_existing
 from yizkr.pipeline import cohort_additions as additions
+from yizkr.pipeline import cohort_context, cohort_provenance, reconcile
 from yizkr.pipeline.assignment_stages import accept_reviewed_assignments
 from yizkr.pipeline.identity_review import ReviewRefused, ReviewStore
 from yizkr.pipeline.review_stages import (
@@ -52,6 +55,156 @@ def approve(store, prepared):
 
 def refresh(wiki, service):
     service.revisions = wiki.entity_revisions(wiki.list_entity_ids())
+
+
+@pytest.fixture
+def previous_empty_birth_facts():
+    """The saved review basis before plural birth evidence was introduced."""
+    current = cohort_context.identity_facts
+
+    def previous(projection, qid):
+        assert all(
+            not row.births for row in projection.roster if row.qid == qid
+        )
+        facts = []
+        for value in current(projection, qid):
+            old = dict(value)
+            old.pop("births", None)
+            old["birth"] = ""
+            facts.append(old)
+        return tuple(facts)
+
+    return previous
+
+
+@pytest.mark.parametrize("operation", ["assign", "new_entity"])
+def test_empty_birth_upgrade_preserves_pending_approval_and_creation_recovery(
+    graph, tmp_path, monkeypatch, previous_empty_birth_facts, operation
+):
+    wiki, registry, target, _, service = graph
+    request = (
+        assignment_request(target.binding, (source(),))
+        if operation == "assign"
+        else new_request(source())
+    )
+    monkeypatch.setattr(
+        additions,
+        "protected_mutation",
+        lambda *args, **kwargs: nullcontext(
+            SimpleNamespace(evidence={}, assert_active=lambda: None)
+        ),
+    )
+    monkeypatch.setattr(additions, "unique_source_qids", lambda *args: {})
+    monkeypatch.setattr(
+        cohort_provenance,
+        "publish_cohort_assignment",
+        lambda *args, **kwargs: None,
+    )
+    apply_args = {
+        "state_path": tmp_path / "guard.json",
+        "operation_id": "fictional-upgrade-recovery",
+        "record_dir": tmp_path / "records",
+    }
+    path = tmp_path / "review.sqlite"
+    expected_qid = target.binding.qid
+    with monkeypatch.context() as old, ReviewStore(path) as store:
+        old.setattr(
+            cohort_context, "identity_facts", previous_empty_birth_facts
+        )
+        prepared = additions.prepare_cohort_additions(store, request, registry)
+        (proposal,) = prepared.review.proposals
+        (candidate,) = proposal.basis["evidence"]["cohort_candidates"][
+            "candidates"
+        ]
+        assert candidate["qid"] == target.binding.qid
+        assert all(facts["birth"] == "" for facts in candidate["facts"])
+        approve(store, prepared)
+        decision = store.get_decision(proposal.id)
+        if operation == "new_entity":
+
+            def interrupted(*args, **kwargs):
+                raise RuntimeError("fictional interruption before assignment")
+
+            old.setattr(additions, "accept_reviewed_assignments", interrupted)
+            with pytest.raises(RuntimeError, match="before assignment"):
+                additions.apply_cohort_additions(
+                    store, request, registry, **apply_args
+                )
+            (authorization,) = registry.reviewed_creation_authorizations()
+            assert authorization.decision == decision
+            binding = registry.reviewed_creation_binding(authorization)
+            assert binding is not None
+            expected_qid = binding.qid
+        assert not registry.assignment_snapshot().assignments
+
+    refresh(wiki, service)
+    registry = CreationRegistry(wiki)
+    entity_ids = set(wiki.list_entity_ids())
+    with ReviewStore(path) as reopened:
+        current = additions.prepare_cohort_additions(
+            reopened, request, registry
+        )
+        assert current.review.proposals == (proposal,)
+        assert reopened.get_decision(proposal.id) == decision
+        (application,) = current.review.projection.applications
+        assert (
+            application.status == "applied"
+            and application.decision == decision
+        )
+        result = additions.apply_cohort_additions(
+            reopened, request, registry, **apply_args
+        )
+        (assignment,) = result.acceptance.snapshot.assignments.values()
+        (reference,) = assignment.decision_references
+        assert (reference.id, reference.revision) == (
+            decision.id,
+            decision.revision,
+        )
+        assert (
+            registry.binding(assignment.entity_id).binding.qid == expected_qid
+        )
+        assert reopened.list_proposals() == [proposal]
+    assert set(wiki.list_entity_ids()) == entity_ids
+
+
+@pytest.mark.parametrize("operation", ["assign", "new_entity"])
+def test_new_birth_evidence_requires_review_after_empty_birth_approval(
+    graph, tmp_path, monkeypatch, previous_empty_birth_facts, operation
+):
+    _, registry, target, _, _ = graph
+    request = (
+        assignment_request(target.binding, (source(),))
+        if operation == "assign"
+        else new_request(source())
+    )
+    with ReviewStore(tmp_path / "review.sqlite") as store:
+        with monkeypatch.context() as old:
+            old.setattr(
+                cohort_context, "identity_facts", previous_empty_birth_facts
+            )
+            prepared = additions.prepare_cohort_additions(
+                store, request, registry
+            )
+            approve(store, prepared)
+        monkeypatch.setattr(
+            reconcile,
+            "fetch_birth_evidence",
+            lambda *args: {
+                target.binding.qid: fictional_births(target.binding.qid)
+            },
+        )
+        current = additions.prepare_cohort_additions(store, request, registry)
+        assert (
+            current.review.proposals[0].digest
+            != prepared.review.proposals[0].digest
+        )
+        assert (
+            current.review.projection.applications[0].status == "needs_review"
+        )
+        with pytest.raises(ReviewRefused, match="current, unblocked"):
+            additions._approved_scope(current, None)
+        assert not registry.assignment_snapshot().assignments
+        assert registry.reviewed_creation_authorizations() == ()
 
 
 def test_rename_and_unrelated_changes_preserve_candidate_review(

@@ -109,6 +109,12 @@ def identity_facts(projection: GraphProjection, qid: str) -> tuple[dict, ...]:
         if row.qid != qid:
             continue
         value = row.model_dump(mode="json", exclude=_DISPLAY)
+        if not value["births"]:
+            # Keep the durable review basis's empty-evidence encoding.
+            # A richer roster schema alone must not invalidate approval or
+            # change an interrupted creation's original decision receipt.
+            value.pop("births")
+            value["birth"] = ""
         for key, field in value.items():
             if key == "births":
                 # Structured readings retain attribution and uncertainty;
