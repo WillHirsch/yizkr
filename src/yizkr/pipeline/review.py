@@ -29,6 +29,8 @@ the curator sees them at this gate. Each finding is on exactly one row:
 its claim's, or for a finding about an entity, the row of a claim that
 names it (`critique.attach`). A finding that failed its checks is shown
 on the first row, marked unchecked (`critique.sheet_notes`).
+Source-scoped widowhood/death attribution concerns are added deterministically
+on the relevant union-end rows, even when no model critique was run.
 
 There is no `living` column. Whether a person is possibly living is
 never a review decision: it is a runtime determination from the absence
@@ -81,6 +83,7 @@ from yizkr.claims import (
     TimeValue,
     UnknownValue,
     VocabRef,
+    widowhood_review_notes,
 )
 from yizkr.core.dates import UnsupportedDate, claim_time_text, year_problem
 
@@ -297,11 +300,18 @@ def export_review_csv(
     `critique_notes` (ADR-0013): row index (the claim's in `batch`) ->
     the extraction critic's concerns on that row, rendered in the
     `critique_notes` column so the curator sees flagged mistypes /
-    misapplied properties / role-aliases at this gate. There is no
+    misapplied properties / role-aliases at this gate. Deterministic
+    widowhood/death concerns are appended without replacing those notes.
+    There is no
     possibly-living warning and no `living` column: privacy is a runtime
     determination, never a review decision (ADR-0020).
     """
-    critique_notes = critique_notes or {}
+    supplied = critique_notes or {}
+    concerns = widowhood_review_notes(batch)
+    critique_notes = {
+        row: "\n".join(filter(None, (supplied.get(row), concerns.get(row))))
+        for row in supplied.keys() | concerns.keys()
+    }
     with open(path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=CSV_COLUMNS)
         writer.writeheader()

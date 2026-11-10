@@ -9,10 +9,12 @@ letter, and a hypothetical "der selige Felix".
 
 from __future__ import annotations
 
+import csv
 import json
 
 import pytest
 
+from tests.fixtures.widowhood import history_batch
 from tests.unit.test_pipeline import ITEMS, PROPERTIES, FakeWiki
 from tests.unit.test_writer_notes_unions import batch_of
 from yizkr.claims import (
@@ -25,12 +27,12 @@ from yizkr.claims import (
     VITAL_KIND,
     VITAL_REASONS,
     VITAL_SUBJECT,
-    WIDOWED_END,
     ClaimBatch,
     UnknownValue,
     reject_reasons,
     validate_against_manifest,
     vital_problems,
+    widowhood_review_notes,
 )
 from yizkr.model.schema import load_acceptance
 from yizkr.pipeline.chunking import ChunkedClaimExtractor
@@ -38,6 +40,7 @@ from yizkr.pipeline.extract import (
     entity_kind_prompt_lines,
     salvage_valid_claims,
 )
+from yizkr.pipeline.review import export_review_csv
 from yizkr.pipeline.writer import BatchWriter, pre_plan_refusals
 
 RUN = {
@@ -385,6 +388,34 @@ class TestAClassingClaim:
 
 
 class TestUnionEnds:
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_successive_unions_survive_with_reviewable_attribution(
+        self, reverse, tmp_path
+    ):
+        given = history_batch(include_misreading=True)
+        if reverse:
+            given.claims.reverse()
+        assert validate_against_manifest(given) == []
+        assert pre_plan_refusals(given, {}) == {}
+        notes = widowhood_review_notes(given)
+        assert len(notes) == 2
+        assert {given.claims[index].subject.local_id for index in notes} == {
+            "first_union",
+            "second_union",
+        }
+        sheet = tmp_path / "review.csv"
+        model_row = next(iter(notes))
+        export_review_csv(given, sheet, {model_row: "Existing model concern"})
+        with sheet.open() as stream:
+            rows = list(csv.DictReader(stream))
+        assert len(rows) == len(given.claims)
+        assert "Existing model concern" in rows[model_row]["critique_notes"]
+        for index, row in enumerate(rows):
+            assert (
+                "widowhood/death attribution" in row["critique_notes"]
+            ) == (index in notes)
+            assert row["decision"] == ""
+
     @pytest.mark.parametrize("role", ["spouse", "partner"])
     def test_a_witness_is_none_of_the_couple(self, role):
         # a wedding's witness takes part in the union too, but only the
@@ -423,13 +454,15 @@ class TestUnionEnds:
             "subject": {"kind": "qid", "qid": "Q7"},
         }
         wrong = claim("marriage", "ended_by_death_of", item("eugen"))
-        assert codes(
+        given = batch(
             spouse("eugen"),
             spouse("caecilie"),
             wrong,
             widowed,
             entities=entities,
-        ) == [WIDOWED_END]
+        )
+        assert validate_against_manifest(given) == []
+        assert set(widowhood_review_notes(given)) == {2}
 
     def test_with_no_roles_every_participant_is_of_the_couple(self):
         given = [
@@ -443,17 +476,34 @@ class TestUnionEnds:
     def test_the_burial_registers_line(self):
         # "Witwer der Cäcilie": the union ended by her death, his status
         assert codes(spouse("eugen"), spouse("caecilie"), ENDED, WIDOWED) == []
+        assert widowhood_review_notes(batch(ENDED, WIDOWED)) == {}
 
-    def test_the_guard_refuses_the_survivor(self):
-        # the value the same batch calls widowed (§2.5)
+    def test_a_possible_survivor_misreading_is_retained_for_review(self):
         wrong = claim("marriage", "ended_by_death_of", item("eugen"))
-        assert codes(spouse("eugen"), spouse("caecilie"), wrong, WIDOWED) == [
-            WIDOWED_END
-        ]
+        given = batch(spouse("eugen"), spouse("caecilie"), wrong, WIDOWED)
+        assert validate_against_manifest(given) == []
+        assert set(widowhood_review_notes(given)) == {2}
 
-    def test_the_guard_needs_no_couple(self):
+    def test_the_review_concern_needs_no_couple_or_excerpt_match(self):
         wrong = claim("marriage", "ended_by_death_of", item("eugen"))
-        assert codes(wrong, WIDOWED) == [WIDOWED_END]
+        widowed = claim(
+            "eugen", "civil_status", vocab("widowed"), excerpt=None
+        )
+        assert codes(wrong, widowed) == []
+        assert set(widowhood_review_notes(batch(wrong, widowed))) == {0}
+
+    def test_independent_sources_do_not_create_a_survivor_concern(self):
+        ended = claim("marriage", "ended_by_death_of", item("eugen"))
+        ended["source"]["artifact"]["sha1"] = "c" * 40
+        assert codes(ended, WIDOWED) == []
+        assert widowhood_review_notes(batch(ended, WIDOWED)) == {}
+
+    def test_duplicate_values_keep_their_own_citation_and_review_row(self):
+        same_source = claim("marriage", "ended_by_death_of", item("eugen"))
+        independent = claim("marriage", "ended_by_death_of", item("eugen"))
+        independent["source"]["artifact"]["sha1"] = "c" * 40
+        given = batch(independent, WIDOWED, same_source)
+        assert set(widowhood_review_notes(given)) == {2}
 
     def test_one_of_the_couple(self):
         stranger = claim("marriage", "ended_by_death_of", item("felix"))
@@ -466,18 +516,16 @@ class TestUnionEnds:
             codes(claim("marriage", "ended_by_death_of", item("felix"))) == []
         )
 
-    def test_salvage_applies_them_to_the_batch(self):
-        # one by one each claim passes; together the guard refuses one
+    def test_salvage_retains_the_ambiguous_history(self):
         wrong = claim("marriage", "ended_by_death_of", item("eugen"))
         valid, rejects = salvage_valid_claims(
             [spouse("eugen"), spouse("caecilie"), wrong, WIDOWED],
             RUN,
             entities=ENTITIES,
         )
-        assert len(valid.claims) == 3
-        (reject,) = rejects
-        assert reject["claim"] == wrong
-        assert reject["reasons"] == [WIDOWED_END]
+        assert len(valid.claims) == 4
+        assert rejects == []
+        assert set(widowhood_review_notes(valid)) == {2}
 
 
 class TestParentage:
@@ -596,11 +644,13 @@ class UnknownWiki(FakeWiki):
 
 class TestTheWriter:
     def test_it_refuses_what_validation_refuses(self):
-        wrong = claim("marriage", "ended_by_death_of", item("eugen"))
-        refusals = pre_plan_refusals(batch(wrong, WIDOWED), {})
+        wrong = claim("marriage", "ended_by_death_of", item("felix"))
+        refusals = pre_plan_refusals(
+            batch(wrong, spouse("eugen"), spouse("caecilie")), {}
+        )
         assert list(refusals) == [0]
         assert refusals[0][0] == "vital_rule"
-        assert refusals[0][1].endswith(f"[{WIDOWED_END}]")
+        assert refusals[0][1].endswith(f"[{END_NOT_PARTNER}]")
 
     @staticmethod
     def late_felix() -> dict:

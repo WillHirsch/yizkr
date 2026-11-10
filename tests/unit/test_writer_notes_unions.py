@@ -717,9 +717,8 @@ class TestAUnion:
             status.mainsnak.datavalue["value"]["id"] == NOTE_ITEMS["widowed"]
         )
 
-    def test_the_guard_refuses_the_survivor_as_the_partner_who_died(self):
-        """§2.5's guard: the end names Eugen, whom the same batch calls a
-        widower, so the writer refuses it, as validation does."""
+    def test_a_possible_survivor_misreading_is_written_with_a_warning(self):
+        """A shared widowhood citation needs review, not loss of history."""
         eugen = local("b1", "Eugen Löbig", "human")
         union = local("b3", "marriage of Eugen and Cäcilie Löbig", "marriage")
         excerpt = "Witwer der Cäcilie Löbig geb. Tarle"
@@ -739,11 +738,21 @@ class TestAUnion:
             "source": source(BURIAL_SHA1, excerpt=excerpt),
         }
         batch = batch_of(widowed, wrong)
-        (problem,) = validate_against_manifest(batch)
-        assert problem.endswith("[widowed_end]")
-        result = write_mapped(BatchWriter(NotedWiki()), batch)
-        assert result.refusal_reasons == ["vital_rule"]
-        assert result.written == 1
+        assert validate_against_manifest(batch) == []
+        wiki = NotedWiki()
+        result = write_mapped(BatchWriter(wiki), batch)
+        assert result.refused == []
+        assert result.written == 2
+        assert any("widowhood/death attribution" in w for w in result.warnings)
+        (ended,) = statements(
+            wiki, result.created_items["b3"], "ended_by_death_of"
+        )
+        assert (
+            ended.mainsnak.datavalue["value"]["id"]
+            == result.created_items["b1"]
+        )
+        again = write_mapped(BatchWriter(wiki), batch)
+        assert (again.written, again.skipped, again.referenced) == (0, 2, 0)
 
 
 class TestKinshipQualifiers:

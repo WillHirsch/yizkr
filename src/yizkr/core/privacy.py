@@ -16,7 +16,8 @@ evidence" is any source-asserted signal that presupposes death:
   death` or an `age at death` (ADR-0040 Q1);
 * a `place of burial`, a place or of unknown value (burial presupposes
   death — the requirement's explicit example);
-* a union `ended by death of` the person (ADR-0040 Q9): a source states
+* a union `ended by death of` the person (ADR-0040 Q9), with a historical
+  source that does not also call that person widowed: a source states
   the couple were married when that partner died;
 * a `death` event a curator makes that is the person's own (ADR-0040
   Q5): no extraction or GEDCOM batch makes one.
@@ -28,6 +29,16 @@ deprecated statement releases no one, and a "no value" is no value. So a
 person can be identified as deceased without a time/place of death, and
 no curator "living/deceased" decision is ever demanded: privacy falls
 out of what sources already assert.
+
+A union end and a widowhood can both be valid historical assertions,
+including a person who survived one spouse and later died in another
+marriage. They remain stored. For privacy alone, an end's source that
+also calls its named deceased person widowed cannot establish death:
+the status names no union, so the survivor/deceased reading is unresolved.
+This conservatively holds even genuine remarriage history from one source.
+Another historical source on the end can establish death independently;
+process references and an end with no historical source cannot. Independent
+direct death evidence and curator death events remain usable.
 
 A birth or a death event, which only a curator makes, is its principal's
 own, the one it happens to,
@@ -789,26 +800,53 @@ def principals_by_event(
     return events
 
 
-# Every person a union is `ended by death of` (ADR-0040 Q9), at the
-# statement's truthy value, items only: an unknown value names no one, and
-# a deprecated statement releases no one. The value is read through its
-# redirect, as the person the check assesses is the item it redirects to.
+# Union-end death evidence (ADR-0040 Q9), at the statement's truthy rank.
+# A historical source must not also call the named deceased person widowed.
+# Check every nondeprecated status, including one outranked by a later civil
+# status: being married later does not erase earlier widowhood. References
+# to processes do not supply historical support. Missing support fails closed.
+# Resolve redirects for the person and source so aliases cannot evade the hold.
 ENDED_BY_DEATH_QUERY = """\
 SELECT DISTINCT ?person
 WHERE {{
   ?union wdt:{ended_by_death_of} ?named .
+  ?union p:{ended_by_death_of} ?end .
+  ?end a wikibase:BestRank ;
+       ps:{ended_by_death_of} ?named ;
+       prov:wasDerivedFrom/pr:{stated_in} ?citedSource .
   FILTER(isIRI(?named))
   ?named {same_as}* ?person .
   FILTER NOT EXISTS {{ ?person {same_as} ?further . }}
   FILTER(REGEX(STR(?person), "/entity/Q[1-9][0-9]*$"))
+  ?citedSource {same_as}* ?source .
+  FILTER NOT EXISTS {{ ?source {same_as} ?laterSource . }}
+  FILTER(REGEX(STR(?source), "/entity/Q[1-9][0-9]*$"))
+  FILTER NOT EXISTS {{
+    ?statusPerson {same_as}* ?person ;
+                  p:{civil_status} ?status .
+    ?status ps:{civil_status}/{same_as}* wd:{widowed} ;
+            wikibase:rank ?statusRank ;
+            prov:wasDerivedFrom/pr:{stated_in}/{same_as}* ?source .
+    FILTER(?statusRank != wikibase:DeprecatedRank)
+  }}
 }}
 """
 
 
-def ended_by_death_query(properties: Mapping[str, str]) -> str:
-    """``ENDED_BY_DEATH_QUERY`` with an instance's ids."""
+def ended_by_death_query(
+    properties: Mapping[str, str], items: Mapping[str, str]
+) -> str:
+    """Privacy-eligible union ends, using an instance's vocabulary IDs.
+
+    A same-source widowhood holds only that source's ability to release the
+    person, not the historical assertion or independently supported death.
+    """
     return ENDED_BY_DEATH_QUERY.format(
-        same_as=SAME_AS, ended_by_death_of=properties["ended_by_death_of"]
+        same_as=SAME_AS,
+        ended_by_death_of=properties["ended_by_death_of"],
+        civil_status=properties["civil_status"],
+        stated_in=properties["stated_in"],
+        widowed=items["widowed"],
     )
 
 
@@ -817,8 +855,8 @@ class LifeEvidence:
     """What the possibly-living call reads beside a person's own death
     statements: `births`, the latest year each birth allows by person
     (``latest_births``), those of birth events included
-    (``read_evidence``); and `died`, everyone a union is `ended by death
-    of`, and everyone who is the principal of a death event
+    (``read_evidence``); and `died`, everyone with privacy-eligible union-end
+    evidence, and everyone who is the principal of a death event
     (``event_principal``). `ended` and `death_events` keep those two
     apart, for the run record's releases by cause."""
 
@@ -837,9 +875,9 @@ def read_evidence(
     """The births and the deaths the possibly-living call weighs beside a
     person's own death statements, read with `run` (a query runner, given
     `prefixes`): every `date of birth` statement (``BIRTHS_QUERY``), and
-    each dated birth event's `point in time`; everyone a union is `ended
-    by death of` (``ENDED_BY_DEATH_QUERY``, where the instance has the
-    property); and the principals of the death events. A birth
+    each dated birth event's `point in time`; privacy-eligible union ends
+    (``ENDED_BY_DEATH_QUERY``, where the instance has the property); and
+    the principals of the death events. A birth
     event's date is a birth of its principal, as a `date of birth` is, so
     it may release them; a birth that is nobody's own only adds its date
     to the births of its participants who have one already, after the
@@ -866,7 +904,7 @@ def read_evidence(
     if "ended_by_death_of" in properties:
         ended = {
             _cell(row, "person").rsplit("/", 1)[-1]
-            for row in run(prefixes + ended_by_death_query(properties))
+            for row in run(prefixes + ended_by_death_query(properties, items))
         }
     return LifeEvidence(
         births=births,
