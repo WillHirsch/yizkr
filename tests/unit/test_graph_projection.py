@@ -9,6 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from tests.unit.test_pipeline import FakeWiki
+from tests.unit.test_reconcile import fictional_births
 from yizkr.backup import REVISIONS_QUERY
 from yizkr.claims import EntityRecord
 from yizkr.core.wiki import RecoveryEvidenceError, WikiClient, WikiPage
@@ -399,7 +400,7 @@ def test_saved_projection_refuses_tampering_and_unsupported_versions(
     elif damage == "envelope-version":
         saved["format"] = 2
     else:
-        saved["projection"]["selector_version"] = "roster-v2"
+        saved["projection"]["selector_version"] = "unsupported-roster"
     path.write_text(json.dumps(saved))
     with pytest.raises(projection.GraphProjectionRefused):
         projection.load_graph_projection(path)
@@ -412,3 +413,78 @@ def test_capture_requires_existing_generation_without_initializing(graph):
     with pytest.raises(projection.GraphProjectionRefused):
         projection.capture_graph_projection(CreationRegistry(wiki))
     assert wiki._recovery_pages == before
+
+
+def test_saved_projection_preserves_plural_birth_evidence(graph, tmp_path):
+    _, registry, registered, _, _ = graph
+    recorded = projection.capture_graph_projection(registry)
+    qid = registered.binding.qid
+    updated = recorded.model_copy(
+        update={
+            "roster": tuple(
+                row.model_copy(update={"births": fictional_births(qid)})
+                if row.qid == qid
+                else row
+                for row in recorded.roster
+            )
+        }
+    )
+    path = tmp_path / "projection.json"
+    projection.save_graph_projection(updated, path)
+    loaded = projection.load_graph_projection(path)
+    (person,) = [row for row in loaded.roster if row.qid == qid]
+    assert person.births == fictional_births(qid)
+    assert loaded.digest == updated.digest != recorded.digest
+
+
+def test_sampled_projection_requires_recapture(graph, tmp_path):
+    _, registry, _, _, _ = graph
+    path = tmp_path / "projection.json"
+    projection.save_graph_projection(
+        projection.capture_graph_projection(registry), path
+    )
+    saved = json.loads(path.read_text())
+    saved["projection"]["selector_version"] = "roster-v1"
+    for row in saved["projection"]["roster"]:
+        row.pop("births")
+        row["birth"] = "1919-01-07"
+    path.write_text(json.dumps(saved))
+    with pytest.raises(
+        projection.GraphProjectionRefused, match="fresh projection"
+    ):
+        projection.load_graph_projection(path)
+
+
+def test_projection_covers_local_sources_but_not_standard_calendar(graph):
+    _, registry, _, _, _ = graph
+    recorded = projection.capture_graph_projection(registry)
+    from yizkr.core.dates import GREGORIAN
+
+    query = projection.RecordedQuery(
+        purpose="roster",
+        query="fictional birth evidence",
+        rows=({"timeCalendar": {"type": "uri", "value": GREGORIAN}},),
+    )
+    projection._covered_rows(
+        query, recorded.generation.instance_uri, recorded.entity_revisions
+    )
+    for name, uri in (
+        ("dateSource", GREGORIAN),
+        ("timeCalendar", "http://www.wikidata.org/entity/Q1985786"),
+        ("dateSource", recorded.generation.instance_uri + "/entity/Q99999"),
+    ):
+        invalid = query.model_copy(
+            update={
+                "rows": (
+                    {
+                        name: {"type": "uri", "value": uri},
+                    },
+                )
+            }
+        )
+        with pytest.raises(projection.GraphProjectionRefused):
+            projection._covered_rows(
+                invalid,
+                recorded.generation.instance_uri,
+                recorded.entity_revisions,
+            )

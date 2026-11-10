@@ -14,6 +14,14 @@ from yizkr.claims import (
     QidRef,
 )
 from yizkr.core import sparql
+from yizkr.pipeline.birth_evidence import (
+    BirthEvidence,
+    BirthReference,
+    BirthReferenceSnak,
+    BirthSource,
+    BirthTerm,
+    BirthTime,
+)
 from yizkr.pipeline.reconcile import (
     GRAPH_ADJUDICATION_PROMPT,
     PairFacts,
@@ -46,6 +54,37 @@ RUN = {
 SCAN = ArtifactRef.from_bytes(b"fictional scan: a Loebig family document")
 
 
+def fictional_births(person="Q40"):
+    """Gustav's authored conflicting dates, with distinct fictional sources."""
+    return tuple(
+        BirthEvidence(
+            person=person,
+            statement=f"http://wikibase.example/entity/statement/{person}-{key}",
+            rank=rank,
+            value=BirthTime(value=date + "T00:00:00Z", precision=11),
+            references=(
+                BirthReference(
+                    reference=f"http://wikibase.example/reference/{key}",
+                    snaks=(
+                        BirthReferenceSnak(
+                            property="stated_in",
+                            value=BirthTerm(
+                                kind="uri",
+                                value=f"http://wikibase.example/entity/{source}",
+                            ),
+                        ),
+                    ),
+                    sources=(BirthSource(source=source, artifact=source),),
+                ),
+            ),
+        )
+        for key, date, rank, source in (
+            ("register", "1919-01-07", "normal", "Q801"),
+            ("certificate", "1919-07-01", "preferred", "Q802"),
+        )
+    )
+
+
 def entities() -> list[EntityRecord]:
     return [
         EntityRecord(
@@ -67,7 +106,6 @@ def roster() -> list[RosterEntity]:
             # an earlier document's form of her name, kept as an alias
             aliases=["Hildegard Löbig"],
             kind="human",
-            birth="1876-03-19",
             spouses=["Sebastian Löbig"],
         ),
         # a different person whose nickname the batch also gives
@@ -126,7 +164,13 @@ def post_only(rows: list[dict], queries: list[str]):
         assert timeout == 120
         (query,) = urllib.parse.parse_qs(request.data.decode())["query"]
         queries.append(query)
-        body = json.dumps({"results": {"bindings": rows}})
+        body = json.dumps(
+            {
+                "results": {
+                    "bindings": rows if "GROUP BY ?item" in query else []
+                }
+            }
+        )
         return io.BytesIO(body.encode())
 
     return urlopen
@@ -1201,8 +1245,8 @@ class TestImpossiblePair:
     def test_date_disagreement_is_never_impossible(self):
         # contradictory dates coexist (ADR-0002); they are surfaced to the
         # human, never pruned — the filter has no temporal rule at all.
-        a = rf(qid="Q1", label="A B", birth="1900", death="1910")
-        b = rf(qid="Q2", label="A B", birth="1936", death="1990")
+        a = rf(qid="Q1", label="A B", death="1910")
+        b = rf(qid="Q2", label="A B", death="1990")
         assert impossible_pair(_facts(a), _facts(b)) is None
 
     def test_symmetry_of_truthiness(self):
@@ -1470,6 +1514,12 @@ class TestRosterKinds:
                         "official_name",
                         "referred_to_as",
                         "object_has_role",
+                        "earliest_date",
+                        "latest_date",
+                        "sourcing_circumstances",
+                        "stated_in",
+                        "part_of",
+                        "determination_method",
                     ),
                     1,
                 )
@@ -1479,6 +1529,8 @@ class TestRosterKinds:
                 "birth": "Q20",
                 "death": "Q21",
                 "principal": "Q22",
+                "circa": "Q23",
+                "artifact_fragment": "Q24",
                 # the label "occupation" and "time period" never spell
                 # these keys
                 "occupation_class": "Q30",
@@ -1539,7 +1591,7 @@ class TestRosterKinds:
         assert [r.kind_label for r in roster] == ["", "", "", "military unit"]
         assert "kind: Q999 (military unit)" in roster[3].facts()
         assert roster[0].facts().endswith("kind: human")
-        (query,) = queries
+        (query,) = [q for q in queries if "GROUP BY ?item" in q]
         # the kind's QID is selected; its label only rides along
         assert "SELECT ?item ?itemLabel ?kind ?kindLabel" in query
         assert "GROUP BY ?item ?itemLabel ?kind ?kindLabel\n" in query
@@ -1621,7 +1673,7 @@ class TestDatesAtTheirPrecision:
             env_file=None,
         )
         roster = reconcile.fetch_roster(TestRosterKinds.Vocabulary(), config)
-        (query,) = queries
+        (query,) = [q for q in queries if "GROUP BY ?item" in q]
         return roster, query
 
     @staticmethod
@@ -1636,92 +1688,32 @@ class TestDatesAtTheirPrecision:
             row[name] = {"value": value}
         return row
 
-    def test_roster_dates_are_shown_at_their_precision(self, monkeypatch):
+    def test_roster_deaths_are_shown_at_their_precision(self, monkeypatch):
+        rows = [
+            self.binding("Q100", death="1830-01-01T00:00:00Z|8"),
+            self.binding("Q101", death="1941-03-01T00:00:00Z|10"),
+            self.binding("Q102"),
+            self.binding("Q103", death="1900-01-01T00:00:00Z|5"),
+        ]
+        found, _ = self.fetch(monkeypatch, rows)
+        assert [r.death for r in found] == [
+            "the 1830s",
+            "1941-03",
+            "",
+            "1900, to within 10,000 years",
+        ]
+
+    def test_event_death_fills_a_gap(self, monkeypatch):
         rows = [
             self.binding(
                 "Q100",
-                birth="1801-01-01T00:00:00Z|7",
-                death="1830-01-01T00:00:00Z|8",
-            ),
-            self.binding(
-                "Q101",
-                birth="1876-03-19T00:00:00Z|11",
-                death="1941-03-01T00:00:00Z|10",
-            ),
-            self.binding("Q102", birth="1833-01-01T00:00:00Z|9"),
-            # coarser than a claim states, as a curator may set in the wiki
-            self.binding(
-                "Q103",
-                birth="1001-01-01T00:00:00Z|6",
-                death="1900-01-01T00:00:00Z|5",
-            ),
-        ]
-        roster, _ = self.fetch(monkeypatch, rows)
-        assert [(r.birth, r.death) for r in roster] == [
-            ("the 19th century", "the 1830s"),
-            ("1876-03-19", "1941-03"),
-            ("1833", ""),
-            ("the 2nd millennium", "1900, to within 10,000 years"),
-        ]
-        assert "born: the 19th century; died: the 1830s" in roster[0].facts()
-
-    def test_event_dates_fill_gaps_at_their_precision(self, monkeypatch):
-        rows = [
-            # a direct date wins over an event's
-            self.binding(
-                "Q100",
-                birth="1876-03-19T00:00:00Z|11",
-                eventBirth="1801-01-01T00:00:00Z|7",
                 death="1941-03-01T00:00:00Z|10",
                 eventDeath="1890-01-01T00:00:00Z|8",
             ),
-            # an event's date stands in where there is no direct one
-            self.binding(
-                "Q101",
-                eventBirth="1801-01-01T00:00:00Z|7",
-                eventDeath="1890-01-01T00:00:00Z|8",
-            ),
+            self.binding("Q101", eventDeath="1890-01-01T00:00:00Z|8"),
         ]
-        roster, _ = self.fetch(monkeypatch, rows)
-        assert [(r.birth, r.death) for r in roster] == [
-            ("1876-03-19", "1941-03"),
-            ("the 19th century", "the 1890s"),
-        ]
-
-    def test_roster_query_reads_each_dates_precision(self, monkeypatch):
-        _, query = self.fetch(monkeypatch, [])
-        flat = re.sub(r"\s+", " ", query)
-        # each date's node reached through its own property's statement
-        # value link, and sampled with its own precision
-        for statement, prop, name in [
-            ("birthStatement", "P2", "birth"),
-            ("deathStatement", "P3", "death"),
-            ("birthEventStatement", "P10", "birthEvent"),
-            ("deathEventStatement", "P10", "deathEvent"),
-        ]:
-            assert f"wd:{prop} wikibase:statementValue ?{name}Link ." in flat
-            assert f"?{statement} ?{name}Link ?{name}Node ." in flat
-            assert (
-                f'CONCAT(STR(?{name}Time), "|", STR(?{name}Precision))' in flat
-            )
-        # P2/P3 are date of birth/death and P10 point in time, as
-        # TestRosterKinds.Vocabulary numbers them
-        for statement, prop in [
-            ("birthStatement", "P2"),
-            ("deathStatement", "P3"),
-            ("birthEventStatement", "P10"),
-            ("deathEventStatement", "P10"),
-        ]:
-            assert f"p:{prop} ?{statement} ." in query
-            # the best-rank statements, as the truthy value is
-            assert f"?{statement} a wikibase:BestRank ." in query
-        for name in ("birth", "death", "birthEvent", "deathEvent"):
-            assert f"?{name}Node wikibase:timeValue ?{name}Time" in query
-            assert f"wikibase:timePrecision ?{name}Precision" in query
-            # time and precision sampled together, from one statement
-            assert f'CONCAT(STR(?{name}Time), "|",' in query
-        assert "(SAMPLE(?birthDate) AS ?birth)" in query
-        assert "(SAMPLE(?birthEventDate) AS ?eventBirth)" in query
+        found, _ = self.fetch(monkeypatch, rows)
+        assert [r.death for r in found] == ["1941-03", "the 1890s"]
 
 
 class TestAppellationAliases:
@@ -1952,7 +1944,7 @@ class TestAppellationAliases:
         (item,) = reconcile.fetch_roster(TestRosterKinds.Vocabulary(), config)
         assert item.appellations == ["Oma", "Omama"]
         assert item.aliases == ["Oma", "Omama", "Hilde"]
-        (query,) = queries
+        (query,) = [q for q in queries if "GROUP BY ?item" in q]
         flat = " ".join(query.split())
         # P15 is referred_to_as, as TestRosterKinds.Vocabulary numbers it:
         # each statement's value at any rank but deprecated, not the
@@ -1995,7 +1987,7 @@ def test_fetch_roster_sends_its_query_in_a_post_body(monkeypatch):
         env_file=None,
     )
     assert reconcile.fetch_roster(TestRosterKinds.Vocabulary(), config) == []
-    (query,) = queries
+    (query,) = [q for q in queries if "GROUP BY ?item" in q]
     assert query.startswith("PREFIX wd: <http://wikibase.example/entity/>")
     assert "GROUP BY ?item ?itemLabel ?kind ?kindLabel" in query
 
@@ -2237,7 +2229,7 @@ class TestRosterDeaths:
     def test_an_event_dates_its_principal_alone(self, monkeypatch):
         _, query = TestDatesAtTheirPrecision.fetch(monkeypatch, [])
         flat = re.sub(r"\s+", " ", query)
-        for part in ("birthPart", "deathPart"):
+        for part in ("deathPart",):
             # P16 is object_has_role and Q22 principal, as
             # TestRosterKinds.Vocabulary numbers them
             assert f"?{part} ps:P9 ?item ; pq:P16 wd:Q22 ." in flat
@@ -2405,3 +2397,34 @@ def load_manifest_keys() -> tuple[list[str], list[str]]:
 
     raw = yaml.safe_load(read_manifest_data())
     return list(raw["properties"]), list(raw["items"])
+
+
+def test_both_adjudication_paths_receive_competing_attributed_births():
+    first = RosterEntity(
+        qid="Q40",
+        label="Gustav Löbig",
+        kind="human",
+        births=fictional_births(),
+    )
+    second = RosterEntity(qid="Q41", label="Gustav Löbig", kind="human")
+    found = [EntityRecord(id="gustav", label="Gustav Löbig", kind="human")]
+    document_client = ScriptedLlm('{"done": true}')
+    graph_client = ScriptedLlm('{"done": true}')
+    candidates = block_candidates(found, [first])
+    adjudicate(document_client, found, candidates, batch(entity_list=found))
+    propose_graph_pairs(graph_client, [first, second])
+    for prompt in (document_client.prompts[0], graph_client.prompts[0]):
+        for expected in (
+            "1919-01-07",
+            "1919-07-01",
+            "Q801",
+            "Q802",
+            "rank=normal",
+            "rank=preferred",
+            "Q40-register",
+            "Q40-certificate",
+        ):
+            assert expected in prompt
+    # Conflicts remain candidates; provider advice conveys no approval.
+    assert candidates["gustav"] == [first]
+    assert impossible_pair(_facts(first), _facts(second)) is None

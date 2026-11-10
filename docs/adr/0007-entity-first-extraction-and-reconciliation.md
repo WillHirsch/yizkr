@@ -86,7 +86,7 @@ A separate pipeline step between extract and resolve:
 
     yizkr ingest reconcile --batch batch.json --out equivalences.csv
 
-1. **Roster prefetch** (deterministic): all graph entities with label, aliases, kind, and key relational facts (birth/death years, spouse labels, parent labels) via one SPARQL query. Cached to a file; small graph, single prompt.
+1. **Roster prefetch** (deterministic): graph entities with label, aliases, kind and relational facts, including plural attributed birth evidence, death readings, spouses and parents. Shared graph queries retain birth statement ranks, source references and uncertainty without choosing a date. [Recorded graph context](../IDENTITY_REVIEW.md#record-graph-context-and-inspect-later-cohort-matches) makes the inputs replayable.
 2. **Candidate blocking** (deterministic): for each manifest entity, graph candidates sharing kind and any name token with any alias (a whole name form since #388, above). Keeps the LLM prompt small and the pipeline auditable — the LLM never free-searches the graph.
 3. **LLM adjudication** (one call, or few): for each manifest entity with candidates, the model weighs relational evidence and emits `{entity_id, qid, verdict: same|uncertain|distinct, confidence, evidence}` — evidence is a human-readable sentence naming the relational facts that decide it ("same spouse, compatible birth decade, alias subset").
 4. **Human review**: proposals land in `equivalences.csv` with a decision column, exactly like claim review. Nothing is auto-confirmed.

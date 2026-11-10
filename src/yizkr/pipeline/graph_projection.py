@@ -9,6 +9,7 @@ evidence and belong with runtime artifacts, independently of response caches.
 
 from __future__ import annotations
 
+import json
 import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -18,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from yizkr.backup import REVISIONS_QUERY
 from yizkr.core import sparql
+from yizkr.core.dates import GREGORIAN
 from yizkr.core.identity_assignments import (
     AssignmentSnapshot,
     RegistryBinding,
@@ -85,7 +87,7 @@ class ProjectionCapture(_Record):
 
 class GraphProjection(_Record):
     format: Literal[1] = 1
-    selector_version: Literal["roster-v1"] = "roster-v1"
+    selector_version: Literal["roster-v2"] = "roster-v2"
     generation: Generation
     captured_at: datetime
     entity_revisions: dict[str, _Revision]
@@ -112,6 +114,7 @@ class GraphProjection(_Record):
                 not _ITEM.fullmatch(entity.qid)
                 or entity.qid not in self.entity_revisions
                 or not entity.kin_qids <= self.entity_revisions.keys()
+                or any(birth.person != entity.qid for birth in entity.births)
                 or (
                     _ITEM.fullmatch(entity.kind)
                     and entity.kind not in self.entity_revisions
@@ -228,10 +231,14 @@ def _covered_rows(query, concept_uri, revisions):
             and row.get("link", {}).get("value") == _SAME_AS
         ):
             continue
-        for cell in row.values():
+        for name, cell in row.items():
             if cell.get("type") != "uri":
                 continue
             uri = cell.get("value", "")
+            # Wikibase calendars name an external standard, not an entity
+            # whose local revision supplies the historical assertion.
+            if name.endswith("Calendar") and uri == GREGORIAN:
+                continue
             tail = uri.rsplit("/entity/", 1)[-1]
             if _ENTITY.fullmatch(tail) and (
                 not uri.startswith(prefix) or tail not in revisions
@@ -341,8 +348,19 @@ def save_graph_projection(projection: GraphProjection, path: Path) -> None:
 def load_graph_projection(path: Path) -> GraphProjection:
     """Validate saved content without any wiki, query service or model call."""
     try:
-        return _Envelope.model_validate_json(path.read_text()).projection
-    except ValueError as exc:
+        contents = json.loads(path.read_text())
+        if (
+            contents.get("projection", {}).get("selector_version")
+            != "roster-v2"
+        ):
+            raise GraphProjectionRefused(
+                "saved graph projection uses an unsupported roster selector; "
+                "capture a fresh projection before matching"
+            )
+        return _Envelope.model_validate(contents).projection
+    except GraphProjectionRefused:
+        raise
+    except (ValueError, AttributeError) as exc:
         raise GraphProjectionRefused(
             "saved graph projection is invalid"
         ) from exc

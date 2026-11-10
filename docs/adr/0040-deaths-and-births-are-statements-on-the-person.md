@@ -500,7 +500,7 @@ Build B (the PR's follow-up) carries these changes. In brief:
    - **Reversals.** This reverses two points decided earlier, the 1958 letter's stored bound ("keeps today's form") and "the unknown value only where a source gives no limit" (§2.3).
    - **Release: yes, as today.**
      - A death event a curator makes releases its principal, and a curator-made dated birth event dates its principal's birth.
-     - `read_evidence`'s arms and `ROSTER_QUERY`'s event arms read them, for the badge and the export alike.
+     - Privacy and export readers use their event arms. Reconciliation reads birth events through `birth-evidence.rq` and death events through `ROSTER_QUERY`; its evidence does not authorize disclosure.
      - A hypothetical undated "Death of Rahel" a curator makes, with Rahel as its principal, releases her.
      - Rejected alternative: such an event releases no one, which would depart from ADR-0020 §2.
    - **Display.**

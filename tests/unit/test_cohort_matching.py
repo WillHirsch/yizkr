@@ -10,7 +10,7 @@ import pytest
 
 from tests.fixtures.semantic_acceptance import birth_batch, source_case
 from tests.unit.test_graph_projection import graph as graph
-from tests.unit.test_reconcile import ScriptedLlm
+from tests.unit.test_reconcile import ScriptedLlm, fictional_births
 from yizkr.pipeline.assignment_stages import accept_reviewed_assignments
 from yizkr.pipeline.cohort_matching import (
     AdjudicationProvenance,
@@ -151,7 +151,18 @@ def test_adjudication_reuses_existing_prompt_and_never_records_approval(
     _, registry, binding, _, _ = graph
     projection = capture_graph_projection(registry)
     sources = (source(), source("naturalisation-1952"))
-    client = ScriptedLlm(answer(binding.binding.qid))
+    qid = binding.binding.qid
+    projection = projection.model_copy(
+        update={
+            "roster": tuple(
+                row.model_copy(update={"births": fictional_births(qid)})
+                if row.qid == qid
+                else row
+                for row in projection.roster
+            )
+        }
+    )
+    client = ScriptedLlm(answer(qid))
     with ReviewStore(tmp_path / "review.sqlite") as store:
         prepared = prepare_review(store, ReviewRequest(sources=sources))
         result = match_cohort(
@@ -163,6 +174,19 @@ def test_adjudication_reuses_existing_prompt_and_never_records_approval(
         )
         assert store.list_proposals() == []
     assert len(client.prompts) == 2
+    for prompt in client.prompts:
+        assert all(
+            value in prompt
+            for value in (
+                "1919-01-07",
+                "1919-07-01",
+                "Q801",
+                "Q802",
+            )
+        )
+    for mention in result.mentions:
+        assert "Q801" in mention.candidates[0].facts
+        assert "Q802" in mention.candidates[0].facts
     assert "Gustav" in client.prompts[0]
     assert result.adjudicator == PROVIDER
     assert all(
