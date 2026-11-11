@@ -8,10 +8,11 @@ import itertools
 import json
 import re
 import subprocess
+import sys
 import threading
 import unicodedata
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -4394,7 +4395,13 @@ class TestPrivacyDefaults:
             make_client("default")
 
     def test_anthropic_requires_explicit_key(self, monkeypatch):
-        anthropic = pytest.importorskip("anthropic")  # noqa: F841
+        package = ModuleType("anthropic")
+
+        def unexpected_client(*args, **kwargs):
+            pytest.fail("constructed an SDK client without explicit opt-in")
+
+        package.AsyncAnthropic = unexpected_client
+        monkeypatch.setitem(sys.modules, "anthropic", package)
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         from yizkr.pipeline.llm import AnthropicClient
 

@@ -43,6 +43,8 @@ dev = [
     "pytest-xdist>=3.8",
     "ruff>=0.8",
     "pre-commit>=3.5",
+    # Image fixtures use Pillow without requiring the face engine.
+    "pillow>=10",
 ]
 
 [build-system]

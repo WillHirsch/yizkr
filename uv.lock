@@ -1644,6 +1644,7 @@ llm = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "pillow" },
     { name = "pre-commit" },
     { name = "pytest" },
     { name = "pytest-xdist" },
@@ -1668,6 +1669,7 @@ provides-extras = ["llm", "faces"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "pillow", specifier = ">=10" },
     { name = "pre-commit", specifier = ">=3.5" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-xdist", specifier = ">=3.8" },
