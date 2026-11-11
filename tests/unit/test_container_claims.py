@@ -693,15 +693,13 @@ class TestTheWriter:
                 caption(),
                 None,
                 (BOOKLET_REF, LETTER_REF),
-                "its subject is no artifact given to this write as "
-                "placed by its source",
+                "its subject is no artifact given as placed by its source",
             ),
             (
                 caption(STRAY_REF.model_dump()),
                 PLACED,
                 (BOOKLET_REF, LETTER_REF, STRAY_REF),
-                "its subject is no artifact given to this write as "
-                "placed by its source",
+                "its subject is no artifact given as placed by its source",
             ),
             (
                 caption(),
@@ -714,8 +712,7 @@ class TestTheWriter:
                 caption(),
                 {DECK_REF.sha1: {LETTER_REF.sha1}},
                 (BOOKLET_REF, LETTER_REF),
-                "its subject is no artifact given to this write as "
-                "placed by its source",
+                "its subject is no artifact given as placed by its source",
             ),
             (
                 caption(local("e1", "Wastl", "human")),
@@ -734,15 +731,15 @@ class TestTheWriter:
                 PLACED,
                 (BOOKLET_REF, LETTER_REF, STRAY_REF),
                 "its subject is neither its own source nor an artifact "
-                "given to this write as placed by its source",
+                "given as placed by its source",
             ),
         ],
     )
     def test_it_refuses_what_the_subject_rules_forbid(
         self, claim, placed, registered, why
     ):
-        """The writer holds both rules itself, as a batch handed to `yizkr
-        write` is never validated against the manifest: the claim is
+        """The writer applies the shared rules even when its batch was
+        never validated against the manifest: the claim is
         refused and counted, and nothing lands on any item."""
         wiki = CaptionWiki()
         qids = artifacts(wiki, *registered)

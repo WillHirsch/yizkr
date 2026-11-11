@@ -213,7 +213,7 @@ Widened by #626, 2026-10-24: "What sources say about this artifact" also lists w
 
 ### 8. What this costs and checks
 
-- The manifest gains `caption` (with its `placed_subject` mark), the six document-subject properties, `determination_method` and `combined_from_sources`. The manifest, the prompts' paragraphs and the list of placed artifacts change the extraction stage: `stage:extraction` and `needs:scratch-diff` (ADR-0025 §4). Validation and the writer each check both rules (§2), and a live test writes a container's caption about its image and a document's statement about itself through the running stack (CLAUDE.md, Engineering conventions).
+- Manifest validation and the writer share the subject policy (§2, §10), with explicit writer checks for registration and storage normalization; [MODELING.md](../MODELING.md) describes the boundary. Fictional integration exercises accepted captions and placed-document claims, subject refusals and repeat writes through the real writer. Verification follows the affected risk and boundary in [TESTING.md](../TESTING.md#verification-by-risk).
 - The run report counts, as aggregates, the captions given, the document-subject claims by property, and the rejects by reason.
 - The deck half waits on #502's markers; the PDF half does not.
 

@@ -89,6 +89,7 @@ import re
 import sys
 import unicodedata
 from collections.abc import Collection, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Literal, get_args
@@ -1460,83 +1461,7 @@ def has_excerpt(claim: Claim) -> bool:
     return excerpt is not None and bool(excerpt.text.strip())
 
 
-def subject_problems(
-    claim: Claim,
-    acceptance: Acceptance,
-    placed: Mapping[str, Collection[str]] | None = None,
-    subject_kind: str | None = None,
-    confirmed: str | None = None,
-) -> list[str]:
-    """Why the claim's subject breaks the subject rules of ADR-0035 §3.4
-    and ADR-0039 §2 and §10, each ending in its reason code
-    (SUBJECT_REASONS), or none. A property the manifest marks
-    `placed_subject` takes an artifact its source places, and no other
-    subject. A property it marks `document_subject` takes a subject of one
-    of the forms document_subject_form names (`subject_kind` is the kind
-    of a local subject, `confirmed` that of a QID subject's local subject
-    before confirmation, confirmed_kind), and a claim whose subject is not
-    its own source carries an excerpt, the passage that conveys the
-    fact. No other property takes an artifact as its subject. `placed`
-    is as validate_against_manifest takes it."""
-    prop, subject = claim.property, claim.subject
-    source = claim.source.artifact
-    if prop in acceptance.placed_subjects:
-        places = (placed or {}).get(source.sha1, ())
-        if not isinstance(subject, ArtifactRef):
-            return [
-                f"property {prop!r} takes only an artifact the claim's "
-                f"source places as its subject (ADR-0039 §2.1) "
-                f"[{PLACED_SUBJECT}]"
-            ]
-        if subject.sha1 not in places:
-            return [
-                f"property {prop!r} takes an artifact the claim's source "
-                f"places, and {source} places no {subject} (ADR-0039 "
-                f"§2.1) [{PLACED_SUBJECT}]"
-            ]
-        return []
-    if prop in acceptance.document_subjects:
-        form = document_subject_form(
-            claim, acceptance, placed, subject_kind, confirmed
-        )
-        if form is None:
-            if isinstance(subject, ArtifactRef):
-                return [
-                    f"a document subject names the claim's own source, "
-                    f"{source}, or an artifact it places, and {source} "
-                    f"places no {subject} (ADR-0035 §3.4, ADR-0039 "
-                    f"§10.1) [{DOCUMENT_SUBJECT}]"
-                ]
-            return [
-                f"property {prop!r} takes as its subject the claim's own "
-                f"source, {source}, an artifact it places, a batch entity "
-                f"of an artifact kind, an unclassified entity of the "
-                f"batch or the existing item a curator confirmed one of "
-                f"those two as (ADR-0035 §3.4, ADR-0039 §10.1) "
-                f"[{DOCUMENT_SUBJECT}]"
-            ]
-        if form != SOURCE_FORM and not has_excerpt(claim):
-            return [
-                f"property {prop!r} about an artifact other than the "
-                f"claim's own source needs the passage that conveys it as "
-                f"its excerpt (ADR-0039 §10.4) [{EXCERPT_REQUIRED}]"
-            ]
-        return []
-    if isinstance(subject, ArtifactRef):
-        return [
-            f"property {prop!r} does not take an artifact as its subject: "
-            f"only the document-subject properties and `caption` do "
-            f"(ADR-0035 §3.4, ADR-0039 §2, §10) [{ARTIFACT_SUBJECT}]"
-        ]
-    return []
-
-
-# The reason codes of the subject rules, which end each problem
-# subject_problems gives, so a run report can count rejects by reason
-# without quoting one: a document-subject property's subject is of no
-# form it takes; one about an artifact other than its source carries no
-# excerpt; a placed-subject property's is not an artifact its source
-# places; another property names an artifact as its subject.
+# Stable semantic reason codes, shared by admission and reject reporting.
 DOCUMENT_SUBJECT = "document_subject"
 EXCERPT_REQUIRED = "excerpt_required"
 PLACED_SUBJECT = "placed_subject"
@@ -1547,6 +1472,135 @@ SUBJECT_REASONS = (
     PLACED_SUBJECT,
     ARTIFACT_SUBJECT,
 )
+
+
+@dataclass(frozen=True)
+class SubjectProblem:
+    """A semantic refusal, independent of a caller's display format."""
+
+    code: str
+    message: str
+    rule: str
+
+
+MISSING_SUBJECT_EXCERPT = SubjectProblem(
+    EXCERPT_REQUIRED,
+    "its subject is not its own source, and it carries no excerpt "
+    "of the passage that conveys it",
+    "ADR-0039 §10.4",
+)
+
+
+@dataclass(frozen=True)
+class SubjectValidation:
+    """Subject eligibility and the obligations of an eligible subject form.
+
+    A placed artifact needs registration at write time, before checking its
+    excerpt. A document subject other than its source needs an excerpt that
+    survives storage normalization. These obligations remain available when
+    the raw excerpt is absent; other semantic failures have no obligations.
+    """
+
+    form: str | None = None
+    problem: SubjectProblem | None = None
+    registration_rule: str | None = None
+    requires_excerpt: bool = False
+
+
+def subject_policy(
+    claim: Claim,
+    acceptance: Acceptance,
+    placed: Mapping[str, Collection[str]] | None = None,
+    subject_kind: str | None = None,
+    confirmed: str | None = None,
+) -> SubjectValidation:
+    """The shared artifact/document/placed-subject policy.
+
+    Local kinds and confirmed-QID provenance are supplied by each caller's
+    batch context. Registration and storage normalization belong to the writer;
+    this policy checks source ownership, permitted subject forms and raw
+    excerpt presence without consulting a graph or changing the claim.
+    """
+    prop, subject = claim.property, claim.subject
+    source = claim.source.artifact.sha1
+    if prop in acceptance.placed_subjects:
+        if not isinstance(subject, ArtifactRef):
+            message = "its property takes only an artifact its source places"
+        elif subject.sha1 not in (placed or {}).get(source, ()):
+            message = (
+                "its subject is no artifact given as placed by its source"
+            )
+        else:
+            return SubjectValidation(
+                form=PLACED_FORM, registration_rule="ADR-0039 §2.1"
+            )
+        return SubjectValidation(
+            problem=SubjectProblem(PLACED_SUBJECT, message, "ADR-0039 §2.1")
+        )
+    if prop in acceptance.document_subjects:
+        form = document_subject_form(
+            claim, acceptance, placed, subject_kind, confirmed
+        )
+        if form is None:
+            message = (
+                "its subject is neither its own source nor an artifact "
+                "given as placed by its source"
+                if isinstance(subject, ArtifactRef)
+                else "its property takes only its source document, an "
+                "artifact its source places, a batch entity of an artifact "
+                "kind, an unclassified entity of the batch or the existing "
+                "item a curator confirmed one of those two as"
+            )
+            return SubjectValidation(
+                problem=SubjectProblem(
+                    DOCUMENT_SUBJECT, message, "ADR-0039 §10.1"
+                )
+            )
+        needs_excerpt = form != SOURCE_FORM
+        return SubjectValidation(
+            form=form,
+            problem=MISSING_SUBJECT_EXCERPT
+            if needs_excerpt and not has_excerpt(claim)
+            else None,
+            registration_rule="ADR-0039 §10.1"
+            if form == PLACED_FORM
+            else None,
+            requires_excerpt=needs_excerpt,
+        )
+    if isinstance(subject, ArtifactRef):
+        return SubjectValidation(
+            problem=SubjectProblem(
+                ARTIFACT_SUBJECT,
+                "its property does not take an artifact as its subject",
+                "ADR-0035 §3.4",
+            )
+        )
+    return SubjectValidation()
+
+
+def subject_problems(
+    claim: Claim,
+    acceptance: Acceptance,
+    placed: Mapping[str, Collection[str]] | None = None,
+    subject_kind: str | None = None,
+    confirmed: str | None = None,
+) -> list[str]:
+    """Render the shared subject decision for manifest validation.
+
+    Each problem retains its SUBJECT_REASONS code for extraction coverage and
+    run reports. Writer-only registration and storage checks are not applied.
+    """
+    problem = subject_policy(
+        claim, acceptance, placed, subject_kind, confirmed
+    ).problem
+    if problem is None:
+        return []
+    return [
+        f"property {claim.property!r}: {problem.message} "
+        f"({problem.rule}) [{problem.code}]"
+    ]
+
+
 # an extraction's claim names an artifact kind for an entity, which no
 # extraction may (artifact_kind_problems, ADR-0039 §10.1(b))
 ARTIFACT_KIND = "artifact_kind"

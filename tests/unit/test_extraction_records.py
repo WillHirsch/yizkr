@@ -1298,7 +1298,8 @@ class TestTheDocumentAsSubject:
             }
         )
         (problem,) = validate_against_manifest(batch)
-        assert "a document subject names the claim's own source" in problem
+        assert "neither its own source nor an artifact" in problem
+        assert "[document_subject]" in problem
 
     def test_no_other_property_takes_the_document(self):
         dated = cited(
@@ -1325,7 +1326,8 @@ class TestTheDocumentAsSubject:
             {"extraction_run": run(), "claims": [person_issued]}
         )
         (problem,) = validate_against_manifest(batch)
-        assert "takes as its subject the claim's own source" in problem
+        assert "its property takes only its source document" in problem
+        assert "[document_subject]" in problem
         kept, rejects = salvage_valid_claims([person_issued], run())
         assert kept.claims == []
         (reject,) = rejects
@@ -1431,7 +1433,7 @@ class TestTheWriter:
                 "issued_by",
                 item("e9", "Standesamt Flörburg", "organization"),
                 "its subject is neither its own source nor an artifact given "
-                "to this write as placed by its source",
+                "as placed by its source",
             ),
             (
                 DOC_REF,
@@ -1444,8 +1446,8 @@ class TestTheWriter:
     def test_it_refuses_a_document_subject_the_rule_forbids(
         self, subject, prop, value, why
     ):
-        """The writer holds the document-subject rule itself, as a batch
-        handed to `yizkr write` is never validated against the manifest:
+        """The writer applies the shared document-subject rule even when
+        its batch was never validated against the manifest:
         a claim sourced from Gustav's birth register extract (A) whose
         subject names the 1941 death certificate (B), or names A on a
         property that does not take it, or an `issued_by` claim about a
