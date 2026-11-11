@@ -30,20 +30,21 @@ The logs are read a line at a time and folded as they are read, so a long
 run's log is never held in memory. They are read as rundir.run_state
 reads them: run.json before the events and again after them, and all of
 it again, a few times at most, while an invocation starts or ends in
-between. A stage is told cut short (interrupted) by the rule the live
-monitor and run_state use (rundir.interrupted), so the report's states
-agree with theirs. A run.json that cannot be read or holds no JSON
+between. The current invocation's recorded owner is checked for liveness,
+using the same rule as the live monitor and run_state. Unfinished work is
+interrupted when that owner has exited, and unknown when its liveness
+cannot be established. A run.json that cannot be read or holds no JSON
 object, and an event log that cannot be read, are refused (ReportError);
 any other field of another shape than the pipeline writes counts as
 nothing, and the report goes on.
 
 **Per stage**, each document's stage is pending (held, while the control
-file holds it), running, interrupted, computed, reused, needs attention
-or failed, as its latest events leave it. Computed: the engine answered
-at least one of its calls, or it makes none (a text file's transcription,
-the GEDCOM adapter). Reused: the LLM cache answered every call it made,
-by the answers' reasons (`key match`, `adopted`), or its view came from
-before the run's events and stands (`view current`). A view that one
+file holds it), running, unknown, interrupted, computed, reused, needs
+attention or failed, as its latest events leave it. Computed: the engine
+answered at least one of its calls, or it makes none (a text file's
+transcription, the GEDCOM adapter). Reused: the LLM cache answered every
+call it made, by the answers' reasons (`key match`, `adopted`), or its view
+came from before the run's events and stands (`view current`). A view that one
 invocation made and a later one reuses counts as the one that made it,
 so a resumed run's stages keep how the run came by them. A completed
 stage with attention reasons needs attention whichever way it came about,
@@ -184,10 +185,12 @@ from yizkr.pipeline.rundir import (
     RUNNING,
     SET_ASIDE,
     STAGE_EVENTS,
+    UNKNOWN,
     Invocations,
-    interrupted,
+    InvocationState,
     invocation_of,
     invocation_records,
+    invocation_stage_state,
 )
 from yizkr.pipeline.scratch import BARRIER, CORPUS_DIR, CORPUS_STAGES
 from yizkr.pipeline.stage_planning import (
@@ -289,13 +292,25 @@ MODES = frozenset({"scratch run", "ingest run"})
 PROJECT_STAGES = frozenset({"development", "kept"})
 EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
 ENGINES = frozenset({"claude-code", "anthropic"})
-RUN_STATES = frozenset(OUTCOMES) | {"running", "ended", "not started"}
-INVOCATION_ENDS = frozenset(OUTCOMES) | {"running", KILLED}
+RUN_STATES = frozenset(OUTCOMES) | {"running", UNKNOWN, "ended", "not started"}
+INVOCATION_ENDS = frozenset(OUTCOMES) | {"running", UNKNOWN, KILLED}
+LIVENESS_REASONS = frozenset(
+    {
+        "invocation has no verifiable process identity",
+        "local process context is unavailable",
+        "invocation belongs to another host, boot or PID namespace",
+        "invocation process no longer exists",
+        "invocation process identity cannot be read",
+        "invocation PID now belongs to another process",
+        "invocation process has exited",
+    }
+)
 STATUSES = frozenset(
     {
         PENDING,
         HELD,
         RUNNING,
+        UNKNOWN,
         INTERRUPTED,
         CANCELLED,
         DONE,
@@ -1613,7 +1628,14 @@ def build(path: Path | str, *, now: datetime | None = None) -> dict[str, Any]:
     if not (path / MANIFEST).is_file():
         raise ReportError(f"{path}: no {MANIFEST} there, so no run to report")
     fold, manifest = _read(path)
-    latest, ended = fold.invocations.latest(manifest)
+    current = fold.invocations.current(manifest)
+    if current.liveness == "abandoned":
+        # The owner may have published its final events after the snapshot
+        # but before the process probe. Read once more after observing exit:
+        # its completed work and recorded outcome take precedence.
+        fold, manifest = _read(path)
+        current = fold.invocations.current(manifest)
+    latest = current.invocation
     documents, entries = _plan(manifest)
     for (sha1, stage), attempt in fold.attempts.items():
         if sha1 not in documents:
@@ -1623,10 +1645,10 @@ def build(path: Path | str, *, now: datetime | None = None) -> dict[str, Any]:
         documents[sha1].stages[stage] = attempt
     attempts = [a for d in documents.values() for a in d.stages.values()]
     for attempt in [*attempts, *fold.corpus.values()]:
-        if attempt.status == RUNNING and interrupted(
-            attempt.invocation, latest, ended
-        ):
-            attempt.status = INTERRUPTED
+        if attempt.status == RUNNING:
+            attempt.status = invocation_stage_state(
+                attempt.invocation, current
+            ).status
     directories = _directories(path)
     for sha1, document in documents.items():
         if sha1 in directories:
@@ -1647,7 +1669,7 @@ def build(path: Path | str, *, now: datetime | None = None) -> dict[str, Any]:
     alerts = _alerts(path, documents)
     control = _control(path)
     vocabulary = _Vocabulary.of(manifest)
-    run = _run(manifest, fold, ended, now)
+    run = _run(manifest, fold, current, now)
     clusters = _clusters(path, fold)
     written = _written(path)
     placed = _place_stage(path)
@@ -1829,13 +1851,16 @@ def _document_record(document: Document) -> dict[str, Any]:
 
 
 def _run(
-    manifest: Mapping[str, Any], fold: _Fold, ended: bool, now: datetime
+    manifest: Mapping[str, Any],
+    fold: _Fold,
+    current: InvocationState,
+    now: datetime,
 ) -> dict[str, Any]:
     """The run as report.json holds it: what shaped it, and each
-    invocation's span, outcome and reason. An invocation that has not
-    ended runs to now when it is the latest, and was killed otherwise,
-    running to its last event, as the live monitor counts the run's
-    time."""
+    invocation's span, outcome and reason. Only a verified active latest
+    invocation runs to now. Abandoned invocations without a recorded end run
+    to their last observed event; unverifiable owners have unknown duration.
+    Neither reading creates an end timestamp or changes recorded history."""
     records = invocation_records(manifest)
     invocations = []
     for index, entry in enumerate(records):
@@ -1843,14 +1868,17 @@ def _run(
         closing = fold.invocations.closing.get(name) or {}
         start = _time(entry.get("started_at"))
         end = _time(entry.get("ended_at"))
-        running = index == len(records) - 1 and not ended
-        killed = end is None and not running and not closing
+        latest = index == len(records) - 1
+        running = latest and current.liveness == "active"
+        unverified = latest and current.liveness == UNKNOWN
+        abandoned = latest and current.liveness == "abandoned"
+        killed = end is None and not latest and not closing
         if end is None:
             end = now if running else fold.invocation_last_at.get(name or "")
             end = end or start
         span = (
             max(0.0, (end - start).total_seconds())
-            if start is not None and end is not None
+            if start is not None and end is not None and not unverified
             else None
         )
         outcome = _text(entry.get("outcome")) or _text(closing.get("outcome"))
@@ -1860,9 +1888,20 @@ def _run(
                 "started_at": _text(entry.get("started_at")),
                 "ended_at": _text(entry.get("ended_at")),
                 "end": outcome
-                or ("running" if running else KILLED if killed else "ended"),
+                or (
+                    "running"
+                    if running
+                    else UNKNOWN
+                    if unverified
+                    else INTERRUPTED
+                    if abandoned
+                    else KILLED
+                    if killed
+                    else "ended"
+                ),
                 "reason": _text(entry.get("reason"))
-                or _text(closing.get("reason")),
+                or _text(closing.get("reason"))
+                or (current.reason if latest else None),
                 "seconds": span,
             }
         )
@@ -1870,13 +1909,11 @@ def _run(
         # a run.json that records no invocation: its events tell
         marker = fold.invocations.marker or ""
         state = {
-            RUN_START: "running",
+            RUN_START: UNKNOWN,
             RUN_END: "finished",
             RUN_INTERRUPTED: "interrupted",
         }.get(marker, "not started")
-        reason = None
-    elif not ended:
-        state, reason = "running", None
+        reason = current.reason if state == UNKNOWN else None
     else:
         state = invocations[-1]["end"]
         reason = invocations[-1]["reason"]
@@ -1909,7 +1946,7 @@ def _run(
         "started_at": _text(manifest.get("started_at")),
         "ended_at": _text(manifest.get("ended_at")),
         "seconds": sum(i["seconds"] or 0.0 for i in invocations)
-        if invocations
+        if invocations and current.liveness != UNKNOWN
         else None,
         "first_event_at": fold.first_at.isoformat() if fold.first_at else None,
         "last_event_at": fold.last_at.isoformat() if fold.last_at else None,
@@ -2371,10 +2408,12 @@ def _failure_label(reason: Any) -> str:
 def _stop_reason(reason: Any, vocabulary: _Vocabulary) -> str | None:
     """Why an invocation ended short, as the aggregates show it: the
     class of the exception it names, or the slices that stopped it
-    (`kind:media aborted`), each of a known stage or kind; else OTHER;
-    None for no reason."""
+    (`kind:media aborted`), each of a known stage or kind, or a fixed
+    liveness explanation; else OTHER. None for no reason."""
     if not isinstance(reason, str) or not reason:
         return None
+    if reason in LIVENESS_REASONS:
+        return reason
     found = _exception(reason)
     if found is not None:
         return found
@@ -2669,6 +2708,7 @@ STAGE_COLUMNS = (
     PENDING,
     HELD,
     RUNNING,
+    UNKNOWN,
     INTERRUPTED,
     CANCELLED,
     COMPUTED,
@@ -3648,9 +3688,14 @@ def _run_section(run: Mapping[str, Any]) -> _Section:
     blocks: list[Any] = [_table(("", ""), rows)]
     if run["state"] == "running":
         blocks.append(
-            "The run is still running, or its latest invocation was killed "
-            "(a killed invocation records no end): every count is as the run "
+            "The run is still running: every count is as the run "
             "directory held it when the report was made."
+        )
+    elif run["state"] == UNKNOWN:
+        blocks.append(
+            "The latest invocation's liveness cannot be verified. "
+            "Unfinished work and elapsed time are unknown; no end timestamp "
+            "has been inferred."
         )
     if run["roles"]:
         blocks.append(
@@ -3782,6 +3827,7 @@ def _stage_sections(
         "Pending",
         "Held",
         "Running",
+        "Unknown",
         "Interrupted",
         "Cancelled",
         "Computed",

@@ -58,7 +58,7 @@ from yizkr.claims import (
     structure_problems,
     structure_readings,
 )
-from yizkr.pipeline import llm, report
+from yizkr.pipeline import llm, report, rundir
 from yizkr.pipeline.chunking import _set_aside_note
 from yizkr.pipeline.document_state import slugify
 from yizkr.pipeline.monitor import RunMonitor
@@ -75,6 +75,7 @@ from yizkr.pipeline.report import (
     render_markdown,
     write_report,
 )
+from yizkr.pipeline.run_liveness import capture_owner
 from yizkr.pipeline.rundir import (
     DONE,
     FAILED,
@@ -82,6 +83,7 @@ from yizkr.pipeline.rundir import (
     NEEDS_ATTENTION,
     PENDING,
     RUNNING,
+    UNKNOWN,
     RunDir,
     run_state,
 )
@@ -1098,7 +1100,11 @@ def run_in(state: str) -> tuple[list, dict, datetime]:
     invocations = plan["invocations"]
     if state == "running":
         plan["invocations"] = invocations[:2]
-        invocations[1] |= {"ended_at": None, "outcome": None}
+        invocations[1] |= {
+            "ended_at": None,
+            "outcome": None,
+            "owner": capture_owner(),
+        }
         del invocations[1]["reason"]
         plan["ended_at"] = None
         entries, now = upto(3615), T0 + timedelta(seconds=3700)
@@ -3673,6 +3679,7 @@ def monitor_rows(path: Path, now: datetime) -> dict[str, tuple]:
             stage.held,
             stage.interrupted,
             stage.running,
+            stage.unknown,
             stage.done + sum(stage.reused.values()),
             stage.attention,
             stage.failed,
@@ -3690,6 +3697,7 @@ def report_rows(made: dict) -> dict[str, tuple]:
             row[HELD],
             row[INTERRUPTED],
             row[RUNNING],
+            row[UNKNOWN],
             row[COMPUTED] + row[REUSED],
             row[NEEDS_ATTENTION],
             row[FAILED],
@@ -3794,6 +3802,38 @@ class TestRunStates:
         assert "stopped: kind:presentation aborted" in text
         assert leaks(text) == []
 
+    def test_final_records_win_when_the_owner_exits_during_the_probe(
+        self, tmp_path, monkeypatch
+    ):
+        path = tmp_path / "run"
+        run = RunDir(path)
+        run.start(
+            run_id=RUN_ID,
+            mode="scratch run",
+            documents=[
+                {"sha1": CERT, "kind": "media", "stages": ["transcription"]}
+            ],
+        )
+        where = {"subject": CERT, "kind": "media", "stage": "transcription"}
+        run.emit("started", **where)
+        probes = []
+
+        def exited(owner):
+            probes.append(owner)
+            run.emit("done", **where)
+            run.end("finished")
+            run.emit("run-end", outcome="finished")
+            return "abandoned", "invocation process has exited"
+
+        monkeypatch.setattr(rundir, "owner_liveness", exited)
+        made = build(path, now=NOW)
+        assert len(probes) == 1
+        assert made["run"]["state"] == "finished"
+        assert made["run"]["invocations"][-1]["end"] == "finished"
+        assert (
+            document(made, CERT)["stages"]["transcription"]["status"] == DONE
+        )
+
     def test_a_killed_invocation_runs_to_its_last_event(self, tmp_path):
         _path, made, _now = in_state(tmp_path, "killed first")
         run = made["run"]
@@ -3801,15 +3841,45 @@ class TestRunStates:
         assert run["invocations"][0]["seconds"] == 170
         assert made["aggregate"]["run"]["ends"]["killed"] == 1
 
-    def test_a_killed_latest_invocation_reads_as_running(self, tmp_path):
-        """A killed invocation records no end and has no closing event, so
-        while it is the latest it reads as running, as in the monitor."""
-        _path, made, _now = in_state(tmp_path, "killed latest")
+    def test_an_unverifiable_latest_invocation_is_unknown(self, tmp_path):
+        """A legacy record without ownership cannot establish liveness."""
+        path, made, now = in_state(tmp_path, "killed latest")
         aggregate = made["aggregate"]
-        assert aggregate["run"]["state"] == "running"
-        assert aggregate["corpus_stages"][0]["state"] == RUNNING
-        # its time runs to now, as a running invocation's does
-        assert aggregate["run"]["seconds"] == 600 + 100 + (10800 - 7200)
+        assert aggregate["run"]["state"] == UNKNOWN
+        assert aggregate["run"]["reason"] == (
+            "invocation has no verifiable process identity"
+        )
+        assert aggregate["corpus_stages"][0]["state"] == UNKNOWN
+        assert aggregate["run"]["seconds"] is None
+        assert made["run"]["invocations"][-1]["ended_at"] is None
+        later = build(path, now=now + timedelta(hours=1))
+        assert later["run"]["seconds"] == made["run"]["seconds"]
+        assert "liveness cannot be verified" in render_markdown(aggregate)
+
+    def test_an_abandoned_latest_owner_preserves_history(self, tmp_path):
+        path, _made, now = in_state(tmp_path, "killed latest")
+        plan = RunDir(path).manifest()
+        owner = capture_owner()
+        assert owner is not None
+        # The current PID with a different birth token is a different process.
+        plan["invocations"][-1]["owner"] = owner | {
+            "start_ticks": owner["start_ticks"] + 1
+        }
+        RunDir(path).update_manifest(**plan)
+        before = {
+            name: (path / name).read_bytes()
+            for name in ("run.json", "events.jsonl")
+        }
+        made = build(path, now=now)
+        assert made["aggregate"]["run"]["state"] == INTERRUPTED
+        assert made["aggregate"]["run"]["reason"] == (
+            "invocation PID now belongs to another process"
+        )
+        assert made["aggregate"]["corpus_stages"][0]["state"] == INTERRUPTED
+        assert made["run"]["invocations"][-1]["ended_at"] is None
+        later = build(path, now=now + timedelta(hours=1))
+        assert later["run"]["seconds"] == made["run"]["seconds"]
+        assert {name: (path / name).read_bytes() for name in before} == before
 
     def test_an_empty_run(self, tmp_path):
         path = tmp_path / "run"

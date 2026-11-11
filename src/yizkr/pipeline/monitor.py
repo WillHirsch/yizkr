@@ -5,7 +5,7 @@ A monitor attaches to any run directory (yizkr.pipeline.rundir), wherever
 and whenever the run was started, and follows its files as they grow:
 
     run.json       the plan (each document's SHA-1, kind and stages) and
-                   each invocation's start, end and outcome
+                   each invocation's process owner, start, end and outcome
     events.jsonl   stage events, the LLM cache's events, the engine's call
                    events, documents that failed, and each invocation's
                    start and close
@@ -14,8 +14,8 @@ and whenever the run was started, and follows its files as they grow:
 
 From them it builds a summary (RunMonitor.summary):
 
-* per stage, how many documents are pending, running, done (made in this
-  run), reused (every call answered by the LLM cache, by the answers'
+* per stage, how many documents are pending, running, unknown, done (made
+  in this run), reused (every call answered by the LLM cache, by the answers'
   reason, or the view current, so it stands), need attention or failed;
 * a scratch run's corpus stages, after the barrier: each one's state in
   the latest invocation (pending, held, running, interrupted, done,
@@ -126,11 +126,12 @@ from yizkr.pipeline.rundir import (
     SET_ASIDE,
     STAGE_EVENTS,
     Invocations,
+    InvocationState,
     RunDir,
     fold_control,
-    interrupted,
     invocation_of,
     invocation_records,
+    invocation_stage_state,
 )
 from yizkr.pipeline.stages import read_jsonl, staging_path
 
@@ -556,7 +557,7 @@ class _Tail:
 
 @dataclass
 class StageCounts:
-    """One stage over the run's documents. pending, running, done,
+    """One stage over the run's documents. pending, running, unknown, done,
     reused, attention and failed partition its documents: a completed
     output that needs attention counts there, whether it was made or
     reused, and a stage an invocation that has ended left started counts
@@ -566,6 +567,7 @@ class StageCounts:
     name: str
     pending: int = 0
     running: int = 0
+    unknown: int = 0
     done: int = 0
     attention: int = 0
     failed: int = 0
@@ -585,6 +587,7 @@ class StageCounts:
         return (
             self.pending
             + self.running
+            + self.unknown
             + self.done
             + sum(self.reused.values())
             + self.attention
@@ -988,6 +991,7 @@ class RunMonitor:
         self._manifest_key: tuple | None = None
         self._manifest: dict = {}
         self._plan = _Plan()
+        self._liveness: InvocationState | None = None
 
     def _reset_events(self) -> None:
         """Forget everything read from events.jsonl: the next read starts
@@ -1433,6 +1437,13 @@ class RunMonitor:
         """Where the run stands at `now` (the current time by default),
         from what the refreshes have read."""
         now = now or datetime.now(UTC)
+        current = self._invocations.current(self._manifest)
+        if current.ended and current != self._liveness:
+            # The owner may have finished after the preceding refresh read
+            # its events. Take one final snapshot before classifying work;
+            # an observed dead owner cannot append further final records.
+            self.refresh()
+            current = self._invocations.current(self._manifest)
         manifest, plan = self._manifest, self._plan
         summary = Summary(path=self.path, now=now)
         summary.events_unreadable = EVENTS in self._unreadable
@@ -1461,7 +1472,8 @@ class RunMonitor:
         summary.project_stage = (
             _token(project_stage) if project_stage else None
         )
-        latest, ended = self._invocation_state(summary, now)
+        current = self._invocation_state(summary, now, current)
+        latest = current.invocation
         summary.calls = self._calls_shown(latest)
         self._document_failures(summary, latest)
         summary.documents = len(plan.documents)
@@ -1490,11 +1502,16 @@ class RunMonitor:
                 rate.engine += attempt.ended_engine
                 rate.calls += attempt.ended_calls
             status = attempt.status
-            if status == RUNNING and interrupted(
-                attempt.invocation, latest, ended
-            ):
+            if status == RUNNING:
+                status = invocation_stage_state(
+                    attempt.invocation, current
+                ).status
+            if status == INTERRUPTED:
                 counts.pending += 1
                 counts.interrupted += 1
+                remaining[(stage, kind)] += 1
+            elif status == UNKNOWN:
+                counts.unknown += 1
                 remaining[(stage, kind)] += 1
             elif status == RUNNING:
                 counts.running += 1
@@ -1539,9 +1556,7 @@ class RunMonitor:
             summary.stages = list(stages.values())
         summary.corpus_names = self._corpus_names()
         if not summary.events_unreadable:
-            summary.corpus = self._corpus_states(
-                summary.corpus_names, latest, ended
-            )
+            summary.corpus = self._corpus_states(summary.corpus_names, current)
             summary.past_barrier = (
                 latest is None and bool(self._past_barrier)
             ) or latest in self._past_barrier
@@ -1589,7 +1604,7 @@ class RunMonitor:
         return names
 
     def _corpus_states(
-        self, names: list[str], latest: str | None, ended: bool
+        self, names: list[str], current: InvocationState
     ) -> list[CorpusStageState]:
         """Each corpus stage the latest invocation is to run, and any other
         its events name, in its state in that invocation (CorpusStageState):
@@ -1597,6 +1612,7 @@ class RunMonitor:
         did with it, since it runs it afresh; a hold lapses with its
         invocation; one an invocation that has ended left started is
         interrupted, by the rule rundir.run_state reads stages by."""
+        latest, ended = current.invocation, current.ended
         order = dict.fromkeys(names)
         order.update(
             (stage, None)
@@ -1621,10 +1637,10 @@ class RunMonitor:
             }.get(corpus.status, PENDING)
             if state == HELD and ended:
                 state = PENDING
-            if state == RUNNING and interrupted(
-                corpus.invocation, latest, ended
-            ):
-                state = INTERRUPTED
+            if state == RUNNING:
+                state = invocation_stage_state(
+                    corpus.invocation, current
+                ).status
             seconds = None
             if corpus.started is not None and corpus.ended is not None:
                 seconds = max(
@@ -1669,20 +1685,19 @@ class RunMonitor:
         return shown
 
     def _invocation_state(
-        self, summary: Summary, now: datetime
-    ) -> tuple[str | None, bool]:
-        """Fill in the run's state and times; (the latest invocation's id,
-        whether it has ended), read as run_state reads them
-        (rundir.Invocations.latest): an invocation has ended when run.json
-        records its end, or its closing event says how it ended. What only
-        the events can tell is unknown while events.jsonl cannot be read:
-        the state of a run.json without invocations, and the time the run
-        has been running when an invocation was killed."""
+        self, summary: Summary, now: datetime, current: InvocationState
+    ) -> InvocationState:
+        """Read recorded outcomes and current owner liveness without writing
+        an inferred end into history. Liveness is checked on every summary,
+        even when no file changed, and transitions notify attached views."""
         manifest = self._manifest
         invocations = invocation_records(manifest)
         summary.invocations = len(invocations)
         summary.started_at = _time(manifest.get("started_at"))
-        latest, ended = self._invocations.latest(manifest)
+        if self._liveness is not None and current != self._liveness:
+            self.version += 1
+        self._liveness = current
+        latest, ended = current.invocation, current.ended
         closing = self._invocations.closing.get(latest)
         if not invocations:
             # a run.json from before invocations were recorded: the last
@@ -1691,21 +1706,30 @@ class RunMonitor:
                 summary.state = UNKNOWN
             else:
                 summary.state = {
-                    RUN_START: "running",
+                    RUN_START: UNKNOWN,
                     RUN_END: "finished",
                     RUN_INTERRUPTED: "interrupted",
                 }.get(self._invocations.marker or "", "not started")
             if ended:
                 self._closed(summary, closing)
-            return latest, ended
+            elif self._invocations.marker == RUN_START:
+                summary.reason = current.reason
+            return current
         total: float | None = 0.0
         for index, entry in enumerate(invocations):
             start = _time(entry.get("started_at"))
             if start is None:
                 continue
             end = _time(entry.get("ended_at"))
-            if end is None and index == len(invocations) - 1:
+            entry_closing = self._invocations.closing.get(invocation_of(entry))
+            if end is None and entry_closing is not None:
+                end = _time(entry_closing.get("at"))
+            is_latest = index == len(invocations) - 1
+            if end is None and is_latest and current.liveness == "active":
                 end = now
+            elif end is None and is_latest and current.liveness == "unknown":
+                total = None
+                continue
             elif end is None and EVENTS in self._unreadable:
                 # killed: how far it ran is in its events, which cannot be
                 # read, so the run's time is unknown
@@ -1717,11 +1741,17 @@ class RunMonitor:
             span = max(0.0, (end - start).total_seconds())
             if total is not None:
                 total += span
-            if index == len(invocations) - 1:
+            if is_latest:
                 summary.invocation_elapsed = span
         summary.elapsed = total
         last = invocations[-1]
-        if not ended:
+        if current.liveness == "abandoned":
+            summary.state = "interrupted"
+            summary.reason = current.reason
+        elif current.liveness == "unknown":
+            summary.state = UNKNOWN
+            summary.reason = current.reason
+        elif not ended:
             summary.state = "running"
         elif last.get("ended_at"):
             outcome = last.get("outcome")
@@ -1732,7 +1762,7 @@ class RunMonitor:
         else:
             # ended by its closing event alone
             self._closed(summary, closing)
-        return latest, ended
+        return current
 
     @staticmethod
     def _closed(summary: Summary, closing: dict) -> None:
@@ -1940,6 +1970,7 @@ ESCAPE = "\x1b"
 _COLUMNS = (
     ("pending", 8),
     ("running", 8),
+    ("unknown", 8),
     ("done", 7),
     ("reused", 7),
     ("attention", 10),
@@ -2016,6 +2047,7 @@ def _stage_values(stage: StageCounts) -> tuple[int, ...]:
     return (
         stage.pending,
         stage.running,
+        stage.unknown,
         stage.done,
         sum(stage.reused.values()),
         stage.attention,
@@ -2194,6 +2226,8 @@ def _corpus_state(stage: CorpusStageState, now: datetime) -> tuple[str, str]:
         return "cancelled (retry on a new invocation)", "warn"
     if stage.state == INTERRUPTED:
         return "interrupted (the next invocation runs it again)", "warn"
+    if stage.state == UNKNOWN:
+        return "unknown (invocation owner cannot be verified)", "warn"
     return "pending", "dim"
 
 
@@ -2223,7 +2257,15 @@ def _corpus_rows(summary: Summary) -> list[tuple[str, str]]:
 
 # the corpus stages' states still to run in the latest invocation, or in
 # the next one
-_CORPUS_TO_GO = (PENDING, HELD, RUNNING, INTERRUPTED, CANCELLED, FAILED)
+_CORPUS_TO_GO = (
+    PENDING,
+    HELD,
+    RUNNING,
+    UNKNOWN,
+    INTERRUPTED,
+    CANCELLED,
+    FAILED,
+)
 
 
 def _corpus_to_go(summary: Summary) -> str | None:
@@ -2249,6 +2291,8 @@ def _corpus_to_go(summary: Summary) -> str | None:
             text += ")"
         elif stage.state == RUNNING:
             text += " (running)"
+        elif stage.state == UNKNOWN:
+            text += " (state unknown)"
         left.append(text)
     if not left:
         return None
