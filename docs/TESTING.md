@@ -19,6 +19,18 @@ Use focused checks while implementing and CI's broad offline result for the revi
 
 Tests establish intended behavior: provenance, uncertainty, identity, review, isolation and recovery. Prompt literals, exact query syntax, helper structure and historical prose are not substitutes for semantic results. Replace obsolete assertions with the affected implementation rather than preserving defects or requiring a repository-wide test rewrite first.
 
+### Ownership of test migration
+
+Migrate incidental assertions within the subsystem change that encounters them. Keep schema validation, template-key checks, nonempty source/process provenance, cache and restart behavior, lifecycle safeguards and environment isolation. An exact value is appropriate when it is part of the supported interface; a current implementation choice alone is not a contract.
+
+| Subsystem change | Replacement evidence |
+| --- | --- |
+| Source reading, extraction and critique | Explicit authored response scenarios for deterministic orchestration checks; inspect outgoing source inputs and accepted/rejected products. Prompt-policy changes need bounded observed model outputs where interpretation matters. Canned responses cannot establish that prompt wording works. |
+| Query library and publication | Returned fictional evidence at the real query boundary, and decoded query payloads at the publication boundary. Keep vocabulary, projection and template-key checks. Move remaining query-construction assertions with the affected query; do not remove a guard until its semantic obligation has coverage. |
+| Runtime orchestration and tooling | Controlled completion, cancellation, lock ownership and deadline behavior. Select retry intervals explicitly in scheduling tests rather than freezing the production default. |
+
+These are responsibilities of the affected subsystem work, not a separate repository-wide rewrite prerequisite. The focused performance check and optional CI dependency work remain independent ([#728](https://github.com/WillHirsch/yizkr/issues/728), [#729](https://github.com/WillHirsch/yizkr/issues/729)).
+
 The [small semantic acceptance set](#semantic-acceptance) checks deterministic archive behavior; real-model evaluation is a separate bounded activity. A canned engine establishes orchestration, not inference quality. Whole-corpus evidence is required when cross-document interactions or material uncertainty remain beyond bounded checks; record the reason and affected stages. A prompt, model or pre-write code edit alone does not require a corpus run. The procedure and local-only boundary are in [AGENT_PROTOCOL.md §5](AGENT_PROTOCOL.md#5-integration-and-corpus-evidence).
 
 ## Current test layers and limits
@@ -29,7 +41,7 @@ The fixtures in `tests/unit/conftest.py` isolate host settings, model login and 
 
 The network guard rejects non-loopback lookups and connections, removes proxy variables and fails the test even if code catches the refusal. It is not a complete process sandbox: UDP sends, child processes and earlier-scoped fixtures are not covered. Tests and subprocesses must use fictional inputs and explicit temporary paths. Unit tests must not reach archive credentials or runtime state.
 
-**Offline pipeline coverage.** `tests/unit/test_fixture_corpus.py` exercises per-document stages, the barrier, clustering, response reuse, reports and fixture identity traps with a canned engine behind the real LLM cache. The autouse `_no_write_side` fixture removes reset, registration, writing, places and site from the driver's corpus stages unless a test uses `write_side`. Separate write-side unit tests use an in-memory instance and stand-ins for reset, locking or site generation. These checks do not demonstrate a complete real-stack ingestion, query result or model interpretation. Existing fixture traps and strict expected failures need review when their subsystem changes.
+**Offline pipeline coverage.** `tests/unit/test_fixture_corpus.py` exercises per-document stages, the barrier, clustering, response reuse, reports and fixture identity traps with a canned engine behind the real LLM cache. Explicit scenarios select the recorded misreading or corrected response independently of prompt wording. A changed request controls cache invalidation; the scenario controls only the response to a fresh call. The autouse `_no_write_side` fixture removes reset, registration, writing, places and site from the driver's corpus stages unless a test uses `write_side`. Separate write-side unit tests use an in-memory instance and stand-ins for reset, locking or site generation. These checks do not demonstrate a complete real-stack ingestion, query result or model interpretation. Existing fixture traps and strict expected failures need review when their subsystem changes.
 
 The substitutions are explicit boundaries of offline coverage:
 

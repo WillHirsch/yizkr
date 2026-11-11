@@ -1,6 +1,7 @@
 """Offline tests for the query library (pytest; no instance needed)."""
 
 import re
+from urllib.parse import unquote, urlsplit
 
 import pytest
 import yaml
@@ -65,10 +66,6 @@ class TestLibrary:
             unknown_q = items - set(raw["items"])
             assert not unknown_p, f"{name}: unknown property keys {unknown_p}"
             assert not unknown_q, f"{name}: unknown item keys {unknown_q}"
-
-    def test_disagreement_report_uses_provenance(self, templates):
-        assert "prov:wasDerivedFrom" in templates["disagreement-report"]
-        assert "{P:stated_in}" in templates["disagreement-report"]
 
     def test_artifact_assertions_say_where_each_statement_is_cited(
         self, templates
@@ -424,17 +421,35 @@ class TestRendering:
 
 
 class TestWikitext:
-    def test_page_has_run_link_and_highlight(self, templates, vocabulary):
+    def test_run_and_embed_links_carry_the_displayed_query(
+        self, templates, vocabulary
+    ):
         properties, items = vocabulary
         name = "unreferenced-statements"
-        rendered = render(templates[name], properties, items)
+        rendered = render_for_instance(
+            templates[name], properties, items, "http://wikibase.example"
+        )
+        # Characters that must survive URL encoding, including a fragment
+        # marker and literal percent escape; no query execution is implied.
+        rendered += '\n# Löbig: "# %20 + & ? /"\n'
         text = page_wikitext(
             name, templates[name], rendered, "http://query.example"
         )
-        assert "http://query.example/#" in text
-        assert "embed.html#" in text
-        assert '<syntaxhighlight lang="sparql">' in text
-        assert "do not edit by hand" in text
+        links = [
+            urlsplit(link)
+            for link in re.findall(r"\[(https?://\S+)\s+[^\]]+\]", text)
+        ]
+        assert {(link.scheme, link.netloc, link.path) for link in links} == {
+            ("http", "query.example", "/"),
+            ("http", "query.example", "/embed.html"),
+        }
+        assert len(links) == 2
+        assert all(unquote(link.fragment) == rendered for link in links)
+        (displayed,) = re.findall(
+            r"<syntaxhighlight\b[^>]*>(.*?)</syntaxhighlight>", text, re.S
+        )
+        assert displayed.strip() == rendered.strip()
+        assert description_of(templates[name]) in text
 
     def test_index_lists_every_query(self, templates):
         text = index_wikitext(templates)

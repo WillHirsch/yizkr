@@ -42,6 +42,7 @@ from tests.fixtures.corpus.answers import (
     RECORDED,
     SOURCES,
     Recorded,
+    Scenario,
     claims,
     manifest,
     mistakes_in,
@@ -134,8 +135,18 @@ class RecordedEngine:
     system_prompt = "You answer for the fixture corpus's recorded model."
     call_text = ClaudeCodeClient.call_text
 
-    def __init__(self, calls: Calls, *, effort=None, model=None) -> None:
+    def __init__(
+        self,
+        calls: Calls,
+        *,
+        scenario: Scenario = Scenario.MISREAD_YEAR,
+        effort=None,
+        model=None,
+    ) -> None:
         self.calls = calls
+        # The scenario scripts a fresh answer. It is not part of the real
+        # request/configuration, so changing it cannot invalidate a cache hit.
+        self.scenario = scenario
         self.effort = effort
         self.model = model or os.environ.get("YIZKR_LLM_MODEL")
         self.cli_version = CLI
@@ -185,10 +196,9 @@ class RecordedEngine:
         assigned = set(_ASSIGNED_ID.findall(prompt.partition(ASSIGNED)[2]))
         if recorded.entities[0].id in assigned:
             assigned.add(None)
-        sharper = all(m.rule in prompt for m in mistakes_in(recorded))
         answered = [
             claim
-            for claim in claims(recorded, sha1, sharper=sharper)
+            for claim in claims(recorded, sha1, scenario=self.scenario)
             if claim["subject"].get("local_id") in assigned
         ]
         lines = [json.dumps(claim, ensure_ascii=False) for claim in answered]
