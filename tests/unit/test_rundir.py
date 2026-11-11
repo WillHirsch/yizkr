@@ -28,6 +28,7 @@ from yizkr.pipeline.rundir import (
     RUN_END,
     RUN_INTERRUPTED,
     RUNNING,
+    UNKNOWN,
     RunDir,
     cache_counts,
     fold_control,
@@ -523,8 +524,8 @@ class TestRunState:
         )
         critique = states[(DOC_A, "critique")]
         assert critique.status == FAILED and "boom" in critique.reason
-        # started with no later event: running, or interrupted
-        assert states[(DOC_B, "transcription")].status == RUNNING
+        # A hand-written log has no owner whose liveness can be verified.
+        assert states[(DOC_B, "transcription")].status == UNKNOWN
         assert states[(DOC_B, "critique")].status == PENDING
 
     def test_a_held_stage_is_pending_with_its_reason(self, tmp_path):
@@ -667,14 +668,13 @@ class TestStagesCutShort:
         assert self.status(tmp_path, "critique") == INTERRUPTED
         assert self.status(tmp_path, "critique", DOC_B) == RUNNING
 
-    def test_a_killed_invocation_reads_as_running_until_another_starts(
+    def test_a_later_invocation_supersedes_an_outstanding_start(
         self, tmp_path
     ):
-        """A killed invocation records no end and has no closing event:
-        while it is the latest, nothing tells it from one still running,
-        as in the monitor; a later invocation's start shows it is over."""
-        killed = self.invocation(tmp_path, "extraction")
-        self.emit(killed, "started", "extraction")
+        """Starting a new invocation supersedes earlier unfinished work,
+        even while the process that recorded it is still alive."""
+        first = self.invocation(tmp_path, "extraction")
+        self.emit(first, "started", "extraction")
         assert self.status(tmp_path, "extraction") == RUNNING
         later = self.invocation(tmp_path, "extraction")
         assert self.status(tmp_path, "extraction") == INTERRUPTED
@@ -735,16 +735,16 @@ class TestStagesCutShort:
         )
         assert states[(DOC_B, "extraction")] == rundir.StageState(PENDING)
 
-    def test_a_run_with_no_end_on_record_is_running(self, tmp_path):
+    def test_a_run_without_owner_evidence_has_unknown_liveness(self, tmp_path):
         """No run.json invocation and no event that opens or closes one,
-        as a run directory written by hand has: nothing says the stage is
-        over."""
+        as a run directory written by hand has: neither activity nor an
+        interruption can be established from the unfinished stage."""
         run = RunDir(tmp_path)
         run.update_manifest(
             documents=[{"sha1": DOC_A, "kind": "text", "stages": ["critique"]}]
         )
         self.emit(run, "started", "critique")
-        assert self.status(tmp_path, "critique") == RUNNING
+        assert self.status(tmp_path, "critique") == UNKNOWN
 
     def test_without_invocations_in_run_json_the_events_tell(self, tmp_path):
         """A run.json that records no invocation: the latest event that
@@ -756,7 +756,7 @@ class TestStagesCutShort:
         )
         run.emit("run-start")
         self.emit(run, "started", "critique")
-        assert self.status(tmp_path, "critique") == RUNNING
+        assert self.status(tmp_path, "critique") == UNKNOWN
         run.emit(RUN_INTERRUPTED, outcome="interrupted")
         assert self.status(tmp_path, "critique") == INTERRUPTED
         # a later invocation starts: the one that started the stage is over

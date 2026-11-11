@@ -40,6 +40,7 @@ from yizkr.pipeline.monitor import (
     render_rows,
     summarise_run,
 )
+from yizkr.pipeline.run_liveness import capture_owner
 from yizkr.pipeline.rundir import PROGRESS
 
 CORPUS = ["clustering", "reset", "register", "write", "places", "site"]
@@ -72,6 +73,7 @@ def manifest(
         "invocations": [
             {
                 "invocation": invocation,
+                "owner": capture_owner(),
                 "started_at": at(start),
                 "ended_at": None if end is None else at(end),
                 "outcome": None if end is None else "failed",
@@ -286,6 +288,21 @@ class TestStates:
             "12 written, 3 referenced, 1 skipped, 2 claims refused; "
             "1 documents a minute, ~3m 00s to go"
         )
+
+    def test_unverifiable_owner_keeps_unfinished_work_visible(self, tmp_path):
+        run = make(tmp_path, mid_write())
+        manifest_ = json.loads((run / "run.json").read_text())
+        manifest_["invocations"][-1].pop("owner")
+        (run / "run.json").write_text(json.dumps(manifest_))
+        summary = summarise_run(run, at_(280))
+        write = stage_of(summary, "write")
+        assert summary.state == write.state == "unknown"
+        assert write.rate is write.to_go is None
+        assert "unknown (invocation owner cannot be verified)" in line_of(
+            summary, "write"
+        )
+        assert "write (state unknown)" in to_go(summary)
+        assert states(summary)["register"] == "done"
 
     def test_a_done_stage_shows_how_long_it_took_and_its_counts(
         self, tmp_path

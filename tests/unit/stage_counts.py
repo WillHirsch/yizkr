@@ -15,6 +15,7 @@ from yizkr.pipeline.rundir import (
     NEEDS_ATTENTION,
     PENDING,
     RUNNING,
+    UNKNOWN,
     RunDir,
     run_state,
     summarise,
@@ -38,6 +39,7 @@ def disagreement(run: Path, summary=None) -> str | None:
         row = {
             PENDING: counts.pending - counts.interrupted - counts.cancelled,
             RUNNING: counts.running,
+            UNKNOWN: counts.unknown,
             INTERRUPTED: counts.interrupted,
             "cancelled": counts.cancelled,
             DONE: counts.done + sum(counts.reused.values()),

@@ -33,18 +33,21 @@ that must keep its settings across invocations (``fixed_settings``)
 refuses an invocation that asks for others (RunSettingsConflict).
 Callers that allow settings changes record the latest values.
 
-Run state per document and stage is derived from the run manifest and
-the events alone (never from file modification times or a per-document
-status file): a stage is pending until an event names it; running once
-it has started, and interrupted once the invocation that started it is
-over with no later event for the stage, which the next invocation then
+Run state per document and stage is derived from the run manifest, events
+and the recorded invocation owner's current process identity (never from
+file modification times or a per-document status file): a stage is pending
+until an event names it; running once it has started with a verified live
+owner, unknown while its owner cannot be verified, and interrupted once
+the invocation that started it is over with no later event for the stage,
+which the next invocation then
 starts again; done, or needs attention when its output carries
 attention reasons, whether it was made in the run or reused from an
 earlier one; failed, with the reason, until a later start; and pending
 again, with the reason, while the control file holds it. Which
 invocation is over is read from run.json and the events that open and
-close invocations (Invocations), and a stage is told interrupted by one
-rule (interrupted), which the live monitor reads it by too.
+close invocations, or observed from the original process's disappearance
+(Invocations.current). All status readers use invocation_stage_state;
+observations never rewrite the historical records or authorize a resume.
 """
 
 from __future__ import annotations
@@ -68,6 +71,12 @@ from pathlib import Path
 from typing import Any
 
 from yizkr import __version__
+from yizkr.pipeline.run_liveness import (
+    ABANDONED,
+    UNKNOWN,
+    capture_owner,
+    owner_liveness,
+)
 from yizkr.pipeline.stages import (
     atomic_write_text,
     canonical_json,
@@ -781,6 +790,7 @@ class RunDir:
                     "started_at": now,
                     "ended_at": None,
                     "outcome": None,
+                    "owner": capture_owner(),
                 },
             ]
             self._write_manifest(manifest)
@@ -873,6 +883,14 @@ class StageState:
     reason: str | None = None
 
 
+@dataclass(frozen=True)
+class InvocationState:
+    invocation: str | None
+    ended: bool
+    liveness: str
+    reason: str | None = None
+
+
 def _state_from_event(event: dict) -> StageState:
     kind = event["event"]
     if kind in ("done", "reused"):
@@ -952,6 +970,20 @@ class Invocations:
         latest = invocation_of(last)
         return latest, bool(last.get("ended_at")) or latest in self.closing
 
+    def current(self, manifest: Mapping[str, Any]) -> InvocationState:
+        """Combine recorded history with current process evidence.
+
+        Explicit ends remain authoritative. Liveness changes no record and
+        never fabricates an end time or a failure outcome.
+        """
+        latest, ended = self.latest(manifest)
+        if ended:
+            return InvocationState(latest, True, "ended")
+        records = invocation_records(manifest)
+        owner = records[-1].get("owner") if records and latest else None
+        liveness, reason = owner_liveness(owner)
+        return InvocationState(latest, liveness == ABANDONED, liveness, reason)
+
 
 def interrupted(
     started_by: str | None, latest: str | None, ended: bool
@@ -972,6 +1004,20 @@ def interrupted(
     return (
         latest is not None and started_by is not None and started_by != latest
     )
+
+
+def invocation_stage_state(
+    started_by: str | None, current: InvocationState
+) -> StageState:
+    """Effective state of an unfinished stage, shared by all status readers."""
+    if interrupted(started_by, current.invocation, current.ended):
+        return StageState(
+            INTERRUPTED,
+            current.reason if started_by == current.invocation else None,
+        )
+    if current.liveness == UNKNOWN:
+        return StageState(UNKNOWN, current.reason)
+    return StageState(RUNNING)
 
 
 # how many times run_state reads a run directory while invocations start
@@ -1008,31 +1054,36 @@ def run_state(run: RunDir) -> dict[tuple[str, str], StageState]:
     Every stage the manifest plans starts as pending, and the latest event
     for it sets its state. A stage whose latest event is its start is
     running while the invocation that started it runs, and interrupted
-    once that invocation is over (interrupted): the next invocation starts
-    it again. The events are read with a reading of run.json that holds
+    once that invocation is over; an unverifiable owner leaves it unknown.
+    The next invocation can start unfinished work again under the existing
+    execution locks. The events are read with a reading of run.json that holds
     for them (_consistent_read)."""
-    events, manifest = _consistent_read(run)
+    for final_read in (False, True):
+        events, manifest = _consistent_read(run)
+        invocations = Invocations()
+        for event in events:
+            invocations.fold(event)
+        current = invocations.current(manifest)
+        if current.liveness != ABANDONED or final_read:
+            break
+        # The owner may have finished after the snapshot but before its
+        # process was checked. Its final records now take precedence.
     states: dict[tuple[str, str], StageState] = {}
     for document in manifest.get("documents") or []:
         for stage in document.get("stages") or []:
             states[(document["sha1"], stage)] = StageState(PENDING)
-    invocations = Invocations()
     # the invocation of each stage's latest event: a running stage's start
     started_by: dict[tuple[str, str], str | None] = {}
     for event in events:
-        invocations.fold(event)
         if event.get("event") not in STAGE_EVENTS:
             continue
         subject, stage = event.get("subject"), event.get("stage")
         if subject and stage:
             states[(subject, stage)] = _state_from_event(event)
             started_by[(subject, stage)] = invocation_of(event)
-    latest, ended = invocations.latest(manifest)
     for key, invocation in started_by.items():
-        if states[key].status == RUNNING and interrupted(
-            invocation, latest, ended
-        ):
-            states[key] = StageState(INTERRUPTED)
+        if states[key].status == RUNNING:
+            states[key] = invocation_stage_state(invocation, current)
     return states
 
 

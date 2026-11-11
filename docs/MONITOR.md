@@ -45,12 +45,15 @@ The help, the key hint and every refusal of a command give this grammar. A slice
 
 **The header.** The run id, mode and project stage; whether the latest invocation is running or how it ended (`finished`, `stopped`, `interrupted`, `paused`, `refused`, `failed`, with its reason), as `run.json` records it or, failing that, as the invocation's closing event says; the invocations so far; the time the run has been running, summed over its invocations; how long ago the last event came; when the run started; the planned documents by kind; and, once an invocation has closed, its documents per status.
 
+An invocation without a recorded end is running only while its recorded process owner can be verified. A local process that has exited or a reused PID means the invocation was interrupted; its elapsed time stops at the last observed event, without inventing an end timestamp. An owner from another host, boot or PID namespace, inaccessible process information, or a legacy invocation without ownership information leaves liveness and elapsed time `unknown`. Recorded outcomes remain authoritative, including an invocation that ended paused for a model limit. The monitor checks liveness even when no files change, and both attached views update when it changes. These observations never rewrite run history or control requests.
+
 **Stages.** One row per stage, in the order the plan gives them, then any other stage the events name. The columns partition the stage's documents:
 
 | Column | Counts |
 | --- | --- |
 | `pending` | not dispatched yet, including those the control file holds (`held`), whatever they were before, and those an ended invocation left started (interrupted: the next invocation starts them again) |
 | `running` | started by the running invocation, not yet ended |
+| `unknown` | started, but the latest invocation's process owner cannot be verified; not counted as running or in flight |
 | `done` | made in this run: the engine answered at least one of the stage's calls, or the stage makes none (a text file's transcription, the GEDCOM adapter) |
 | `reused` | the view was current and stands (`view current`), or the LLM cache answered every call the stage made (by the answers' reasons: `key match`, `adopted`, or several joined by `+`) |
 | `attention` | done or reused, with attention reasons (a fallback tier, no claims); these count here, not under done or reused |
@@ -68,6 +71,7 @@ The cache's events and the engine's call events name the document, not always th
 | `pending` | the latest invocation has not started it, whatever an earlier one did with it; or the control file held it in an invocation that has ended |
 | `held` | the control file holds it (a pause or an abort of the run or the stage), with the request that holds it |
 | `running` | started by the running invocation, for how long |
+| `unknown` | started, but the latest invocation's process owner cannot be verified |
 | `interrupted` | started by an invocation that has ended, by the rule `rundir.run_state` reads stages by: the next invocation runs it again |
 | `done` | done, and how long it took, with the reasons its output needs attention |
 | `skipped` | done, having found that the instance holds what the run's key makes (reset, register, write, places) |
@@ -173,6 +177,6 @@ Every response, the page's and an error's alike (a 404 for another path or a mis
 
 ## Limits
 
-- An invocation killed without a trace (no end in `run.json`, no closing event, no later invocation) looks as if it were still running, and so do the stages it left started, here and in `rundir.run_state`; the header's last-event age shows how quiet it has gone.
+- Process liveness establishes that the recorded owner still exists, not that it is making progress. The header's last-event age and corpus-stage progress age remain useful for detecting a live but stalled process. Unverifiable owners are reported as unknown; the monitor does not inspect another host or take ownership of its run.
 - The estimate assumes the documents still to go of a kind behave like the ended ones, and a corpus stage's time to go that what it has left goes at the rate of what it did in this attempt so far.
 - Reuse is inferred from the events of the stage's latest attempt; a stage with a hit and a miss is `done`, whatever the share.

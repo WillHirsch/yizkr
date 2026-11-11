@@ -69,6 +69,7 @@ from yizkr.pipeline.monitor import (
     watch,
     write_status_page,
 )
+from yizkr.pipeline.run_liveness import capture_owner
 from yizkr.pipeline.rundir import (
     INTERRUPTED,
     RUN_END,
@@ -167,6 +168,7 @@ def manifest(*, ended: str | None = None, outcome: str | None = None) -> dict:
             },
             {
                 "invocation": SECOND,
+                "owner": capture_owner(),
                 "started_at": at(300),
                 "ended_at": ended,
                 "outcome": outcome,
@@ -992,6 +994,163 @@ class TestClosingEvents:
             (INTERVIEW, "transcription"),
             (POSTCARD, "critique"),
         }
+
+
+class TestInvocationLiveness:
+    @pytest.mark.parametrize("attached", [False, True])
+    def test_final_records_win_when_process_exits_after_refresh(
+        self, tmp_path, monkeypatch, attached
+    ):
+        from yizkr.pipeline import rundir
+
+        run = RunDir(tmp_path / "run")
+        run.start(
+            documents=[
+                {"sha1": CERT, "kind": "text", "stages": ["extraction"]}
+            ],
+            scratch={"corpus_stages": ["write"], "until": "write"},
+        )
+        where = {"subject": CERT, "kind": "text", "stage": "extraction"}
+        run.emit("started", **where)
+        run.emit("started", stage="write")
+        observer = RunMonitor(run.path)
+        observer.refresh()
+        if attached:
+            assert observer.summary().state == "running"
+
+        def finish_before_death_is_observed(owner):
+            run.emit("done", **where)
+            run.emit("done", stage="write")
+            run.end("finished")
+            run.emit(RUN_END, outcome="finished", statuses={"done": 1})
+            return "abandoned", "invocation process no longer exists"
+
+        monkeypatch.setattr(
+            rundir, "owner_liveness", finish_before_death_is_observed
+        )
+        summary = observer.summary()
+        assert summary.state == "finished"
+        assert summary.statuses == {"done": 1}
+        assert summary.stage("extraction").done == 1
+        assert summary.stage("extraction").interrupted == 0
+        assert summary.corpus[0].state == "done"
+        assert summary.in_flight == []
+
+    def test_process_exit_updates_attached_views_without_changing_history(
+        self, tmp_path, monkeypatch
+    ):
+        path = tmp_path / "run"
+        script = """
+import os
+import sys
+from pathlib import Path
+from yizkr.pipeline.rundir import RunDir
+run = RunDir(Path(sys.argv[1]))
+run.start(
+    documents=[{
+        'sha1': sys.argv[2], 'kind': 'text', 'stages': ['extraction'],
+    }],
+    scratch={'corpus_stages': ['write'], 'until': 'write'},
+)
+run.emit('started', subject=sys.argv[2], kind='text', stage='extraction')
+run.emit('started', stage='write')
+print('ready', flush=True)
+sys.stdin.readline()
+os._exit(0)
+"""
+        child = subprocess.Popen(
+            [sys.executable, "-c", script, str(path), CERT],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+            cwd=tmp_path,
+        )
+        try:
+            ready, _, _ = select.select([child.stdout], [], [], HANG_GUARD)
+            assert ready and child.stdout.readline().strip() == "ready"
+            observer = RunMonitor(path)
+            observer.refresh()
+            active = observer.summary()
+            assert active.state == "running"
+            assert active.stage("extraction").running == 1
+            assert active.corpus[0].state == "running"
+            assert len(active.in_flight) == 1
+            version = observer.version
+            history = {
+                p: p.read_bytes() for p in path.iterdir() if p.is_file()
+            }
+
+            def exit_between_views():
+                if child.poll() is None:
+                    child.communicate("exit\n", timeout=HANG_GUARD)
+
+            keys = ScriptedKeys([None, "q"], between=exit_between_views)
+            out = io.StringIO()
+            monkeypatch.setattr(monitor, "PAGE_MIN_INTERVAL", 0)
+            assert (
+                watch(
+                    path,
+                    keys=keys,
+                    interval=0,
+                    out=out,
+                    size=lambda: (180, 60),
+                )
+                == 0
+            )
+            assert out.getvalue().count("yizkr run ") == 2
+            assert "interrupted: invocation process" in out.getvalue()
+            assert (
+                "interrupted: invocation process" in page_of(path).read_text()
+            )
+            assert not observer.refresh()
+            stopped = observer.summary()
+            assert observer.version > version
+            assert stopped.state == "interrupted"
+            assert stopped.stage("extraction").interrupted == 1
+            assert stopped.stage("extraction").running == 0
+            assert stopped.corpus[0].state == "interrupted"
+            assert stopped.in_flight == []
+            assert disagreement(path, stopped) is None
+            later = observer.summary(stopped.now + timedelta(hours=1))
+            assert later.elapsed == stopped.elapsed
+            assert {p: p.read_bytes() for p in history} == history
+        finally:
+            if child.poll() is None:
+                child.kill()
+            child.communicate(timeout=HANG_GUARD)
+
+    @pytest.mark.parametrize("owner", ["missing", "foreign"])
+    def test_unverifiable_owner_is_unknown_and_not_in_flight(self, run, owner):
+        manifest_ = json.loads((run / "run.json").read_text())
+        latest = manifest_["invocations"][-1]
+        if owner == "missing":
+            latest.pop("owner")
+        else:
+            latest["owner"]["host"] = "another-host"
+        (run / "run.json").write_text(json.dumps(manifest_))
+        summary = summarise_run(run, NOW)
+        assert summary.state == UNKNOWN
+        assert summary.elapsed is summary.invocation_elapsed is None
+        assert summary.in_flight == []
+        assert summary.stage("critique").unknown == 1
+        assert summary.stage("critique").running == 0
+        assert summary.stage("transcription").interrupted == 1
+        assert disagreement(run, summary) is None
+        assert "unknown" in render_terminal(summary, width=200)
+        assert "unknown" in render_html(summary)
+
+    def test_recorded_pause_takes_precedence_over_unverifiable_owner(
+        self, tmp_path
+    ):
+        path = record(tmp_path / "run", ended=at(500), outcome="paused")
+        manifest_ = json.loads((path / "run.json").read_text())
+        manifest_["invocations"][-1].pop("owner")
+        (path / "run.json").write_text(json.dumps(manifest_))
+        summary = summarise_run(path, NOW)
+        assert summary.state == "paused"
+        assert summary.elapsed == 230
+        assert summary.in_flight == []
+        assert summary.stage("critique").interrupted == 1
 
 
 class TestCallEvents:
@@ -1899,14 +2058,17 @@ class TestLogsThatCannotBeRead:
     def test_a_run_its_events_alone_tell_of_is_in_an_unknown_state(
         self, run, plan, by
     ):
-        """Its start and close events say whether it is going, and they
-        cannot be read: its state is unknown, not 'not started', and an
-        event log that cannot be read is a run's, not one yet to start."""
+        """Without owner metadata a start cannot establish liveness.
+        Unreadable events also hide its stages and last observed activity;
+        the directory still belongs to a run, not one yet to start."""
         if plan == "no run.json":
             (run / "run.json").unlink()
         else:
             (run / "run.json").write_text(json.dumps({"run_id": RUN_ID}))
-        assert summarise_run(run, NOW).state == "running"
+        before = summarise_run(run, NOW)
+        assert before.state == UNKNOWN
+        assert not before.events_unreadable
+        assert before.stage("critique").unknown == 1
         with unreadable_file(run, "events.jsonl", by):
             summary = summarise_run(run, NOW)
         assert summary.found and summary.state == UNKNOWN
@@ -2198,7 +2360,11 @@ class TestIncrementalReading:
                         for sha1 in shas
                     ],
                     "invocations": [
-                        {"invocation": SECOND, "started_at": at(0)}
+                        {
+                            "invocation": SECOND,
+                            "started_at": at(0),
+                            "owner": capture_owner(),
+                        }
                     ],
                 }
             )
@@ -2706,7 +2872,8 @@ class TestTerminalView:
         assert "kind:gedcom            ABORTED" in view
         # both logs can be read: nothing says either cannot
         assert "jsonl cannot be read" not in view
-        assert "unknown" not in view
+        assert "elapsed unknown" not in view
+        assert "counts unknown" not in view
 
     def test_it_names_no_document_and_quotes_none(self, summary):
         view = render_terminal(summary, width=300)
@@ -2851,7 +3018,8 @@ class TestStatusPage:
         # flight and the alerts are shown, and nothing says they are unknown
         assert "<th>stage</th>" in page
         assert "jsonl cannot be read" not in page
-        assert "nknown" not in page
+        assert "elapsed unknown" not in page
+        assert "Counts unknown" not in page
         # the notes on what the stage counts are made of are shown too
         assert (
             '<li class="">reused transcription: 1 adopted, 1 view current</li>'
