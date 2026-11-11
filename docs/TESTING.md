@@ -29,13 +29,13 @@ Migrate incidental assertions within the subsystem change that encounters them. 
 | Query library and publication | Returned fictional evidence at the real query boundary, and decoded query payloads at the publication boundary. Keep vocabulary, projection and template-key checks. Move remaining query-construction assertions with the affected query; do not remove a guard until its semantic obligation has coverage. |
 | Runtime orchestration and tooling | Controlled completion, cancellation, lock ownership and deadline behavior. Select retry intervals explicitly in scheduling tests rather than freezing the production default. |
 
-These are responsibilities of the affected subsystem work, not a separate repository-wide rewrite prerequisite. The focused performance check and optional CI dependency work remain independent ([#728](https://github.com/WillHirsch/yizkr/issues/728), [#729](https://github.com/WillHirsch/yizkr/issues/729)).
+These are responsibilities of the affected subsystem work, not a separate repository-wide rewrite prerequisite. The focused performance check remains independent ([#728](https://github.com/WillHirsch/yizkr/issues/728)).
 
 The [small semantic acceptance set](#semantic-acceptance) checks deterministic archive behavior; real-model evaluation is a separate bounded activity. A canned engine establishes orchestration, not inference quality. Whole-corpus evidence is required when cross-document interactions or material uncertainty remain beyond bounded checks; record the reason and affected stages. A prompt, model or pre-write code edit alone does not require a corpus run. The procedure and local-only boundary are in [AGENT_PROTOCOL.md §5](AGENT_PROTOCOL.md#5-integration-and-corpus-evidence).
 
 ## Current test layers and limits
 
-**Offline unit tests.** `tests/unit` is the default for `uv run pytest -q` or `make test`; `pyproject.toml` excludes the `live` marker unless requested. CI runs lint and the offline suite on pull-request pushes and main commits. The offline job installs all optional extras and runs `pytest -n auto --dist loadfile`. A separate `fictional-integration` job runs the required real writer/query lane described below; neither job evaluates real models.
+**Offline unit tests.** `tests/unit` is the default for `uv run pytest -q` or `make test`; `pyproject.toml` excludes the `live` marker unless requested. CI runs lint and the offline suite on pull-request pushes and main commits. The offline job installs the locked base and development dependencies with `uv sync --locked --dev` and runs `pytest -n auto --dist loadfile`. Pillow is an explicit development dependency for image fixtures. Optional model SDKs and face engines are not needed: tests substitute those boundaries, including the always-run Anthropic opt-in guard. A separate `fictional-integration` job runs the required real writer/query lane described below; neither job evaluates real models.
 
 The fixtures in `tests/unit/conftest.py` isolate host settings, model login and instance records. Tests provide their own configuration. Most filesystem sync calls are replaced; use `@pytest.mark.real_fsync` when actual sync behavior matters. Anomaly timers are recorded rather than started. A test that calls `monkeypatch.undo()` removes these function-scoped protections too; use `monkeypatch.context()` for a temporary patch.
 
@@ -55,6 +55,29 @@ The substitutions are explicit boundaries of offline coverage:
 **Live integration.** `tests/fictional_integration`, marked `live`, exercises the required disposable writer/query lane and fails when its setup is missing. Tests under `tests/integration`, also marked `live`, exercise an explicitly configured stack or a real model; their availability checks can skip tests. These are separate invocations. Query-string unit assertions do not establish the rows returned by an actual engine.
 
 **Real-model checks.** `tests/integration/test_live_chunked.py` exercises extraction and conversation resumption through the claude CLI and response cache. It needs a logged-in CLI and skips if unavailable. `$YIZKR_LIVE_CACHE` selects its cache; the default is `var/live-cache`. It does not acquire the stack lock. These checks do not establish broad extraction quality across the corpus, and a reused response establishes only the request/configuration it matches.
+
+### Optional-engine compatibility
+
+Run this explicit local check when changing optional dependencies or the supported runtime, or before using those engines. It installs the locked `llm` and `faces` extras in an isolated environment and verifies real imports and CPU-provider availability without API calls or model-weight downloads:
+
+```sh
+uv run --locked --isolated --no-default-groups --extra llm --extra faces python - <<'PY'
+from importlib.metadata import version
+
+import cv2
+import onnxruntime
+from anthropic import AsyncAnthropic
+from insightface.app import FaceAnalysis
+
+providers = onnxruntime.get_available_providers()
+assert "CPUExecutionProvider" in providers, providers
+print(AsyncAnthropic.__name__, FaceAnalysis.__name__, cv2.__version__, providers)
+for package in ("anthropic", "insightface", "onnxruntime", "opencv-python-headless"):
+    print(f"{package}=={version(package)}")
+PY
+```
+
+Missing dependencies or import failures fail this check rather than skip it. It is separate from default CI and adds no unconditional Actions job. The default suite checks application policy and wiring with stand-ins; this command checks installation/import compatibility, not face-model initialization, inference quality or a remote service. Do not construct `FaceAnalysis` merely to test imports: its initialization can download model weights. Any real inference evaluation needs its own declared fictional inputs, model/configuration and evidence scope; existing private-data and disclosure permissions still apply.
 
 ## Semantic acceptance
 
