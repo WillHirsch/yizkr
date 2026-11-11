@@ -1,7 +1,7 @@
 """Portable producer facts and immutable publication."""
 
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -102,6 +102,10 @@ def test_detail_refuses_malformed_present_provenance():
 
 def test_immutable_record_round_trip_and_concurrent_identical_freeze(tmp_path):
     record = producer()
+    # Existing content-addressed records must retain their canonical encoding.
+    assert provenance.record_digest(record) == (
+        "d87ace18f8df169274936cec747a1b5450a48b975e9c1c18bcbf682da5165b41"
+    )
     with ThreadPoolExecutor(max_workers=2) as workers:
         refs = list(
             workers.map(
@@ -261,6 +265,126 @@ def test_capture_records_observed_client_and_resource_facts(
     assert stage.started_at == START and stage.ended_at == END
     assert record.manifest_hash == "b" * 64
     assert client.prompts == []
+
+
+@pytest.mark.parametrize(
+    "record_type, identity",
+    [
+        pytest.param(ProcessRecord, {"kind": "producer"}, id="producer"),
+        pytest.param(
+            StageProvenance,
+            {"stage": "transcription", "process": "deterministic"},
+            id="stage",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "started_at, ended_at, error",
+    [
+        pytest.param(
+            START,
+            START - timedelta(microseconds=1),
+            "end precedes its start",
+            id="reversed",
+        ),
+        pytest.param(
+            START.replace(tzinfo=None),
+            END,
+            "must include a timezone",
+            id="naive-start",
+        ),
+        pytest.param(
+            START,
+            END.replace(tzinfo=None),
+            "must include a timezone",
+            id="naive-end",
+        ),
+    ],
+)
+def test_process_schema_rejects_invalid_timestamps(
+    record_type, identity, started_at, ended_at, error
+):
+    with pytest.raises(ValueError, match=error):
+        record_type(**identity, started_at=started_at, ended_at=ended_at)
+
+
+@pytest.mark.parametrize(
+    "observed_end",
+    [
+        START - timedelta(microseconds=1),
+        START,
+        END,
+        START.astimezone(timezone(timedelta(hours=-1))),
+    ],
+    ids=["backward", "equal", "forward", "equal-in-another-timezone"],
+)
+def test_capture_preserves_observations_without_inventing_an_ordered_end(
+    fixed_capture, monkeypatch, observed_end
+):
+    capture = provenance.Capture(
+        "transcription", "deterministic", processing={}, prompt_templates={}
+    )
+    monkeypatch.setattr(provenance, "now", lambda: observed_end)
+    supplied_limitations = ("fictional source layout unavailable",)
+    dependencies = {"source_sha1": "a" * 40}
+    record = capture.finish(dependencies, limitations=supplied_limitations)
+    stage = record.stages[0]
+    assert record.started_at == stage.started_at == START
+    expected_metadata = {"dependencies": dependencies, "processing": {}}
+    if observed_end < START:
+        assert record.ended_at is stage.ended_at is None
+        expected_metadata["clock_observation"] = {
+            "observed_ended_at": observed_end.isoformat()
+        }
+        expected_limitations = supplied_limitations + (
+            "transcription: observed wall-clock finish "
+            f"{observed_end.isoformat()} "
+            f"precedes start {START.isoformat()}; ended_at is unknown",
+        )
+    else:
+        assert record.ended_at == stage.ended_at == observed_end
+        expected_limitations = supplied_limitations
+    assert record.metadata == expected_metadata
+    assert record.limitations == stage.limitations == expected_limitations
+
+
+def test_clock_adjustment_survives_storage_and_parent_stages(
+    tmp_path, fixed_capture, monkeypatch
+):
+    capture = provenance.Capture(
+        "transcription", "deterministic", processing={}, prompt_templates={}
+    )
+    monkeypatch.setattr(
+        provenance, "now", lambda: START - timedelta(microseconds=1)
+    )
+    original = capture.finish({})
+    reference = provenance.freeze_record(tmp_path, original)
+    assert provenance.read_record(tmp_path, reference) == original
+    assert ProcessRecord.model_validate_json(original.model_dump_json()) == (
+        original
+    )
+    monkeypatch.setattr(
+        provenance, "now", lambda: START - timedelta(microseconds=2)
+    )
+    other_observation = capture.finish({})
+    assert provenance.record_digest(other_observation) != reference.sha256
+
+    monkeypatch.setattr(provenance, "now", lambda: END)
+    child = provenance.Capture(
+        "extraction", "deterministic", processing={}, prompt_templates={}
+    ).finish({}, parents=(original,))
+    application = provenance.application_record(
+        [child],
+        kind="batch-write-context",
+        stage="write-preparation",
+        metadata={"batch": "fictional"},
+    )
+    applied_reference = provenance.freeze_record(tmp_path, application)
+    restored = provenance.read_record(tmp_path, applied_reference)
+    assert child.stages[0] == restored.stages[0] == original.stages[0]
+    assert restored.stages[0].limitations == original.limitations
+    assert child.stages[-1].started_at == child.stages[-1].ended_at == END
+    assert "clock_observation" not in child.metadata
 
 
 @pytest.mark.parametrize("strategy", ["single", "chunked"])

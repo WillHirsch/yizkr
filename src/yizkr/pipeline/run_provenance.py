@@ -380,6 +380,23 @@ class Capture:
                     }
                 ).encode()
             ).hexdigest()
+        metadata = {
+            "dependencies": dict(dependencies),
+            "processing": processing,
+        }
+        if ended_at < self.started_at:
+            metadata["clock_observation"] = {
+                "observed_ended_at": ended_at.isoformat()
+            }
+            # Parent records carry stages forward without their metadata.
+            # Keep the observation in the stage limitation as well.
+            limitations = (
+                *limitations,
+                f"{self.stage}: observed wall-clock finish "
+                f"{ended_at.isoformat()} precedes start "
+                f"{self.started_at.isoformat()}; ended_at is unknown",
+            )
+            ended_at = None
         current = StageProvenance(
             stage=self.stage,
             process=self.process,
@@ -413,8 +430,5 @@ class Capture:
             ended_at=ended_at,
             manifest_hash=manifest,
             limitations=tuple(limitations),
-            metadata={
-                "dependencies": dict(dependencies),
-                "processing": processing,
-            },
+            metadata=metadata,
         )

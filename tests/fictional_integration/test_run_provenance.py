@@ -34,17 +34,34 @@ from .test_write_query import _synchronize
 
 pytestmark = pytest.mark.live
 START = datetime(2026, 9, 29, 9, 0, 0, tzinfo=UTC)
+OBSERVED_END = START - timedelta(microseconds=1)
+CLOCK_LIMITATION = (
+    f"extraction: observed wall-clock finish {OBSERVED_END.isoformat()} "
+    f"precedes start {START.isoformat()}; ended_at is unknown"
+)
 EXTRACTOR = "authored-fictional-extractor"
 PROPOSER = "authored-fictional-place-proposer"
 CODE = CodeProvenance(version="0.1.0", commit="a" * 40, dirty=False)
 
 
-def _producer(stage, model):
+def _producer(stage, model, *, clock_adjusted=False):
+    ended_at = None if clock_adjusted else START + timedelta(seconds=5)
+    limitations = (CLOCK_LIMITATION,) if clock_adjusted else ()
     return ProcessRecord(
         kind="producer",
         code=CODE,
         started_at=START,
-        ended_at=START + timedelta(seconds=5),
+        ended_at=ended_at,
+        limitations=limitations,
+        metadata=(
+            {
+                "clock_observation": {
+                    "observed_ended_at": OBSERVED_END.isoformat()
+                }
+            }
+            if clock_adjusted
+            else {}
+        ),
         stages=(
             StageProvenance(
                 stage=stage,
@@ -59,7 +76,8 @@ def _producer(stage, model):
                 code=CODE,
                 cli_version="fictional-cli-1.0",
                 started_at=START,
-                ended_at=START + timedelta(seconds=5),
+                ended_at=ended_at,
+                limitations=limitations,
             ),
         ),
     )
@@ -87,7 +105,9 @@ def _record_reference(statement, pid):
     }
 
 
-def _assert_metadata(client, qid, stage_name, model, directory):
+def _assert_metadata(
+    client, qid, stage_name, model, directory, expected_producer
+):
     properties, _ = client.vocabulary()
     entity = _entity(client, qid)
     statements = [
@@ -103,12 +123,17 @@ def _assert_metadata(client, qid, stage_name, model, directory):
     path = directory / f"{digest}.json"
     assert hashlib.sha256(path.read_bytes()).hexdigest() == digest
     record = read_record(directory, RecordRef(sha256=digest))
+    assert len(record.producer_refs) == 1
+    # Application metadata only summarizes stages. The separate immutable
+    # producer keeps the precise clock observation, including microseconds.
+    assert read_record(directory, record.producer_refs[0]) == expected_producer
     producer = next(
         stage for stage in record.stages if stage.stage == stage_name
     )
     assert producer.model_identifier == model
     assert producer.code == CODE
-    assert producer.ended_at == START + timedelta(seconds=5)
+    assert producer == expected_producer.stages[0]
+    assert producer.started_at == START
     # Write preparation is a snapshot, never a completed-write timing claim.
     assert record.started_at is None and record.ended_at is None
     assert not entity["claims"].get(properties["process_ended_at"])
@@ -130,9 +155,25 @@ def _assert_metadata(client, qid, stage_name, model, directory):
         "software_dirty": "false",
         "model_manifest_hash": "d" * 64,
         "process_started_at": "2026-09-29T09:00:00Z",
-        "process_ended_at": "2026-09-29T09:00:05Z",
     }.items():
         assert _values(qualifiers[properties[key]]) == [wanted]
+    if producer.ended_at is None:
+        assert properties["process_ended_at"] not in qualifiers
+    else:
+        assert _values(qualifiers[properties["process_ended_at"]]) == [
+            "2026-09-29T09:00:05Z"
+        ]
+    assert _values(
+        qualifiers.get(properties["provenance_limitation"], [])
+    ) == list(expected_producer.limitations)
+    assert _values(
+        [
+            item["mainsnak"]
+            for item in entity["claims"].get(
+                properties["provenance_limitation"], []
+            )
+        ]
+    ) == list(expected_producer.limitations)
     assert _values(
         [
             item["mainsnak"]
@@ -157,21 +198,32 @@ PREFIX ps: <{concept}/prop/statement/>
 PREFIX pq: <{concept}/prop/qualifier/>
 PREFIX pr: <{concept}/prop/reference/>
 PREFIX prov: <http://www.w3.org/ns/prov#>
-SELECT ?run ?stage ?model ?effort ?ended ?record WHERE {{
+SELECT ?run ?stage ?model ?effort ?ended ?limitation ?record WHERE {{
   VALUES ?run {{ {" ".join(f"<{concept}/entity/{qid}>" for qid in runs)} }}
   ?run p:{properties["run_stage"]} ?statement .
   ?statement ps:{properties["run_stage"]} ?stage ;
     pq:{properties["model_identifier"]} ?model ;
     pq:{properties["model_effort"]} ?effort ;
-    pq:{properties["process_ended_at"]} ?ended ;
     prov:wasDerivedFrom ?reference .
+  OPTIONAL {{ ?statement pq:{properties["process_ended_at"]} ?ended . }}
+  OPTIONAL {{
+    ?statement pq:{properties["provenance_limitation"]} ?limitation .
+  }}
   ?reference pr:{properties["run_record_sha256"]} ?record .
 }}
 """
     return {
         tuple(
-            row[key]["value"]
-            for key in ("run", "stage", "model", "effort", "ended", "record")
+            row.get(key, {}).get("value")
+            for key in (
+                "run",
+                "stage",
+                "model",
+                "effort",
+                "ended",
+                "limitation",
+                "record",
+            )
         )
         for row in sparql.select(client.config.sparql_url, query)
     }
@@ -212,12 +264,13 @@ def test_structured_run_records_roundtrip_without_rewriting(
     for claim in batch.claims:
         claim.source = claim.source.model_copy(update={"artifact": artifact})
         assert claim.source.transcription_excerpt.text in source.read_text()
+    extractor = _producer("extraction", EXTRACTOR, clock_adjusted=True)
     batch.extraction_run = batch.extraction_run.model_copy(
         update={
             "model_identifier": EXTRACTOR,
             "software_commit": CODE.commit,
             "started_at": START,
-            "provenance": _producer("extraction", EXTRACTOR),
+            "provenance": extractor,
         }
     )
     marks = {
@@ -242,12 +295,12 @@ def test_structured_run_records_roundtrip_without_rewriting(
     )
     expected = {}
     before = {}
-    for qid, stage, model in (
-        (result.run_qid, "extraction", EXTRACTOR),
-        (place_run, "places", PROPOSER),
+    for qid, stage, model, producer in (
+        (result.run_qid, "extraction", EXTRACTOR, extractor),
+        (place_run, "places", PROPOSER, proposer),
     ):
         before[qid], expected[qid] = _assert_metadata(
-            client, qid, stage, model, directory
+            client, qid, stage, model, directory, producer
         )
     _synchronize(client)
     queried = _query(client, expected)
@@ -258,12 +311,27 @@ def test_structured_run_records_roundtrip_without_rewriting(
             stage,
             model,
             effort,
-            "2026-09-29T09:00:05Z",
+            ended,
+            limitation,
             expected[qid],
         )
-        for qid, stage, model, effort in (
-            (result.run_qid, "extraction", EXTRACTOR, "low"),
-            (place_run, "places", PROPOSER, "high"),
+        for qid, stage, model, effort, ended, limitation in (
+            (
+                result.run_qid,
+                "extraction",
+                EXTRACTOR,
+                "low",
+                None,
+                CLOCK_LIMITATION,
+            ),
+            (
+                place_run,
+                "places",
+                PROPOSER,
+                "high",
+                "2026-09-29T09:00:05Z",
+                None,
+            ),
         )
     }
     ids = set(client.list_entity_ids())
