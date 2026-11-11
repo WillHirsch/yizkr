@@ -149,8 +149,20 @@ def sha1(name: str) -> str:
 # -- the recorded engine, the refusing wiki and a copy of the corpus ----------
 
 
+@dataclass
+class ScenarioSelection:
+    """The next fresh engine's authored outcome, separate from cache keys."""
+
+    value: answers.Scenario = answers.Scenario.MISREAD_YEAR
+
+
 @pytest.fixture
-def calls(monkeypatch, tmp_path) -> Calls:
+def scenario() -> ScenarioSelection:
+    return ScenarioSelection()
+
+
+@pytest.fixture
+def calls(monkeypatch, tmp_path, scenario) -> Calls:
     """The recorded engine behind the client factory, a full model id, and
     a claude CLI that is installed and logged in as far as the preflight
     can tell, as test_scratch.py's `fakes` has them: a credentials file in
@@ -158,7 +170,9 @@ def calls(monkeypatch, tmp_path) -> Calls:
     calls = Calls()
 
     def make_client(engine, *, effort=None, model=None, **kwargs):
-        return RecordedEngine(calls, effort=effort, model=model)
+        return RecordedEngine(
+            calls, scenario=scenario.value, effort=effort, model=model
+        )
 
     monkeypatch.setattr(llm, "make_client", make_client)
     monkeypatch.setattr(llm.ClaudeCodeClient, "available", lambda *a: True)
@@ -457,8 +471,8 @@ class TestTheCorpus:
         """Every claim the recorded engine answers is an assertion the
         universe records for the document's source, in the form the
         extraction prompts ask for (#407), but for its recorded mistakes,
-        which a sharper prompt mends; none of the source's assertions
-        about an entity is left out; and each is a valid claim. The
+        selected by the explicit response scenario; none of the source's
+        assertions about an entity is left out; and each is a valid claim. The
         universe states a couple by a spouse assertion, a property now
         retired: the recorded model answers each as a marriage whose
         couple take part in it as spouses, started by a wedding where the
@@ -478,8 +492,10 @@ class TestTheCorpus:
             entities = answers.manifest(recorded)["entities"]
             kinds = {e["id"]: e["kind"] for e in entities}
             answered = {}
-            for sharper in (False, True):
-                claimed = answers.claims(recorded, sha1(name), sharper=sharper)
+            for scenario in answers.Scenario:
+                claimed = answers.claims(
+                    recorded, sha1(name), scenario=scenario
+                )
                 batch, rejects = salvage_valid_claims(
                     claimed, run, entities=entities, placed=placed(name)
                 )
@@ -497,7 +513,7 @@ class TestTheCorpus:
                         assert roles == ["spouse"], claim
                     else:
                         assert roles == ["principal"], claim
-                answered[sharper] = said_in(name, batch)
+                answered[scenario] = said_in(name, batch)
             stated = {
                 (a.subject, a.property, a.value)
                 for _image, a in answers.said_of_placed(recorded)
@@ -523,13 +539,14 @@ class TestTheCorpus:
             mistakes = answers.mistakes_in(recorded)
             says = {(m.subject, m.property, m.says) for m in mistakes}
             read_as = {(m.subject, m.property, m.read_as) for m in mistakes}
-            assert answered[True] == stated, name
-            assert answered[False] == stated - says | read_as, name
-        # the one mistake: a birth a century early, a century the source
-        # does not give, and the rule that mends it is new to the prompt
+            assert answered[answers.Scenario.CORRECTED_YEAR] == stated, name
+            assert (
+                answered[answers.Scenario.MISREAD_YEAR]
+                == stated - says | read_as
+            ), name
+        # The authored mistake is a birth a century earlier than its source.
         (mistake,) = answers.MISTAKES
         assert mistake.read_as.year == mistake.says.year - 100
-        assert mistake.rule not in chunking.CHUNK_PROMPT
 
     def test_the_traps_are_those_of_the_issue(self):
         titles = [trap.title for trap in fc.TRAPS]
@@ -1041,6 +1058,89 @@ def view_hashes(runs: Scratch, run: Path) -> dict[str, tuple]:
     return found
 
 
+def recorded_chunk_prompt(instruction: str = "") -> str:
+    """A request naming the narrative and all its assigned entities."""
+    recorded = answers.RECORDED[fc.NARRATIVE]
+    assigned = "\n".join(f"- {e.id}: {e.label}" for e in recorded.entities)
+    return (
+        f"{sha1(fc.NARRATIVE)}\nAssigned entities:\n{assigned}\n{instruction}"
+    )
+
+
+def recorded_birth_year(response: str) -> int:
+    recorded = answers.RECORDED[fc.NARRATIVE]
+    subject = recorded.ids()["nicholas-lobig"]
+    rows = [json.loads(line) for line in response.splitlines()]
+    (birth,) = [
+        row["value"]
+        for row in rows
+        if row.get("subject", {}).get("local_id") == subject
+        and row.get("property") == "date_of_birth"
+    ]
+    return birth["year"]
+
+
+class TestRecordedScenarios:
+    @pytest.mark.parametrize(
+        "scenario,year",
+        [
+            (answers.Scenario.MISREAD_YEAR, 1850),
+            (answers.Scenario.CORRECTED_YEAR, 1950),
+        ],
+    )
+    @pytest.mark.parametrize(
+        "instruction",
+        [
+            "",
+            "- A two-digit year (as in '50) names no century: take the "
+            "century from the document itself, never from the oldest date "
+            "it gives.",
+        ],
+        ids=["no-extra-instruction", "corrective-instruction"],
+    )
+    def test_instructions_do_not_select_the_answer(
+        self, scenario, year, instruction
+    ):
+        engine = RecordedEngine(Calls(), scenario=scenario, model=MODEL)
+        assert (
+            recorded_birth_year(
+                engine.complete(recorded_chunk_prompt(instruction))
+            )
+            == year
+        )
+
+    def test_a_new_scenario_does_not_invalidate_a_cached_answer(
+        self, tmp_path
+    ):
+        calls = Calls()
+        cache = llm.open_cache(tmp_path / "cache")
+        prompt = recorded_chunk_prompt()
+        try:
+            first = llm.cached_client(
+                RecordedEngine(calls, model=MODEL), cache, role="extract"
+            ).complete(prompt)
+            corrected = llm.cached_client(
+                RecordedEngine(
+                    calls,
+                    scenario=answers.Scenario.CORRECTED_YEAR,
+                    model=MODEL,
+                ),
+                cache,
+                role="extract",
+            )
+            assert recorded_birth_year(first) == 1850
+            assert corrected.complete(prompt) == first
+            assert calls.asked == [("chunk", fc.NARRATIVE)]
+            # Only an actual request change reaches the newly scripted answer.
+            fresh = corrected.complete(
+                prompt + "\nUse the requested output schema."
+            )
+            assert recorded_birth_year(fresh) == 1950
+            assert calls.asked == [("chunk", fc.NARRATIVE)] * 2
+        finally:
+            cache.close()
+
+
 class TestReuse:
     def test_a_second_run_asks_the_engine_nothing(self, runs, tmp_path):
         """A new run starts from fresh state directories: every view is
@@ -1109,66 +1209,67 @@ class TestReuse:
         }
         assert runs.refused.asked == []
 
-    def test_a_sharper_chunk_prompt_recomputes_extraction_and_what_follows(
-        self, runs, monkeypatch
+    @pytest.mark.parametrize(
+        "corrected", [False, True], ids=["same-answer", "changed-answer"]
+    )
+    def test_a_changed_chunk_prompt_recomputes_dependent_work_when_needed(
+        self, runs, monkeypatch, scenario, corrected
     ):
-        """A rule added to the chunk prompt changes every chunk call's key:
-        the engine is asked again for every extraction, and, where the
-        batch it makes differs (the family history, whose mistake the rule
-        mends), for the critique that follows it, and for the clustering
-        stage's adjudication, whose prompts give that batch's claims as
-        evidence (#106). The transcriptions, the entity manifests and every
-        other critique come from the cache."""
+        """A benign prompt edit changes extraction keys. Only a changed
+        answer changes downstream critique and adjudication requests; the
+        response scenario scripts that answer independently of the edit."""
         first = runs.run("first")
         before = len(runs.calls.asked)
+        if corrected:
+            scenario.value = answers.Scenario.CORRECTED_YEAR
         monkeypatch.setattr(
             chunking,
             "CHUNK_PROMPT",
-            chunking.CHUNK_PROMPT + answers.SHARPER_RULE + "\n",
+            chunking.CHUNK_PROMPT + "\nUse the requested output schema.\n",
         )
-        sharper = runs.run("sharper")
+        changed = runs.run("changed")
         asked = runs.calls.asked[before:]
-        assert {what for what, _name in asked} == {
-            "chunk",
-            "critique",
-            "adjudication",
-        }
+        downstream = {"critique", "adjudication"} if corrected else set()
+        assert {what for what, _name in asked} == {"chunk"} | downstream
         assert {name for what, name in asked if what == "chunk"} == set(
             EXTRACTED
         )
-        assert [name for what, name in asked if what == "critique"] == [
-            fc.NARRATIVE
-        ]
-        assert calls_by_stage(sharper) == {
+        assert [name for what, name in asked if what == "critique"] == (
+            [fc.NARRATIVE] if corrected else []
+        )
+        assert calls_by_stage(changed) == {
             (sha1(name), "extraction") for name in EXTRACTED
-        } | {(sha1(fc.NARRATIVE), "critique"), (None, "clustering")}
+        } | (
+            {(sha1(fc.NARRATIVE), "critique"), (None, "clustering")}
+            if corrected
+            else set()
+        )
         # each conversation the cache answered is resumed, without a call,
         # for the new chunk prompts to fork
-        assert {e["subject"] for e in events(sharper, "cache-resume")} == {
+        assert {e["subject"] for e in events(changed, "cache-resume")} == {
             sha1(name) for name in EXTRACTED
         }
         missed = {
             (e["role"], e.get("call"), e["reason"])
-            for e in events(sharper, "cache-miss")
+            for e in events(changed, "cache-miss")
         }
-        assert missed == {
-            ("extract", "fork", "absent"),
-            ("critique", "complete", "absent"),
-            ("adjudication", "complete", "absent"),
+        assert missed == {("extract", "fork", "absent")} | {
+            (role, "complete", "absent") for role in downstream
         }
-        assert statuses(sharper) == {DONE}
-        # the family history's batch is mended, and its critique has
-        # nothing to flag; every other view is the first run's
-        mended = runs.batch(sharper, fc.NARRATIVE)
+        assert statuses(changed) == {DONE}
+        batch = runs.batch(changed, fc.NARRATIVE)
         assert values(
-            said_in(fc.NARRATIVE, mended), "nicholas-lobig", "date_of_birth"
-        ) == {u.Date(1950)}
-        views = view_hashes(runs, sharper)
+            said_in(fc.NARRATIVE, batch), "nicholas-lobig", "date_of_birth"
+        ) == {u.Date(1950 if corrected else 1850)}
+        views = view_hashes(runs, changed)
         was = view_hashes(runs, first)
         transcription, batch, critique = views[fc.NARRATIVE]
         assert transcription == was[fc.NARRATIVE][0]
-        assert batch != was[fc.NARRATIVE][1]
-        assert critique == []
+        if corrected:
+            assert batch != was[fc.NARRATIVE][1]
+            assert critique == []
+        else:
+            assert views == was
         for name in fc.DOCUMENTS:
             if name != fc.NARRATIVE:
                 assert views[name] == was[name], name

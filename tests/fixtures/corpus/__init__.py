@@ -190,7 +190,7 @@ TRAPS = (
         "reads it as 1850, a century the document does not give; the export "
         "and the talk give 1950.",
         "Both births stand, each cited to its document, and the critic flags "
-        "the early one. Under a sharper extraction prompt the model reads "
+        "the early one. The corrected-year response scenario instead reads "
         "1950. The early birth never releases him from privacy: every birth "
         "is read, the latest counts (#334), and an unconfirmed one counts "
         "for nothing (#120). Adjudication says the family history's "

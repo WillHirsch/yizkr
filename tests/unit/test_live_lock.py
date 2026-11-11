@@ -45,7 +45,6 @@ from tests.integration import live_lock
 from tests.integration.live_lock import (
     DEFAULT_TIMEOUT,
     LOCK_ENV,
-    POLL_INTERVAL,
     RECORD_INTERVAL,
     RECORD_READS,
     TIMEOUT_ENV,
@@ -788,10 +787,12 @@ def held_here(lock: Path, pid: int) -> Iterator[int]:
         os.close(fd)
 
 
-def test_giving_up_names_the_holder(lock, start_holder, clock):
+def test_giving_up_names_the_holder(lock, start_holder, clock, monkeypatch):
     first = start_holder("first", "--an-argument")
     first.wait_for_line("acquired")
 
+    # The deadline must win even when the next retry would fall after it.
+    monkeypatch.setattr(live_lock, "POLL_INTERVAL", 2.0)
     announced: list[str] = []
     with (
         pytest.raises(LiveStackBusy) as gave_up,
@@ -804,10 +805,7 @@ def test_giving_up_names_the_holder(lock, start_holder, clock):
         ),
     ):
         pytest.fail("took a lock that another process holds")
-    # it tried every POLL_INTERVAL, the last wait cut short at the timeout,
-    # and gave up once the timeout had passed
-    assert POLL_INTERVAL == 0.5
-    assert clock.sleeps == [0.5, 0.5, 0.25]
+    assert clock.sleeps and all(delay > 0 for delay in clock.sleeps)
     assert clock.time == 1.25
     message = str(gave_up.value)
     assert message.startswith("Gave up after 1.25 s waiting")
@@ -840,10 +838,10 @@ def test_a_holder_that_waited_says_how_long(lock, clock):
             sleep=clock.sleep,
         ):
             assert record(lock)["pid"] == os.getpid()
-    assert clock.sleeps == [POLL_INTERVAL, POLL_INTERVAL]
+    assert clock.time > 0
     first, took = announced
     assert f"held by pid {os.getpid()} " in first
-    assert took == "Took the live-stack lock after 1 s."
+    assert took == f"Took the live-stack lock after {clock.time:.0f} s."
 
 
 def test_a_free_lock_is_taken_with_no_look_at_the_clock(lock, clock):

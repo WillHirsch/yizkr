@@ -11,9 +11,9 @@ document names them, each with the universe entity it is (`truth`) and
 its mention record (ADR-0035 §2); a marriage and its wedding have keys of
 their own. One answer is deliberately wrong,
 as models are: the family history's "I was born in '50" is read as 1850
-(MISTAKES). Under an extraction prompt that carries SHARPER_RULE the
-recorded model reads it right, and the critic flags the mistake wherever a
-batch holds it.
+(MISTAKES). The selected scenario supplies that misreading or the correct
+year, independently of prompt wording. The critic flags the mistake
+wherever a batch holds it.
 
 An image a document places and the pipeline reads on its own (PLACED) has
 a recorded reading of its own, its source's text, and the document's
@@ -33,6 +33,7 @@ import hashlib
 import re
 import zipfile
 from dataclasses import dataclass
+from enum import Enum
 from functools import cache
 
 from tests.fixtures import example_universe as u
@@ -49,14 +50,14 @@ from yizkr.model.schema import load_manifest
 
 SOURCES = {source.key: source for source in u.SOURCES}
 
-# The extraction-prompt rule a sharper prompt adds: under it the recorded
-# model reads a two-digit year as the document means it. The rule is a line
-# of the chunk prompt, with no brace in it.
-SHARPER_RULE = (
-    "- A two-digit year (as in '50) names no century: take the century "
-    "from the document itself, never from the oldest date it gives."
-)
 CONFIDENCE = 0.9
+
+
+class Scenario(Enum):
+    """Authored extraction outcomes; these do not evaluate prompt quality."""
+
+    MISREAD_YEAR = "misread-year"
+    CORRECTED_YEAR = "corrected-year"
 
 
 @dataclass(frozen=True)
@@ -108,16 +109,14 @@ class Recorded:
 @dataclass(frozen=True)
 class Mistake:
     """A claim the recorded model gets wrong: of `subject`'s `property`,
-    the source says `says` and the model answers `read_as`, except under a
-    chunk prompt that carries `rule`. The critic's `flag` names it wherever
-    a batch holds it."""
+    the source says `says` and the misread-year scenario answers `read_as`.
+    The critic's `flag` names it wherever a batch holds it."""
 
     document: str
     subject: str
     property: str
     says: u.Date
     read_as: u.Date
-    rule: str
     flag: str
 
 
@@ -128,7 +127,6 @@ MISTAKES = (
         "date_of_birth",
         u.Date(1950),
         u.Date(1850),
-        SHARPER_RULE,
         "born in 1850, 92 years before his father married in 1942",
     ),
 )
@@ -980,12 +978,15 @@ def placed_claims(recorded: Recorded, sha1: str) -> list[dict]:
 
 
 def claims(
-    recorded: Recorded, sha1: str, *, sharper: bool = False
+    recorded: Recorded,
+    sha1: str,
+    *,
+    scenario: Scenario = Scenario.MISREAD_YEAR,
 ) -> list[dict]:
     """Every claim the recorded model answers for the document, whose
     SHA-1 is `sha1`: those of each assertion (answered_as), with its
-    mistakes unless `sharper` (the chunk prompt carries each mistake's
-    rule), then those about the images it places (placed_claims)."""
+    mistakes in the misread-year scenario, then those about the images it
+    places (placed_claims)."""
     ids = recorded.ids()
     by_id = {entity.id: entity for entity in recorded.entities}
     answered = []
@@ -993,7 +994,7 @@ def claims(
         for key, prop, value, qualifiers in answered_as(recorded, assertion):
             for mistake in MISTAKES:
                 if (
-                    not sharper
+                    scenario is Scenario.MISREAD_YEAR
                     and (mistake.document, mistake.subject, mistake.property)
                     == (recorded.document, key, prop)
                     and value == mistake.says
