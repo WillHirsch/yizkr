@@ -20,11 +20,14 @@ from tests.unit.test_pdf_pages import (
     run,
     typed,
 )
+from tests.unit.test_run_provenance import fixed_capture  # noqa: F401
 from yizkr.pipeline import transcribe
 from yizkr.pipeline.container_inventory import CONTAINER_INVENTORY
 from yizkr.pipeline.presentation import derived_transcription
 from yizkr.pipeline.scratchwrite import _registration
 from yizkr.pipeline.textlayer import png
+
+pytestmark = pytest.mark.usefixtures("fixed_capture")
 
 
 @pytest.fixture(autouse=True)
