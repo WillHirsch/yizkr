@@ -460,8 +460,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from yizkr.claims import (
-    PLACED_FORM,
-    SOURCE_FORM,
+    MISSING_SUBJECT_EXCERPT,
     ArtifactRef,
     Claim,
     ClaimBatch,
@@ -481,10 +480,9 @@ from yizkr.claims import (
     UnknownValue,
     VocabRef,
     confirmed_kind,
-    document_subject_form,
-    has_excerpt,
     load_vocabulary,
     source_support_locators,
+    subject_policy,
     vital_problems,
     widowhood_review_notes,
 )
@@ -1476,78 +1474,31 @@ def subject_refusal(
     subject_kind: str | None = None,
     confirmed: str | None = None,
 ) -> tuple[str, str] | None:
-    """Why the writer refuses the claim's subject, with the decision that
-    gives the rule, or None (the module docstring, step 0). A
-    placed-subject property's subject is an artifact among the derived
-    media `placed` names for the claim's source, by their SHA-1s, whose
-    media SHA-1 an item carries (`resolved`, the SHA-1s resolved;
-    ADR-0039 §2.1). A document-subject property's is one of the forms
-    claims.document_subject_form names (`subject_kind` is the kind of a
-    local subject, `confirmed` that of a QID subject's local subject
-    before a curator's confirmation, claims.confirmed_kind):
-    the claim's own source (ADR-0035 §3.4), an artifact `placed` names
-    for it that an item carries, a batch entity of an artifact kind, an
-    unclassified entity of the batch or the existing item a curator
-    confirmed one of those two as; and a claim
-    whose subject is not its own source carries the passage that conveys
-    it as its excerpt, one that is not blank as the instance keeps text
-    (_locator_text; ADR-0039 §10.1, §10.4). No other property takes an
-    artifact subject (ADR-0039 §2)."""
-    acceptance = load_acceptance()
-    prop, subject = claim.property, claim.subject
-    source = claim.source.artifact.sha1
-    if prop in acceptance.placed_subjects:
-        if not isinstance(subject, ArtifactRef):
-            reason = "its property takes only an artifact its source places"
-        elif subject.sha1 not in placed.get(source, ()):
-            reason = (
-                "its subject is no artifact given to this write as "
-                "placed by its source"
-            )
-        elif subject.sha1 not in resolved:
-            reason = "no item carries its subject's media SHA-1"
-        else:
-            return None
-        return reason, "ADR-0039 §2.1"
-    if prop in acceptance.document_subjects:
-        form = document_subject_form(
-            claim, acceptance, placed, subject_kind, confirmed
-        )
-        if form is None:
-            if isinstance(subject, ArtifactRef):
-                return (
-                    "its subject is neither its own source nor an artifact "
-                    "given to this write as placed by its source",
-                    "ADR-0039 §10.1",
-                )
-            return (
-                "its property takes only its source document, an artifact "
-                "its source places, a batch entity of an artifact kind, "
-                "an unclassified entity of its batch or the existing item "
-                "a curator confirmed one of those two as",
-                "ADR-0039 §10.1",
-            )
-        if form == PLACED_FORM and subject.sha1 not in resolved:
-            return (
-                "no item carries its subject's media SHA-1",
-                "ADR-0039 §10.1",
-            )
-        excerpt = claim.source.transcription_excerpt
-        if form != SOURCE_FORM and not (
-            has_excerpt(claim) and _locator_text(excerpt.text)
-        ):
-            return (
-                "its subject is not its own source, and it carries no "
-                "excerpt of the passage that conveys it",
-                "ADR-0039 §10.4",
-            )
-        return None
-    if isinstance(subject, ArtifactRef):
+    """Apply shared semantic policy, then explicit writer boundary checks.
+
+    Only an eligible placed subject needs a registered artifact here. Check
+    that before its excerpt, retaining the useful first refusal when both are
+    missing. Required excerpts must remain nonblank after the writer's storage
+    normalization; captions need no excerpt and source self-claims need none.
+    """
+    decision = subject_policy(
+        claim, load_acceptance(), placed, subject_kind, confirmed
+    )
+    if decision.registration_rule and claim.subject.sha1 not in resolved:
         return (
-            "its property does not take an artifact as its subject",
-            "ADR-0035 §3.4",
+            "no item carries its subject's media SHA-1",
+            decision.registration_rule,
         )
-    return None
+    problem = decision.problem
+    # Raw presence was checked by the shared policy. Only the writer knows
+    # whether that text survives the instance's normalization.
+    if (
+        problem is None
+        and decision.requires_excerpt
+        and not _locator_text(claim.source.transcription_excerpt.text)
+    ):
+        problem = MISSING_SUBJECT_EXCERPT
+    return (problem.message, problem.rule) if problem is not None else None
 
 
 def pre_plan_refusals(

@@ -329,7 +329,7 @@ class TestWrite:
         assert result["written"] == 0
         # counted under the subject rule's reason
         assert result["refusal_reasons"] == ["subject_rule", "subject_rule"]
-        assert "is no artifact given to this write as placed" in out
+        assert "is no artifact given as placed by its source" in out
         assert unplaced_hint(2) in err
         for qid in qids.values():
             assert not wiki.wbi.item.get(qid).claims.get("P91")

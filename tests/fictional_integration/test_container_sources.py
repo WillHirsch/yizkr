@@ -16,15 +16,25 @@ from datetime import UTC, datetime
 from xml.sax.saxutils import escape
 
 import pytest
+from wikibaseintegrator.datatypes import Item
 
 from tests.fixtures import pdfs
 from tests.fixtures.identity import write_mapped
-from yizkr.claims import ArtifactRef, ClaimBatch
+from yizkr.claims import (
+    ArtifactRef,
+    ClaimBatch,
+    ItemValue,
+    MonolingualText,
+    QidRef,
+    validate_against_manifest,
+)
+from yizkr.core.write_recovery import CreationRegistry
 from yizkr.pipeline.container_inventory import keep_inventory
 from yizkr.pipeline.container_sources import prepare_sources, project_sources
 from yizkr.pipeline.pdf_inventory import inventory_pdf
 from yizkr.pipeline.presentation import unpack_pptx
 from yizkr.pipeline.registrar import Registrar
+from yizkr.pipeline.review import claim_id
 from yizkr.pipeline.textlayer import read_pages
 from yizkr.pipeline.writer import BatchWriter
 
@@ -192,6 +202,115 @@ def register(
     return container, projection, owners
 
 
+def subject_policy_boundary(client, batch, placed, image_qid, container_qid):
+    """Validate and persist the caption's attribution of the placed image."""
+    properties, items = client.vocabulary()
+    person = client.wbi.item.new()
+    person.labels.set("en", "Wastl")
+    person.claims.add(
+        Item(prop_nr=properties["instance_of"], value=items["human"])
+    )
+    wastl = (
+        CreationRegistry(client)
+        .create(
+            {"kind": "fictional-container-author", "entity": "wastl"},
+            person,
+            summary="fictional container attribution fixture",
+        )
+        .qid
+    )
+    caption = batch.claims[0]
+    author = caption.model_copy(
+        update={
+            "property": "author",
+            "value": ItemValue(value=QidRef(qid=wastl)),
+        },
+        deep=True,
+    )
+    missing = author.model_copy(deep=True)
+    missing.source.transcription_excerpt = None
+    normalized_blank = author.model_copy(deep=True)
+    normalized_blank.source.transcription_excerpt = MonolingualText(
+        text="\u180e", language="en"
+    )
+    nonplaced = caption.model_copy(
+        update={"subject": caption.source.artifact}, deep=True
+    )
+
+    def one(claim):
+        return batch.model_copy(update={"claims": [claim]})
+
+    assert any(
+        problem.endswith("[excerpt_required]")
+        for problem in validate_against_manifest(one(missing), placed=placed)
+    )
+    # Python regards U+180E as nonblank; the writer's storage normalization
+    # must still refuse an attribution whose evidence would disappear.
+    assert (
+        validate_against_manifest(one(normalized_blank), placed=placed) == []
+    )
+    assert any(
+        problem.endswith("[placed_subject]")
+        for problem in validate_against_manifest(one(nonplaced), placed=placed)
+    )
+    rejected = batch.model_copy(
+        update={"claims": [missing, normalized_blank, nonplaced]}
+    )
+    qids = [image_qid, container_qid, wastl]
+    before = client.fetch_claims(qids)
+    result = write_mapped(BatchWriter(client), rejected, placed=placed)
+    assert result.refused == [claim_id(claim) for claim in rejected.claims]
+    assert result.refusal_reasons == ["subject_rule"] * 3
+    assert result.written == result.referenced == 0
+    assert client.fetch_claims(qids) == before
+
+    accepted = one(author)
+    assert validate_against_manifest(accepted, placed=placed) == []
+    result = write_mapped(BatchWriter(client), accepted, placed=placed)
+    assert not result.refused
+    assert result.written == 1
+    (written,) = statements(client, image_qid, "author")
+    assert written["mainsnak"]["datavalue"]["value"]["id"] == wastl
+    (source,) = [
+        reference["snaks"]
+        for reference in written["references"]
+        if properties["stated_in"] in reference["snaks"]
+    ]
+    assert len(written["references"]) == 2
+    (process,) = [
+        reference["snaks"]
+        for reference in written["references"]
+        if properties["inferred_from_extraction_run"] in reference["snaks"]
+    ]
+    assert (
+        source[properties["stated_in"]][0]["datavalue"]["value"]["id"]
+        == container_qid
+    )
+    assert (
+        process[properties["inferred_from_extraction_run"]][0]["datavalue"][
+            "value"
+        ]["id"]
+        == result.run_qid
+    )
+    assert source[properties["transcription_excerpt"]][0]["datavalue"][
+        "value"
+    ] == {"text": CAPTION, "language": "en"}
+    assert locators(client, [written]) == [
+        {
+            "container": author.source.artifact.sha1,
+            "part": author.source.support.part_id,
+            "kind": "slide_body",
+            "position": 1,
+        }
+    ]
+    assert statements(client, container_qid, "author") == []
+    before = client.fetch_claims(qids)
+    again = write_mapped(BatchWriter(client), accepted, placed=placed)
+    assert not again.refused
+    assert again.written == again.referenced == 0
+    assert client.fetch_claims(qids) == before
+
+
 def test_common_sources_preserve_owners_placements_and_citations(
     fictional_client, tmp_path
 ):
@@ -266,6 +385,9 @@ def test_common_sources_preserve_owners_placements_and_citations(
     assert statements(client, container.artifact_qid, "caption") == []
     again = write_mapped(BatchWriter(client), batch, placed=placed)
     assert again.written == again.referenced == 0
+    subject_policy_boundary(
+        client, batch, placed, image_qid, container.artifact_qid
+    )
 
     for annotated in (False, True):
         page = pdfs.Page().text([CAPTION])
