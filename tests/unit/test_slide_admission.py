@@ -180,6 +180,77 @@ def test_notes_images_are_not_visual_contributors(tmp_path):
     assert all(len(proof.image_part_ids) == 1 for proof in proofs)
 
 
+@pytest.mark.parametrize("location", ["notes", "unused-metadata"])
+def test_external_relationships_in_nonvisual_parts_refuse(tmp_path, location):
+    def change(values):
+        if location == "notes":
+            part = "ppt/notesSlides/_rels/notesSlide1.xml.rels"
+        else:
+            values["docProps/unused.xml"] = "<Properties/>"
+            part = "docProps/_rels/unused.xml.rels"
+        values[part] = relationships(
+            ("outside", "image", "https://example.invalid/photo.png", True)
+        )
+
+    path = deck(tmp_path / "library-talk-2018.pptx", change)
+    with pytest.raises(ValueError, match="external relationship"):
+        admission(path, tmp_path)
+
+
+def test_opaque_notes_image_cannot_import_external_content(tmp_path):
+    def change(values):
+        key = "ppt/notesSlides/notesSlide1.xml"
+        values[key] = (
+            values[key]
+            .replace(f'xmlns:a="{A}"', f'xmlns:a="{A}" xmlns:r="{R}"')
+            .replace("</p:spTree>", picture("notes", 3) + "</p:spTree>")
+        )
+        values["ppt/notesSlides/_rels/notesSlide1.xml.rels"] = relationships(
+            ("notes", "image", "../media/notes.svg", False)
+        )
+        values["ppt/media/notes.svg"] = (
+            '<svg xmlns="http://www.w3.org/2000/svg">'
+            '<image href="https://example.invalid/photo.png"/></svg>'
+        )
+
+    path = deck(tmp_path / "library-talk-2018.pptx", change)
+    with pytest.raises(ValueError, match="unsupported declared package image"):
+        admission(path, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "location,encoding",
+    [
+        ("notes", "utf-8"),
+        ("notes", "utf-16"),
+        ("unused-metadata", "utf-32"),
+        ("non-xml-suffix", "utf-8"),
+    ],
+)
+def test_nonvisual_xml_declarations_refuse_before_rendering(
+    tmp_path, location, encoding
+):
+    def change(values):
+        if location == "notes":
+            part = "ppt/notesSlides/notesSlide1.xml"
+            document = "<!DOCTYPE p:notes>" + values[part]
+        elif location == "non-xml-suffix":
+            part = "docProps/extra.dat"
+            document = "<!DOCTYPE Properties><Properties/>"
+            values["_rels/.rels"] = relationships(
+                ("document", "officeDocument", "ppt/presentation.xml", False),
+                ("metadata", "custom-properties", part, False),
+            )
+        else:
+            part = "docProps/unused.xml"
+            document = "<!DOCTYPE Properties><Properties/>"
+        values[part] = document.encode(encoding)
+
+    path = deck(tmp_path / "library-talk-2018.pptx", change)
+    with pytest.raises(ValueError, match="XML declarations"):
+        admission(path, tmp_path)
+
+
 @pytest.mark.parametrize(
     "fill",
     [
@@ -332,7 +403,8 @@ def test_duplicate_package_members_are_rejected_even_with_matching_projection(
         pytest.warns(UserWarning, match="Duplicate name"),
     ):
         archive.writestr(
-            "ppt/slides/slide1.xml", archive.read("ppt/slides/slide1.xml")
+            zipfile.ZipInfo("ppt/slides/slide1.xml", (2020, 1, 1, 0, 0, 0)),
+            archive.read("ppt/slides/slide1.xml"),
         )
     with pytest.raises(ValueError, match="duplicate package member"):
         admission(path, tmp_path)

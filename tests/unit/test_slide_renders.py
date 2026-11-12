@@ -26,6 +26,8 @@ from yizkr.pipeline.slide_renderer import (
     SlideRenderSettings,
 )
 
+HANG_GUARD = 30
+
 
 def allow(_sha1, _names=()):
     return False
@@ -378,17 +380,17 @@ def test_concurrent_preparation_cannot_share_workspace(
 
     def waiting(*args, **kwargs):
         entered.set()
-        assert release.wait(5), "test did not release the renderer"
+        assert release.wait(HANG_GUARD), "test did not release the renderer"
         return render(*args, **kwargs)
 
     monkeypatch.setattr(renders.slide_renderer, "render_slides", waiting)
     with ThreadPoolExecutor(max_workers=1) as executor:
         running = executor.submit(prepare, tmp_path)
         try:
-            assert entered.wait(5), "renderer did not start"
+            assert entered.wait(HANG_GUARD), "renderer did not start"
             with pytest.raises(ValueError, match="workspace is in use"):
                 prepare(tmp_path)
         finally:
             release.set()
-        assert len(running.result(timeout=5).slides) == 2
+        assert len(running.result(timeout=HANG_GUARD).slides) == 2
     assert len(backend) == 1

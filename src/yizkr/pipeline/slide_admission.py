@@ -190,11 +190,13 @@ class _Package(PptxPackage):
         if part not in self.names:
             _fail(f"missing XML part {part}")
         self.consulted.add(part)
-        data = self.bytes(part)
-        declarations = data.replace(b"\x00", b"").upper()
+        self.check_declarations(part)
+        return super().root(part)
+
+    def check_declarations(self, part):
+        declarations = self.bytes(part).replace(b"\x00", b"").upper()
         if b"<!DOCTYPE" in declarations or b"<!ENTITY" in declarations:
             _fail(f"XML declarations outside the supported subset: {part}")
-        return super().root(part)
 
     def relationships(self, part):
         location = PurePosixPath(part)
@@ -251,6 +253,45 @@ class _Package(PptxPackage):
                 _fail(f"missing relationship target in {rels}")
             result.append(Relationship(rid, target, kind))
         return result
+
+    def preflight(self):
+        """The converter can import nonvisual parts from the whole package.
+
+        Notes stay outside the slide contribution proof, but their links
+        and opaque images must not provide an alternate external-input route.
+        """
+        from yizkr.pipeline.presentation import unread_reason
+
+        checked_images = set()
+        for name in sorted(self.names):
+            if name.casefold().endswith((".xml", ".rels")):
+                self.check_declarations(name)
+            if not name.casefold().endswith(".rels"):
+                continue
+            location = PurePosixPath(name)
+            if location.parent.name != "_rels" or not name.endswith(".rels"):
+                _fail("unsupported package relationships location")
+            part = (
+                ""
+                if name == "_rels/.rels"
+                else str(location.parent.parent / location.name[:-5])
+            )
+            if part and part not in self.names:
+                _fail("orphan package relationships part")
+            for relation in self.relationships(part):
+                if relation.kind not in {_REL_BASE + "image", _THUMBNAIL}:
+                    # Every other admitted relationship type names XML;
+                    # its filename extension cannot bypass this check.
+                    self.check_declarations(relation.target)
+                    continue
+                if relation.target in checked_images:
+                    continue
+                checked_images.add(relation.target)
+                if unread_reason(
+                    PurePosixPath(relation.target).suffix,
+                    self.bytes(relation.target),
+                ):
+                    _fail("unsupported declared package image")
 
     def checked(self, part, expected):
         root = self.root(part)
@@ -550,6 +591,7 @@ def admit_slides(
     try:
         with zipfile.ZipFile(io.BytesIO(original)) as archive:
             package = _Package(archive, source)
+            package.preflight()
             package.document()
             slides = package.slide_parts()
             if not slides or not package.inventory.complete:
