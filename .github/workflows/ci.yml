@@ -18,8 +18,15 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    outputs:
+      prose_only: ${{ steps.scope.outputs.prose_only }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Classify the tested change
+        id: scope
+        run: python3 scripts/ci_scope.py
       - uses: astral-sh/setup-uv@v8.3.2
         with:
           enable-cache: true
@@ -28,9 +35,23 @@ jobs:
       # pytest-xdist: one worker per CPU; loadfile keeps each test file in
       # one worker, so its module fixtures and test order hold as in a
       # serial run. Local runs stay serial unless -n is given.
-      - run: uv run pytest -n auto --dist loadfile --durations=20
+      - name: Full offline suite
+        if: steps.scope.outputs.prose_only != 'true'
+        run: uv run pytest -n auto --dist loadfile --durations=20
+      - name: Documentation consistency checks
+        if: steps.scope.outputs.prose_only == 'true'
+        run: >-
+          uv run pytest -q
+          tests/unit/test_anomalies.py::TestThresholds::test_the_defaults_are_one_documented_config
+          tests/unit/test_engine_limits.py::TestOverageDocs
+          tests/unit/test_engine_limits.py::TestUtilizationDocs
+          tests/unit/test_engine_limits.py::TestUnifiedWindowsDocs
+          tests/unit/test_engine_limits.py::TestPinDocs
 
   fictional-integration:
+    # Spend database-runner minutes only after offline checks pass.
+    needs: test
+    if: needs.test.outputs.prose_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
