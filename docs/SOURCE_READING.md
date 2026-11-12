@@ -13,7 +13,7 @@ A reading preserves what a source says, its location and uncertainty, before [ex
 | Paged PDF/PPTX | A format reader assembles located page/slide text and provenance, with independent image readings and vision page readings where supported. The assembled container has no whole-document vision class. |
 | Adopted image reading | Verified existing reading products supply the independent image's transcription without another vision call. |
 
-These are shared [stage operations](ARCHITECTURE.md#shared-document-stage-operations), used by the [reviewed text-source workflow](TEXT_INGESTION.md) and the [whole-corpus workflow](SCRATCH_WORKFLOW.md). PPTX whole-slide vision remains unimplemented under [#747](https://github.com/WillHirsch/yizkr/issues/747); PDF fallback behavior is not evidence that the same route exists for PPTX. The HTR adapter is a stub, not another supported reading engine.
+These are shared [stage operations](ARCHITECTURE.md#shared-document-stage-operations), used by the [reviewed text-source workflow](TEXT_INGESTION.md) and the [whole-corpus workflow](SCRATCH_WORKFLOW.md). PPTX has an optional [local rendering API](#pptx-render-preparation), but whole-slide vision routing and attributed readings remain unimplemented under [#747](https://github.com/WillHirsch/yizkr/issues/747). PDF fallback behavior is not evidence that the same route exists for PPTX. The HTR adapter is a stub, not another supported reading engine.
 
 ### Structured vision record (ADR-0037)
 
@@ -48,6 +48,34 @@ Every original embedded image is an independent source, including full-page PDF 
 A page proved to show only one readable original image uses `image-source`: that image is read independently once, and the container keeps a marker without duplicate claims. Other pages use usable visible native text, no reading for an empty page, or vision for text annotations, detected occlusion, scan-like overlays and unusable/garbled text. Size and coverage help select a reading route; they never determine source ownership. [The PDF route description](LLM_CACHE.md) explains the paged/whole-document choice and reuse; [textlayer.py](../src/yizkr/pipeline/textlayer.py) defines the detectors.
 
 The native-text detector misses some hidden text: thick stroked overpaint, clipping, text matching its background color and zero fill opacity. It can therefore read such text as if visible. Nontext annotations on native-text pages can be counted without being read. A successful parse does not establish complete visual coverage or resolve mixed-source attribution. With configured exclusions, an unsafe or uninspectable representation refuses rather than bypassing the [model-input boundary](LLM_CACHE.md#pdf-model-input-exclusions).
+
+### PPTX render preparation
+
+[`prepare_slide_renders(source, directory, *, excluded, settings)`](../src/yizkr/pipeline/slide_renders.py) prepares reusable slide PNGs through a direct Python API. Callers supply the original PPTX, a dedicated local workspace and the current exclusion predicate `(sha1, names) -> bool`. This operation is separate from ingestion stage routing: it calls no model, produces no transcription and writes no graph data.
+
+```mermaid
+flowchart LR
+    original["Original PPTX"] --> inventory["Inventory + verified image owners"]
+    original --> admission["Conservative admission"]
+    inventory --> admission
+    policy["Current exclusions"] --> admission
+    admission --> conversion["LibreOffice: slides → PDF"]
+    conversion --> raster["PDFium: pages → PNGs"]
+    raster --> product["Checksummed render product"]
+    inventory --> product
+```
+
+| Step | Inputs and process | Product |
+| --- | --- | --- |
+| Inventory and admission | Deterministic package inspection, existing source bindings and current exclusions; verify every supported visual image contribution. | Ordered slide/body IDs, image-part and placement IDs, and digests of consulted package XML. Speaker notes remain separate. |
+| Rendering | Local LibreOffice Impress exports a temporary PDF; PDFium rasterizes every slide in presentation order, including hidden slides and excluding notes pages. | PNG bytes, pixel dimensions and renderer/environment identity. Defaults: 1,600-pixel long edge and 120-second rendering deadline. |
+| Publication and reuse | Recheck source bytes and admission; verify recorded outputs before reuse. | `slide-renders.json`, content-addressed PNGs under `slide-renders/`, and representations attached to existing slide-body parts in `container-inventory.json`. |
+
+The optional renderer needs a local LibreOffice executable, Fontconfig (`fc-list` and `fc-conflist`) and the package's pinned PDFium dependency. `SlideRenderSettings` selects the executable, output size and timeout. Each conversion uses a temporary profile and directory; subprocesses use the existing execution cancellation and process cleanup. No global LibreOffice configuration is changed. The export options are defined in [LibreOffice's PDF parameters](https://help.libreoffice.org/latest/en-US/text/shared/guide/pdf_params.html).
+
+Admission supports native text/vector shapes, directly placed raster pictures and resolved picture backgrounds inherited through layout, master and theme. All original images retain their independent owners, including background assignments. A plain opaque sRGB background can suppress an ancestor picture; ambiguous overrides, including background `noFill`, transparency modifiers and overlapping picture-background definitions, refuse. LibreOffice can retain an inherited picture under `noFill`, so treating that form as an empty background would bypass exclusions. Inherited visible shapes or text without represented placements, external relationships, opaque media, charts, extensions and other unsupported drawing constructs also refuse. Empty inherited placeholders used for formatting are supported. Admission is conservative and all-or-nothing for the presentation; successful rendering does not establish correct attribution for a future composite reading.
+
+The product records original bytes, source bindings, ordered contribution proofs, processing-code hashes, renderer/version/configuration, font and Fontconfig digests, and output hashes. Changes to these recorded inputs invalidate reuse. Current exclusions apply even to a previously rendered product. Missing or damaged PNGs are regenerated; unavailable canonical owner bytes or an unreadable prior inventory block instead of allocating a replacement owner. A render record whose inventory is missing also refuses. Publication writes files before its completion record, and reuse verifies the record, inventory and bytes together after interruption. The workspace lock coordinates this API's callers; use a dedicated directory rather than sharing it with an active ingestion run. These checks support reproducible reuse in the recorded environment, not identical pixels across different LibreOffice or font installations.
 
 ## Validation: failure and attention
 
