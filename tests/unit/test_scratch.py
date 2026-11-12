@@ -943,24 +943,41 @@ class TestControl:
         stage = CorpusStage("clustering", lambda context: ran.append(1))
 
         def hook(what, name):
-            if what == "vision":
+            if what == "vision" and name == PHOTO:
                 request(driver.state_dir, "abort", stage="transcription")
+                signal = current_cancellation()
+                assert signal is not None
+                assert signal.wait(HANG_GUARD), (
+                    "abort did not reach active reading"
+                )
 
         fakes.hook = hook
-        driver = a_run(tmp_path, corpus, fakes, corpus_stages=[stage])
+        # The watcher interrupts the active stage before its fake answer
+        # returns. Dispatch takes one anti-spin poll, then stops the slice.
+        waits = Waits(None)
+        driver = a_run(
+            tmp_path, corpus, fakes, corpus_stages=[stage], waits=waits
+        )
         assert driver.run() == EXIT_STOPPED
         assert outcome(driver.state_dir) == (
             "stopped",
             "stage:transcription aborted",
         )
+        assert waits.waited == [driver.poll]
         states = run_state(RunDir(driver.state_dir))
-        assert (
-            states[(corpus.sha1(STONE), "transcription")].status == "pending"
+        photo = corpus.sha1(PHOTO)
+        assert states[(photo, "transcription")].status == CANCELLED
+        photo_doc = next(
+            doc for doc in driver.documents() if doc.sha1 == photo
         )
+        assert not photo_doc.transcription.exists()
+        assert states[(corpus.sha1(LETTER), "transcription")].status == PENDING
+        assert states[(corpus.sha1(STONE), "transcription")].status == PENDING
         assert events(driver.state_dir, BARRIER) == [] and ran == []
-        # the documents the abort held are paused
+        # Only the first document finished: the active reading is cancelled
+        # and the two later transcriptions remain pending.
         closing = events(driver.state_dir, "run-end")[-1]
-        assert closing["statuses"] == {"batched": 2, "paused": 2}
+        assert closing["statuses"] == {"batched": 1, "paused": 3}
 
         # invoked again, the abort no longer holds, and the run goes past
         # the barrier to its corpus stage
@@ -968,6 +985,7 @@ class TestControl:
         again = Driver(corpus.folder, driver.state_dir, corpus_stages=[stage])
         assert again.run() == EXIT_OK
         assert ran == [1]
+        assert photo_doc.transcription.is_file()
 
     @pytest.mark.parametrize("lifted", [False, True])
     def test_a_stage_held_as_it_starts_waits_its_turn(
