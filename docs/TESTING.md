@@ -35,7 +35,7 @@ The [small semantic acceptance set](#semantic-acceptance) checks deterministic a
 
 ## Current test layers and limits
 
-**Offline unit tests.** `tests/unit` is the default for `uv run pytest -q` or `make test`; `pyproject.toml` excludes the `live` marker unless requested. CI runs lint and the offline suite on pull-request pushes and main commits. The offline job installs the locked base and development dependencies with `uv sync --locked --dev` and runs `pytest -n auto --dist loadfile`. Pillow is an explicit development dependency for image fixtures. Optional model SDKs and face engines are not needed: tests substitute those boundaries, including the always-run Anthropic opt-in guard. A separate `fictional-integration` job runs the required real writer/query lane described below; neither job evaluates real models.
+**Offline unit tests.** `tests/unit` is the default for `uv run pytest -q` or `make test`; `pyproject.toml` excludes the `live` marker unless requested. CI installs the locked base and development dependencies with `uv sync --locked --dev` and always runs lint, including Markdown formatting. Except for verified prose-only changes described below, it runs `pytest -n auto --dist loadfile`. Pillow is an explicit development dependency for image fixtures. Optional model SDKs and face engines are not needed: tests substitute those boundaries, including the Anthropic opt-in guard. After the full offline job passes, a separate `fictional-integration` job runs the required real writer/query lane described below; neither job evaluates real models.
 
 The fixtures in `tests/unit/conftest.py` isolate host settings, model login and instance records. Tests provide their own configuration. Most filesystem sync calls are replaced; use `@pytest.mark.real_fsync` when actual sync behavior matters. Anomaly timers are recorded rather than started. A test that calls `monkeypatch.undo()` removes these function-scoped protections too; use `monkeypatch.context()` for a temporary patch.
 
@@ -55,6 +55,20 @@ The substitutions are explicit boundaries of offline coverage:
 **Live integration.** `tests/fictional_integration`, marked `live`, exercises the required disposable writer/query lane and fails when its setup is missing. Tests under `tests/integration`, also marked `live`, exercise an explicitly configured stack or a real model; their availability checks can skip tests. These are separate invocations. Query-string unit assertions do not establish the rows returned by an actual engine.
 
 **Real-model checks.** `tests/integration/test_live_chunked.py` exercises extraction and conversation resumption through the claude CLI and response cache. It needs a logged-in CLI and skips if unavailable. `$YIZKR_LIVE_CACHE` selects its cache; the default is `var/live-cache`. It does not acquire the stack lock. These checks do not establish broad extraction quality across the corpus, and a reused response establishes only the request/configuration it matches.
+
+### Prose-only CI
+
+The existing `test` job uses [ci_scope.py](../scripts/ci_scope.py) to inspect the complete local Git diff. For a pull request it verifies the tested merge commit's base and head parents, then compares the base with that merge result. For a push it compares the event's full before/after range, including every commit in the push. Manual runs, empty changes, missing history, malformed events or an unexpected checkout use full verification.
+
+Only ordinary, non-executable Markdown files directly inside `docs/`, `docs/adr/` or `docs/runbooks/`, and these explicit guides, qualify:
+
+- `README.md`
+- `src/yizkr/pipeline/README.md`
+- `src/yizkr/queries/README.md`
+
+Both the removed and added paths and file modes count, including renames and deletions. Everything else takes the full route: executable prompts, query templates, fixtures, scripts, configuration, dependencies, workflow changes and unknown paths. Keep this allowlist narrow; a new executable consumer of a guide must either have an appropriate check in the prose route or remove that guide from eligibility.
+
+Verified prose-only changes retain lint and the existing anomaly/engine-limit documentation consistency checks selected in [ci.yml](../.github/workflows/ci.yml). They omit the remaining offline suite and the entire integration job. Both job identities remain stable, with no workflow-level path filter; a classifier, setup, lint or selected-test failure still fails `test`. Integration waits for successful full offline verification, avoiding database-runner minutes when an earlier check fails. This intentionally prioritizes total Actions minutes over full-suite turnaround time.
 
 ### Optional-engine compatibility
 
