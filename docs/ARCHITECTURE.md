@@ -66,7 +66,7 @@ A citation is a passage read where it stands in the source, with its locator and
 
 Before writing, the writer resolves each source's media SHA-1 to its registered artifact item; a page is cited through its parent artifact and page locator. Entity mentions resolve through the run's identity map, or an explicit reviewed equivalence, rather than by label alone. The [clustering diagram](../src/yizkr/pipeline/README.md#corpus-clustering-clusteringpy-the-scratch-runs-identity-map) shows how the map is made.
 
-Extraction and GEDCOM record births and deaths as statements on the person, including an unknown-valued death date when the source gives no date. Documents can also assert facts about themselves, placed media, and documents they record or mention. See [ADR-0040](adr/0040-deaths-and-births-are-statements-on-the-person.md) and [claims about artifacts](ARTIFACTS.md#claims-about-artifacts-adr-0039).
+Extraction and GEDCOM record births and deaths as statements on the person, including an unknown-valued death date when the source gives no date. Documents can also assert facts about themselves, placed media, and documents they record or mention. See [birth and death assertions](LIFE_EVENTS.md#birth-and-death-assertions-adr-0040) and [claims about artifacts](ARTIFACTS.md#claims-about-artifacts-adr-0039).
 
 Implementation: [claim contract](../src/yizkr/claims.py), [writer](../src/yizkr/pipeline/writer.py) and [modeling conventions](MODELING.md).
 

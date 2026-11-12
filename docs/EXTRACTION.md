@@ -67,7 +67,7 @@ An unfinished critic retains available findings and an explicit incomplete statu
 
 ## Machine uncertainty and judgment (ADR-0023)
 
-Source uncertainty and machine uncertainty mean different things. Preserve the source's precision, explicit ranges and circa wording in the assertion. Do not narrow a date beyond the source, or round it to disguise uncertainty about the reading. An ambiguous interpretation must not become an apparently resolved value or falsely coarser source precision. See [time modeling](MODELING.md#uncertainty-and-time) for supported values and bounds.
+Source uncertainty and machine uncertainty mean different things. Preserve the source's precision, explicit ranges and circa wording in the assertion. Do not narrow a date beyond the source, or round it to disguise uncertainty about the reading. An ambiguous interpretation must not become an apparently resolved value or falsely coarser source precision. See [time modeling](LIFE_EVENTS.md#dates-and-bounds-adr-0034) for supported values and bounds.
 
 Optional claim confidence is review metadata, not graph confidence or approval. An entity or claim can also carry a judgment note: a category (`kind`, `relation`, `date_reading`, `identity`, `other`) and a sentence explaining a call a careful reader could make differently. Notes describe the extractor's interpretation; they are not calibrated probabilities, source uncertainty or a substitute for evidence. Absence of a note establishes no certainty.
 

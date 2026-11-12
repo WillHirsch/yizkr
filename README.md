@@ -18,6 +18,8 @@ Start here:
 - [Artifacts and container sources](docs/ARTIFACTS.md) – inner-source ownership, media registration and claims about artifacts
 - [Extraction and critique](docs/EXTRACTION.md) – chunking, accepted products and diagnostics, schema gaps and identity proposals
 - [Names, mention records and matching](docs/MENTIONS_AND_MATCHING.md) – source names, appellations, record validation, term cleanup and candidate limits
+- [Life events, relationships and dates](docs/LIFE_EVENTS.md) – source assertions, unions, unknown values, derived bounds and reader limits
+- [Places and organizations](docs/PLACES.md) – relation-dependent kinds, source-stated containment and container-identity resolution
 - [GEDCOM adaptation](docs/GEDCOM.md) – deterministic products, citations, unheld media and unsupported material
 - [Run provenance](docs/RUN_PROVENANCE.md) – structured stage metadata, immutable producer records and retained-code admission
 - `docs/adr/` – focused design guidance and rationale; remaining historical material is marked with open removal tasks and is not an authority for new policy
