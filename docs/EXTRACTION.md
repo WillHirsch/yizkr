@@ -51,9 +51,15 @@ When preparation reading is enabled, the manifest also reads any statement that 
 
 ## Schema gaps and critique (ADR-0013)
 
+### A. Unclassified entities
+
 `unclassified_entity` is a holding kind for a mentioned entity no modeled kind fits. The prompt asks for an English `type_hint`; existing modeled kinds take precedence. This proposal can reach the graph with source/process provenance through the applicable writer and review route. The [unclassified-entities query](../src/yizkr/queries/unclassified-entities.rq) groups nondeprecated hints for vocabulary review. It does not reclassify entities automatically.
 
+### B. Relation gaps
+
 Chunked extraction also accepts gap objects containing `subject`, free-text `predicate`, `object` and quoted `evidence`. These become `gaps.ndjson` and curator-facing CSV, never graph relations without a vocabulary property. `yizkr gaps rollup [<run>]` groups logged predicates using Unicode/case/whitespace/hyphen/underscore normalization and records counts, variants and example evidence in `gaps-rollup.csv`. Its `decision` and `notes` columns are for inspection; nothing applies them. Missing facts are not guaranteed to become gaps: this channel records what the model actually reports.
+
+### C. Critique
 
 The critic reads the manifest, claims, whole numbered transcription and located citations. It flags kind/alias mistakes, misapplied properties and unsupported readings without rewriting the batch. Findings identify an entity and optionally a claim, alias or container, with an axis (`subject`, `predicate`, `value`, `existence`) and validated category. Invalid findings remain verbatim with validation reasons. Findings appear in review notes and reports; they supply neither corrections nor approval.
 
