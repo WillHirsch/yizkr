@@ -19,7 +19,9 @@ The readers:
   independently bound image sources on any page;
 - a deck's, `yizkr.pipeline.presentation.read_slides`: each slide's text
   and speaker notes from the PPTX XML (`SLIDE_XML`), with no model call,
-  and its independently bound original image sources.
+  and its independently bound original image sources. Explicit selected-slide
+  vision (`yizkr.pipeline.slide_reading`) replaces admitted container-owned
+  visual bodies with rendered inputs, retaining separate native notes.
 
 Original embedded images are independent sources regardless of size, page
 coverage or placement. Repeated uses share a reading while retaining each
@@ -37,7 +39,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from yizkr.claims import SourceSupport
+from yizkr.claims import ArtifactRef, SourceSupport
 from yizkr.pipeline.container_inventory import ContainerInventory
 
 if TYPE_CHECKING:
@@ -89,6 +91,11 @@ class ContainerPage:
     vision: Path | None = None
     images: list[tuple[int, str]] = field(default_factory=list)
     annotations: int = 0
+    # Native notes are appended after the checked visual body. They are not
+    # the vision model's observational RecordPage.notes.
+    speaker_notes: str = ""
+    reading_input: ArtifactRef | None = None
+    render_product_sha256: str | None = None
 
 
 @dataclass

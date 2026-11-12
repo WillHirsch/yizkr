@@ -13,8 +13,9 @@ Engines implement `Transcriber`. Provided:
   `PdfPageTranscriber` reads a PDF so (yizkr.pipeline.textlayer), when
   it has native text or independently readable image sources, and
   otherwise leaves it to be read whole by `LlmVisionTranscriber`;
-  `DeckTranscriber` reads a deck so, each slide from its XML
-  (yizkr.pipeline.presentation.read_slides).
+  `DeckTranscriber` reads native slide XML by default and supports explicitly
+  selected, admitted container-owned slide renders through the same vision
+  reader (yizkr.pipeline.slide_reading).
 * `TextFileTranscriber` — reads an existing transcription from a text
   file (manual transcriptions, or output of any external tool). Keeps
   the pipeline fully runnable with no LLM configured.
@@ -173,6 +174,10 @@ from yizkr.pipeline.transcription_record import (
 if TYPE_CHECKING:
     from yizkr.pipeline.pdf_inventory import PdfInventory
     from yizkr.pipeline.presentation import PresentationContent
+    from yizkr.pipeline.slide_reading import (
+        SlideVisionProof,
+        SlideVisionRequest,
+    )
 
 
 def _transcription_prompt(classes: Sequence[str]) -> str:
@@ -273,13 +278,27 @@ class PageProvenance(BaseModel):
     page, a deck's slide): its method, what made its text (the text-layer
     method with its version and the library's, the deck's adapter, or the
     vision client), and how many annotations the page shows that its text
-    layer leaves unread (a PDF's text-layer page's)."""
+    layer leaves unread (a PDF's text-layer page's). Selected slide renders
+    also identify the actual PNG and admitted render product; these do not
+    change the source owner."""
 
     model_config = ConfigDict(extra="forbid")
 
     method: PageMethod
     engine: str = Field(min_length=1)
     annotations: int = Field(default=0, ge=0)
+    reading_input: ArtifactRef | None = None
+    render_product_sha256: str | None = Field(
+        default=None, pattern=r"^[0-9a-f]{64}$"
+    )
+
+    @model_serializer(mode="wrap")
+    def _without_absent_render_details(self, handler):
+        data = handler(self)
+        for key in ("reading_input", "render_product_sha256"):
+            if getattr(self, key) is None:
+                data.pop(key, None)
+        return data
 
 
 class TranscribedPage(BaseModel):
@@ -290,7 +309,8 @@ class TranscribedPage(BaseModel):
     in their order on the page, and the transcription record's fields
     (ADR-0037): the page number printed on it (`printed_page`), its
     `status`, the `languages` its text is written in and the engine's
-    `notes`. Apart from that content, its provenance."""
+    `notes`. `body_end`, when present, ends the vision body before appended
+    native speaker notes. Apart from that content, its provenance."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -303,6 +323,25 @@ class TranscribedPage(BaseModel):
     languages: list[LanguageCode] = Field(default_factory=list)
     notes: str = ""
     provenance: PageProvenance
+    body_end: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def _body_lies_in_page(self):
+        if self.body_end is not None:
+            if not self.start <= self.body_end <= self.end:
+                raise ValueError("the visual body must lie within its page")
+            if self.provenance.method != "vision":
+                raise ValueError(
+                    "only a vision page has a separate visual body"
+                )
+        return self
+
+    @model_serializer(mode="wrap")
+    def _without_absent_body_end(self, handler):
+        data = handler(self)
+        if self.body_end is None:
+            data.pop("body_end", None)
+        return data
 
 
 class Transcription(BaseModel):
@@ -417,7 +456,8 @@ class Transcription(BaseModel):
     def page_record(self, page: TranscribedPage) -> TranscriptionRecord | None:
         """The one-page record of one of its pages, as the reading of
         one image with no class: the page's text and its record's fields,
-        numbered 1. A page of a container read page by page that the vision
+        numbered 1, excluding any appended native speaker notes. A page of
+        a container read page by page that the vision
         engine read is checked by it, as its reading was when the page was
         made. None when the page's fields are not a record's page (a page
         called transcribed with no text)."""
@@ -429,7 +469,11 @@ class Transcription(BaseModel):
                         page=1,
                         printed_page=page.printed_page,
                         status=page.status,
-                        text=self.page_text(page),
+                        text=self.text[
+                            page.start : page.end
+                            if page.body_end is None
+                            else page.body_end
+                        ],
                         languages=page.languages,
                         notes=page.notes,
                     )
@@ -613,10 +657,12 @@ class LlmVisionTranscriber(_CheckedTranscriber):
         fallback_language: str = "en",
         excluded: Callable[[str], bool] | None = None,
         pdf_inventory: PdfInventory | None = None,
+        before_read: Callable[[Path], None] | None = None,
     ) -> None:
         self.client = client
         self.excluded = excluded
         self.pdf_inventory = pdf_inventory
+        self.before_read = before_read
         self.language = language
         self.fallback_language = fallback_language
         # the resolution behind the last transcribe(), for callers to log
@@ -638,6 +684,8 @@ class LlmVisionTranscriber(_CheckedTranscriber):
         before anything hashes or sends it."""
         self._response = None
         refuse_archive(media_path)
+        if self.before_read is not None:
+            self.before_read(media_path)
         artifact = ArtifactRef.from_path(media_path)
         from yizkr.pipeline.textlayer import is_pdf_input, prepare_pdf_vision
 
@@ -984,14 +1032,19 @@ class PagedTranscriber:
     def _marker(self, number: int) -> str:
         return f"[{self.unit} {number}]"
 
+    def _before_vision(self, path: Path) -> None:
+        """Revalidate a format's current admission before a model attempt."""
+
     def _read_by_vision(self, path: Path) -> Transcription:
         """The checked vision transcription of one page's or one image's
         file."""
+        self._before_vision(path)
         if self._vision is None:
             self._vision = LlmVisionTranscriber(
                 self._client(),
                 language=self.language,
                 fallback_language=self.fallback_language,
+                before_read=self._before_vision,
             )
         return self._vision.transcribe(path)
 
@@ -1076,6 +1129,7 @@ class PagedTranscriber:
             fields: dict[str, Any] = {
                 "status": TRANSCRIBED if page.text else BLANK
             }
+            visual_length = None
             if page.method == textlayer.VISION:
                 reading = self._read_by_vision(page.vision)
                 record = reading.record()
@@ -1083,6 +1137,12 @@ class PagedTranscriber:
                 body, engine = one.text.strip(), reading.engine
                 fields = one.model_dump(exclude={"page", "text"})
                 flag = flag or reading.flag
+                if page.speaker_notes:
+                    visual_length = len(body)
+                    body += ("\n" if body else "") + (
+                        f"[{self.unit} {page.number} notes]\n"
+                        + page.speaker_notes
+                    )
             else:
                 body, engine = page.text, own_text
             opening = (self.separator if text else "") + "\n".join(marks)
@@ -1095,12 +1155,27 @@ class PagedTranscriber:
                     page=page.number,
                     start=start,
                     end=len(text),
+                    body_end=(
+                        start + visual_length
+                        if visual_length is not None
+                        else None
+                    ),
                     images=[sha1 for _place, sha1 in page.images],
                     **fields,
                     provenance=PageProvenance(
                         method=page.method,
                         engine=engine,
                         annotations=page.annotations,
+                        reading_input=(
+                            page.reading_input
+                            if page.method == textlayer.VISION
+                            else None
+                        ),
+                        render_product_sha256=(
+                            page.render_product_sha256
+                            if page.method == textlayer.VISION
+                            else None
+                        ),
                     ),
                 )
             )
@@ -1167,12 +1242,14 @@ class PdfPageTranscriber(PagedTranscriber):
 
 
 class DeckTranscriber(PagedTranscriber):
-    """A deck read slide by slide (presentation.read_slides): each slide
-    from its XML, with no model call, behind its `[Slide N]` marker, and
-    each image it embeds that is read on its own read by the vision
-    engine, as a PDF's placed images are. Slides are joined by one line
-    break, so a deck that reads no image on its own has the text
-    presentation.slide_transcript gives."""
+    """Read native slides and independent images, with explicit slide vision.
+
+    The default reads each slide from XML behind its `[Slide N]` marker.
+    An optional selection replaces only admitted container-owned visual
+    bodies with checked vision readings, keeping native notes separate.
+    Images retain their independent readings. Native slides are joined by
+    one line break, as presentation.slide_transcript does.
+    """
 
     unit = "Slide"
     separator = "\n"
@@ -1185,24 +1262,55 @@ class DeckTranscriber(PagedTranscriber):
         excluded: Callable[..., bool] | None = None,
         *,
         content: PresentationContent | None = None,
+        slide_vision: SlideVisionRequest | None = None,
     ) -> None:
+        if slide_vision is not None and excluded is None:
+            raise ValueError(
+                "slide vision requires a current exclusion predicate"
+            )
         super().__init__(client, language, fallback_language, excluded)
         self.content = content
+        self.slide_vision = slide_vision
+        self.slide_vision_proof: SlideVisionProof | None = None
 
     def _read(self, media_path: Path, directory: Path) -> Any:
-        from yizkr.pipeline.presentation import read_slides, slide_pages
+        from yizkr.pipeline.presentation import slide_pages, unpack_pptx
 
-        if self.content is not None:
-            if (
-                self.content.inventory is None
-                or self.content.inventory.source
-                != ArtifactRef.from_path(media_path)
-            ):
-                raise ValueError(
-                    "prepared presentation belongs to another source"
-                )
-            return slide_pages(self.content, directory, excluded=self.excluded)
-        return read_slides(media_path, directory, excluded=self.excluded)
+        content = self.content or unpack_pptx(media_path)
+        if (
+            content.inventory is None
+            or content.inventory.source != ArtifactRef.from_path(media_path)
+        ):
+            raise ValueError("prepared presentation belongs to another source")
+        read = slide_pages(content, directory, excluded=self.excluded)
+        if self.slide_vision is not None:
+            from yizkr.pipeline.slide_reading import select_slide_vision
+
+            self.slide_vision_proof = select_slide_vision(
+                media_path,
+                directory,
+                content,
+                read,
+                self.slide_vision,
+                excluded=self.excluded,
+            )
+        return read
+
+    def _before_vision(self, path: Path) -> None:
+        if self.slide_vision_proof is not None:
+            self.slide_vision_proof.before_vision(path)
+
+    def transcribe(self, media_path: Path) -> Transcription | None:
+        self.slide_vision_proof = None
+        result = super().transcribe(media_path)
+        try:
+            if self.slide_vision_proof is not None:
+                self.slide_vision_proof.verify()
+        except BaseException:
+            if result is not None and result.reading is not None:
+                result.reading.close()
+            raise
+        return result
 
     def _engines(self) -> tuple[str, str]:
         return DECK_ENGINE, DECK_ENGINE

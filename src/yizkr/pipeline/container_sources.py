@@ -846,19 +846,56 @@ def source_context(transcription, sources: ContainerSources):
             for p in sources.inventory.placements
             if p.parent == part.id and parts[p.child].kind == "annotation"
         ]
-        if page.provenance.method == "vision" and (inner or annotations):
+        composite = (
+            "page-wide vision cannot separate inner-source "
+            "assertions from the container body"
+            if page.provenance.method == "vision" and (inner or annotations)
+            else None
+        )
+        note = notes.get(page.page)
+        if page.body_end is not None:
+            marker = f"[Slide {page.page} notes]\n"
+            separator = "\n" if page.body_end > page.start else ""
+            if (
+                page.provenance.method != "vision"
+                or not page.start <= page.body_end <= page.end
+                or note is None
+                or not note.text
+                or transcription.text[page.body_end : page.end]
+                != separator + marker + note.text
+            ):
+                span(
+                    part,
+                    page.start,
+                    page.end,
+                    reason="slide body and speaker notes cannot be located "
+                    "in this reading",
+                )
+                continue
+            span(part, page.start, page.body_end, reason=composite)
+            note_start = page.body_end + len(separator) + len(marker)
+            span(note, note_start, page.end)
+            continue
+        if composite:
             span(
                 part,
                 page.start,
                 page.end,
-                reason="page-wide vision cannot separate inner-source "
-                "assertions from the container body",
+                reason=composite,
             )
             continue
         text = transcription.text[page.start : page.end]
-        note = notes.get(page.page)
         if note is None or not note.text:
             span(part, page.start, page.end)
+            continue
+        if page.provenance.method == "vision":
+            span(
+                part,
+                page.start,
+                page.end,
+                reason="vision body and speaker notes need "
+                "a recorded boundary",
+            )
             continue
         prefix = (part.text + "\n") if part.text else ""
         marker = f"[Slide {page.page} notes]\n"

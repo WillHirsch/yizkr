@@ -54,13 +54,13 @@ The substitutions are explicit boundaries of offline coverage:
 
 **Live integration.** `tests/fictional_integration`, marked `live`, exercises the required disposable writer/query lane and fails when its setup is missing. `tests/integration/test_live_*.py`, also marked `live`, exercises an explicitly configured stack or a real model; its availability checks can skip tests. These are separate invocations. Query-string unit assertions do not establish the rows returned by an actual engine.
 
-**Local slide renderer.** The optional [LibreOffice/PDFium check](../tests/integration/test_slide_rendering.py) uses an authored fictional presentation to verify slide order, hidden-slide export, image contributions, separate notes and reusable render products. Run it with a local LibreOffice executable and Fontconfig installed:
+**Local slide renderer.** The optional [LibreOffice/PDFium check](../tests/integration/test_slide_rendering.py) uses an authored fictional presentation to verify slide order, hidden-slide export, image contributions, separate notes and reusable render products. The [selected-slide reading check](../tests/integration/test_slide_reading.py) exercises actual rendering through the shared media API, using an authored model answer to verify located body/notes and persisted input provenance. Run them with a local LibreOffice executable and Fontconfig installed:
 
 ```sh
-YIZKR_TEST_LIBREOFFICE=/usr/bin/libreoffice uv run --locked pytest -q tests/integration/test_slide_rendering.py
+YIZKR_TEST_LIBREOFFICE=/usr/bin/libreoffice uv run --locked pytest -q tests/integration/test_slide_rendering.py tests/integration/test_slide_reading.py
 ```
 
-It skips when `YIZKR_TEST_LIBREOFFICE` is unset; selecting an unavailable or failing renderer fails the test. It uses temporary files and no model, corpus or graph access. Default CI does not install LibreOffice; offline renderer tests substitute conversion while exercising the real PDFium rasterizer. This optional check verifies the selected local renderer environment, not general Office visual fidelity or future slide-reading attribution.
+They skip when `YIZKR_TEST_LIBREOFFICE` is unset; selecting an unavailable or failing renderer fails the tests. They use temporary files and no model, corpus or graph access. Default CI does not install LibreOffice; offline renderer tests substitute conversion while exercising the real PDFium rasterizer. These optional checks verify the selected local renderer environment and reading assembly, not general Office visual fidelity, model interpretation quality or mixed-source attribution.
 
 **Real-model checks.** `tests/integration/test_live_chunked.py` exercises extraction and conversation resumption through the claude CLI and response cache. It needs a logged-in CLI and skips if unavailable. `$YIZKR_LIVE_CACHE` selects its cache; the default is `var/live-cache`. It does not acquire the stack lock. These checks do not establish broad extraction quality across the corpus, and a reused response establishes only the request/configuration it matches.
 

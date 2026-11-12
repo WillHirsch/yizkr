@@ -31,7 +31,7 @@ from yizkr.pipeline.container_inventory import (
     read_inventory,
 )
 from yizkr.pipeline.container_sources import prepare_sources, project_sources
-from yizkr.pipeline.presentation import unpack_pptx
+from yizkr.pipeline.presentation import PresentationContent, unpack_pptx
 from yizkr.pipeline.slide_admission import SlideAdmission, admit_slides
 from yizkr.pipeline.slide_renderer import SlideRenderSettings
 from yizkr.pipeline.stages import canonical_json
@@ -120,7 +120,7 @@ def _workspace(directory: Path):
             fcntl.flock(handle, fcntl.LOCK_UN)
 
 
-def _sources(source, original, directory, excluded):
+def _sources(source, original, directory, excluded, prepared=None):
     content = unpack_pptx(source)
     inventory = content.inventory
     if inventory is None or inventory.source != ArtifactRef.from_bytes(
@@ -135,6 +135,32 @@ def _sources(source, original, directory, excluded):
         path.exists() or path.is_symlink() for path in records
     ):
         raise ValueError("prior source bindings are missing or unreadable")
+    if prepared is not None:
+        supplied = prepared.inventory
+        if supplied is None or supplied.source != inventory.source:
+            raise ValueError("prepared presentation belongs to another source")
+        if previous is not None and previous.source == supplied.source:
+            supplied_parts = {part.id: part for part in supplied.parts}
+            for part in previous.parts:
+                binding = part.owner_binding
+                if binding is None:
+                    continue
+                current = supplied_parts.get(part.id)
+                if (
+                    current is None
+                    or current.byte_object != part.byte_object
+                    or current.owner_binding is None
+                    or current.owner_binding.artifact != binding.artifact
+                ):
+                    raise ValueError(
+                        "render workspace has different prepared "
+                        "source bindings"
+                    )
+        for digest, payload in prepared.inventory_bytes.items():
+            if ArtifactRef.from_bytes(payload).sha1 != digest:
+                raise ValueError("prepared presentation bytes are damaged")
+            content.inventory_bytes[digest] = payload
+        previous = supplied
     inventory = prepare_sources(
         inventory,
         content.inventory_bytes,
@@ -219,6 +245,7 @@ def prepare_slide_renders(
     *,
     excluded: ExclusionCheck,
     settings: SlideRenderSettings = _DEFAULT_SETTINGS,
+    prepared: PresentationContent | None = None,
 ) -> SlideRenderProduct:
     """Prepare all slides or refuse, without marking them transcribed.
 
@@ -226,12 +253,14 @@ def prepare_slide_renders(
     returned representation is eligible for the supported rendering route;
     attributing a composite reading to historical owners is a separate step.
     The renderer is optional and is checked even when a saved product exists.
+    A caller's prepared inventory supplies verified existing image owners;
+    it must agree with bindings already present in the render workspace.
     """
     check_cancelled()
     with _workspace(directory):
         original = source.read_bytes()
         inventory, data, admission = _sources(
-            source, original, directory, excluded
+            source, original, directory, excluded, prepared
         )
         renderer = slide_renderer.renderer_identity(settings)
         basis = _basis(original, renderer, admission, inventory)
@@ -240,7 +269,7 @@ def prepare_slide_renders(
             if source.read_bytes() != original:
                 raise ValueError("PPTX changed during render reuse")
             current, _, current_admission = _sources(
-                source, original, directory, excluded
+                source, original, directory, excluded, prepared
             )
             if _basis(original, renderer, current_admission, current) != basis:
                 raise ValueError(
@@ -263,7 +292,7 @@ def prepare_slide_renders(
         if source.read_bytes() != original:
             raise ValueError("PPTX changed during rendering")
         current, _, current_admission = _sources(
-            source, original, directory, excluded
+            source, original, directory, excluded, prepared
         )
         if _basis(original, renderer, current_admission, current) != basis:
             raise ValueError("source admission changed during rendering")

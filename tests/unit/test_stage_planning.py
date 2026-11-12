@@ -207,6 +207,7 @@ def package(tmp_path, monkeypatch):
         | set(planning.MEDIA_READING_RESOURCES)
         | set(planning.PDF_READING_RESOURCES)
         | set(planning.PRESENTATION_READING_RESOURCES)
+        | set(planning.SLIDE_VISION_RESOURCES)
         | set(planning.VISION_READING_RESOURCES)
     ):
         path = root / name
@@ -250,6 +251,37 @@ def test_media_generation_observes_its_reader_resources(
         processing=observe(),
     )
     assert plan.changed_dependencies == (f"processing.resources.{resource}",)
+
+
+def test_selected_slide_reading_observes_visual_policy_only_when_requested(
+    package,
+):
+    def observe(selected):
+        configuration = {"route": "paged"}
+        if selected:
+            configuration["slide_vision"] = {"positions": [2]}
+        return processing_dependencies(
+            "transcription",
+            package=package,
+            source_sha1="1" * 40,
+            document_kind="presentation",
+            configuration=configuration,
+        )
+
+    native, visual = observe(False), observe(True)
+    path = package / "pipeline/slide_reading.py"
+    path.write_text(path.read_text() + "changed fictional slide policy\n")
+    assert observe(False) == native
+    plan = plan_view(
+        exists=True,
+        recorded_inputs={},
+        current_inputs={},
+        recorded_processing=visual,
+        processing=observe(True),
+    )
+    assert plan.changed_dependencies == (
+        "processing.resources.pipeline/slide_reading.py",
+    )
 
 
 @pytest.mark.parametrize("kind", ["pdf", "presentation", "media", "excerpt"])

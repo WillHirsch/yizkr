@@ -258,6 +258,13 @@ PRESENTATION_READING_RESOURCES = (
     "pipeline/presentation.py",
     "pipeline/pptx_inventory.py",
 )
+SLIDE_VISION_RESOURCES = (
+    "pipeline/slide_reading.py",
+    "pipeline/slide_renders.py",
+    "pipeline/slide_renderer.py",
+    "pipeline/slide_admission.py",
+    "pipeline/textlayer.py",
+)
 VISION_READING_RESOURCES = (
     "pipeline/llm.py",
     "pipeline/cancellation.py",
@@ -349,12 +356,19 @@ def processing_dependencies(
     """
     paths = set(PROCESSING_RESOURCES[stage])
     pdf_reading = stage == "transcription" and document_kind == "pdf"
+    slide_vision = (
+        stage == "transcription"
+        and document_kind == "presentation"
+        and configuration.get("slide_vision") is not None
+    )
     if stage == "transcription" and document_kind != "text":
         paths.update(MEDIA_READING_RESOURCES)
         if pdf_reading:
             paths.update(PDF_READING_RESOURCES)
         elif document_kind == "presentation":
             paths.update(PRESENTATION_READING_RESOURCES)
+            if slide_vision:
+                paths.update(SLIDE_VISION_RESOURCES)
         if configuration.get("route") in {"vision", "paged"}:
             paths.update(VISION_READING_RESOURCES)
     root = files("yizkr") if package is None else package
@@ -363,7 +377,7 @@ def processing_dependencies(
         "stage": stage,
         "source_sha1": source_sha1,
         "configuration": json.loads(canonical_json(configuration)),
-        "libraries": _libraries(pdf=pdf_reading),
+        "libraries": _libraries(pdf=pdf_reading or slide_vision),
         "resources": {
             path: hashlib.sha256(root.joinpath(path).read_bytes()).hexdigest()
             for path in sorted(paths)

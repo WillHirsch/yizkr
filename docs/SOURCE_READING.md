@@ -13,7 +13,7 @@ A reading preserves what a source says, its location and uncertainty, before [ex
 | Paged PDF/PPTX | A format reader assembles located page/slide text and provenance, with independent image readings and vision page readings where supported. The assembled container has no whole-document vision class. |
 | Adopted image reading | Verified existing reading products supply the independent image's transcription without another vision call. |
 
-These are shared [stage operations](ARCHITECTURE.md#shared-document-stage-operations), used by the [reviewed text-source workflow](TEXT_INGESTION.md) and the [whole-corpus workflow](SCRATCH_WORKFLOW.md). PPTX has an optional [local rendering API](#pptx-render-preparation), but whole-slide vision routing and attributed readings remain unimplemented under [#747](https://github.com/WillHirsch/yizkr/issues/747). PDF fallback behavior is not evidence that the same route exists for PPTX. The HTR adapter is a stub, not another supported reading engine.
+These are shared [stage operations](ARCHITECTURE.md#shared-document-stage-operations), used by the [reviewed text-source workflow](TEXT_INGESTION.md) and the [whole-corpus workflow](SCRATCH_WORKFLOW.md). A direct caller can also select [PPTX slides for vision](#pptx-selected-slide-vision) when their visible content has no independent image contributors. The default PPTX route still reads native XML; automatic route selection, mixed-source slide attribution and whole-corpus integration remain under [#747](https://github.com/WillHirsch/yizkr/issues/747). The HTR adapter is a stub, not another supported reading engine.
 
 ### Structured vision record (ADR-0037)
 
@@ -78,6 +78,38 @@ LibreOffice imports the intact package, so admission checks external relationshi
 Admission supports native text/vector shapes, directly placed raster pictures and resolved picture backgrounds inherited through layout, master and theme. All original images retain their independent owners, including background assignments. A plain opaque sRGB background can suppress an ancestor picture; ambiguous overrides, including background `noFill`, transparency modifiers and overlapping picture-background definitions, refuse. LibreOffice can retain an inherited picture under `noFill`, so treating that form as an empty background would bypass exclusions. Inherited visible shapes or text without represented placements, external relationships, opaque media, charts, extensions and other unsupported drawing constructs also refuse. Empty inherited placeholders used for formatting are supported. Admission is conservative and all-or-nothing for the presentation; successful rendering does not establish correct attribution for a future composite reading.
 
 The product records original-input digests, ordered contribution proofs, renderer/version/configuration, font and Fontconfig digests, and output hashes. An aggregate basis also binds the source-owner identities and processing-code hashes; owner bindings remain in the accompanying inventory. Changes to these inputs invalidate reuse. Current exclusions apply even to a previously rendered product, including its PNG hash and filename. Missing or damaged PNGs are regenerated; unavailable canonical owner bytes or an unreadable prior inventory block instead of allocating a replacement owner. A render record whose inventory is missing also refuses. Publication writes files before its completion record, and reuse verifies the record, inventory and bytes together after interruption. The workspace lock coordinates this API's callers; use a dedicated directory rather than sharing it with an active ingestion run. These checks support reproducible reuse in the recorded environment, not identical pixels across different LibreOffice or font installations.
+
+### PPTX selected-slide vision
+
+The shared `read_media` operation accepts an explicit `SlideVisionRequest` on its `paged` route:
+
+```python
+from yizkr.pipeline.media_stages import MediaReadRequest, read_media
+from yizkr.pipeline.slide_reading import SlideVisionRequest
+
+with read_media(
+    MediaReadRequest(
+        source,
+        route="paged",
+        excluded=current_exclusions,
+        slide_vision=SlideVisionRequest(
+            positions=(1, 3), directory=render_workspace
+        ),
+    ),
+    client_factory,
+) as result:
+    transcription = result.transcription
+```
+
+Positions are unique, positive physical slide numbers in presentation order. A current exclusion predicate and a dedicated caller-owned render workspace are required. The entire presentation must pass render admission, and each selected slide must have no painted original-image contributors. A selected slide combining native content with an image refuses before a model call. Supplied prepared source bindings remain authoritative; rendering does not replace an established image owner.
+
+Selected PNGs pass through the existing vision transcriber, structured-record validation and response-cache interface. Their records are assembled under the original `[Slide N]` positions with `vision` provenance. The presentation remains the owner of this native text/vector content; PNGs remain representations. Unselected slides retain native XML reading, and independent images retain their existing per-owner readings. The assembled presentation has no inferred whole-document class.
+
+Speaker notes are appended from their native source part after the visual body, with separate source-context spans. When present, `TranscribedPage.body_end` records that boundary; vision status, record fields and validation apply to the body alone. A blank visual body stays blank even when the slide has speaker notes. Missing or inconsistent boundaries leave attribution unsupported. A model's page observations remain reader notes.
+
+Reading dependencies include the selected positions, renderer settings and verified render-product digest alongside the ordinary source, language and model dependencies. Selected-page provenance records the actual PNG and render-product digest. The workspace keeps render products; callers own persistence of the returned transcription, as with other shared media operations. Compatible model responses can be reused independently of those document products, after current admission and exclusion checks.
+
+The unchanged transcription prompt reads visible text and tabular layout; it does not capture arbitrary geometric or arrow meanings as structured relationships. This opt-in API provides no automatic test of whether native XML is visually sufficient. It does not enable slide vision in the whole-corpus driver or separate assertions made by several sources within one composite slide. Those remaining routes need their own attribution and downstream evidence under [#747](https://github.com/WillHirsch/yizkr/issues/747).
 
 ## Validation: failure and attention
 
