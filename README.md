@@ -21,6 +21,9 @@ Start here:
 - [Life events, relationships and dates](docs/LIFE_EVENTS.md) – source assertions, unions, unknown values, derived bounds and reader limits
 - [Places and organizations](docs/PLACES.md) – relation-dependent kinds, source-stated containment and container-identity resolution
 - [GEDCOM adaptation](docs/GEDCOM.md) – deterministic products, citations, unheld media and unsupported material
+- [Runtime privacy](docs/PRIVACY.md) – person eligibility, private-site badges and non-privileged export limits
+- [Views and model-response reuse](docs/LLM_CACHE.md) – freshness, cache keys, retries and provider sessions
+- [Queries and disagreement comparison](src/yizkr/queries/README.md) – published reads, report scope and comparison limits
 - [Run provenance](docs/RUN_PROVENANCE.md) – structured stage metadata, immutable producer records and retained-code admission
 - `docs/adr/` – focused design guidance and rationale; remaining historical material is marked with open removal tasks and is not an authority for new policy
 - `docs/MODELING.md` – Wikibase modeling conventions
