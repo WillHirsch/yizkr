@@ -844,8 +844,13 @@ class TestPreflight:
         """A run checks the host once, before any document, with
         preflight_vision_transcription (tests/unit/test_scratch.py,
         #225); the transcriber does not ask again for each document."""
-        asked = []
-        monkeypatch.setattr(transcribe.shutil, "which", asked.append)
+        monkeypatch.setattr(
+            transcribe,
+            "require_pdf_renderer",
+            lambda *_args, **_kwargs: pytest.fail(
+                "document transcription must not repeat renderer preflight"
+            ),
+        )
         monkeypatch.setattr(
             transcription_check.subprocess, "run", FakeRun("Pages: 1\n")
         )
@@ -853,7 +858,6 @@ class TestPreflight:
             scan_file(tmp_path, "scan.pdf")
         )
         assert result.text == page_text(STAMP)
-        assert asked == []
 
     def test_images_need_no_renderer(self, tmp_path, monkeypatch):
         monkeypatch.setattr(transcribe.shutil, "which", no_tools)

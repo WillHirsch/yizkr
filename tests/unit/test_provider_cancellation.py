@@ -76,8 +76,16 @@ def inactive(pid):
     status = Path(f"/proc/{pid}/stat")
     try:
         return status.read_text().split(") ", 1)[1][0] == "Z"
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):
         return True
+
+
+def test_inactive_accepts_a_process_reaped_during_stat_read(monkeypatch):
+    def reaped(_path):
+        raise ProcessLookupError("fictional process exited after stat opened")
+
+    monkeypatch.setattr(Path, "read_text", reaped)
+    assert inactive(12345)
 
 
 def pidfd_open(pid):

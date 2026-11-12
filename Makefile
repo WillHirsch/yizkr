@@ -7,7 +7,7 @@ COMPOSE_LOCAL = docker compose -f docker-compose.yml -f docker-compose.localhost
 export UID := $(shell id -u)
 export GID := $(shell id -g)
 
-.PHONY: install hooks test test-live test-integration integration-down lint fmt up down up-local cli bootstrap smoke publish-queries scratch-reset wdqs-sandbox-up wdqs-sandbox-down
+.PHONY: install hooks test test-live test-integration benchmark-transcription integration-down lint fmt up down up-local cli bootstrap smoke publish-queries scratch-reset wdqs-sandbox-up wdqs-sandbox-down
 
 install:            ## create/update the uv-managed venv (with dev tools)
 	$(UV) sync --dev
@@ -31,6 +31,9 @@ hooks:              ## install git hooks: pre-commit (Ruff + Prettier), pre-push
 
 test:               ## offline unit tests
 	$(UV) run pytest
+
+benchmark-transcription: ## explicit local transcription-validation budget check
+	$(UV) run --locked python -m scripts.transcription_performance $(ARGS)
 
 test-live:          ## integration tests against the running stack (make up first)
 	$(UV) run pytest -m live tests/integration -v

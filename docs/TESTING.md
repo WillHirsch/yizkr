@@ -29,7 +29,7 @@ Migrate incidental assertions within the subsystem change that encounters them. 
 | Query library and publication | Returned fictional evidence at the real query boundary, and decoded query payloads at the publication boundary. Keep vocabulary, projection and template-key checks. Move remaining query-construction assertions with the affected query; do not remove a guard until its semantic obligation has coverage. |
 | Runtime orchestration and tooling | Controlled completion, cancellation, lock ownership and deadline behavior. Select retry intervals explicitly in scheduling tests rather than freezing the production default. |
 
-These are responsibilities of the affected subsystem work, not a separate repository-wide rewrite prerequisite. The focused performance check remains independent ([#728](https://github.com/WillHirsch/yizkr/issues/728)).
+These are responsibilities of the affected subsystem work, not a separate repository-wide rewrite prerequisite. [Transcription validation performance](#transcription-validation-performance) has a separate local check.
 
 The [small semantic acceptance set](#semantic-acceptance) checks deterministic archive behavior; real-model evaluation is a separate bounded activity. A canned engine establishes orchestration, not inference quality. Whole-corpus evidence is required when cross-document interactions or material uncertainty remain beyond bounded checks; record the reason and affected stages. A prompt, model or pre-write code edit alone does not require a corpus run. The procedure and local-only boundary are in [AGENT_PROTOCOL.md §5](AGENT_PROTOCOL.md#5-integration-and-corpus-evidence).
 
@@ -133,6 +133,26 @@ Replace the example test name or expression with an actual target. Use `uv run p
 CI uses `uv run pytest -n auto --dist loadfile --durations=20`, keeping each file in one worker and reporting the twenty slowest test stages. Local runs are serial unless `-n` is given. Use parallelism when machine capacity permits; concurrent test-heavy sessions can make every run slower. Real-stack tests share a lock and are not an xdist workload.
 
 For concurrent behavior, coordinate with events, barriers or pipes rather than timing sleeps. Keep bounded hang guards so failed synchronization terminates. The existing `test_no_real_time.py` checker enforces fake-clock conventions, an explicit allowlist and module-level `HANG_GUARD` values of 30–600 seconds. This is an implementation constraint of the current suite, not evidence of performance. In particular, the transcription backtracking check catches catastrophic hangs but can miss a several-fold slowdown; meaningful performance changes need a suitable measurement.
+
+## Transcription validation performance
+
+Run the focused benchmark when changing transcription validation or its regex signatures. It uses two repetitive legacy-text inputs and a 48-page structured reading assembled from fictional letters, with an engine diagnostic on the final page. Every validation must retain its expected pass/rejection/flag and page-count result. The measured operation is `check_transcription`; input construction, JSON parsing, rendering, imports, process startup and model calls are outside its scope.
+
+The designated environment is an otherwise idle Linux x86_64 host running CPython in the locked development environment. Measure the accepted baseline and candidate serially on the same host, interpreter and CPU affinity, without concurrent test-heavy work. Record the baseline on accepted main immediately before the change, then run the candidate with the same benchmark and fixtures:
+
+```sh
+uv sync --locked --dev
+# On accepted main:
+make benchmark-transcription ARGS="--output /tmp/transcription-baseline.json"
+# In the candidate checkout, with the same locked environment:
+make benchmark-transcription ARGS="--baseline /tmp/transcription-baseline.json --output /tmp/transcription-candidate.json"
+```
+
+Each workload gets one untimed warm-up followed by five samples of three validations. Reports retain every sample's wall and CPU seconds per validation, the source revision and dirty flag, interpreter/platform/CPU/affinity details, lockfile digest and workload digest. The budget is **candidate median wall time no greater than 1.5 times the accepted baseline**, independently for each workload. CPU timings help interpret scheduling noise; they do not replace the wall-time budget. Medians limit the influence of an isolated outlier; this small check is a material-regression guard, not a claim of statistical significance or a complete ingestion benchmark.
+
+Without `--baseline`, the command only records a measurement and prints no budget verdict. With a baseline, the Python module exits 1 for a budget breach; incompatible or invalid reports, unexpected validation results, setup errors or a hung worker exit 2. The Make target reports either failure with exit 2. The child has a separate 60-second hang guard. Comparisons refuse different environment metadata, workloads or sampling settings. Output paths must be new files, so neither a candidate nor a failed comparison overwrites accepted evidence.
+
+Investigate a breach and rerun a comparable baseline/candidate pair under quiet conditions if load or thermal variation is suspected. Record both results in the PR; do not hide a failure by widening the budget or replacing the baseline with the slower candidate. An intentional workload, environment or budget change needs a separately explained calibration. Keep raw reports outside the repository; report measurements and limitations in GitHub. This check runs explicitly and adds no timing assertion to normal unit tests or always-on Actions job. It supplies regression evidence, not a promised reduction in CI minutes.
 
 ## Live integration and the transition
 
