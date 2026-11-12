@@ -1097,6 +1097,58 @@ def cmd_gaps_rollup(args) -> int:
     return 0
 
 
+def _load_slide_vision(path: Path) -> dict:
+    """Read explicit source selections without preparing media or a client."""
+    import json
+    import re
+
+    from yizkr.pipeline.slide_reading import SlideVisionSelection
+    from yizkr.pipeline.slide_renderer import SlideRenderSettings
+
+    def distinct(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError("slide-vision configuration repeats a key")
+            value[key] = item
+        return value
+
+    values = json.loads(path.read_text(), object_pairs_hook=distinct)
+    if not isinstance(values, dict):
+        raise ValueError("slide-vision configuration must be a source mapping")
+    result = {}
+    for sha1, value in values.items():
+        if not re.fullmatch(r"[0-9a-f]{40}", sha1):
+            raise ValueError("slide-vision sources need full lowercase SHA-1s")
+        if (
+            not isinstance(value, dict)
+            or set(value) - {"positions", "settings"}
+            or not isinstance(value.get("positions"), list)
+        ):
+            raise ValueError(
+                "each slide-vision selection needs positions "
+                "and optional settings"
+            )
+        settings = value.get("settings", {})
+        if (
+            not isinstance(settings, dict)
+            or set(settings) - {"executable", "long_edge", "timeout"}
+            or (
+                "executable" in settings
+                and not isinstance(settings["executable"], str)
+            )
+            or (
+                "timeout" in settings
+                and type(settings["timeout"]) not in (int, float)
+            )
+        ):
+            raise ValueError("invalid slide-vision renderer settings")
+        result[sha1] = SlideVisionSelection(
+            tuple(value["positions"]), SlideRenderSettings(**settings)
+        )
+    return result
+
+
 def _scratch_plan(args) -> tuple[Path, dict]:
     """(the corpus folder, the driver's options) for the run a `scratch
     run` or `scratch estimate` command plans; exits when there is no
@@ -1113,7 +1165,14 @@ def _scratch_plan(args) -> tuple[Path, dict]:
         )
     if not folder.is_dir():
         sys.exit(f"{folder} is not a directory")
+    selected = {}
+    if args.slide_vision is not None:
+        try:
+            selected = {"slide_vision": _load_slide_vision(args.slide_vision)}
+        except (OSError, ValueError) as exc:
+            sys.exit(f"invalid --slide-vision configuration: {exc}")
     return folder, {
+        **selected,
         "runs": args.runs,
         "resume": args.resume,
         "new": args.new,
@@ -2352,6 +2411,13 @@ def _scratch_plan_options(p, effort_choices, runs_help: str) -> None:
         default=3,
         metavar="N",
         help="extraction chunks in parallel per document (default 3)",
+    )
+    p.add_argument(
+        "--slide-vision",
+        type=Path,
+        metavar="FILE",
+        help="JSON mapping of PPTX source SHA-1s to selected slide positions "
+        "and optional renderer settings; native XML remains the default",
     )
     p.add_argument(
         "--extract-effort",

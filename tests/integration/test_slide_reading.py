@@ -1,16 +1,27 @@
 """Optional actual office rendering through the selected-slide reading API."""
 
 import os
+import shutil
+from collections import defaultdict
 
 import pytest
 
 from tests.fixtures import slides
+from tests.fixtures.document_processing import snapshot
 from tests.fixtures.records import record_answer
+from tests.unit import test_scratch_estimate as estimate_tests
+from tests.unit.test_scratch import Corpus, Driver, fakes  # noqa: F401
 from yizkr.claims import ArtifactRef
+from yizkr.pipeline.container_inventory import read_inventory
 from yizkr.pipeline.media_stages import MediaReadRequest, read_media
-from yizkr.pipeline.slide_reading import SlideVisionRequest
+from yizkr.pipeline.slide_reading import (
+    SlideVisionRequest,
+    SlideVisionSelection,
+)
 from yizkr.pipeline.slide_renderer import SlideRenderSettings
 from yizkr.pipeline.transcribe import Transcription, check_vision_page
+
+engine = estimate_tests.engine
 
 
 def test_real_render_selected_body_and_native_notes(tmp_path):
@@ -70,3 +81,62 @@ def test_real_render_selected_body_and_native_notes(tmp_path):
             "positions"
         ] == [1]
     assert len(seen) == 1
+
+
+def test_real_render_survives_driver_publication_and_cache_removal(
+    tmp_path, engine
+):
+    executable = os.environ.get("YIZKR_TEST_LIBREOFFICE")
+    if executable is None:
+        pytest.skip("set YIZKR_TEST_LIBREOFFICE to a local office executable")
+    corpus = Corpus(tmp_path / "corpus")
+    source = corpus.folder / "fictional.pptx"
+    source.write_bytes(slides.native_presentation())
+    corpus.texts = defaultdict(lambda: "Left panel | Right panel")
+    engine.corpus = corpus
+    engine.fresh = False
+    state = tmp_path / "runs" / "selected"
+    cache = tmp_path / "cache"
+    options = {
+        "cache_dir": cache,
+        "until": "transcription",
+        "slide_vision": {
+            ArtifactRef.from_path(source).sha1: SlideVisionSelection(
+                (1,), SlideRenderSettings(executable=executable, long_edge=640)
+            )
+        },
+    }
+    first = Driver(corpus.folder, state, **options)
+    assert first.run() == 0
+    (doc,) = first.documents()
+    transcription = doc.transcription.read_bytes()
+    reading = Transcription.model_validate_json(transcription)
+    assert reading.pages[0].provenance.method == "vision"
+    assert reading.pages[0].provenance.render_product_sha256
+    assert check_vision_page(reading, reading.pages[0]).passed
+    body, notes = reading.source_context.readings[:2]
+    assert body.support.part_id != notes.support.part_id
+    assert reading.text[notes.start : notes.end] == slides.NOTES
+    inventory = read_inventory(doc.dir)
+    part = next(p for p in inventory.parts if p.id == body.support.part_id)
+    assert part.reading.product == "transcription.json"
+    assert reading.pages[0].provenance.reading_input in [
+        representation.byte_object for representation in part.representations
+    ]
+    assert len(engine.calls) == 1
+    shutil.rmtree(cache)
+
+    def unexpected(*args):
+        raise AssertionError(
+            "durable reading unexpectedly called the provider"
+        )
+
+    engine.hook = unexpected
+    before = snapshot(state, skip=())
+    estimate = estimate_tests.Quiet(corpus.folder, state, **options).estimate()
+    assert estimate.stages["transcription"].reused == 1
+    assert snapshot(state, skip=()) == before
+    assert not cache.exists()
+    assert Driver(corpus.folder, state, **options).run() == 0
+    assert doc.transcription.read_bytes() == transcription
+    assert len(engine.calls) == 1
