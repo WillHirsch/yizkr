@@ -13,7 +13,7 @@ A reading preserves what a source says, its location and uncertainty, before [ex
 | Paged PDF/PPTX | A format reader assembles located page/slide text and provenance, with independent image readings and vision page readings where supported. The assembled container has no whole-document vision class. |
 | Adopted image reading | Verified existing reading products supply the independent image's transcription without another vision call. |
 
-These are shared [stage operations](ARCHITECTURE.md#shared-document-stage-operations), used by the [reviewed text-source workflow](TEXT_INGESTION.md) and the [whole-corpus workflow](SCRATCH_WORKFLOW.md). A direct caller can also select [PPTX slides for vision](#pptx-selected-slide-vision) when their visible content has no independent image contributors. The default PPTX route still reads native XML; automatic route selection, mixed-source slide attribution and whole-corpus integration remain under [#747](https://github.com/WillHirsch/yizkr/issues/747). The HTR adapter is a stub, not another supported reading engine.
+These are shared [stage operations](ARCHITECTURE.md#shared-document-stage-operations), used by the [reviewed text-source workflow](TEXT_INGESTION.md) and the [whole-corpus workflow](SCRATCH_WORKFLOW.md). Direct callers and the whole-corpus driver can select [PPTX slides for vision](#pptx-selected-slide-vision) when their visible content has no independent image contributors. The default PPTX route still reads native XML; automatic route selection and mixed-source slide attribution remain under [#747](https://github.com/WillHirsch/yizkr/issues/747). The HTR adapter is a stub, not another supported reading engine.
 
 ### Structured vision record (ADR-0037)
 
@@ -109,7 +109,26 @@ Speaker notes are appended from their native source part after the visual body, 
 
 Reading dependencies include the selected positions, renderer settings and verified render-product digest alongside the ordinary source, language and model dependencies. Selected-page provenance records the actual PNG and render-product digest. The workspace keeps render products; callers own persistence of the returned transcription, as with other shared media operations. Compatible model responses can be reused independently of those document products, after current admission and exclusion checks.
 
-The unchanged transcription prompt reads visible text and tabular layout; it does not capture arbitrary geometric or arrow meanings as structured relationships. This opt-in API provides no automatic test of whether native XML is visually sufficient. It does not enable slide vision in the whole-corpus driver or separate assertions made by several sources within one composite slide. Those remaining routes need their own attribution and downstream evidence under [#747](https://github.com/WillHirsch/yizkr/issues/747).
+The whole-corpus driver accepts the same explicit choice through `ScratchDriver(slide_vision={source_sha1: SlideVisionSelection(positions=(1, 3))})`; `SlideVisionSelection` is defined in `slide_reading`. The driver owns a `slide-render-workspace/` directory beside the document's transcription. For the CLI, `--slide-vision FILE` reads a JSON object keyed by each original PPTX's full lowercase SHA-1. Replace the template key below with that identity; `settings` is optional and these are its defaults:
+
+```json
+{
+  "<full-source-sha1>": {
+    "positions": [1, 3],
+    "settings": {
+      "executable": "libreoffice",
+      "long_edge": 1600,
+      "timeout": 120
+    }
+  }
+}
+```
+
+Pass the file to `yizkr scratch estimate --slide-vision FILE` and `yizkr scratch run --slide-vision FILE`. Resume with the same normalized selections and settings; changing them requires a new run. Unknown, excluded or non-PPTX source selections refuse. A current curator correction takes precedence over slide vision: the plan reports that choice, keeps the selection in the run's configuration and reads the correction without a slide renderer. Sources without a selection keep their existing route.
+
+Saved selected readings are checked against current source bindings, admission, renderer inputs, rendered bytes, physical positions and body/notes boundaries before reuse. Their render products and transcriptions survive independently of the model-response cache. Estimation uses the same selection and cache keys, inspecting saved products without modifying them; when PNGs must be prepared, it renders in a temporary workspace. It makes no provider call but can require local rendering work.
+
+The unchanged transcription prompt reads visible text and tabular layout; it does not capture arbitrary geometric or arrow meanings as structured relationships. Automatic selection when native XML is insufficient and attribution within mixed-source slides remain work under [#747](https://github.com/WillHirsch/yizkr/issues/747).
 
 ## Validation: failure and attention
 

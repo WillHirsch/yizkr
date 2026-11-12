@@ -16,7 +16,7 @@ The manifest records settings, hashes and paths:
 - the LLM cache's absolute path, or `null` when the run has no cache;
 - the corpus folder, and the never-ingest list's file and hash;
 - the code version: the package version, the git commit, whether tracked files differ from it, and the SHA-256 of that difference;
-- the run's other configuration (language, concurrency and refresh);
+- the run's other configuration (language, concurrency, refresh and explicit slide-vision selections);
 - the planned documents;
 - when the run and each of its invocations started and ended, and how each invocation ended.
 
@@ -51,6 +51,8 @@ The settings a run that keeps its settings must keep are `mode`, `project_stage`
 
 A `run.json` written before format 1 lacks these settings, so a run that keeps its settings refuses to resume from one.
 
+When selected PPTX vision is requested, `config.slide_vision` records the normalized map from original source SHA-1 to sorted physical `positions` and renderer `settings`. The selection-file path and render-workspace paths are not part of this configuration. Resume must supply the same values; changing a selection requires a new run. An unselected run omits the field. See the [selection-file format and reuse rules](SOURCE_READING.md#pptx-selected-slide-vision).
+
 **A scratch run past its barrier.** A scratch run keeps its code with one exception, so that a corpus stage registered after the run reached its barrier can still run on it. When every document has ended its per-document stages in the run's events, all of them done or failed, or one failed (the stages after a failed one are never dispatched), and the code is the only setting an invocation changes, the invocation goes past the barrier alone: it dispatches no document's stage, and runs the corpus stages over the views as they are. The run's `code` stays the code the documents' stages ran on, and the invocation records its own under `scratch.code`, with `scratch.past_barrier_only`. Such an invocation refuses `--refresh`, which would make views again. With any other setting changed, or a document's stage still to run, a change of code is refused as any other change is: start a new run, whose fresh state directories make every view again with the new code, the LLM cache answering every call the change leaves the same.
 
 ## Model ids, never aliases
@@ -81,7 +83,7 @@ A reader checks `format`. A later format may add fields; a reader that meets fie
 | `cache` | The configured LLM cache's absolute path; deterministic-only invocations need not open it |
 | `corpus` | `{folder, exclusions}`: the corpus folder's absolute path; the never-ingest list as `{file, sha256}`, see below |
 | `code` | `{version, commit, dirty, diff_sha256}`, see below |
-| `config` | Declared generation settings: engine, language, fallback language, efforts, extraction model, refresh, role epochs and chunk concurrency |
+| `config` | Declared generation settings: engine, language, fallback language, efforts, extraction model, refresh, role epochs, chunk concurrency and optional `slide_vision` source selections |
 | `pacing` | A scratch run's: the engine's pacing, as the latest invocation ran it (not a setting it keeps): `reserve`, the share of each usage window left to development sessions (`$YIZKR_CLAUDE_RESERVE`), and `max_wait`, the longest a call waits for the subscription, in seconds (`$YIZKR_CLAUDE_MAX_WAIT`); `null` for the API engine |
 | `scratch` | A scratch run's latest invocation (not a setting it keeps): `until` (the stage it was asked to stop after, or `null`), `canaries` (the SHA-1s of the documents that went first, and of the first excerpt of the invocation, added as it is found), `corpus_stages` (the names of those registered, which the live monitor lists with `until` as the corpus stages the invocation is to run), `past_barrier_only` and, when it is true, `code` (the invocation's own code, see above), and `complete` (whether it went through every stage there is, which `yizkr scratch run` reads to resume the latest run or start a new one) |
 | `documents` | One entry per planned document, `{sha1, file, kind, stages}`: its media SHA-1, its file name, its slice (`text`, `media`, `pdf`, `presentation`, `gedcom`, `excerpt`) and the stages planned for it. An excerpt is an eligible independent PDF/PPTX image with a retained document reading, including an illegible reading; readings whose pages are all blank or not document pages produce no excerpt. Size, page coverage and visible placement do not determine source ownership ([container sources](ARTIFACTS.md#container-sources-adr-0008)). It is added as its container's transcription finds it, under its bound owner's SHA-1; an invocation plans the excerpts its directories hold from its start. A document whose source or `state.json` cannot be read is not planned; a `document-failed` event names it (docs/LLM_CACHE.md) |

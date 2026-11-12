@@ -11,7 +11,7 @@ import hashlib
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from yizkr.claims import ArtifactRef
 from yizkr.pipeline.cancellation import check_cancelled
@@ -24,10 +24,57 @@ from yizkr.pipeline.slide_renderer import SlideRenderSettings
 from yizkr.pipeline.slide_renders import (
     SlideRender,
     SlideRenderProduct,
+    inspect_slide_renders,
     prepare_slide_renders,
+    slide_render_dependencies,
 )
 
+if TYPE_CHECKING:
+    from yizkr.pipeline.transcribe import Transcription
+
 ExclusionCheck = Callable[[str, Sequence[str]], bool]
+
+
+def _positions(positions: tuple[int, ...]) -> None:
+    if (
+        not isinstance(positions, tuple)
+        or not positions
+        or any(
+            type(position) is not int or position < 1 for position in positions
+        )
+        or len(set(positions)) != len(positions)
+    ):
+        raise ValueError(
+            "slide vision needs distinct positive slide positions"
+        )
+
+
+def _configuration(positions, settings):
+    return {
+        "positions": sorted(positions),
+        "settings": {
+            "executable": settings.executable,
+            "long_edge": settings.long_edge,
+            "timeout": settings.timeout,
+        },
+    }
+
+
+@dataclass(frozen=True)
+class SlideVisionSelection:
+    """A durable source-specific choice, independent of workspace paths."""
+
+    positions: tuple[int, ...]
+    settings: SlideRenderSettings = SlideRenderSettings()
+
+    def __post_init__(self) -> None:
+        _positions(self.positions)
+
+    def configuration(self) -> dict[str, Any]:
+        return _configuration(self.positions, self.settings)
+
+    def request(self, directory: Path) -> SlideVisionRequest:
+        return SlideVisionRequest(self.positions, directory, self.settings)
 
 
 @dataclass(frozen=True)
@@ -44,30 +91,135 @@ class SlideVisionRequest:
     settings: SlideRenderSettings = SlideRenderSettings()
 
     def __post_init__(self) -> None:
-        if (
-            not isinstance(self.positions, tuple)
-            or not self.positions
-            or any(
-                type(position) is not int or position < 1
-                for position in self.positions
-            )
-            or len(set(self.positions)) != len(self.positions)
-        ):
-            raise ValueError(
-                "slide vision needs distinct positive slide positions"
-            )
+        _positions(self.positions)
         if not isinstance(self.directory, Path):
             raise ValueError("slide vision needs a render workspace Path")
 
     def configuration(self) -> dict[str, Any]:
-        return {
-            "positions": sorted(self.positions),
-            "settings": {
-                "executable": self.settings.executable,
-                "long_edge": self.settings.long_edge,
-                "timeout": self.settings.timeout,
-            },
-        }
+        return _configuration(self.positions, self.settings)
+
+
+def _selection(request, admission) -> None:
+    positions = set(request.positions)
+    if not positions <= {proof.position for proof in admission}:
+        raise ValueError("selected slide position is outside the presentation")
+    mixed = [
+        proof.position
+        for proof in admission
+        if proof.position in positions and proof.image_part_ids
+    ]
+    if mixed:
+        raise ValueError(
+            "selected slide has original image contributors; "
+            f"mixed-source attribution is unsupported at positions {mixed}"
+        )
+
+
+def slide_vision_dependencies(
+    source: Path,
+    content: PresentationContent,
+    request: SlideVisionRequest,
+    *,
+    excluded: ExclusionCheck,
+) -> dict[str, Any]:
+    """Current visual generation basis, independent of saved output health."""
+    from yizkr.pipeline.slide_admission import SlideAdmission
+
+    observed = slide_render_dependencies(
+        source,
+        request.directory,
+        excluded=excluded,
+        settings=request.settings,
+        prepared=content,
+    )
+    _selection(
+        request,
+        [
+            SlideAdmission.model_validate(value)
+            for value in observed.pop("admission")
+        ],
+    )
+    return {**request.configuration(), **observed}
+
+
+def slide_vision_reading_failure(
+    source: Path,
+    transcription: Transcription,
+    content: PresentationContent,
+    request: SlideVisionRequest,
+    *,
+    excluded: ExclusionCheck,
+) -> str | None:
+    """Revalidate a persisted selected-slide reading without publication.
+
+    Stale reading/provenance/representation data asks for regeneration. Unsafe
+    current source admission or ownership raises instead of selecting another
+    route. Provider caches are neither consulted nor needed.
+    """
+    from yizkr.pipeline.container_sources import source_context
+    from yizkr.pipeline.transcribe import DECK_ENGINE, check_vision_page
+
+    product = inspect_slide_renders(
+        source,
+        request.directory,
+        excluded=excluded,
+        settings=request.settings,
+        prepared=content,
+    )
+    if product is None:
+        return "slide render product is missing, damaged or stale"
+    _selection(request, [slide.admission for slide in product.slides])
+    if (
+        transcription.artifact != product.source
+        or transcription.engine != DECK_ENGINE
+    ):
+        return "slide reading identifies another source or reader"
+    pages = transcription.pages or ()
+    if [page.page for page in pages] != [
+        slide.admission.position for slide in product.slides
+    ]:
+        return "slide reading lacks complete physical-slide provenance"
+    for page, slide in zip(pages, product.slides, strict=True):
+        selected = page.page in request.positions
+        if page.provenance.method != ("vision" if selected else "slide-xml"):
+            return "selected slide reading routes have changed"
+        if selected:
+            if (
+                page.provenance.reading_input
+                != slide.representation.byte_object
+                or page.provenance.render_product_sha256 != product.digest
+            ):
+                return "slide reading does not identify its rendered input"
+            if not check_vision_page(transcription, page).passed:
+                return (
+                    "selected slide vision record no longer passes validation"
+                )
+        elif (
+            page.body_end is not None
+            or page.provenance.reading_input is not None
+            or page.provenance.render_product_sha256 is not None
+        ):
+            return (
+                "native slide reading carries incompatible render provenance"
+            )
+    if content.inventory is None:
+        raise ValueError("slide reading requires a current source inventory")
+    sources = project_sources(
+        content.inventory,
+        request.directory,
+        data=content.inventory_bytes,
+        excluded=excluded,
+    )
+    context = source_context(transcription, sources)
+    if any(span.state != "attributed" for span in context.readings):
+        return (
+            "slide body and speaker notes no longer have supported boundaries"
+        )
+    if {span.support.locator.position for span in context.readings} != {
+        page.page for page in pages
+    }:
+        return "slide reading lacks current source-part support"
+    return None
 
 
 def _payload(
@@ -85,6 +237,42 @@ def _payload(
     ):
         raise ValueError("slide reading representation is missing or damaged")
     return data
+
+
+def restore_slide_render_representations(
+    content: PresentationContent,
+    product: SlideRenderProduct,
+    directory: Path,
+    *,
+    excluded: ExclusionCheck,
+) -> None:
+    """Merge verified render bytes into current preparation, in memory only.
+
+    Call after current product inspection. Fresh source eligibility, owners
+    and readings remain authoritative; the workspace contributes no new ones.
+    """
+    if content.inventory is None or content.inventory.source != product.source:
+        raise ValueError("render product belongs to another source inventory")
+    parts = {part.id: part for part in content.inventory.parts}
+    payloads = []
+    for slide in product.slides:
+        part = parts.get(slide.admission.part_id)
+        if (
+            part is None
+            or part.kind != "slide_body"
+            or part.locator.position != slide.admission.position
+        ):
+            raise ValueError("render product has no matching slide body")
+        payloads.append(
+            (part, slide.representation, _payload(directory, slide, excluded))
+        )
+    for part, representation, data in payloads:
+        part.representations = [
+            old
+            for old in part.representations
+            if old.method != representation.method
+        ] + [representation.model_copy(deep=True)]
+        content.inventory_bytes[representation.byte_object.sha1] = data
 
 
 @dataclass(frozen=True)
@@ -219,11 +407,7 @@ def select_slide_vision(
     admission = admit_slides(
         original, read.sources, excluded=excluded, source_names=(source.name,)
     )
-    if any(
-        proof.position in positions and proof.image_part_ids
-        for proof in admission
-    ):
-        raise ValueError("selected slide has original image contributors")
+    _selection(request, admission)
     product = prepare_slide_renders(
         source,
         request.directory,
@@ -242,18 +426,23 @@ def select_slide_vision(
     # The render workspace and the reading share one verified owner binding.
     # Carry render bytes with the usual temporary products for callers that
     # publish the inventory, while the dedicated folder retains its record.
-    content.inventory = inventory
+    restore_slide_render_representations(
+        content, product, request.directory, excluded=excluded
+    )
     for slide in product.slides:
-        data = _payload(request.directory, slide, excluded)
-        content.inventory_bytes[slide.representation.byte_object.sha1] = data
         if slide.admission.position in positions:
             path = directory / slide.representation.file
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(data)
-    read.inventory = inventory
+            path.write_bytes(
+                content.inventory_bytes[slide.representation.byte_object.sha1]
+            )
+    read.inventory = content.inventory
     read.inventory_bytes = content.inventory_bytes
     read.sources = project_sources(
-        inventory, directory, data=content.inventory_bytes, excluded=excluded
+        content.inventory,
+        directory,
+        data=content.inventory_bytes,
+        excluded=excluded,
     )
     notes = {
         part.locator.position: part.text or "" for part in read.sources.notes

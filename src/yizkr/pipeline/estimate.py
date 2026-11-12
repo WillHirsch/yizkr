@@ -109,11 +109,13 @@ import contextlib
 import functools
 import json
 import math
+import shutil
 import sys
 import uuid
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 from yizkr.claims import ArtifactRef, ClaimBatch
@@ -948,6 +950,57 @@ class Estimator(ScratchDriver):
             volatile=TRANSCRIPTION_VOLATILE,
         ) != doc.derivations.content(doc.transcription.name)
         return made
+
+    def _slide_vision_dependencies(self, doc, request):
+        if not self._fresh(doc):
+            return super()._slide_vision_dependencies(doc, request)
+        # Execution sets obsolete document directories aside before observing
+        # generation inputs; their render workspace cannot affect this plan.
+        with TemporaryDirectory(prefix="yizkr-slide-estimate-") as directory:
+            return super()._slide_vision_dependencies(
+                doc, replace(request, directory=Path(directory))
+            )
+
+    def _transcribe(self, doc: DocumentRun, method: str):
+        """Stage optional render products outside every persisted run folder.
+
+        Reuse the same admission and model-input preparation as execution.
+        Missing or damaged representations may be rebuilt to determine cache
+        keys, but estimates never repair the caller's render workspace.
+        """
+        request = self._slide_vision_request(doc)
+        if request is None:
+            return super()._transcribe(doc, method)
+        with TemporaryDirectory(prefix="yizkr-slide-estimate-") as temporary:
+            workspace = Path(temporary) / "renders"
+            retained = not self._fresh(doc)
+            if retained and request.directory.is_symlink():
+                raise ValueError("slide render workspace is a symlink")
+            if retained and request.directory.exists():
+                if not request.directory.is_dir():
+                    raise ValueError(
+                        "slide render workspace is not a directory"
+                    )
+                for path in request.directory.rglob("*"):
+                    # Do not turn unsafe destinations into harmless missing
+                    # files: execution and estimation must both refuse them.
+                    if path.is_symlink():
+                        raise ValueError(
+                            "slide render workspace contains a symlink"
+                        )
+                    if path.is_dir():
+                        continue
+                    if not path.is_file():
+                        raise ValueError(
+                            "slide render workspace contains a nonregular file"
+                        )
+                    relative = path.relative_to(request.directory)
+                    target = workspace / relative
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(path, target)
+            return super()._transcribe(
+                doc, method, slide_vision_directory=workspace
+            )
 
     def _extraction(
         self, doc: DocumentRun, fresh: bool, before: _Made

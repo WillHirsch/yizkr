@@ -227,6 +227,10 @@ from yizkr.pipeline.rundir import (
     summarise,
 )
 from yizkr.pipeline.rundir import FAILED as STAGE_FAILED
+from yizkr.pipeline.slide_reading import (
+    SlideVisionRequest,
+    SlideVisionSelection,
+)
 from yizkr.pipeline.stage_planning import (
     DOCUMENT_STAGES,
     MODEL_ROLES,
@@ -883,6 +887,7 @@ class ScratchDriver:
         extract_model: str | None = None,
         env_file: Path | None = None,
         exclusions: ExclusionList | None = None,
+        slide_vision: Mapping[str, SlideVisionSelection] | None = None,
         refresh: Collection[str] = (),
         epochs: Mapping[str, int] | None = None,
         cancellation: Cancellation | None = None,
@@ -896,6 +901,13 @@ class ScratchDriver:
         # the never-ingest list. run() refuses to start without one:
         # an empty ExclusionList is an explicit configuration, None is none.
         self.exclusions = exclusions
+        self.slide_vision = dict(slide_vision or {})
+        for owner, selection in self.slide_vision.items():
+            ArtifactRef(sha1=owner)
+            if not isinstance(selection, SlideVisionSelection):
+                raise ValueError(
+                    "slide vision needs SlideVisionSelection values"
+                )
         self.state_dir = run_dir
         self.rundir = RunDir(run_dir)
         self.cache_dir = cache_dir
@@ -1043,6 +1055,33 @@ class ScratchDriver:
         self._planned_kinds = {
             doc.kind for doc in docs if doc.unreadable is None
         }
+        if not self.slide_vision:
+            return
+        selected = set(self.slide_vision)
+        for doc in docs:
+            try:
+                owner = doc.sha1
+            except OSError:
+                # An unreadable unrelated source still fails only its own
+                # stages. A requested owner absent from the eligible set is
+                # refused below, rather than silently ignored.
+                continue
+            if owner not in self.slide_vision:
+                continue
+            if doc.unreadable is not None or doc.kind != "presentation":
+                raise ScratchRefused(
+                    "slide vision selects an unreadable or non-PPTX source"
+                )
+            if self._slide_vision_request(doc) is None:
+                self.log(
+                    f"  {owner[:12]}: curator correction takes precedence "
+                    "over the configured slide vision selection"
+                )
+            selected.discard(owner)
+        if selected:
+            raise ScratchRefused(
+                "slide vision selects sources absent from the eligible corpus"
+            )
 
     def _preflight_roles(self, past: bool = False) -> tuple[str, ...]:
         """Model roles in the declared document and corpus stages in range."""
@@ -1399,6 +1438,18 @@ class ScratchDriver:
                 "refresh": list(self.refresh),
                 "epochs": dict(sorted(self.epochs.items())),
                 "chunk_concurrency": self.chunk_concurrency,
+                **(
+                    {
+                        "slide_vision": {
+                            owner: selection.configuration()
+                            for owner, selection in sorted(
+                                self.slide_vision.items()
+                            )
+                        }
+                    }
+                    if self.slide_vision
+                    else {}
+                ),
             },
             "documents": [
                 {
@@ -2682,6 +2733,11 @@ class ScratchDriver:
                     configuration["preparation"] = preparation_dependencies(
                         prepared
                     )
+                selection = self._slide_vision_request(doc)
+                if selection is not None:
+                    configuration["slide_vision"] = (
+                        self._slide_vision_dependencies(doc, selection)
+                    )
                 if route == EXCERPT:
                     candidates = self._excerpt_candidates(doc)
                     if not candidates:
@@ -3046,6 +3102,72 @@ class ScratchDriver:
         # Readers can add representations and outcomes to this preparation.
         return prepared.inventory, prepared.data
 
+    def _slide_vision_request(
+        self, doc: DocumentRun, *, directory: Path | None = None
+    ) -> SlideVisionRequest | None:
+        selection = self.slide_vision.get(doc.sha1)
+        if selection is None:
+            return None
+        resets = doc.unrecorded or (
+            doc.state.content_sha1 and doc.state.content_sha1 != doc.sha1
+        )
+        route = (
+            route_transcription(doc.source, None)
+            if resets
+            else self._route(doc)
+        )
+        if doc.kind == "presentation" and route == "correction":
+            return None
+        if doc.kind != "presentation" or route != PAGED:
+            raise ScratchRefused("slide vision requires a paged PPTX source")
+        return selection.request(
+            directory
+            if directory is not None
+            else doc.dir / "slide-render-workspace",
+        )
+
+    def _slide_vision_dependencies(
+        self, doc: DocumentRun, request: SlideVisionRequest
+    ) -> dict[str, Any]:
+        from yizkr.pipeline.slide_reading import slide_vision_dependencies
+        from yizkr.pipeline.slide_renderer import SlideRenderError
+
+        try:
+            return slide_vision_dependencies(
+                doc.source,
+                self._presentation(doc),
+                request,
+                excluded=self._excluded_image,
+            )
+        except (OSError, ValueError, SlideRenderError) as exc:
+            raise ScratchRefused(
+                f"cannot inspect selected slide inputs: {exc}"
+            ) from exc
+
+    def _restore_slide_representations(self, doc: DocumentRun) -> None:
+        """Carry verified render bytes into the published source inventory."""
+        from yizkr.pipeline.slide_reading import (
+            restore_slide_render_representations,
+        )
+        from yizkr.pipeline.slide_renders import inspect_slide_renders
+
+        request = self._slide_vision_request(doc)
+        if request is None:
+            return
+        content = self._presentation(doc)
+        product = inspect_slide_renders(
+            doc.source,
+            request.directory,
+            excluded=self._excluded_image,
+            settings=request.settings,
+            prepared=content,
+        )
+        if product is None:
+            raise ValueError("slide render product is missing or stale")
+        restore_slide_render_representations(
+            content, product, request.directory, excluded=self._excluded_image
+        )
+
     def _record_container_inventory(self, doc: DocumentRun) -> None:
         """Publish source correspondence while retaining human products."""
         from yizkr.pipeline.container_inventory import keep_inventory
@@ -3185,6 +3307,11 @@ class ScratchDriver:
 
         if transcription is not None and doc.kind == PDF:
             self._restore_pdf_representations(doc, transcription)
+        if (
+            transcription is not None
+            and self._slide_vision_request(doc) is not None
+        ):
+            self._restore_slide_representations(doc)
         prepared = self._container_preparation(doc)
         if prepared is None:
             return
@@ -3237,7 +3364,7 @@ class ScratchDriver:
                 product=path.relative_to(doc.dir).as_posix(),
                 product_sha256=hashlib.sha256(reading_data).hexdigest(),
             )
-        if inventory.container == "pdf" and transcription is not None:
+        if transcription is not None:
             pages = {page.page: page for page in transcription.pages or ()}
             digest = hashlib.sha256(doc.transcription.read_bytes()).hexdigest()
             for part in inventory.parts:
@@ -3255,15 +3382,21 @@ class ScratchDriver:
                         product=doc.transcription.name,
                         product_sha256=digest,
                     )
-                if part.kind != "page_body":
+                if part.kind not in {"page_body", "slide_body"}:
                     continue
                 page = pages.get(part.locator.position)
+                if part.kind == "slide_body" and (
+                    page is None or page.provenance.method != "vision"
+                ):
+                    continue
                 if page is not None:
                     part.reading = ReadingOutcome(
                         state="read",
                         method=page.provenance.engine,
                         empty=not transcription.text[
-                            page.start : page.end
+                            page.start : page.body_end
+                            if page.body_end is not None
+                            else page.end
                         ].strip(),
                         product=doc.transcription.name,
                         product_sha256=digest,
@@ -3465,6 +3598,34 @@ class ScratchDriver:
             media_page_count,
         )
 
+        if doc.kind == "presentation":
+            request = self._slide_vision_request(doc)
+            if request is not None:
+                from yizkr.pipeline.slide_reading import (
+                    slide_vision_reading_failure,
+                )
+                from yizkr.pipeline.slide_renderer import SlideRenderError
+
+                try:
+                    failure = slide_vision_reading_failure(
+                        doc.source,
+                        transcription,
+                        self._presentation(doc),
+                        request,
+                        excluded=self._excluded_image,
+                    )
+                except (OSError, ValueError, SlideRenderError) as exc:
+                    raise ScratchRefused(
+                        f"cannot inspect saved slide reading: {exc}"
+                    ) from exc
+                if failure is not None:
+                    return failure
+            elif any(
+                page.provenance.method == VISION
+                for page in transcription.pages or ()
+            ):
+                return "slide vision is no longer selected"
+
         if is_pdf_input(doc.source):
             from yizkr.pipeline.transcribe import pdf_reading_failure
 
@@ -3663,7 +3824,13 @@ class ScratchDriver:
         )
         return result.transcription
 
-    def _transcribe(self, doc: DocumentRun, method: str):
+    def _transcribe(
+        self,
+        doc: DocumentRun,
+        method: str,
+        *,
+        slide_vision_directory: Path | None = None,
+    ):
         """Construct a shared read request without publishing any products."""
         from yizkr.pipeline.media_stages import (
             ExcerptReadRequest,
@@ -3694,6 +3861,9 @@ class ScratchDriver:
                     fallback_language=self.fallback_language,
                     prepared=self._media_preparation(doc),
                     excluded=self._excluded_image,
+                    slide_vision=self._slide_vision_request(
+                        doc, directory=slide_vision_directory
+                    ),
                 ),
                 client=functools.partial(self._llm, "transcribe", doc),
             )

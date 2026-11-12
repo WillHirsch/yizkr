@@ -239,6 +239,96 @@ def _check_output(rep: SourceRepresentation, excluded: ExclusionCheck):
         raise ValueError("rendered slide is excluded")
 
 
+def slide_render_dependencies(
+    source: Path,
+    directory: Path,
+    *,
+    excluded: ExclusionCheck,
+    settings: SlideRenderSettings = _DEFAULT_SETTINGS,
+    prepared: PresentationContent | None = None,
+) -> dict:
+    """Observe current generation inputs without writing render products.
+
+    Renderer fingerprinting uses its private temporary directory, but never
+    converts source content. Output presence or damage is not a generation
+    input. Canonical-owner and admission failures remain refusals.
+    """
+    check_cancelled()
+    original = source.read_bytes()
+    inventory, _, admission = _sources(
+        source, original, directory, excluded, prepared
+    )
+    renderer = slide_renderer.renderer_identity(settings)
+    if source.read_bytes() != original:
+        raise ValueError("PPTX changed during render inspection")
+    current, _, current_admission = _sources(
+        source, original, directory, excluded, prepared
+    )
+    basis = _basis(original, renderer, admission, inventory)
+    if _basis(original, renderer, current_admission, current) != basis:
+        raise ValueError("source admission changed during render inspection")
+    check_cancelled()
+    return {
+        "source_sha256": _digest(original),
+        "render_basis_sha256": basis,
+        "renderer": renderer,
+        "admission": [proof.model_dump(mode="json") for proof in admission],
+    }
+
+
+def inspect_slide_renders(
+    source: Path,
+    directory: Path,
+    *,
+    excluded: ExclusionCheck,
+    settings: SlideRenderSettings = _DEFAULT_SETTINGS,
+    prepared: PresentationContent | None = None,
+) -> SlideRenderProduct | None:
+    """Verify a saved product without creating, locking or repairing files.
+
+    Missing, damaged or stale output returns None. Unsafe current input,
+    exclusions and missing/conflicting canonical bindings raise. The current
+    renderer environment is fingerprinted even when all output bytes exist.
+    """
+    observed = slide_render_dependencies(
+        source,
+        directory,
+        excluded=excluded,
+        settings=settings,
+        prepared=prepared,
+    )
+    admission = tuple(
+        SlideAdmission.model_validate(value) for value in observed["admission"]
+    )
+    saved = _saved(directory, observed["render_basis_sha256"], admission)
+    if saved is None:
+        return None
+    if (
+        saved.source_sha256 != observed["source_sha256"]
+        or saved.renderer != observed["renderer"]
+    ):
+        return None
+    original = source.read_bytes()
+    if _digest(original) != observed["source_sha256"]:
+        raise ValueError("PPTX changed during render inspection")
+    if saved.source != ArtifactRef.from_bytes(original):
+        return None
+    current, _, current_admission = _sources(
+        source, original, directory, excluded, prepared
+    )
+    if (
+        _basis(original, observed["renderer"], current_admission, current)
+        != (observed["render_basis_sha256"])
+    ):
+        raise ValueError("source admission changed during render inspection")
+    for slide in saved.slides:
+        _check_output(slide.representation, excluded)
+    if _saved(directory, observed["render_basis_sha256"], admission) != saved:
+        return None
+    check_cancelled()
+    return saved
+
+
 def prepare_slide_renders(
     source: Path,
     directory: Path,
@@ -265,6 +355,12 @@ def prepare_slide_renders(
         renderer = slide_renderer.renderer_identity(settings)
         basis = _basis(original, renderer, admission, inventory)
         saved = _saved(directory, basis, admission)
+        if saved is not None and (
+            saved.source != ArtifactRef.from_bytes(original)
+            or saved.source_sha256 != _digest(original)
+            or saved.renderer != renderer
+        ):
+            saved = None
         if saved is not None:
             if source.read_bytes() != original:
                 raise ValueError("PPTX changed during render reuse")
