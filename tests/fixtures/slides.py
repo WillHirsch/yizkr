@@ -166,3 +166,43 @@ def presentation(*, hidden=True, notes_text=NOTES, background_fill=None):
                 zipfile.ZipInfo(name, (2020, 1, 1, 0, 0, 0)), text
             )
     return output.getvalue()
+
+
+def native_presentation(*, notes_text=NOTES):
+    """Native vectors/text only; first-slide XML reverses visual columns."""
+    with zipfile.ZipFile(
+        io.BytesIO(presentation(notes_text=notes_text))
+    ) as old:
+        parts = {
+            name: old.read(name)
+            for name in old.namelist()
+            if not name.startswith("ppt/media/")
+        }
+    master = "ppt/slideMasters/slideMaster1.xml"
+    text = parts[master].decode()
+    start = text.index("<p:bg>")
+    end = text.index("</p:bg>", start) + len("</p:bg>")
+    parts[master] = text[:start] + text[end:]
+    parts["ppt/slideMasters/_rels/slideMaster1.xml.rels"] = _rels(
+        [("layout", "slideLayout", "../slideLayouts/slideLayout1.xml")]
+    )
+
+    body = _body("Right panel", COLORS[0])
+    start = body.index("<p:sp>")
+    end = body.index("</p:sp>", start) + len("</p:sp>")
+    shape = body[start:end]
+    right = shape.replace('<a:off x="0"', '<a:off x="4572000"', 1)
+    right = right.replace('cx="9144000"', 'cx="4572000"', 1)
+    left = (
+        right.replace("Right panel", "Left panel")
+        .replace('<p:cNvPr id="2"', '<p:cNvPr id="3"', 1)
+        .replace('<a:off x="4572000"', '<a:off x="0"', 1)
+    )
+    parts["ppt/slides/slide3.xml"] = body[:start] + right + left + body[end:]
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w") as package:
+        for name, value in parts.items():
+            package.writestr(
+                zipfile.ZipInfo(name, (2020, 1, 1, 0, 0, 0)), value
+            )
+    return output.getvalue()

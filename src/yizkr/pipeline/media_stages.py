@@ -37,6 +37,7 @@ from yizkr.pipeline.presentation import (
     read_derived_media,
     unpack_pptx,
 )
+from yizkr.pipeline.slide_reading import SlideVisionRequest
 from yizkr.pipeline.stages import canonical_json, sha256_text
 from yizkr.pipeline.textlayer import check_pdf_vision, is_pdf_input
 from yizkr.pipeline.transcribe import (
@@ -199,6 +200,7 @@ class MediaReadRequest:
     fallback_language: str = "en"
     prepared: PreparedContainer | None = None
     excluded: ExclusionPredicate | None = None
+    slide_vision: SlideVisionRequest | None = None
 
 
 @dataclass
@@ -245,6 +247,22 @@ def read_media(
     artifact = _source(
         request.source, request.expected_artifact, request.excluded
     )
+    configuration = {
+        "route": request.route,
+        "language": request.language,
+        "fallback_language": request.fallback_language,
+    }
+    if request.slide_vision is not None:
+        if (
+            request.route != "paged"
+            or request.source.suffix.lower() not in DECK_SUFFIXES
+        ):
+            raise ValueError("slide vision requires a paged PPTX reading")
+        if request.excluded is None:
+            raise ValueError(
+                "slide vision requires a current exclusion predicate"
+            )
+        configuration["slide_vision"] = request.slide_vision.configuration()
     capture = Capture(
         "transcription",
         "mixed",
@@ -255,11 +273,7 @@ def read_media(
             if is_pdf_input(request.source)
             else "media"
         ),
-        configuration={
-            "route": request.route,
-            "language": request.language,
-            "fallback_language": request.fallback_language,
-        },
+        configuration=configuration,
     )
     prepared = request.prepared
     if prepared is not None and (
@@ -278,11 +292,7 @@ def read_media(
         )
     dependencies = {
         "source_sha1": artifact.sha1,
-        "configuration": {
-            "route": request.route,
-            "language": request.language,
-            "fallback_language": request.fallback_language,
-        },
+        "configuration": configuration,
         "preparation": preparation_dependencies(prepared),
     }
     borrowed: LlmClient | None = None
@@ -308,6 +318,7 @@ def read_media(
                 get_client,
                 **common,
                 content=prepared.presentation if prepared else None,
+                slide_vision=request.slide_vision,
             )
         else:
             reader = PdfPageTranscriber(
@@ -317,6 +328,10 @@ def read_media(
             )
         transcription = reader.transcribe(request.source)
         resolution = reader.last_resolution
+        if request.slide_vision is not None:
+            dependencies["slide_vision"] = (
+                reader.slide_vision_proof.dependencies()
+            )
     if transcription is None:
         refuse_archive(request.source)
         excluded = (
