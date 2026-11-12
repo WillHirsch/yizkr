@@ -312,13 +312,13 @@ flowchart TD
     basis -->|changed| review["Requeue affected review"]
 ```
 
-These driver comparisons use canonical hashes and whole-sheet CSV review bindings. The separate [durable review and application operations](IDENTITY_REVIEW.md) compare scoped identity and historical-claim decisions against current evidence and accepted assignments. They do not automatically import driver CSV consent. Recomputing the same canonical batch preserves its existing file and original producer provenance, and does not by itself revoke approvals. Changed batch content invalidates its dependent views and sets aside its reviewed CSVs; a changed re-exported review sheet requeues that sheet's decision. Missing processing metadata makes an older text view recompute once, after which its new dependency record supports reuse. Publication remains caller-owned and is not an atomic multi-file generation commit.
+These driver comparisons use canonical hashes and whole-sheet CSV review bindings. The separate [durable review and application operations](IDENTITY_REVIEW.md) compare scoped identity and historical-claim decisions against current evidence and accepted assignments. They do not automatically import driver CSV consent. Recomputing the same canonical batch preserves its existing file and original producer provenance, and does not by itself revoke approvals. Changed batch content invalidates its dependent views and sets aside its reviewed CSVs; a changed re-exported review sheet requeues that sheet's decision. A view without required processing metadata is recomputed; its new dependency record then supports reuse. Publication remains caller-owned and is not an atomic multi-file generation commit.
 
 Call keys include prompt and file content hashes, engine/model/effort and configuration, call kind, conversation ancestry where applicable, attempt and role epoch. Input-file paths are replaced by content hashes in the key; sources are identified by media SHA-1 rather than artifact QID, and mtimes do not key calls. This allows reuse across fresh document directories and wiki resets while the engine configuration stays the same.
 
 Persisted views and review state are separate from the response cache; cache removal alone does not invalidate them. Conversation forks bind to the opening answer whose context they assume. Provider restoration and replay belong to the execution-owned session service described below. Response storage retains its exclusive process-lifetime lock.
 
-`--refresh ROLE` rebuilds that role's views and bypasses cached answers once per key in the run. Changing a programmatic role epoch also stales that role's text extraction or critique view; legacy adapters still need refresh or a fresh directory when their current views must be rebuilt. The [cache guide](LLM_CACHE.md) covers rejection, retries and resume semantics; implementation lives in [scratch execution](../src/yizkr/pipeline/scratch.py) and [the LLM cache](../src/yizkr/pipeline/llmcache.py).
+`--refresh ROLE` rebuilds that role's views and bypasses cached answers once per key in the run. Changing a programmatic role epoch stales the relevant model-backed views through their declared processing dependencies. All supported document kinds participate in freshness checking; deterministic routes exclude unused model/cache settings. The [cache guide](LLM_CACHE.md) covers rejection, retries and resume semantics; implementation lives in [scratch execution](../src/yizkr/pipeline/scratch.py) and [the LLM cache](../src/yizkr/pipeline/llmcache.py).
 
 ## Provider conversation ownership
 
@@ -378,7 +378,7 @@ flowchart LR
     ui -->|SPARQL| endpoint["WDQS endpoint"]
     render --> builder["Static site builder"]
     endpoint -->|query results| builder
-    endpoint -->|statements and place containment| compare["Python disagreement comparison"]
+    endpoint -->|statements, death inputs and containment| compare["Python disagreement comparison"]
     endpoint -->|death, union and source-date evidence| bounds["Derive died-by bounds<br/>and union endings"]
     bounds --> compare
     bounds --> builder
@@ -390,6 +390,6 @@ The site presents people, artifacts, timelines, galleries, places and source dis
 
 Disagreement comparison accounts for date precision and ranges, derived bounds, source-stated parent sets, place containment and redirects; it does not choose a winning source. Containment follows sourced edges that have not been deprecated. The query library also provides provenance checks, the under-witnessed reappraisal queue and an unclassified-entity view for vocabulary development. The complementary `yizkr gaps rollup` command collects relation gaps from a run into a curator's CSV.
 
-The current site reads the live graph and includes possibly-living people, with runtime badges. Those badges do not filter the site; this build is for private/LAN use. Its media links point back to the wiki.
+The current site reads the live graph and includes possibly-living people, with runtime badges. Those badges do not filter the site; this build is for private/LAN use. Its media links point back to the wiki. [Runtime privacy](PRIVACY.md) describes the shared eligibility check and the export-only exclusions; the [query guide](../src/yizkr/queries/README.md#disagreement-comparison-adr-0033) defines the comparison scope and limits.
 
 Implementation: [query library](../src/yizkr/queries/README.md), [query publisher](../src/yizkr/queries/publish.py), [static site builder](../src/yizkr/staticsite.py) and [disagreement comparison](../src/yizkr/disagreement.py), with shared [death and union derivation](../src/yizkr/died_by.py).
