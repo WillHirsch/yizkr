@@ -44,7 +44,7 @@ These properties accept a subject of kind `human` or `unclassified_entity` where
 
 ### Unknown values, missing evidence and burial
 
-A positive death assertion without its date can produce `date_of_death` with `UnknownValue`, Wikibase's “some value”. A source's “the late” or a GEDCOM `DEAT Y` can support it. A blank field, “d. ?”, “date unknown”, an unreadable date or a note/citation alone does not establish a death. A marker adds no unknown-date assertion where that source already dates the death.
+A positive death assertion without its date can produce `date_of_death` with `UnknownValue`, Wikibase's “some value”. A source's “the late” or a GEDCOM `DEAT Y` can support it. A blank field, “d. ?”, “date unknown”, an unreadable date or a note/citation alone does not establish a death. In free-text extraction, a marker adds no unknown-date assertion where that source already dates the death. Independent GEDCOM DEAT records can still supply an unknown assertion beside a dated one.
 
 Unknown-value claims need an excerpt supporting the assertion. An unknown death date carries no date, bound or circa qualifiers. Unknown values are allowed only on the manifest's designated properties, currently `date_of_death` and `burial_place`, and never as qualifier values. They mean a positively supported event with an unstated value, not missing data or machine uncertainty.
 
@@ -81,7 +81,7 @@ If one source both calls a person widowed and names them as a union's deceased p
 
 - An unknown-valued death assertion can be bounded by the latest date allowed by its source artifact's nondeprecated `inception` statements.
 - A stated `ended_by_death_of` can be bounded by when the same source presents a surviving partner as widowed. Without that dating, the source artifact's own date can supply the bound.
-- An undated, circa or open-at-the-late-end alternative prevents a finite bound, even when another alternative supplies a latest date. Candidate source dates must not be narrowed by choosing a convenient earlier alternative; the derivation preserves the latest permitted bound at its precision.
+- Circa or open-at-the-late-end dated alternatives prevent a finite bound, even when another alternative supplies a latest date. Without usable dates there is no bound; an undated widowhood can still use the artifact-date fallback above. Candidate source dates must not be narrowed by choosing a convenient earlier alternative; the derivation preserves the latest permitted bound at its precision.
 - Deprecated inputs contribute no bound. Burial contributes no bound. Different sources' bounds remain attributed results, compared as ranges open at the early end.
 
 For a union with no nondeprecated stated end, the view can also derive an end from the partners' death evidence. It forms each person's span from their nondeprecated dated deaths and derived bounds, retaining the full extent rather than choosing a preferred death statement. For two partners, disjoint spans can identify whose death came first. Otherwise it can say only that the union ended no later than each evidenced partner's death. These are labeled derivations, not source-written `ended_by`/`ended_by_death_of` claims.
