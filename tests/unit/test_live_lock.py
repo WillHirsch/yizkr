@@ -629,11 +629,15 @@ def test_a_lock_error_is_a_setup_error_with_its_message_once(
 
 
 def test_a_default_run_never_touches_the_lock(runs):
-    """A run without -m live deselects every live test, so nothing makes
-    the lock's folder, let alone takes the lock."""
+    """A run without -m live leaves stack tests deselected and takes no
+    stack lock. Optional local renderer checks may be collected separately.
+    """
     run = runs.default_run
     returned = run.process.wait(timeout=HANG_GUARD)
-    assert returned == pytest.ExitCode.NO_TESTS_COLLECTED, run.output()
+    assert returned in {
+        pytest.ExitCode.OK,
+        pytest.ExitCode.NO_TESTS_COLLECTED,
+    }, run.output()
     assert "deselected" in run.output()
     assert not runs.default_lock.parent.exists()
 
