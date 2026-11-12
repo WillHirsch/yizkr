@@ -196,9 +196,16 @@ def test_empty_manual_unknown_and_malformed_events_require_full_verification(
     assert not classify(
         "push", {"before": head, "after": head}, "f" * 40, repo
     )[0]
-    assert not classify(
-        "push", {"before": head, "after": "f" * 40}, head, repo
-    )[0]
+
+
+def test_a_push_must_name_the_checked_out_after_commit(repo):
+    before = git(repo, "rev-parse", "HEAD")
+    write(repo, "docs/guide.md", "New prose\n")
+    after = commit(repo)
+    event = {"before": before, "after": after}
+    assert classify("push", event, after, repo)[0]
+    event["after"] = before
+    assert not classify("push", event, after, repo)[0]
 
 
 @pytest.mark.parametrize("raw", [b"", b"M\0docs/guide.md\0", b"bad", b"bad\0"])
