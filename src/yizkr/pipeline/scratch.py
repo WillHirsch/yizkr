@@ -915,7 +915,8 @@ class ScratchDriver:
         # task where source discipline (extract only what the source
         # asserts) matters more than raw capability, so it can run a
         # distinct model from the run's main one — which stays on the
-        # critique. None inherits the main model. See docs/adr/0016.
+        # critique. None inherits the main model. See inference configuration
+        # in docs/SOURCE_READING.md.
         self.extract_model = extract_model
         self.env_file = env_file
         self.log = log

@@ -14,6 +14,9 @@ Start here:
 - [Ingestion and identity contracts](docs/INGESTION_CONTRACT.md) – source ownership, durable assignments, review, stage products and recovery boundaries for implementation
 - [Architecture and workflow diagrams](docs/ARCHITECTURE.md) – Mermaid overviews of the implemented services, provenance, ingestion, scratch runs, cache, face review and exploration, with subsystem details
 - [Scratch-run stages and data products](docs/SCRATCH_WORKFLOW.md) – detailed input/output contracts and process types for every stage
+- [Source reading](docs/SOURCE_READING.md) – reading records, source ownership, validation, language and inference settings
+- [Extraction and critique](docs/EXTRACTION.md) – chunking, accepted products and diagnostics, schema gaps and identity proposals
+- [GEDCOM adaptation](docs/GEDCOM.md) – deterministic products, citations, unheld media and unsupported material
 - [Run provenance](docs/RUN_PROVENANCE.md) – structured stage metadata, immutable producer records and retained-code admission
 - `docs/adr/` – focused design guidance and rationale; remaining historical material is marked with open removal tasks and is not an authority for new policy
 - `docs/MODELING.md` – Wikibase modeling conventions
