@@ -15,6 +15,7 @@ Start here:
 - [Architecture and workflow diagrams](docs/ARCHITECTURE.md) – Mermaid overviews of the implemented services, provenance, ingestion, scratch runs, cache, face review and exploration, with subsystem details
 - [Scratch-run stages and data products](docs/SCRATCH_WORKFLOW.md) – detailed input/output contracts and process types for every stage
 - [Source reading](docs/SOURCE_READING.md) – reading records, source ownership, validation, language and inference settings
+- [Artifacts and container sources](docs/ARTIFACTS.md) – inner-source ownership, media registration and claims about artifacts
 - [Extraction and critique](docs/EXTRACTION.md) – chunking, accepted products and diagnostics, schema gaps and identity proposals
 - [GEDCOM adaptation](docs/GEDCOM.md) – deterministic products, citations, unheld media and unsupported material
 - [Run provenance](docs/RUN_PROVENANCE.md) – structured stage metadata, immutable producer records and retained-code admission
