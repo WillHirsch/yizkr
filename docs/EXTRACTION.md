@@ -19,7 +19,7 @@ The shared API defaults to `chunked`; run ingestion explicitly uses it for its e
 
 ## Entity manifest and fallback
 
-The opening model turn sees the whole reading. Each `EntityRecord` carries a document-scoped ID, label, aliases, kind, summary, best-effort mention lines and an `extract` flag; it may also carry a structured mention record, judgment note and `type_hint`. The manifest proposes alias unification and gives every chunk the same reference vocabulary. This makes cross-chunk references consistent, but cannot prove that the model found or distinguished every entity. Local IDs and labels are not durable identities.
+The opening model turn sees the whole reading. Each `EntityRecord` carries a document-scoped ID, label, aliases, kind, summary, best-effort mention lines and an `extract` flag; it may also carry a structured mention record, judgment note and `type_hint`. [Names and mention records](MENTIONS_AND_MATCHING.md) describes these representations and their validation/cleanup limits. The manifest proposes alias unification and gives every chunk the same reference vocabulary. This makes cross-chunk references consistent, but cannot prove that the model found or distinguished every entity. Local IDs and labels are not durable identities.
 
 Validation requires unique IDs, nonempty labels and supported entity kinds. Artifact kinds cannot be invented as manifest entities; a document mentioned by the source is distinct from a registered source artifact. Birth/death event kinds reserved for curation are dropped, and claims referencing them are rejected. Invalid mention structures or judgment notes are set aside and counted without discarding an otherwise usable entity; invalid place containers are checked separately. Out-of-range mention lines are removed. An empty or null entity list is accepted immediately as the model's claim-free reading, without another manifest attempt or fallback.
 
@@ -65,9 +65,19 @@ The critic reads the manifest, claims, whole numbered transcription and located 
 
 An unfinished critic retains available findings and an explicit incomplete status. The reviewed text-source workflow requires completion before registration/review, while a completed critic's warnings remain advisory. Critic silence is not evidence that all claims are correct, and an empty batch needs no critic model call.
 
+## Machine uncertainty and judgment (ADR-0023)
+
+Source uncertainty and machine uncertainty mean different things. Preserve the source's precision, explicit ranges and circa wording in the assertion. Do not narrow a date beyond the source, or round it to disguise uncertainty about the reading. An ambiguous interpretation must not become an apparently resolved value or falsely coarser source precision. See [time modeling](MODELING.md#uncertainty-and-time) for supported values and bounds.
+
+Optional claim confidence is review metadata, not graph confidence or approval. An entity or claim can also carry a judgment note: a category (`kind`, `relation`, `date_reading`, `identity`, `other`) and a sentence explaining a call a careful reader could make differently. Notes describe the extractor's interpretation; they are not calibrated probabilities, source uncertainty or a substitute for evidence. Absence of a note establishes no certainty.
+
+The claims writer can store a note as `judgement` and `judgement_note` in the extraction-run reference block, separate from the historical source reference. An entity note accompanies its sourced kind statement. Notes do not choose the claim's value or rank and confer no consent. [The reference pattern](MODELING.md#reference-pattern-see-adr-0003) describes encoding and refusal limits. Critic findings remain separate advisory products, not automatically written corrections.
+
+Genuine disagreement may occur within one source as well as between sources. Reviewed machine alternatives can remain labeled interpretations, but are not independent witnesses. The [disagreement report](MODELING.md#contradictions) currently compares different artifacts; that view scope is not a prohibition on preserving same-source evidence. The [under-witnessed query](../src/yizkr/queries/README.md#queries) is a structural review queue based on source targets and run references, not a measure of truth, actual scrutiny or independent corroboration. Human identity confirmation has its own [durable provenance](IDENTITY_REVIEW.md).
+
 ## Reconciliation and authority
 
-Graph matching blocks candidates by kind and shared whole-name forms, including supported structured name forms; it does not use arbitrary shared tokens or prefixes. Person appellations are excluded where identified. Structural kinship and place-containment checks can remove impossible pairs; birth-date disagreement remains evidence for review, not an automatic exclusion. Adjudication sees explicit candidates and relational evidence rather than searching the graph itself.
+Graph matching blocks candidates by kind and shared whole-name forms. [Candidate generation and structural exclusions](MENTIONS_AND_MATCHING.md#matching-candidates-and-structural-exclusions-adr-0017) describes the name keys, supplied-fact limitations and distinction from corpus clustering. Birth-date disagreement remains evidence for review, not an automatic graph-candidate exclusion. Adjudication sees explicit candidates and relational evidence rather than searching the graph itself.
 
 Use [recorded graph matching and durable review](IDENTITY_REVIEW.md#record-graph-context-and-inspect-later-cohort-matches) for replayable later-cohort proposals. A saved projection or an empty candidate list grants no creation permission. Retained assignment and historical-claim application recheck current state and require separate scoped approvals. Labels and cached model verdicts supply neither authority.
 
