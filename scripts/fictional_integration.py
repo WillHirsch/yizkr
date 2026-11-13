@@ -51,6 +51,10 @@ REQUIRED_CASES = (
         "test_common_sources_preserve_owners_placements_and_citations",
     ),
     (
+        "tests.fictional_integration.test_slide_attribution",
+        "test_slide_readings_preserve_attribution_through_write_and_query",
+    ),
+    (
         "tests.fictional_integration.test_identity_migration",
         "test_verified_migration_preserves_evidence_and_publishes_graph_origins",
     ),
