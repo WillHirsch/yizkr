@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import ctypes
+import hashlib
 import os
 import select
 import subprocess
@@ -194,6 +195,62 @@ def test_shared_client_stops_only_the_cancelled_call(fictional_cli):
     assert inactive(second_pid)
 
 
+@pytest.mark.parametrize("text", [True, False])
+def test_large_input_survives_polling_before_child_reads(
+    tmp_path, monkeypatch, text
+):
+    gate = tmp_path / "read-gate"
+    os.mkfifo(gate)
+    release = os.open(gate, os.O_RDWR)
+    polled = threading.Event()
+    communicate = subprocess.Popen.communicate
+
+    def observe_poll(process, *args, **kwargs):
+        try:
+            return communicate(process, *args, **kwargs)
+        except subprocess.TimeoutExpired:
+            polled.set()
+            raise
+
+    monkeypatch.setattr(subprocess.Popen, "communicate", observe_poll)
+    prompt = "Fictional prompt with Unicode: \u03b1\u03b2\u03b3.\n" * 16384
+    payload = prompt.encode()
+    script = (
+        "import hashlib, sys; from pathlib import Path; "
+        f"gate = Path({str(gate)!r}).open('rb', buffering=0); "
+        "gate.read(1); gate.close(); "
+        "data = sys.stdin.buffer.read(); "
+        "print(hashlib.sha256(data).hexdigest()); "
+        "print('complete', file=sys.stderr)"
+    )
+    token = Cancellation()
+    thread, result = background(
+        lambda: RUN_PROCESS(
+            [sys.executable, "-c", script],
+            input=prompt if text else payload,
+            text=text,
+            timeout=5,
+        ),
+        token,
+    )
+    try:
+        # The child cannot read stdin until a real polling timeout occurred.
+        # This reproduces a slow-starting CLI without a sleep-based race.
+        assert polled.wait(HANG_GUARD)
+        os.write(release, b"1")
+        joined(thread)
+        assert "error" not in result, result.get("error")
+        completed = result["value"]
+        digest = hashlib.sha256(payload).hexdigest() + "\n"
+        assert completed.returncode == 0
+        assert completed.stdout == (digest if text else digest.encode())
+        assert completed.stderr == ("complete\n" if text else b"complete\n")
+    finally:
+        token.cancel()
+        joined(thread)
+        os.close(release)
+
+
 @pytest.mark.skipif(
     sys.platform != "linux", reason="Linux process exit notification"
 )
@@ -243,7 +300,11 @@ def test_process_group_cleanup_includes_term_ignoring_descendant(
             llm, "time", types.SimpleNamespace(monotonic=monotonic)
         )
     thread, result = background(
-        lambda: RUN_PROCESS([sys.executable, "-c", leader], timeout=30),
+        lambda: RUN_PROCESS(
+            [sys.executable, "-c", leader],
+            input="Fictional prompt that the child never reads.\n" * 16384,
+            timeout=30,
+        ),
         token,
     )
     leader_pid, child_pid = leader_ready.get(), child_ready.get()

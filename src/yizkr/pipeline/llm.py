@@ -65,7 +65,7 @@ import time
 import uuid
 import weakref
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -125,7 +125,7 @@ def _stop_process(process: subprocess.Popen) -> tuple[str, str]:
 def _run_process(
     command,
     *,
-    input: str | None = None,
+    input: str | bytes | None = None,
     capture_output: bool = True,
     text: bool = True,
     timeout: float,
@@ -141,16 +141,29 @@ def _run_process(
     if cancellation is not None:
         cancellation.check()
     _PROCESS_OUTPUT.stdout = ""
-    process = subprocess.Popen(
-        command,
-        stdin=subprocess.PIPE if input is not None else None,
-        stdout=subprocess.PIPE if capture_output else None,
-        stderr=subprocess.PIPE if capture_output else None,
-        text=text,
-        cwd=cwd,
-        env=env,
-        start_new_session=os.name == "posix",
-    )
+    # Retrying communicate after a polling timeout does not reliably finish
+    # writing its original input. Give the child a complete anonymous file
+    # instead; output draining can then be polled without stranding stdin.
+    with (
+        tempfile.TemporaryFile(mode="w+t" if text else "w+b")
+        if input is not None
+        else nullcontext()
+    ) as stdin:
+        if stdin is not None:
+            stdin.write(input)
+            stdin.seek(0)
+        if cancellation is not None:
+            cancellation.check()
+        process = subprocess.Popen(
+            command,
+            stdin=stdin,
+            stdout=subprocess.PIPE if capture_output else None,
+            stderr=subprocess.PIPE if capture_output else None,
+            text=text,
+            cwd=cwd,
+            env=env,
+            start_new_session=os.name == "posix",
+        )
     signalling = threading.Lock()
     active = True
 
@@ -166,7 +179,6 @@ def _run_process(
     )
     deadline = time.monotonic() + timeout
     try:
-        first = True
         while True:
             if cancellation is not None:
                 cancellation.check()
@@ -175,11 +187,9 @@ def _run_process(
                 raise subprocess.TimeoutExpired(command, timeout)
             try:
                 stdout, stderr = process.communicate(
-                    input=input if first else None,
                     timeout=min(_POLL_INTERVAL, remaining),
                 )
             except subprocess.TimeoutExpired:
-                first = False
                 continue
             _PROCESS_OUTPUT.stdout = stdout or ""
             if process.returncode and cancellation is not None:
