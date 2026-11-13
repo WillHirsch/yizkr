@@ -1,8 +1,8 @@
-"""Slide vision over admitted, container-owned visual content.
+"""Slide vision with checked container and independent-image attribution.
 
 The normal presentation reader remains native. Opt-in explicit or layout
-policies select physical slides, preserve original image owners and refuse
-selected composites whose visible image evidence cannot be attributed.
+policies select physical slides and preserve original image owners. Mixed
+slides constrain model output to the arrangement of verified native blocks.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from yizkr.pipeline.container_sources import ContainerSources, project_sources
 from yizkr.pipeline.containers import ContainerPages
 from yizkr.pipeline.presentation import PresentationContent
 from yizkr.pipeline.slide_admission import admit_slides
+from yizkr.pipeline.slide_layout import NativeSlideBlocks, native_slide_blocks
 from yizkr.pipeline.slide_renderer import SlideRenderSettings
 from yizkr.pipeline.slide_renders import (
     SlideRender,
@@ -99,7 +100,7 @@ class SlideVisionRequest:
     The folder retains render products independently of the model cache.
     Explicit positions follow presentation order, including hidden slides;
     layout mode resolves its own positions. Neither choice changes source
-    ownership or authorizes mixed-source evidence.
+    ownership; supported mixed readings only arrange verified native text.
     """
 
     positions: tuple[int, ...]
@@ -153,20 +154,25 @@ def resolve_slide_vision(
     return effective, plan.configuration()
 
 
-def _selection(request, admission) -> None:
+def _selection(request, admission, sources) -> dict[int, NativeSlideBlocks]:
     positions = set(request.positions)
     if not positions <= {proof.position for proof in admission}:
         raise ValueError("selected slide position is outside the presentation")
-    mixed = [
-        proof.position
-        for proof in admission
-        if proof.position in positions and proof.image_part_ids
-    ]
-    if mixed:
-        raise ValueError(
-            "selected slide has original image contributors; "
-            f"mixed-source attribution is unsupported at positions {mixed}"
-        )
+    mixed = {}
+    for proof in admission:
+        if proof.position not in positions or not proof.image_part_ids:
+            continue
+        original = sources.body_bytes.get(proof.part_id)
+        if original is None:
+            raise ValueError("mixed slide has no verified native body")
+        blocks = native_slide_blocks(original, proof.part_id)
+        if not blocks.blocks:
+            raise ValueError(
+                "selected image-only slide has no native text to arrange; "
+                "original images are read independently"
+            )
+        mixed[proof.position] = blocks
+    return mixed
 
 
 def slide_vision_dependencies(
@@ -200,6 +206,12 @@ def slide_vision_dependencies(
             SlideAdmission.model_validate(value)
             for value in observed.pop("admission")
         ],
+        project_sources(
+            content.inventory,
+            request.directory,
+            data=content.inventory_bytes,
+            excluded=excluded,
+        ),
     )
     return {**configuration, **observed}
 
@@ -224,6 +236,12 @@ def slide_vision_reading_failure(
     effective, report = resolve_slide_vision(
         source, content, request, excluded=excluded
     )
+    sources = project_sources(
+        content.inventory,
+        request.directory,
+        data=content.inventory_bytes,
+        excluded=excluded,
+    )
     if report is not None:
         metadata = (
             transcription.provenance.metadata
@@ -236,6 +254,7 @@ def slide_vision_reading_failure(
         ):
             return "slide routing report is missing or stale"
     product = None
+    mixed = {}
     if effective is not None:
         product = inspect_slide_renders(
             source,
@@ -246,7 +265,9 @@ def slide_vision_reading_failure(
         )
         if product is None:
             return "slide render product is missing, damaged or stale"
-        _selection(effective, [slide.admission for slide in product.slides])
+        mixed = _selection(
+            effective, [slide.admission for slide in product.slides], sources
+        )
     if content.inventory is None:
         raise ValueError("slide reading requires a current source inventory")
     if (
@@ -283,20 +304,19 @@ def slide_vision_reading_failure(
                 return (
                     "selected slide vision record no longer passes validation"
                 )
+            if (page.provenance.native_layout is not None) != (
+                page.page in mixed
+            ):
+                return "slide native-layout attribution is missing or stale"
         elif (
             page.body_end is not None
             or page.provenance.reading_input is not None
             or page.provenance.render_product_sha256 is not None
+            or page.provenance.native_layout is not None
         ):
             return (
                 "native slide reading carries incompatible render provenance"
             )
-    sources = project_sources(
-        content.inventory,
-        request.directory,
-        data=content.inventory_bytes,
-        excluded=excluded,
-    )
     context = source_context(transcription, sources)
     if any(span.state != "attributed" for span in context.readings):
         return (
@@ -434,6 +454,7 @@ class SlideVisionProof:
     reading_directory: Path
     excluded: ExclusionCheck
     image_inputs: dict[Path, tuple[ArtifactRef, ArtifactRef]]
+    native_blocks: dict[int, NativeSlideBlocks]
 
     def dependencies(self) -> dict[str, Any]:
         return {
@@ -464,6 +485,16 @@ class SlideVisionProof:
             slide.admission for slide in self.product.slides
         ):
             raise ValueError("slide render admission changed during reading")
+        for expected in self.native_blocks.values():
+            original_body = sources.body_bytes.get(expected.part_id)
+            if (
+                original_body is None
+                or native_slide_blocks(original_body, expected.part_id)
+                != expected
+            ):
+                raise ValueError(
+                    "mixed slide native input changed during reading"
+                )
         return sources
 
     def _input(self, path: Path, sources: ContainerSources) -> None:
@@ -536,7 +567,7 @@ def select_slide_vision(
     admission = admit_slides(
         original, read.sources, excluded=excluded, source_names=(source.name,)
     )
-    _selection(request, admission)
+    mixed = _selection(request, admission, read.sources)
     product = prepare_slide_renders(
         source,
         request.directory,
@@ -587,7 +618,8 @@ def select_slide_vision(
         page.speaker_notes = notes.get(page.number, "")
         page.reading_input = slide.representation.byte_object
         page.render_product_sha256 = product.digest
+        page.native_blocks = mixed.get(page.number)
     inputs = slide_image_inputs(read)
     return SlideVisionProof(
-        source, content, request, product, directory, excluded, inputs
+        source, content, request, product, directory, excluded, inputs, mixed
     )

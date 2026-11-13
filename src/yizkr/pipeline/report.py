@@ -1159,7 +1159,10 @@ def _slide_routing(transcription: dict) -> dict:
         return {"status": "unavailable"}
     raw = dependencies["slide_routing"]
     invalid = {"status": "invalid"}
-    if not isinstance(raw, dict) or raw.get("policy") != "layout-v1":
+    if not isinstance(raw, dict) or raw.get("policy") not in (
+        "layout-v1",
+        "layout-v2",
+    ):
         return invalid
     from yizkr.pipeline.slide_routing import ROUTE_LIMITATIONS, ROUTE_REASONS
 
@@ -1216,7 +1219,7 @@ def _slide_routing(transcription: dict) -> dict:
         return invalid
     return {
         "status": "recorded",
-        "policy": "layout-v1",
+        "policy": raw["policy"],
         "positions": sorted(positions),
         "slides": observed,
     }

@@ -253,8 +253,18 @@ def test_media_generation_observes_its_reader_resources(
     assert plan.changed_dependencies == (f"processing.resources.{resource}",)
 
 
+@pytest.mark.parametrize(
+    "resource",
+    [
+        "pipeline/slide_reading.py",
+        "pipeline/slide_layout.py",
+        "pipeline/slide_layout_reading.py",
+        "pipeline/prompts/slide_layout.md",
+    ],
+)
 def test_selected_slide_reading_observes_visual_policy_only_when_requested(
     package,
+    resource,
 ):
     def observe(selected):
         configuration = {"route": "paged"}
@@ -269,7 +279,7 @@ def test_selected_slide_reading_observes_visual_policy_only_when_requested(
         )
 
     native, visual = observe(False), observe(True)
-    path = package / "pipeline/slide_reading.py"
+    path = package / resource
     path.write_text(path.read_text() + "changed fictional slide policy\n")
     assert observe(False) == native
     plan = plan_view(
@@ -279,9 +289,7 @@ def test_selected_slide_reading_observes_visual_policy_only_when_requested(
         recorded_processing=visual,
         processing=observe(True),
     )
-    assert plan.changed_dependencies == (
-        "processing.resources.pipeline/slide_reading.py",
-    )
+    assert plan.changed_dependencies == (f"processing.resources.{resource}",)
 
 
 @pytest.mark.parametrize("kind", ["pdf", "presentation", "media", "excerpt"])

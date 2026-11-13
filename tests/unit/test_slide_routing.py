@@ -169,11 +169,35 @@ def test_unhandled_local_layout_stays_native_with_gap(tmp_path, change, code):
     assert reading.slides[1].reason == "no-layout-trigger"
 
 
-def test_original_images_get_explicit_mixed_source_gap(tmp_path):
+def test_simple_mixed_native_body_has_no_layout_trigger_or_gap(tmp_path):
     reading = plan(tmp_path, slides.presentation())
     assert reading.positions == ()
-    assert reading.slides[0].reason == "mixed-source"
-    assert "mixed-source-attribution" in reading.slides[0].limitations
+    assert reading.policy == "layout-v2"
+    assert reading.slides[0].reason == "no-layout-trigger"
+    assert reading.slides[0].limitations == ()
+
+
+@pytest.mark.parametrize("placement", ["direct", "repeated", "background"])
+def test_mixed_native_grid_is_selected_with_original_image_owners_preserved(
+    tmp_path, placement
+):
+    original, sources = inputs(
+        tmp_path, slides.mixed_layout_presentation(placement=placement)
+    )
+    admission = admit_slides(original, sources, excluded=allowed)
+    image = next(
+        p for p in sources.inventory.parts if p.kind == "embedded_resource"
+    )
+    assert admission[0].image_part_ids == [image.id]
+    assert len(admission[0].placement_ids) == (
+        2 if placement == "repeated" else 1
+    )
+    reading = slide_routing.plan_slide_layout(
+        original, sources, excluded=allowed
+    )
+    assert reading.positions == (1,)
+    assert reading.slides[0].reason == "spatial-text-layout"
+    assert reading.slides[0].limitations == ()
 
 
 @pytest.mark.parametrize(

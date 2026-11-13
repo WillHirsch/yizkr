@@ -52,8 +52,10 @@ def saved(tmp_path):
     return reading, plan, build
 
 
-def test_saved_routing_has_local_detail_and_aggregate_counts(tmp_path):
+@pytest.mark.parametrize("policy", ["layout-v1", "layout-v2"])
+def test_saved_routing_has_local_detail_and_aggregate_counts(tmp_path, policy):
     _, plan, build = saved(tmp_path)
+    plan["policy"] = policy
     made = build()
     local = fixture.document(made, fixture.DECK)["transcription"][
         "slide_routing"

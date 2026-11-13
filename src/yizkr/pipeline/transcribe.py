@@ -146,6 +146,7 @@ from yizkr.pipeline.llm import (
     reject_response,
 )
 from yizkr.pipeline.prompts import load_prompt
+from yizkr.pipeline.slide_layout import NativeSlideLayout
 from yizkr.pipeline.source_context import SourceContext
 from yizkr.pipeline.stages import canonical_json
 from yizkr.pipeline.transcription_check import (
@@ -291,11 +292,12 @@ class PageProvenance(BaseModel):
     render_product_sha256: str | None = Field(
         default=None, pattern=r"^[0-9a-f]{64}$"
     )
+    native_layout: NativeSlideLayout | None = None
 
     @model_serializer(mode="wrap")
     def _without_absent_render_details(self, handler):
         data = handler(self)
-        for key in ("reading_input", "render_product_sha256"):
+        for key in ("reading_input", "render_product_sha256", "native_layout"):
             if getattr(self, key) is None:
                 data.pop(key, None)
         return data
@@ -650,6 +652,10 @@ class _CheckedTranscriber:
 class LlmVisionTranscriber(_CheckedTranscriber):
     expects_record = True
 
+    def _prompt_templates(self):
+        """Use standard templates unless the reader specializes them."""
+        return None
+
     def __init__(
         self,
         client: LlmClient,
@@ -765,6 +771,7 @@ class LlmVisionTranscriber(_CheckedTranscriber):
                 "language": self.language,
                 "fallback_language": self.fallback_language,
             },
+            prompt_templates=self._prompt_templates(),
         )
         result = super().transcribe(media_path)
         adopted = getattr(self._response, "made_by", None)
@@ -1048,6 +1055,10 @@ class PagedTranscriber:
             )
         return self._vision.transcribe(path)
 
+    def _read_page_by_vision(self, page) -> Transcription:
+        """Read one visual body using its format's admitted contract."""
+        return self._read_by_vision(page.vision)
+
     def transcribe(self, media_path: Path) -> Transcription | None:
         """The container at `media_path` read page by page, or None when
         it is to be read whole."""
@@ -1130,13 +1141,16 @@ class PagedTranscriber:
                 "status": TRANSCRIBED if page.text else BLANK
             }
             visual_length = None
+            native_layout = None
             if page.method == textlayer.VISION:
-                reading = self._read_by_vision(page.vision)
+                reading = self._read_page_by_vision(page)
                 record = reading.record()
                 one = merged(record.pages, page.number)
                 body, engine = one.text.strip(), reading.engine
                 fields = one.model_dump(exclude={"page", "text"})
                 flag = flag or reading.flag
+                if len(reading.pages or ()) == 1:
+                    native_layout = reading.pages[0].provenance.native_layout
                 if page.speaker_notes:
                     visual_length = len(body)
                     body += ("\n" if body else "") + (
@@ -1176,6 +1190,7 @@ class PagedTranscriber:
                             if page.method == textlayer.VISION
                             else None
                         ),
+                        native_layout=native_layout,
                     ),
                 )
             )
@@ -1329,6 +1344,20 @@ class DeckTranscriber(PagedTranscriber):
             self.slide_vision_proof.before_vision(path)
         elif self.slide_routing is not None:
             self._verify_slide_routing(path)
+
+    def _read_page_by_vision(self, page) -> Transcription:
+        if page.native_blocks is None:
+            return super()._read_page_by_vision(page)
+        from yizkr.pipeline.slide_layout_reading import NativeLayoutTranscriber
+
+        reader = NativeLayoutTranscriber(
+            self._client(),
+            page.native_blocks,
+            language=self.language,
+            fallback_language=self.fallback_language,
+            before_read=self._before_vision,
+        )
+        return reader.transcribe(page.vision)
 
     def _verify_slide_routing(self, path: Path | None = None) -> None:
         from yizkr.pipeline.slide_reading import (

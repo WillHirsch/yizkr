@@ -13,7 +13,7 @@ A reading preserves what a source says, its location and uncertainty, before [ex
 | Paged PDF/PPTX | A format reader assembles located page/slide text and provenance, with independent image readings and vision page readings where supported. The assembled container has no whole-document vision class. |
 | Adopted image reading | Verified existing reading products supply the independent image's transcription without another vision call. |
 
-These are shared [stage operations](ARCHITECTURE.md#shared-document-stage-operations), used by the [reviewed text-source workflow](TEXT_INGESTION.md) and the [whole-corpus workflow](SCRATCH_WORKFLOW.md). Direct callers and the whole-corpus driver can select [PPTX slides for vision](#pptx-selected-slide-vision) when their visible content has no independent image contributors. Native XML remains the default; an opt-in [layout policy](#pptx-layout-routing) selects supported spatial text layouts automatically. Broader visual coverage and mixed-source slide attribution remain under [#747](https://github.com/WillHirsch/yizkr/issues/747). The HTR adapter is a stub, not another supported reading engine.
+These are shared [stage operations](ARCHITECTURE.md#shared-document-stage-operations), used by the [reviewed text-source workflow](TEXT_INGESTION.md) and the [whole-corpus workflow](SCRATCH_WORKFLOW.md). Direct callers and the whole-corpus driver can select [PPTX slides for vision](#pptx-selected-slide-vision) with constrained native-block ordering for supported mixed slides. Native XML remains the default; an opt-in [layout policy](#pptx-layout-routing) selects supported spatial text layouts automatically. Remaining graph and corpus verification is tracked in [#747](https://github.com/WillHirsch/yizkr/issues/747). The HTR adapter is a stub, not another supported reading engine.
 
 ### Structured vision record (ADR-0037)
 
@@ -101,9 +101,9 @@ with read_media(
     transcription = result.transcription
 ```
 
-Positions are unique, positive physical slide numbers in presentation order. A current exclusion predicate and a dedicated caller-owned render workspace are required. The entire presentation must pass render admission, and each selected slide must have no painted original-image contributors. A selected slide combining native content with an image refuses before a model call. Supplied prepared source bindings remain authoritative; rendering does not replace an established image owner.
+Positions are unique, positive physical slide numbers in presentation order. A current exclusion predicate and a dedicated caller-owned render workspace are required. The entire presentation must pass render admission. A selected slide with painted original-image contributors uses the constrained native-layout reading below; unsupported native text structures refuse before a model call. Supplied prepared source bindings remain authoritative; rendering does not replace an established image owner.
 
-Selected PNGs pass through the existing vision transcriber, structured-record validation and response-cache interface. Their records are assembled under the original `[Slide N]` positions with `vision` provenance. The presentation remains the owner of this native text/vector content; PNGs remain representations. Unselected slides retain native XML reading, and independent images retain their existing per-owner readings. The assembled presentation has no inferred whole-document class.
+Selected PNGs without original-image contributors pass through the existing vision transcriber, structured-record validation and response-cache interface. Their records are assembled under the original `[Slide N]` positions with `vision` provenance. The presentation remains the owner of this native text/vector content; PNGs remain representations. Unselected slides retain native XML reading, and independent images retain their existing per-owner readings. The assembled presentation has no inferred whole-document class.
 
 Speaker notes are appended from their native source part after the visual body, with separate source-context spans. When present, `TranscribedPage.body_end` records that boundary; vision status, record fields and validation apply to the body alone. A blank visual body stays blank even when the slide has speaker notes. Missing or inconsistent boundaries leave attribution unsupported. A model's page observations remain reader notes.
 
@@ -126,13 +126,19 @@ The whole-corpus driver accepts the same explicit choice through `ScratchDriver(
 
 Pass the file to `yizkr scratch estimate --slide-vision FILE` and `yizkr scratch run --slide-vision FILE`. Resume with the same normalized selections and settings; changing them requires a new run. Unknown, excluded or non-PPTX source selections refuse. A current curator correction takes precedence over slide vision: the plan reports that choice, keeps the selection in the run's configuration and reads the correction without a slide renderer. Sources without a selection keep their existing route.
 
-Saved selected readings are checked against current source bindings, admission, renderer inputs, rendered bytes, physical positions and body/notes boundaries before reuse. Their render products and transcriptions survive independently of the model-response cache. Estimation uses the same selection and cache keys, inspecting saved products without modifying them; when PNGs must be prepared, it renders in a temporary workspace. It makes no provider call but can require local rendering work.
+Saved selected readings are checked against current source bindings, admission, renderer inputs, rendered bytes, physical positions and body/notes boundaries before reuse. Mixed-slide readings also reassemble their exact native text from the current source and recorded block arrangement. Their render products and transcriptions survive independently of the model-response cache. Estimation uses the same selection and cache keys, inspecting saved products without modifying them; when PNGs must be prepared, it renders in a temporary workspace. It makes no provider call but can require local rendering work.
 
-The unchanged transcription prompt reads visible text and tabular layout; it does not capture arbitrary geometric or arrow meanings as structured relationships. Attribution within mixed-source slides remains work under [#747](https://github.com/WillHirsch/yizkr/issues/747).
+### Mixed-slide native layout
+
+A composed slide can show native captions or table cells beside an independently owned image. For admitted mixed slides, vision answers only with an ordering and grouping of supplied native text-block IDs. Code verifies that every known block appears exactly once, then assembles its exact XML text: rows are separated by newlines and cells by `|`. Multi-paragraph blocks remain intact on their own row. The model cannot add image OCR, new words, labels or reader notes to this body. Original images, including backgrounds and repeated placements, keep their separately read source owners; the slide render creates no additional image source or image claim batch.
+
+`PageProvenance.native_layout` records the native part and byte identity, block-basis digest and accepted rows. Attribution reconstructs the blocks from the verified original slide XML and checks that the recorded arrangement produces exactly the saved body. A missing, changed or inconsistent proof leaves mixed-body attribution unsupported. Native speaker notes remain a separate source span. These checks establish where the emitted wording came from; they do not prove that the model interpreted a table or reading order correctly.
+
+This route supports ordinary native text boxes under the same bounded layout rules as automatic routing. It cannot recover words that exist only inside an image, arbitrary arrow meanings, or relationships between a photograph and a caption. Image-only content remains in its independent reading. Unsupported geometry or ambiguous native block correspondence is refused or recorded as a native-route limitation, according to the requested route. Remaining graph and corpus verification is tracked in [#747](https://github.com/WillHirsch/yizkr/issues/747).
 
 ### PPTX layout routing
 
-To select slides by the bounded `layout-v1` policy, use `{"mode": "layout"}` in place of `{"positions": [1, 3]}` for a source in the same `--slide-vision FILE` JSON map. Optional `settings` have the same format and defaults. The mode remains fixed run configuration, and curator corrections retain precedence. Sources with no entry continue through their existing native route.
+To select slides by the bounded `layout-v2` policy, use `{"mode": "layout"}` in place of `{"positions": [1, 3]}` for a source in the same `--slide-vision FILE` JSON map. Optional `settings` have the same format and defaults. The mode remains fixed run configuration, and curator corrections retain precedence. Sources with no entry continue through their existing native route.
 
 The deterministic planner checks native text-box geometry and package admission without rendering or calling a model. It selects vision for supported side-by-side text boxes or vertically separated boxes whose XML order reverses their spatial order. These are specific routing triggers, not a proof that every other slide is visually complete. Slides without a trigger retain XML reading.
 
@@ -140,7 +146,7 @@ The deterministic planner checks native text-box geometry and package admission 
 flowchart TD
     source[("Prepared PPTX<br/>and source bindings")] --> plan{"Inspect layout and admission<br/>deterministic"}
     plan -->|native or limited visual coverage| native["Read slide body<br/>native XML"]
-    plan -->|supported layout, no image contributors| vision["Render selected body<br/>then checked vision LLM"]
+    plan -->|supported native text layout| vision["Render selected body<br/>then checked vision / block ordering"]
     source --> notes["Read speaker notes<br/>native XML"]
     native --> reading[("Located transcription<br/>body and notes remain distinct")]
     vision --> reading
@@ -150,7 +156,7 @@ flowchart TD
     reading --> saved
 ```
 
-Overlapping text, grouped shapes, drawings, unsupported geometry or text flow, and hidden shapes retain native reading with explicit visual limitations. Painted independent images also keep a slide on the native route because composite attribution is unsupported; the images retain their own readings and owners. Rendering admission covers the presentation as a whole: an unsupported rendering construct can leave every slide on the native route. Exclusions, malformed packages and unresolved ownership still refuse; they are not converted into a fallback decision.
+Overlapping text, grouped shapes, drawings, unsupported geometry or text flow, and hidden shapes retain native reading with explicit visual limitations. Painted independent images do not by themselves prevent layout selection: supported mixed slides use the constrained native-block route above, while the images retain their own readings and owners. Rendering admission covers the presentation as a whole: an unsupported rendering construct can leave every slide on the native route. Exclusions, malformed packages and unresolved ownership still refuse; they are not converted into a fallback decision.
 
 When the plan selects no slide, the reading operation needs no slide renderer or slide-vision call. Independent-image reading and the scratch driver's existing model preflight are separate. Every layout decision records its physical position, source part, actual route, fixed reason and limitations in `transcription.provenance.metadata.dependencies.slide_routing`. Limitations also produce stage attention that survives reuse. [Run reports](RUN_REPORT.md) show local slide detail and aggregate counts; these decisions are process metadata, not new witnesses or evidence quotations. Estimates and execution use the same plan, and saved native readings are checked against current routing dependencies.
 

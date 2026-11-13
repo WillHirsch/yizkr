@@ -44,6 +44,7 @@ from yizkr.pipeline.container_inventory import ContainerInventory
 
 if TYPE_CHECKING:
     from yizkr.pipeline.container_sources import ContainerSources
+    from yizkr.pipeline.slide_layout import NativeSlideBlocks
 
 # how a deck's slide is read: from the slide's XML, with no model call
 SLIDE_XML = "slide-xml"
@@ -96,6 +97,7 @@ class ContainerPage:
     speaker_notes: str = ""
     reading_input: ArtifactRef | None = None
     render_product_sha256: str | None = None
+    native_blocks: NativeSlideBlocks | None = None
 
 
 @dataclass
