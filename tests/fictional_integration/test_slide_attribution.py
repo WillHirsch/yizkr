@@ -11,15 +11,15 @@ import json
 
 import pytest
 
-from tests.fixtures.identity import write_mapped
 from tests.fixtures.slide_attribution import prepare_case
-from yizkr.claims import source_support_locators
+from yizkr.claims import QidRef, source_support_locators
 from yizkr.core import sparql
 from yizkr.core.provenance import RecordRef
+from yizkr.core.write_recovery import CreationRegistry
 from yizkr.pipeline.extract import ExtractionFailed
 from yizkr.pipeline.registrar import Registrar
 from yizkr.pipeline.run_provenance import read_record, record_digest
-from yizkr.pipeline.writer import BatchWriter
+from yizkr.pipeline.writer import BatchWriter, other_identity_maps
 from yizkr.queries.publish import load_templates, render_for_instance
 
 from .test_container_sources import locators, statements
@@ -126,7 +126,32 @@ def test_slide_readings_preserve_attribution_through_write_and_query(
 ):
     client = fictional_client
     records = tmp_path / "process-records"
-    with prepare_case(tmp_path / "slides", monkeypatch) as case:
+    # The independent write/query case owns this shared stack's one identity
+    # map. As in the process-provenance case, explicit authored targets keep
+    # this fixture focused on source attribution without publishing a map.
+    targets = {}
+    for key, label in (("rahel", "Rahel"), ("address", "Angerring 11")):
+        entity = client.wbi.item.new()
+        entity.labels.set("en", f"Slide attribution fixture: {label}")
+        targets[key] = (
+            CreationRegistry(client)
+            .create(
+                {
+                    "kind": "fictional-slide-attribution-subject",
+                    "mention": key,
+                },
+                entity,
+                summary="fictional slide attribution target",
+            )
+            .qid
+        )
+    person, address = targets["rahel"], targets["address"]
+    with prepare_case(
+        tmp_path / "slides",
+        monkeypatch,
+        person=QidRef(qid=person),
+        address=QidRef(qid=address),
+    ) as case:
         assert [
             page.provenance.method for page in case.transcription.pages
         ] == [
@@ -155,30 +180,42 @@ def test_slide_readings_preserve_attribution_through_write_and_query(
         image_qid = owners[case.image_owner.sha1]
         placed = {case.transcription.artifact.sha1: set(owners)}
 
+        image_batch = case.image_batch
+        (image_claim,) = image_batch.claims
+        assert image_claim.subject == QidRef(qid=person)
+        assert image_claim.value.value == QidRef(qid=address)
+
         def write(batch):
             reading = (
                 case.transcription
                 if batch is case.parent_batch
                 else case.image_transcription
             )
-            return write_mapped(
-                BatchWriter(
-                    client,
-                    record_dir=records,
-                    process_records=(reading.provenance,),
-                ),
-                batch,
-                placed=placed,
-            )
+            return BatchWriter(
+                client,
+                record_dir=records,
+                process_records=(reading.provenance,),
+            ).write_batch(batch, placed=placed)
 
         parent_write = write(case.parent_batch)
-        image_write = write(case.image_batch)
+        image_write = write(image_batch)
         assert (parent_write.written, image_write.written) == (4, 1)
         assert not parent_write.refused and not image_write.refused
-        assert parent_write.minted == []
-        (image_claim,) = case.image_batch.claims
-        person = image_write.created_items[image_claim.subject.local_id]
-        address = image_write.created_items[image_claim.value.value.local_id]
+        assert parent_write.minted == image_write.minted == []
+        runs = client.api_get(
+            {
+                "action": "wbgetentities",
+                "ids": "|".join((parent_write.run_qid, image_write.run_qid)),
+                "props": "labels",
+            }
+        )["entities"]
+        assert (
+            other_identity_maps(
+                [entity["labels"]["en"]["value"] for entity in runs.values()],
+                "",
+            )
+            == []
+        )
 
         caption_statements = statements(client, image_qid, "caption")
         assert len(caption_statements) == 4
@@ -235,7 +272,7 @@ def test_slide_readings_preserve_attribution_through_write_and_query(
         run_record(
             client,
             image_write.run_qid,
-            case.image_batch,
+            image_batch,
             case.image_transcription,
             records,
         )
@@ -278,7 +315,7 @@ def test_slide_readings_preserve_attribution_through_write_and_query(
         )
         for batch, first in (
             (case.parent_batch, parent_write),
-            (case.image_batch, image_write),
+            (image_batch, image_write),
         ):
             again = write(batch)
             assert again.run_qid == first.run_qid
@@ -300,7 +337,7 @@ def test_slide_readings_preserve_attribution_through_write_and_query(
         _synchronize(client)
         excerpts = {
             claim.source.transcription_excerpt.text
-            for batch in (case.parent_batch, case.image_batch)
+            for batch in (case.parent_batch, image_batch)
             for claim in batch.claims
         }
         rows = assertion_rows(client, excerpts, {image_qid, person})

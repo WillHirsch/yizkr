@@ -19,7 +19,7 @@ from PIL import Image
 from tests.fixtures import slides
 from tests.fixtures.records import record_answer
 
-from yizkr.claims import ArtifactRef, ClaimBatch
+from yizkr.claims import ArtifactRef, ClaimBatch, QidRef
 from yizkr.pipeline import slide_renders, text_stages
 from yizkr.pipeline.container_inventory import keep_inventory
 from yizkr.pipeline.container_sources import (
@@ -167,23 +167,13 @@ def captions(owner):
     ]
 
 
-def residence():
+def residence(person: QidRef, address: QidRef):
     return {
-        "subject": {
-            "kind": "local",
-            "local_id": "rahel",
-            "label": "Rahel",
-            "instance_of": "human",
-        },
+        "subject": person.model_dump(),
         "property": "residence",
         "value": {
             "type": "item",
-            "value": {
-                "kind": "local",
-                "local_id": "address",
-                "label": "Angerring 11",
-                "instance_of": "place",
-            },
+            "value": address.model_dump(),
         },
         "source": _quote(IMAGE_TEXT, 1, "de"),
     }
@@ -231,8 +221,9 @@ class SlideCase:
 
 
 @contextmanager
-def prepare_case(directory, monkeypatch):
+def prepare_case(directory, monkeypatch, *, person: QidRef, address: QidRef):
     """Keep real media/claim products alive for the graph or offline check."""
+    image_claim = residence(person, address)
     directory.mkdir(parents=True, exist_ok=True)
     source = directory / "library-talk-attribution.pptx"
     source.write_bytes(presentation())
@@ -274,7 +265,7 @@ def prepare_case(directory, monkeypatch):
             keep_inventory(prepared.inventory, prepared.data, products)
             sources = project_sources(prepared.inventory, products)
             parent = extract(read.transcription, captions(owner.owner))
-            image_batch = extract(image, [residence()])
+            image_batch = extract(image, [image_claim])
             yield SlideCase(
                 source,
                 products,

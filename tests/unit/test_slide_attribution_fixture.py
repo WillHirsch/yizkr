@@ -10,13 +10,18 @@ from tests.fixtures.slide_attribution import (
     SELECTED,
     prepare_case,
 )
+from yizkr.claims import QidRef
 from yizkr.pipeline.extract import ExtractionFailed
+from yizkr.pipeline.writer import check_batch
 
 
 def test_fixture_keeps_native_visual_notes_and_image_claims_separate(
     tmp_path, monkeypatch
 ):
-    with prepare_case(tmp_path, monkeypatch) as case:
+    person, address = QidRef(qid="Q101"), QidRef(qid="Q102")
+    with prepare_case(
+        tmp_path, monkeypatch, person=person, address=address
+    ) as case:
         pages = case.transcription.pages
         assert [p.provenance.method for p in pages] == [
             "vision",
@@ -48,6 +53,9 @@ def test_fixture_keeps_native_visual_notes_and_image_claims_separate(
         assert claim.property == "residence"
         assert claim.source.artifact == case.image_owner
         assert claim.source.support.locator.kind == "embedded_resource"
+        assert claim.subject == person
+        assert claim.value.value == address
+        assert check_batch(case.image_batch, None)[3] == ""
         assert case.parent_batch.extraction_run.provenance is not None
         assert case.image_batch.extraction_run.provenance is not None
         for batch in (case.parent_batch, case.image_batch):
