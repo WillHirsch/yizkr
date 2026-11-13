@@ -19,6 +19,7 @@ from yizkr.pipeline.claim_review import ClaimSelection
 from yizkr.pipeline.correction_planning import (
     CorrectionPlan,
     CorrectionRequest,
+    _proposed_support,
     plan_correction,
 )
 from yizkr.pipeline.review_stages import (
@@ -381,6 +382,20 @@ def test_two_item_qualifiers_keep_their_roles_when_target_already_occurs(
     assert impact.receipt == applied.receipts[0]
     assert len(impact.selected_roles) == 1
     assert impact.selected_roles[0].startswith("qualifier:location:")
+    # Mention IDs affect canonical role ordering. Exercise both traversals so
+    # this catches lookup in an already-modified qualifier list every time.
+    for roles in (impact.claim.roles, tuple(reversed(impact.claim.roles))):
+        reordered = impact.claim.model_copy(update={"roles": roles})
+        assert (
+            _proposed_support(
+                reordered,
+                impact.before,
+                {selected.mention_id},
+                correction.source,
+                correction.target,
+            )
+            == impact.proposed
+        )
     pid = impact.before.properties["location"]
     before = impact.before.statement["qualifiers"][pid]
     after = impact.proposed.statement["qualifiers"][pid]
