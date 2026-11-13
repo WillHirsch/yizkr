@@ -246,9 +246,18 @@ def _loaded_templates(stage: str, configuration: Mapping) -> dict[str, str]:
             return {}
         from yizkr.pipeline.transcribe import TRANSCRIPTION_PROMPT
 
-        return {
+        templates = {
             "pipeline.transcribe.TRANSCRIPTION_PROMPT": TRANSCRIPTION_PROMPT
         }
+        if configuration.get("slide_vision") is not None:
+            from yizkr.pipeline.slide_layout_reading import (
+                NATIVE_LAYOUT_PROMPT,
+            )
+
+            templates["pipeline.slide_layout_reading.NATIVE_LAYOUT_PROMPT"] = (
+                NATIVE_LAYOUT_PROMPT
+            )
+        return templates
     if stage == "critique":
         from yizkr.pipeline.critique import CRITIQUE_PROMPT
 

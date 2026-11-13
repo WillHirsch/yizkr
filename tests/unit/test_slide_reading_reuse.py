@@ -268,9 +268,13 @@ def test_dependency_inspection_rechecks_policy_after_renderer_identity(
 def test_generation_dependency_inspection_refuses_invalid_selection(
     tmp_path, backend, positions
 ):
-    selected = request(tmp_path, positions=positions)
+    selected = request(
+        tmp_path, positions=positions, unsupported=positions == (1,)
+    )
     prepared = prepare_container(PreparationRequest(selected.source))
-    with pytest.raises(ValueError, match="contributors|outside"):
+    with pytest.raises(
+        ValueError, match="unsupported native slide layout|outside"
+    ):
         dependencies(selected, prepared.presentation)
     assert backend == []
     assert not selected.slide_vision.directory.exists()

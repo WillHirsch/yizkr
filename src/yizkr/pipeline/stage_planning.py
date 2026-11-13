@@ -259,6 +259,9 @@ PRESENTATION_READING_RESOURCES = (
     "pipeline/pptx_inventory.py",
 )
 SLIDE_VISION_RESOURCES = (
+    "pipeline/slide_layout.py",
+    "pipeline/slide_layout_reading.py",
+    "pipeline/prompts/slide_layout.md",
     "pipeline/slide_reading.py",
     "pipeline/slide_routing.py",
     "pipeline/slide_renders.py",

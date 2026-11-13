@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import zipfile
 from dataclasses import replace
 from pathlib import Path
 
@@ -30,7 +31,7 @@ from yizkr.pipeline.transcribe import Transcription
 backend = render_tests.backend
 
 
-def request(tmp_path, positions=(2,), *, opaque=False):
+def request(tmp_path, positions=(2,), *, opaque=False, unsupported=False):
     source = tmp_path / "fictional.pptx"
     source.write_bytes(
         slides.presentation(
@@ -41,6 +42,20 @@ def request(tmp_path, positions=(2,), *, opaque=False):
             )
         )
     )
+    if unsupported:
+        output = io.BytesIO()
+        with (
+            zipfile.ZipFile(source) as original,
+            zipfile.ZipFile(output, "w") as changed,
+        ):
+            for info in original.infolist():
+                data = original.read(info.filename)
+                if info.filename == "ppt/slides/slide3.xml":
+                    data = data.replace(b"<a:xfrm>", b'<a:xfrm rot="60000">')
+                changed.writestr(
+                    zipfile.ZipInfo(info.filename, (2020, 1, 1, 0, 0, 0)), data
+                )
+        source.write_bytes(output.getvalue())
     return MediaReadRequest(
         source,
         "paged",
@@ -144,12 +159,18 @@ def test_invalid_selection_is_not_a_silent_native_request(tmp_path, positions):
 
 @pytest.mark.parametrize(
     "failure",
-    ["missing-policy", "whole-vision", "pdf", "out-of-range", "mixed"],
+    [
+        "missing-policy",
+        "whole-vision",
+        "pdf",
+        "out-of-range",
+        "unsupported-mixed",
+    ],
 )
-def test_invalid_or_mixed_selection_refuses_before_render_or_client(
+def test_invalid_or_unsupported_selection_refuses_before_render_or_client(
     tmp_path, backend, failure
 ):
-    selected = request(tmp_path)
+    selected = request(tmp_path, unsupported=failure == "unsupported-mixed")
     if failure == "missing-policy":
         selected = replace(selected, excluded=None)
     elif failure == "whole-vision":

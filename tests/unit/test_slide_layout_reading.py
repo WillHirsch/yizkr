@@ -28,7 +28,7 @@ def test_native_image_calls_recheck_layout_admission_after_client_creation(
             excluded.add(digest)
         else:
             # The fixture has one original PNG, independently read while its
-            # native slide keeps an explicit mixed-source coverage gap.
+            # native slide has no supported spatial-layout trigger.
             from yizkr.pipeline.presentation import unpack_pptx
 
             content = unpack_pptx(source)

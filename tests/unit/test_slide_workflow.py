@@ -7,6 +7,7 @@ driver publishes and revalidates its normal document and corpus products.
 from __future__ import annotations
 
 import io
+import json
 import shutil
 import zipfile
 from collections import defaultdict
@@ -26,7 +27,7 @@ from tests.fixtures.records import record_answer
 from tests.unit import test_scratch_estimate as estimate_tests
 from tests.unit import test_slide_renders as render_tests
 from tests.unit.test_scratch import Corpus, Driver, fakes  # noqa: F401
-from yizkr.claims import ArtifactRef
+from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.core.corpus import ExclusionList
 from yizkr.pipeline.container_inventory import read_inventory
 from yizkr.pipeline.rundir import RunSettingsConflict
@@ -90,6 +91,136 @@ def routing_report(doc):
     )
 
 
+@pytest.fixture
+def mixed_answers(monkeypatch):
+    """Author the fictional grid's arrangement and its separate image text."""
+    complete = estimate_tests.Engine.complete
+
+    def answer(self, prompt, image_paths=()):
+        if image_paths:
+            self._call("vision", Path(image_paths[0]).name)
+            if prompt.startswith(
+                "Read the arrangement of the supplied native"
+            ):
+                return json.dumps(
+                    {"rows": [["b1"], ["b3", "b5"], ["b4", "b2"]]}
+                )
+            self.fakes.corpus.texts[Path(image_paths[0]).name] = (
+                "Rahel wohnt jetzt Angerring 11"
+            )
+            return record_answer("Rahel wohnt jetzt Angerring 11")
+        return complete(self, prompt, image_paths)
+
+    monkeypatch.setattr(estimate_tests.Engine, "complete", answer)
+
+
+@pytest.mark.parametrize("placement", ["repeated", "background"])
+def test_mixed_native_layout_has_one_image_owner_through_cluster_and_reuse(
+    setup, engine, backend, mixed_answers, placement
+):
+    source, driver, estimator = setup
+    source.write_bytes(slides.mixed_layout_presentation(placement=placement))
+    options = {"slide_vision": layout_selection(source)}
+    first = driver(**options)
+    before = snapshot(first.state_dir, skip=())
+    cache_before = contents(first.cache_dir)
+    estimate = estimator(**options).estimate()
+    assert estimate.stages["transcription"].known == 2
+    assert estimate.stages["transcription"].failing == 0
+    assert engine.calls == []
+    assert snapshot(first.state_dir, skip=()) == before
+    assert contents(first.cache_dir) == cache_before
+
+    assert first.run() == 0
+    (doc,) = first.documents()
+    reading = load(doc)
+    page = reading.pages[0]
+    assert reading.page_record(page).pages[0].text == (
+        "Stupfield arrivals\nKlara | 1938\nGustav | 1939"
+    )
+    assert "Angerring" not in reading.text
+    assert page.provenance.native_layout is not None
+    body, notes = reading.source_context.readings[:2]
+    assert body.state == notes.state == "attributed"
+    assert body.support.part_id != notes.support.part_id
+    assert reading.text[notes.start : notes.end] == slides.NOTES
+    owner = page.images[0]
+    assert page.images == [owner] * (2 if placement == "repeated" else 1)
+    excerpts = [
+        item
+        for item in first.rundir.manifest()["documents"]
+        if item["kind"] == "excerpt"
+    ]
+    assert [item["sha1"] for item in excerpts] == [owner]
+    image_reading = Transcription.model_validate_json(
+        (doc.dir / "derived-media" / f"{owner}.transcription.json").read_text()
+    )
+    assert "Rahel wohnt jetzt Angerring 11" in image_reading.text
+    image_batches = []
+    for path in first.state_dir.rglob("batch.json"):
+        batch = ClaimBatch.model_validate_json(path.read_text())
+        if any(claim.source.artifact.sha1 == owner for claim in batch.claims):
+            image_batches.append(batch)
+    assert len(image_batches) == 1
+    assert all(
+        claim.source.artifact.sha1 == owner
+        for claim in image_batches[0].claims
+    )
+    parent_batch = ClaimBatch.model_validate_json(doc.batch.read_text())
+    assert parent_batch.claims
+    assert all(
+        claim.source.artifact.sha1 == doc.sha1 for claim in parent_batch.claims
+    )
+    assert (first.state_dir / "corpus/clustering/identity-map.json").is_file()
+    decision = routing_report(doc)
+    assert decision["policy"] == "layout-v2"
+    assert decision["positions"] == [1]
+    assert decision["slides"][0]["limitations"] == []
+    calls = list(engine.calls)
+    assert sum(kind == "vision" for kind, _ in calls) == 2
+    shutil.rmtree(first.cache_dir)
+    held = snapshot(doc.dir, skip=())
+    assert estimator(**options).estimate().stages["transcription"].reused >= 1
+    assert snapshot(doc.dir, skip=()) == held
+    assert driver(**options).run() == 0
+    assert routing_report(doc) == decision
+    assert engine.calls == calls
+    assert (
+        load(doc).pages[0].provenance.native_layout
+        == page.provenance.native_layout
+    )
+
+
+def test_mixed_layout_proof_damage_repairs_from_cache_without_new_claims(
+    setup, engine, mixed_answers
+):
+    source, driver, estimator = setup
+    source.write_bytes(slides.mixed_layout_presentation())
+    options = {"slide_vision": layout_selection(source), "until": "critique"}
+    first = driver(**options)
+    assert first.run() == 0
+    (doc,) = first.documents()
+    reading = load(doc)
+    expected = reading.pages[0].provenance.native_layout
+    reading.pages[0].provenance.native_layout = expected.model_copy(
+        update={"rows": (("b1",), ("b3", "b2"), ("b4", "b5"))}
+    )
+    doc.transcription.write_text(reading.model_dump_json(indent=2))
+    before = snapshot(doc.dir, skip=())
+    cache_before = contents(first.cache_dir)
+    calls = list(engine.calls)
+    estimate = estimator(**options).estimate().stages["transcription"]
+    assert estimate.hits == 2 and estimate.engine_calls == 0
+    assert estimate.failing == 0
+    assert snapshot(doc.dir, skip=()) == before
+    assert contents(first.cache_dir) == cache_before
+    held = doc.batch.read_bytes(), doc.critique.read_bytes()
+    assert driver(**options).run() == 0
+    assert engine.calls == calls
+    assert load(doc).pages[0].provenance.native_layout == expected
+    assert (doc.batch.read_bytes(), doc.critique.read_bytes()) == held
+
+
 def test_layout_workflow_persists_routes_and_repairs_from_response_cache(
     setup, engine, backend
 ):
@@ -105,7 +236,7 @@ def test_layout_workflow_persists_routes_and_repairs_from_response_cache(
     ]
     decision = routing_report(doc)
     assert decision["status"] == "recorded"
-    assert decision["policy"] == "layout-v1"
+    assert decision["policy"] == "layout-v2"
     assert decision["positions"] == [1]
     assert decision["slides"][0]["route"] == "vision"
     assert decision["slides"][0]["reason"]
@@ -161,11 +292,31 @@ def test_simple_layout_avoids_renderer_and_estimator_workspace(
     assert backend == []
 
 
-def test_mixed_layout_report_remains_actionable_on_reuse(
+def unsupported_mixed_presentation():
+    """An original image plus rotated native text beyond the layout subset."""
+    data = io.BytesIO()
+    with (
+        zipfile.ZipFile(io.BytesIO(slides.presentation())) as original,
+        zipfile.ZipFile(data, "w") as changed,
+    ):
+        for name in original.namelist():
+            value = original.read(name)
+            if name == "ppt/slides/slide3.xml":
+                value = value.replace(
+                    b"<p:spPr><a:xfrm>",
+                    b'<p:spPr><a:xfrm rot="900000">',
+                )
+            changed.writestr(
+                zipfile.ZipInfo(name, (2020, 1, 1, 0, 0, 0)), value
+            )
+    return data.getvalue()
+
+
+def test_unsupported_mixed_layout_report_remains_actionable_on_reuse(
     setup, engine, backend
 ):
     source, driver, estimator = setup
-    source.write_bytes(slides.presentation())
+    source.write_bytes(unsupported_mixed_presentation())
     options = {"slide_vision": layout_selection(source)}
     first = driver(**options)
     assert first.run() == 0
@@ -175,7 +326,7 @@ def test_mixed_layout_report_remains_actionable_on_reuse(
     assert all(page.provenance.method == "slide-xml" for page in before.pages)
     decision = routing_report(doc)
     assert decision["positions"] == []
-    assert decision["slides"][0]["limitations"]
+    assert decision["slides"][0]["limitations"] == ["unsupported-geometry"]
     attention = doc.state.detail["attention"]["transcription"]
     assert any(
         "slide visual reading unsupported" in item for item in attention
@@ -494,7 +645,7 @@ def test_selected_estimate_reports_known_inspection_refusal(
 
         monkeypatch.setattr(slide_renderer, "renderer_identity", unavailable)
     elif failure == "admission":
-        source.write_bytes(slides.presentation())
+        source.write_bytes(unsupported_mixed_presentation())
         options["slide_vision"] = {
             ArtifactRef.from_path(source).sha1: SlideVisionSelection((1,))
         }

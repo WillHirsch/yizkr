@@ -420,8 +420,12 @@ class _Keyed:
             and image_paths
             and all(str(path).endswith(_READ_FILES) for path in image_paths)
         ):
+            from yizkr.pipeline.slide_layout_reading import (
+                native_layout_stand_in,
+            )
+
             self.stood_in += 1
-            return STAND_IN_READING
+            return native_layout_stand_in(prompt) or STAND_IN_READING
         raise _Unanswered
 
     def close(self) -> None:

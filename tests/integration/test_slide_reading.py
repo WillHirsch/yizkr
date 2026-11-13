@@ -1,5 +1,6 @@
 """Optional actual office rendering through the selected-slide reading API."""
 
+import json
 import os
 import shutil
 from collections import defaultdict
@@ -83,9 +84,9 @@ def test_real_render_selected_body_and_native_notes(tmp_path):
     assert len(seen) == 1
 
 
-@pytest.mark.parametrize("mode", ["explicit", "layout"])
+@pytest.mark.parametrize("mode", ["explicit", "layout", "mixed"])
 def test_real_render_survives_driver_publication_and_cache_removal(
-    tmp_path, engine, mode
+    tmp_path, engine, monkeypatch, mode
 ):
     executable = os.environ.get("YIZKR_TEST_LIBREOFFICE")
     if executable is None:
@@ -95,6 +96,8 @@ def test_real_render_survives_driver_publication_and_cache_removal(
     source.write_bytes(
         slides.native_presentation()
         if mode == "explicit"
+        else slides.mixed_layout_presentation(placement="repeated")
+        if mode == "mixed"
         else slides.layout_presentation()
     )
     corpus.texts = defaultdict(
@@ -106,6 +109,25 @@ def test_real_render_survives_driver_publication_and_cache_removal(
     )
     engine.corpus = corpus
     engine.fresh = False
+    if mode == "mixed":
+        complete = estimate_tests.Engine.complete
+
+        def answer(self, prompt, image_paths=()):
+            if image_paths:
+                self._call("vision", image_paths[0].name)
+                if prompt.startswith(
+                    "Read the arrangement of the supplied native"
+                ):
+                    return json.dumps(
+                        {"rows": [["b1"], ["b3", "b5"], ["b4", "b2"]]}
+                    )
+                self.fakes.corpus.texts[image_paths[0].name] = (
+                    "Rahel wohnt jetzt Angerring 11"
+                )
+                return record_answer("Rahel wohnt jetzt Angerring 11")
+            return complete(self, prompt, image_paths)
+
+        monkeypatch.setattr(estimate_tests.Engine, "complete", answer)
     state = tmp_path / "runs" / "selected"
     cache = tmp_path / "cache"
     options = {
@@ -115,7 +137,7 @@ def test_real_render_survives_driver_publication_and_cache_removal(
             ArtifactRef.from_path(source).sha1: SlideVisionSelection(
                 (1,) if mode == "explicit" else (),
                 SlideRenderSettings(executable=executable, long_edge=640),
-                mode=mode,
+                mode="layout" if mode == "mixed" else mode,
             )
         },
     }
@@ -126,9 +148,23 @@ def test_real_render_survives_driver_publication_and_cache_removal(
     reading = Transcription.model_validate_json(transcription)
     assert reading.pages[0].provenance.method == "vision"
     assert reading.pages[0].provenance.render_product_sha256
-    if mode == "layout":
+    if mode != "explicit":
         plan = reading.provenance.metadata["dependencies"]["slide_routing"]
-        assert plan["policy"] == "layout-v1" and plan["positions"] == [1]
+        assert plan["policy"] == "layout-v2" and plan["positions"] == [1]
+    if mode == "mixed":
+        assert reading.page_record(reading.pages[0]).pages[0].text == (
+            "Stupfield arrivals\nKlara | 1938\nGustav | 1939"
+        )
+        assert "Angerring" not in reading.text
+        assert reading.pages[0].provenance.native_layout is not None
+        owner = reading.pages[0].images[0]
+        assert set(reading.pages[0].images) == {owner}
+        image_reading = Transcription.model_validate_json(
+            (
+                doc.dir / "derived-media" / f"{owner}.transcription.json"
+            ).read_text()
+        )
+        assert "Rahel wohnt jetzt Angerring 11" in image_reading.text
     assert check_vision_page(reading, reading.pages[0]).passed
     body, notes = reading.source_context.readings[:2]
     assert body.support.part_id != notes.support.part_id
@@ -139,7 +175,8 @@ def test_real_render_survives_driver_publication_and_cache_removal(
     assert reading.pages[0].provenance.reading_input in [
         representation.byte_object for representation in part.representations
     ]
-    assert len(engine.calls) == 1
+    calls = len(engine.calls)
+    assert calls == (2 if mode == "mixed" else 1)
     shutil.rmtree(cache)
 
     def unexpected(*args):
@@ -150,9 +187,9 @@ def test_real_render_survives_driver_publication_and_cache_removal(
     engine.hook = unexpected
     before = snapshot(state, skip=())
     estimate = estimate_tests.Quiet(corpus.folder, state, **options).estimate()
-    assert estimate.stages["transcription"].reused == 1
+    assert estimate.stages["transcription"].reused >= 1
     assert snapshot(state, skip=()) == before
     assert not cache.exists()
     assert Driver(corpus.folder, state, **options).run() == 0
     assert doc.transcription.read_bytes() == transcription
-    assert len(engine.calls) == 1
+    assert len(engine.calls) == calls

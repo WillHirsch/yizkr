@@ -95,6 +95,9 @@ class ContainerSources:
     bodies: list[SourcePart] = field(default_factory=list)
     notes: list[SourcePart] = field(default_factory=list)
     unresolved: list[UnresolvedSource] = field(default_factory=list)
+    # Verified original slide XML, retained only for in-memory reading proofs.
+    # A saved transcription or render cannot supply these bytes as authority.
+    body_bytes: dict[str, bytes] = field(default_factory=dict)
 
     def support(
         self, part_id: str, *, placement_ids: Sequence[str] | None = None
@@ -582,6 +585,25 @@ def project_sources(
     for part in inventory.parts:
         if part.kind in {"page_body", "slide_body"}:
             result.bodies.append(part)
+            if (
+                part.kind == "slide_body"
+                and part.byte_object is not None
+                and part.file is not None
+                and part.eligibility.state == "allowed"
+                and not excluded(inventory.source.sha1, ())
+                and not excluded(
+                    part.byte_object.sha1,
+                    (
+                        part.locator.package_part or "",
+                        PurePosixPath(part.locator.package_part or "").name,
+                    ),
+                )
+            ):
+                original = _payload(
+                    directory, part.file, part.byte_object, data
+                )
+                if original is not None:
+                    result.body_bytes[part.id] = original
         elif part.kind == "speaker_notes":
             result.notes.append(part)
         if part.kind != "embedded_resource":
@@ -780,6 +802,38 @@ def image_source_context(
     return context
 
 
+def _native_layout_failure(transcription, page, part, sources):
+    """Verify container-only text assembled from original native blocks.
+
+    A model's claimed owner or a rendered picture cannot prove authorship.
+    The recorded layout may only arrange known native text; rederive that
+    text from verified original slide XML before attributing the body.
+    """
+    from yizkr.pipeline.slide_layout import (
+        assemble_native_layout,
+        native_slide_blocks,
+    )
+
+    failure = "native layout does not match verified original slide text"
+    original = sources.body_bytes.get(part.id)
+    if (
+        sources.inventory.container != "presentation"
+        or part.kind != "slide_body"
+        or page.provenance.method != "vision"
+        or part.eligibility.state != "allowed"
+        or original is None
+        or ArtifactRef.from_bytes(original) != part.byte_object
+    ):
+        return failure
+    try:
+        blocks = native_slide_blocks(original, part.id)
+        body = assemble_native_layout(blocks, page.provenance.native_layout)
+    except ValueError:
+        return failure
+    end = page.body_end if page.body_end is not None else page.end
+    return None if transcription.text[page.start : end] == body else failure
+
+
 def source_context(transcription, sources: ContainerSources):
     """Locate reading spans without guessing composite authorship."""
     from yizkr.pipeline.source_context import (
@@ -852,6 +906,10 @@ def source_context(transcription, sources: ContainerSources):
             if page.provenance.method == "vision" and (inner or annotations)
             else None
         )
+        if getattr(page.provenance, "native_layout", None) is not None:
+            composite = _native_layout_failure(
+                transcription, page, part, sources
+            )
         note = notes.get(page.page)
         if page.body_end is not None:
             marker = f"[Slide {page.page} notes]\n"

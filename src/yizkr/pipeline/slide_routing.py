@@ -8,10 +8,8 @@ and layouts keep native readings with inspectable gaps; unsafe inputs refuse.
 from __future__ import annotations
 
 import io
-import xml.etree.ElementTree as ET
 import zipfile
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Literal
 
@@ -20,12 +18,13 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from yizkr.claims import ArtifactRef
 from yizkr.pipeline.cancellation import check_cancelled
 from yizkr.pipeline.container_sources import ContainerSources
-from yizkr.pipeline.pptx_inventory import A_NS, P_NS, PptxPackage, text_runs
+from yizkr.pipeline.pptx_inventory import PptxPackage
 from yizkr.pipeline.slide_admission import (
     RENDERING_LIMITATIONS,
     UnsupportedSlideRendering,
     admit_slides,
 )
+from yizkr.pipeline.slide_layout import layout_analysis
 
 ROUTE_REASONS = frozenset(
     {
@@ -71,7 +70,7 @@ class SlideRoutingDecision(BaseModel):
 class SlideRoutingPlan(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    policy: Literal["layout-v1"] = "layout-v1"
+    policy: Literal["layout-v2"] = "layout-v2"
     positions: tuple[int, ...]
     slides: tuple[SlideRoutingDecision, ...]
 
@@ -89,138 +88,6 @@ class SlideRoutingPlan(BaseModel):
 
     def configuration(self) -> dict:
         return self.model_dump(mode="json")
-
-
-@dataclass(frozen=True)
-class _Box:
-    x: int
-    y: int
-    width: int
-    height: int
-
-    @property
-    def right(self):
-        return self.x + self.width
-
-    @property
-    def bottom(self):
-        return self.y + self.height
-
-
-def _box(shape: ET.Element) -> _Box | None:
-    transforms = shape.findall(P_NS + "spPr/" + A_NS + "xfrm")
-    if len(transforms) != 1:
-        return None
-    transform = transforms[0]
-    if set(transform.attrib) - {"rot", "flipH", "flipV"} or (
-        transform.get("rot", "0") != "0"
-        or any(
-            transform.get(name, "0") not in {"0", "false"}
-            for name in ("flipH", "flipV")
-        )
-    ):
-        return None
-    offset = transform.find(A_NS + "off")
-    extent = transform.find(A_NS + "ext")
-    if (
-        offset is None
-        or extent is None
-        or len(transform) != 2
-        or set(offset.attrib) != {"x", "y"}
-        or set(extent.attrib) != {"cx", "cy"}
-    ):
-        return None
-    try:
-        result = _Box(
-            int(offset.attrib["x"]),
-            int(offset.attrib["y"]),
-            int(extent.attrib["cx"]),
-            int(extent.attrib["cy"]),
-        )
-    except (KeyError, ValueError):
-        return None
-    if min(result.x, result.y) < 0 or min(result.width, result.height) <= 0:
-        return None
-    return result
-
-
-def _layout(root: ET.Element) -> tuple[str, tuple[str, ...]]:
-    trees = root.findall(P_NS + "cSld/" + P_NS + "spTree")
-    if len(trees) != 1:
-        raise ValueError("slide has no unambiguous shape tree")
-    boxes = []
-    gaps = set()
-    for shape in trees[0]:
-        if shape.tag == P_NS + "grpSpPr" and any(
-            value not in {"0", "false"}
-            for element in shape.iter()
-            for value in element.attrib.values()
-        ):
-            gaps.add("unsupported-geometry")
-        if shape.tag in {P_NS + "nvGrpSpPr", P_NS + "grpSpPr", P_NS + "pic"}:
-            continue
-        if shape.tag == P_NS + "grpSp":
-            gaps.add("grouped-shapes")
-            continue
-        if shape.tag != P_NS + "sp" or not text_runs(shape):
-            gaps.add("drawings")
-            continue
-        if any(
-            node.get("hidden") in {"1", "true"}
-            for node in shape.iter(P_NS + "cNvPr")
-        ):
-            gaps.add("hidden-shapes")
-        geometry = shape.find(P_NS + "spPr/" + A_NS + "prstGeom")
-        if shape.find(P_NS + "spPr/" + A_NS + "custGeom") is not None or (
-            geometry is not None and geometry.get("prst") != "rect"
-        ):
-            gaps.add("drawings")
-        body = shape.find(P_NS + "txBody/" + A_NS + "bodyPr")
-        if (
-            body is None
-            or any(
-                body.get(name, default) != default
-                for name, default in (
-                    ("vert", "horz"),
-                    ("rot", "0"),
-                    ("numCol", "1"),
-                )
-            )
-            or any(
-                node.tag in {A_NS + "fld", A_NS + "br", A_NS + "prstTxWarp"}
-                or node.tag.startswith(A_NS + "alpha")
-                for node in shape.iter()
-            )
-        ):
-            gaps.add("unsupported-text-flow")
-        box = _box(shape)
-        if box is None:
-            gaps.add("unsupported-geometry")
-        else:
-            boxes.append(box)
-    spatial = False
-    reversed_order = False
-    for index, first in enumerate(boxes):
-        for second in boxes[index + 1 :]:
-            horizontal_overlap = min(first.right, second.right) > max(
-                first.x, second.x
-            )
-            vertical_overlap = min(first.bottom, second.bottom) > max(
-                first.y, second.y
-            )
-            if horizontal_overlap and vertical_overlap:
-                gaps.add("overlapping-text")
-            elif vertical_overlap:
-                spatial = True
-            elif second.bottom <= first.y:
-                reversed_order = True
-    if gaps:
-        return "unsupported-layout", tuple(sorted(gaps))
-    if spatial:
-        return "spatial-text-layout", ()
-    if reversed_order:
-        return "xml-order", ()
-    return "no-layout-trigger", ()
 
 
 def plan_slide_layout(
@@ -243,15 +110,13 @@ def plan_slide_layout(
         raise ValueError("presentation is excluded")
     unavailable = None
     try:
-        admission = admit_slides(
+        admit_slides(
             original, sources, excluded=excluded, source_names=source_names
         )
     except UnsupportedSlideRendering as error:
         unavailable = error.limitation
-        admission = ()
     if excluded(source.sha1, source_names):
         raise ValueError("presentation is excluded")
-    proofs = {proof.position: proof for proof in admission}
     bodies = {part.locator.position: part for part in sources.bodies}
     if len(bodies) != len(sources.bodies):
         raise ValueError("slide routing has repeated body positions")
@@ -294,14 +159,10 @@ def plan_slide_layout(
         for position, target in order:
             check_cancelled()
             body = bodies.get(position)
-            reason, gaps = _layout(package.root(target))
-            proof = proofs.get(position)
+            reason, gaps = layout_analysis(package.root(target))
             if unavailable is not None:
                 reason = "unsupported-rendering"
                 gaps = (*gaps, unavailable)
-            elif proof.image_part_ids:
-                reason = "mixed-source"
-                gaps = (*gaps, "mixed-source-attribution")
             route = (
                 "vision"
                 if reason in {"spatial-text-layout", "xml-order"}

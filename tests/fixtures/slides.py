@@ -6,7 +6,7 @@ import io
 import zipfile
 from xml.sax.saxutils import escape
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 P = "http://schemas.openxmlformats.org/presentationml/2006/main"
 A = "http://schemas.openxmlformats.org/drawingml/2006/main"
@@ -266,6 +266,79 @@ def layout_presentation(*, arrangement="grid", order=None, notes_text=NOTES):
         parts = {name: old.read(name) for name in old.namelist()}
     parts["ppt/slides/slide3.xml"] = (
         body[:start] + "".join(shapes) + body[end:]
+    )
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w") as package:
+        for name, value in parts.items():
+            package.writestr(
+                zipfile.ZipInfo(name, (2020, 1, 1, 0, 0, 0)), value
+            )
+    return output.getvalue()
+
+
+def mixed_layout_presentation(
+    *, placement="direct", arrangement="grid", notes_text=NOTES
+):
+    """Native migration cells and a separately owned fictional letter image.
+
+    The image says Rahel lives at Angerring 11, from Sebastian's 1939 letter
+    in the example universe. It contributes no words to the native grid.
+    The same image can occur twice or supply the inherited slide background.
+    """
+    if placement not in {"direct", "repeated", "background"}:
+        raise ValueError("unknown fictional image placement")
+    with zipfile.ZipFile(
+        io.BytesIO(
+            layout_presentation(arrangement=arrangement, notes_text=notes_text)
+        )
+    ) as old:
+        parts = {name: old.read(name) for name in old.namelist()}
+    image = Image.new("RGB", (320, 36), "white")
+    ImageDraw.Draw(image).text(
+        (5, 10), "Rahel wohnt jetzt Angerring 11", fill="black"
+    )
+    raster = io.BytesIO()
+    image.resize((1280, 144), Image.Resampling.NEAREST).save(raster, "PNG")
+    parts["ppt/media/letter-excerpt.png"] = raster.getvalue()
+    image_relationship = (
+        f'<Relationship Id="letter" Type="{R}/image" '
+        'Target="../media/letter-excerpt.png"/>'
+    )
+    if placement == "background":
+        key = "ppt/slideMasters/slideMaster1.xml"
+        parts[key] = (
+            parts[key]
+            .decode()
+            .replace(
+                "<p:cSld>",
+                '<p:cSld><p:bg><p:bgPr><a:blipFill><a:blip r:embed="letter"/>'
+                "<a:stretch><a:fillRect/></a:stretch></a:blipFill></p:bgPr></p:bg>",
+            )
+        )
+        key = "ppt/slideMasters/_rels/slideMaster1.xml.rels"
+    else:
+        picture = """<p:pic><p:nvPicPr>
+          <p:cNvPr id="{id}" name="Letter excerpt"/>
+          <p:cNvPicPr/><p:nvPr/></p:nvPicPr>
+          <p:blipFill><a:blip r:embed="letter"/>
+          <a:stretch><a:fillRect/></a:stretch></p:blipFill>
+          <p:spPr><a:xfrm><a:off x="500000" y="{y}"/>
+          <a:ext cx="7000000" cy="800000"/></a:xfrm>
+          <a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>"""
+        pictures = picture.format(id=20, y=4500000)
+        if placement == "repeated":
+            pictures += picture.format(id=21, y=5500000)
+        key = "ppt/slides/slide3.xml"
+        parts[key] = (
+            parts[key]
+            .decode()
+            .replace("</p:spTree>", pictures + "</p:spTree>")
+        )
+        key = "ppt/slides/_rels/slide3.xml.rels"
+    parts[key] = (
+        parts[key]
+        .decode()
+        .replace("</Relationships>", image_relationship + "</Relationships>")
     )
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w") as package:
