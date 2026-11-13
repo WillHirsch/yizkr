@@ -260,6 +260,7 @@ PRESENTATION_READING_RESOURCES = (
 )
 SLIDE_VISION_RESOURCES = (
     "pipeline/slide_reading.py",
+    "pipeline/slide_routing.py",
     "pipeline/slide_renders.py",
     "pipeline/slide_renderer.py",
     "pipeline/slide_admission.py",

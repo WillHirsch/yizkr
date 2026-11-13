@@ -6,8 +6,11 @@ driver publishes and revalidates its normal document and corpus products.
 
 from __future__ import annotations
 
+import io
 import shutil
+import zipfile
 from collections import defaultdict
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -66,6 +69,131 @@ def setup(tmp_path, engine, backend):
 
 def load(doc):
     return Transcription.model_validate_json(doc.transcription.read_text())
+
+
+def layout_selection(source):
+    return {
+        ArtifactRef.from_path(source).sha1: SlideVisionSelection(mode="layout")
+    }
+
+
+def routing_report(doc):
+    from yizkr.pipeline import report
+
+    value = report.build(
+        doc.dir.parent, now=datetime(2026, 9, 28, 9, tzinfo=UTC)
+    )
+    return next(
+        item["transcription"]["slide_routing"]
+        for item in value["documents"]
+        if item["sha1"] == doc.sha1
+    )
+
+
+def test_layout_workflow_persists_routes_and_repairs_from_response_cache(
+    setup, engine, backend
+):
+    source, driver, estimator = setup
+    options = {"slide_vision": layout_selection(source)}
+    first = driver(**options)
+    assert first.run() == 0
+    (doc,) = first.documents()
+    assert [page.provenance.method for page in load(doc).pages] == [
+        "vision",
+        "slide-xml",
+        "slide-xml",
+    ]
+    decision = routing_report(doc)
+    assert decision["status"] == "recorded"
+    assert decision["policy"] == "layout-v1"
+    assert decision["positions"] == [1]
+    assert decision["slides"][0]["route"] == "vision"
+    assert decision["slides"][0]["reason"]
+    configuration = first.rundir.manifest()["config"]["slide_vision"][doc.sha1]
+    assert (
+        configuration["mode"] == "layout" and "positions" not in configuration
+    )
+    calls = list(engine.calls)
+    before = snapshot(doc.dir, skip=())
+    assert estimator(**options).estimate().stages["transcription"].reused == 1
+    assert snapshot(doc.dir, skip=()) == before
+    assert driver(**options).run() == 0
+    assert routing_report(doc) == decision
+    assert engine.calls == calls and len(backend) == 1
+    workspace = doc.dir / "slide-render-workspace"
+    next((workspace / "slide-renders").glob("*.png")).write_bytes(b"broken")
+    before = snapshot(doc.dir, skip=())
+    assert estimator(**options).estimate().stages["transcription"].hits == 1
+    assert snapshot(doc.dir, skip=()) == before
+    assert driver(**options).run() == 0
+    assert engine.calls == calls
+    assert routing_report(doc) == decision
+
+
+def test_simple_layout_avoids_renderer_and_estimator_workspace(
+    setup, monkeypatch, backend
+):
+    from yizkr.pipeline import estimate, slide_renderer
+
+    source, driver, estimator = setup
+    source.write_bytes(slides.layout_presentation(arrangement="simple"))
+    options = {
+        "slide_vision": layout_selection(source),
+        "until": "transcription",
+    }
+
+    def unavailable(*args, **kwargs):
+        pytest.fail("a native layout needs no renderer or render workspace")
+
+    monkeypatch.setattr(slide_renderer, "renderer_identity", unavailable)
+    monkeypatch.setattr(estimate, "TemporaryDirectory", unavailable)
+    count = estimator(**options).estimate()
+    assert count.stages["transcription"].engine_calls == 0
+    first = driver(**options)
+    assert first.run() == 0
+    (doc,) = first.documents()
+    assert not (doc.dir / "slide-render-workspace").exists()
+    assert all(
+        page.provenance.method == "slide-xml" for page in load(doc).pages
+    )
+    assert routing_report(doc)["positions"] == []
+    assert estimator(**options).estimate().stages["transcription"].reused == 1
+    assert backend == []
+
+
+def test_mixed_layout_report_remains_actionable_on_reuse(
+    setup, engine, backend
+):
+    source, driver, estimator = setup
+    source.write_bytes(slides.presentation())
+    options = {"slide_vision": layout_selection(source)}
+    first = driver(**options)
+    assert first.run() == 0
+    (doc,) = first.documents()
+    before = load(doc)
+    owner = before.pages[0].images[0]
+    assert all(page.provenance.method == "slide-xml" for page in before.pages)
+    decision = routing_report(doc)
+    assert decision["positions"] == []
+    assert decision["slides"][0]["limitations"]
+    attention = doc.state.detail["attention"]["transcription"]
+    assert any(
+        "slide visual reading unsupported" in item for item in attention
+    )
+    calls = list(engine.calls)
+    assert estimator(**options).estimate().stages["transcription"].reused >= 1
+    assert driver(**options).run() == 0
+    assert routing_report(doc) == decision
+    assert load(doc).pages[0].images == [owner]
+    assert [
+        item["sha1"]
+        for item in first.rundir.manifest()["documents"]
+        if item["kind"] == "excerpt"
+    ] == [owner]
+    assert engine.calls == calls and backend == []
+    updated = driver(**options)
+    (current,) = updated.documents()
+    assert current.state.detail["attention"]["transcription"] == attention
 
 
 def test_selected_workflow_reuses_reading_extraction_and_cluster_products(
@@ -180,22 +308,26 @@ def test_unusable_selected_source_refuses_before_model_or_render(
     assert engine.calls == [] and backend == []
 
 
+@pytest.mark.parametrize("mode", ["explicit", "layout"])
 def test_correction_takes_precedence_without_changing_fixed_selection(
-    setup, engine, backend
+    setup, engine, backend, mode
 ):
-    _, driver, estimator = setup
-    first = driver(until="transcription")
+    source, driver, estimator = setup
+    options = {"until": "transcription"}
+    if mode == "layout":
+        options["slide_vision"] = layout_selection(source)
+    first = driver(**options)
     assert first.run() == 0
     (doc,) = first.documents()
     doc.correction.write_text(u.SOURCES[0].text)
     before = snapshot(doc.dir, skip=())
     calls = list(engine.calls)
     messages = []
-    probe = estimator(until="transcription", log=messages.append)
+    probe = estimator(**options, log=messages.append)
     count = probe.estimate()
     assert count.stages["transcription"].engine_calls == 0
     assert snapshot(doc.dir, skip=()) == before
-    assert driver(until="transcription", log=messages.append).run() == 0
+    assert driver(**options, log=messages.append).run() == 0
     assert load(doc).text == u.SOURCES[0].text
     assert first.rundir.manifest()["config"]["slide_vision"][doc.sha1]
     assert any(
@@ -342,7 +474,9 @@ def test_estimator_result_owns_reading_files_until_close(setup, monkeypatch):
     assert not folder.exists()
 
 
-@pytest.mark.parametrize("failure", ["renderer", "admission"])
+@pytest.mark.parametrize(
+    "failure", ["renderer", "admission", "layout-external"]
+)
 def test_selected_estimate_reports_known_inspection_refusal(
     setup, engine, backend, monkeypatch, capsys, failure
 ):
@@ -359,11 +493,34 @@ def test_selected_estimate_reports_known_inspection_refusal(
             )
 
         monkeypatch.setattr(slide_renderer, "renderer_identity", unavailable)
-    else:
+    elif failure == "admission":
         source.write_bytes(slides.presentation())
         options["slide_vision"] = {
             ArtifactRef.from_path(source).sha1: SlideVisionSelection((1,))
         }
+    else:
+        data = io.BytesIO()
+        with (
+            zipfile.ZipFile(source) as original,
+            zipfile.ZipFile(data, "w") as changed,
+        ):
+            for name in original.namelist():
+                value = original.read(name)
+                if name == "ppt/_rels/presentation.xml.rels":
+                    value = value.replace(
+                        b"</Relationships>",
+                        (
+                            '<Relationship Id="outside" '
+                            f'Type="{slides.R}/hyperlink" '
+                            'Target="https://example.invalid/" '
+                            'TargetMode="External"/></Relationships>'
+                        ).encode(),
+                    )
+                changed.writestr(
+                    zipfile.ZipInfo(name, (2020, 1, 1, 0, 0, 0)), value
+                )
+        source.write_bytes(data.getvalue())
+        options["slide_vision"] = layout_selection(source)
     with pytest.raises(
         ScratchRefused, match="cannot inspect selected slide inputs"
     ):

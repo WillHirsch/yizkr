@@ -13,8 +13,9 @@ SOURCE = ArtifactRef.from_bytes(b"fictional native presentation").sha1
 
 
 @pytest.mark.parametrize("action", ["run", "estimate"])
+@pytest.mark.parametrize("mode", ["explicit", "layout"])
 def test_cli_passes_same_typed_selection_to_run_and_estimate(
-    tmp_path, monkeypatch, action
+    tmp_path, monkeypatch, action, mode
 ):
     corpus = tmp_path / "corpus"
     corpus.mkdir()
@@ -27,7 +28,11 @@ def test_cli_passes_same_typed_selection_to_run_and_estimate(
         json.dumps(
             {
                 SOURCE: {
-                    "positions": [3, 1],
+                    **(
+                        {"positions": [3, 1]}
+                        if mode == "explicit"
+                        else {"mode": "layout"}
+                    ),
                     "settings": {
                         "executable": "fictional-office",
                         "long_edge": 640,
@@ -66,7 +71,9 @@ def test_cli_passes_same_typed_selection_to_run_and_estimate(
     assert args.func(args) == 0
     choice = seen["slide_vision"][SOURCE]
     assert choice.configuration() == {
-        "positions": [1, 3],
+        **(
+            {"positions": [1, 3]} if mode == "explicit" else {"mode": "layout"}
+        ),
         "settings": {
             "executable": "fictional-office",
             "long_edge": 640,
@@ -96,6 +103,11 @@ def test_cli_passes_same_typed_selection_to_run_and_estimate(
         {SOURCE: {"positions": [1], "settings": {"timeout": float("nan")}}},
         {SOURCE: {"positions": [1], "settings": {"long_edge": True}}},
         {SOURCE: {"positions": [1], "settings": {"misspelled": 1}}},
+        {SOURCE: {"mode": "unknown"}},
+        {SOURCE: {"mode": []}},
+        {SOURCE: {"mode": "explicit"}},
+        {SOURCE: {"mode": "layout", "positions": []}},
+        {SOURCE: {"mode": "layout", "positions": [1]}},
     ],
 )
 def test_invalid_selection_cannot_become_another_reading_plan(tmp_path, value):

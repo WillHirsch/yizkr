@@ -83,16 +83,27 @@ def test_real_render_selected_body_and_native_notes(tmp_path):
     assert len(seen) == 1
 
 
+@pytest.mark.parametrize("mode", ["explicit", "layout"])
 def test_real_render_survives_driver_publication_and_cache_removal(
-    tmp_path, engine
+    tmp_path, engine, mode
 ):
     executable = os.environ.get("YIZKR_TEST_LIBREOFFICE")
     if executable is None:
         pytest.skip("set YIZKR_TEST_LIBREOFFICE to a local office executable")
     corpus = Corpus(tmp_path / "corpus")
     source = corpus.folder / "fictional.pptx"
-    source.write_bytes(slides.native_presentation())
-    corpus.texts = defaultdict(lambda: "Left panel | Right panel")
+    source.write_bytes(
+        slides.native_presentation()
+        if mode == "explicit"
+        else slides.layout_presentation()
+    )
+    corpus.texts = defaultdict(
+        lambda: (
+            "Left panel | Right panel"
+            if mode == "explicit"
+            else "Klara | 1938\nGustav | 1939"
+        )
+    )
     engine.corpus = corpus
     engine.fresh = False
     state = tmp_path / "runs" / "selected"
@@ -102,7 +113,9 @@ def test_real_render_survives_driver_publication_and_cache_removal(
         "until": "transcription",
         "slide_vision": {
             ArtifactRef.from_path(source).sha1: SlideVisionSelection(
-                (1,), SlideRenderSettings(executable=executable, long_edge=640)
+                (1,) if mode == "explicit" else (),
+                SlideRenderSettings(executable=executable, long_edge=640),
+                mode=mode,
             )
         },
     }
@@ -113,6 +126,9 @@ def test_real_render_survives_driver_publication_and_cache_removal(
     reading = Transcription.model_validate_json(transcription)
     assert reading.pages[0].provenance.method == "vision"
     assert reading.pages[0].provenance.render_product_sha256
+    if mode == "layout":
+        plan = reading.provenance.metadata["dependencies"]["slide_routing"]
+        assert plan["policy"] == "layout-v1" and plan["positions"] == [1]
     assert check_vision_page(reading, reading.pages[0]).passed
     body, notes = reading.source_context.readings[:2]
     assert body.support.part_id != notes.support.part_id

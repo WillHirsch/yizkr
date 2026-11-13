@@ -1098,7 +1098,7 @@ def cmd_gaps_rollup(args) -> int:
 
 
 def _load_slide_vision(path: Path) -> dict:
-    """Read explicit source selections without preparing media or a client."""
+    """Read slide policies without preparing media or a model client."""
     import json
     import re
 
@@ -1120,15 +1120,25 @@ def _load_slide_vision(path: Path) -> dict:
     for sha1, value in values.items():
         if not re.fullmatch(r"[0-9a-f]{40}", sha1):
             raise ValueError("slide-vision sources need full lowercase SHA-1s")
-        if (
-            not isinstance(value, dict)
-            or set(value) - {"positions", "settings"}
-            or not isinstance(value.get("positions"), list)
-        ):
+        if not isinstance(value, dict) or set(value) - {
+            "positions",
+            "settings",
+            "mode",
+        }:
             raise ValueError(
-                "each slide-vision selection needs positions "
+                "each slide-vision selection needs positions or layout mode "
                 "and optional settings"
             )
+        mode = value.get("mode", "explicit")
+        if (
+            mode not in ("explicit", "layout")
+            or (
+                mode == "explicit"
+                and not isinstance(value.get("positions"), list)
+            )
+            or (mode == "layout" and "positions" in value)
+        ):
+            raise ValueError("slide vision needs positions or layout mode")
         settings = value.get("settings", {})
         if (
             not isinstance(settings, dict)
@@ -1144,7 +1154,9 @@ def _load_slide_vision(path: Path) -> dict:
         ):
             raise ValueError("invalid slide-vision renderer settings")
         result[sha1] = SlideVisionSelection(
-            tuple(value["positions"]), SlideRenderSettings(**settings)
+            tuple(value.get("positions", ())),
+            SlideRenderSettings(**settings),
+            mode,
         )
     return result
 
@@ -2416,7 +2428,7 @@ def _scratch_plan_options(p, effort_choices, runs_help: str) -> None:
         "--slide-vision",
         type=Path,
         metavar="FILE",
-        help="JSON mapping of PPTX source SHA-1s to selected slide positions "
+        help="JSON mapping of PPTX source SHA-1s to positions or layout mode "
         "and optional renderer settings; native XML remains the default",
     )
     p.add_argument(

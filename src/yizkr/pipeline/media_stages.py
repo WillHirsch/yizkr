@@ -328,10 +328,18 @@ def read_media(
             )
         transcription = reader.transcribe(request.source)
         resolution = reader.last_resolution
-        if request.slide_vision is not None:
+        if (
+            request.slide_vision is not None
+            and reader.slide_vision_proof is not None
+        ):
             dependencies["slide_vision"] = (
                 reader.slide_vision_proof.dependencies()
             )
+        if (
+            request.slide_vision is not None
+            and reader.slide_routing is not None
+        ):
+            dependencies["slide_routing"] = reader.slide_routing
     if transcription is None:
         refuse_archive(request.source)
         excluded = (

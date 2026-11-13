@@ -3147,6 +3147,7 @@ class ScratchDriver:
     def _restore_slide_representations(self, doc: DocumentRun) -> None:
         """Carry verified render bytes into the published source inventory."""
         from yizkr.pipeline.slide_reading import (
+            resolve_slide_vision,
             restore_slide_render_representations,
         )
         from yizkr.pipeline.slide_renders import inspect_slide_renders
@@ -3155,6 +3156,11 @@ class ScratchDriver:
         if request is None:
             return
         content = self._presentation(doc)
+        request, _report = resolve_slide_vision(
+            doc.source, content, request, excluded=self._excluded_image
+        )
+        if request is None:
+            return
         product = inspect_slide_renders(
             doc.source,
             request.directory,

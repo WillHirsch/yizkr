@@ -206,3 +206,71 @@ def native_presentation(*, notes_text=NOTES):
                 zipfile.ZipInfo(name, (2020, 1, 1, 0, 0, 0)), value
             )
     return output.getvalue()
+
+
+def layout_presentation(*, arrangement="grid", order=None, notes_text=NOTES):
+    """Klara's 1938 and Gustav's 1939 emigrations in ordinary text boxes.
+
+    These Stupfield migration facts belong to the example universe. Shapes
+    remain independent native text; XML order can hide their row association.
+    """
+    if arrangement == "grid":
+        cells = [
+            ("Klara", 500000, 1000000, 3000000, 1000000),
+            ("1938", 4500000, 1000000, 3000000, 1000000),
+            ("Gustav", 500000, 3000000, 3000000, 1000000),
+            ("1939", 4500000, 3000000, 3000000, 1000000),
+        ]
+        order = (3, 0, 2, 1) if order is None else order
+        cells.append(("Stupfield arrivals", 500000, 100000, 7000000, 500000))
+        order = (4, *order)
+    elif arrangement in {"columns", "reversed"}:
+        cells = [
+            ("Klara: Stupfield, 1938", 500000, 1000000, 3000000, 1000000),
+            ("Gustav: Stupfield, 1939", 4500000, 1000000, 3000000, 1000000)
+            if arrangement == "columns"
+            else (
+                "Gustav: Stupfield, 1939",
+                500000,
+                3000000,
+                3000000,
+                1000000,
+            ),
+        ]
+        order = (1, 0) if order is None else order
+    elif arrangement == "simple":
+        cells = [("Klara came first, Gustl in 1939.", 0, 0, 9144000, 6858000)]
+        order = (0,) if order is None else order
+    else:
+        raise ValueError("unknown fictional slide arrangement")
+    shapes = []
+    for index in order:
+        text, x, y, width, height = cells[index]
+        body = _body(text, "EEEEEE")
+        start, end = (
+            body.index("<p:sp>"),
+            body.index("</p:sp>") + len("</p:sp>"),
+        )
+        shape = body[start:end]
+        shape = shape.replace('id="2"', f'id="{index + 2}"', 1)
+        shape = shape.replace('<a:off x="0" y="0"', f'<a:off x="{x}" y="{y}"')
+        shape = shape.replace(
+            'cx="9144000" cy="6858000"', f'cx="{width}" cy="{height}"'
+        )
+        shapes.append(shape.replace('val="FFFFFF"', 'val="000000"'))
+    body = _body("", None)
+    start, end = body.index("<p:sp>"), body.index("</p:sp>") + len("</p:sp>")
+    with zipfile.ZipFile(
+        io.BytesIO(native_presentation(notes_text=notes_text))
+    ) as old:
+        parts = {name: old.read(name) for name in old.namelist()}
+    parts["ppt/slides/slide3.xml"] = (
+        body[:start] + "".join(shapes) + body[end:]
+    )
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w") as package:
+        for name, value in parts.items():
+            package.writestr(
+                zipfile.ZipInfo(name, (2020, 1, 1, 0, 0, 0)), value
+            )
+    return output.getvalue()
