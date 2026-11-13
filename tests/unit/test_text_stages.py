@@ -335,6 +335,7 @@ def test_empty_container_is_deterministic_and_clears_obsolete_diagnostics(
     tmp_path, strategy, method
 ):
     from yizkr.pipeline.chunking import SIDE_OUTPUTS
+    from yizkr.pipeline.extract import correction_dump_path
 
     transcription = empty_container_reading(method)
     raw, rejects, diagnostic = (
@@ -345,6 +346,7 @@ def test_empty_container_is_deterministic_and_clears_obsolete_diagnostics(
     output.mkdir()
     for path in [
         raw,
+        correction_dump_path(raw),
         rejects,
         diagnostic,
         *(output / name for name in SIDE_OUTPUTS),
@@ -381,6 +383,7 @@ def test_empty_container_is_deterministic_and_clears_obsolete_diagnostics(
     assert client.prompts == []
     assert not client.closed
     assert not any(path.exists() for path in (raw, rejects, diagnostic))
+    assert not correction_dump_path(raw).exists()
     assert list(output.iterdir()) == [output / "coverage.json"]
     coverage = json.loads((output / "coverage.json").read_text())
     assert coverage["strategy"] == "empty-container"

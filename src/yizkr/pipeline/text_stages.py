@@ -22,7 +22,7 @@ from yizkr.pipeline.chunking import (
     SIDE_OUTPUTS,
 )
 from yizkr.pipeline.critique import Finding, Invalid
-from yizkr.pipeline.extract import ExtractionFailed
+from yizkr.pipeline.extract import ExtractionFailed, correction_dump_path
 from yizkr.pipeline.interpretation_context import InterpretationContext
 from yizkr.pipeline.language import LanguageResolution, resolve_language
 from yizkr.pipeline.llm import LlmClient
@@ -337,6 +337,7 @@ def _extract_empty_container(
         request.raw_dump,
         request.rejects_dump,
         request.diagnostic_dump,
+        correction_dump_path(request.raw_dump),
     ):
         if path is not None:
             path.unlink(missing_ok=True)
@@ -397,7 +398,13 @@ def extract(
     outputs = [request.diagnostic_dump]
     workspaces = []
     if strategy == "single" or empty_container:
-        outputs.extend((request.raw_dump, request.rejects_dump))
+        outputs.extend(
+            (
+                request.raw_dump,
+                request.rejects_dump,
+                correction_dump_path(request.raw_dump),
+            )
+        )
     if (
         strategy == "chunked" or empty_container
     ) and request.state_dir is not None:
@@ -513,7 +520,11 @@ def extract(
     elif strategy == "single":
         paths.extend(
             path
-            for path in (request.raw_dump, request.rejects_dump)
+            for path in (
+                request.raw_dump,
+                request.rejects_dump,
+                correction_dump_path(request.raw_dump),
+            )
             if path is not None
         )
     artifacts = [path for path in paths if path.is_file()]
