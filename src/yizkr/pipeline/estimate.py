@@ -952,7 +952,20 @@ class Estimator(ScratchDriver):
         return made
 
     def _slide_vision_dependencies(self, doc, request):
-        if not self._fresh(doc):
+        from yizkr.pipeline.slide_reading import resolve_slide_vision
+
+        try:
+            selected, _report = resolve_slide_vision(
+                doc.source,
+                self._presentation(doc),
+                request,
+                excluded=self._excluded_image,
+            )
+        except (OSError, ValueError) as exc:
+            raise ScratchRefused(
+                f"cannot inspect selected slide inputs: {exc}"
+            ) from exc
+        if selected is None or not self._fresh(doc):
             return super()._slide_vision_dependencies(doc, request)
         # Execution sets obsolete document directories aside before observing
         # generation inputs; their render workspace cannot affect this plan.
@@ -970,6 +983,16 @@ class Estimator(ScratchDriver):
         """
         request = self._slide_vision_request(doc)
         if request is None:
+            return super()._transcribe(doc, method)
+        from yizkr.pipeline.slide_reading import resolve_slide_vision
+
+        selected, _report = resolve_slide_vision(
+            doc.source,
+            self._presentation(doc),
+            request,
+            excluded=self._excluded_image,
+        )
+        if selected is None:
             return super()._transcribe(doc, method)
         with TemporaryDirectory(prefix="yizkr-slide-estimate-") as temporary:
             workspace = Path(temporary) / "renders"

@@ -64,6 +64,8 @@ They skip when `YIZKR_TEST_LIBREOFFICE` is unset; selecting an unavailable or fa
 
 The offline [selected-slide workflow checks](../tests/unit/test_slide_workflow.py) exercise execution through clustering, stored-reading reuse, render repair, fixed selection settings and independent-image ownership with controlled renderer/model outputs. Estimator checks compare the selected work while verifying that saved run products remain unchanged. These checks cover durable orchestration; the optional real-renderer checks above supply the conversion boundary.
 
+[Routing-report checks](../tests/unit/test_slide_routing_report.py) distinguish recorded native decisions from missing or inconsistent metadata, verify local per-slide detail and keep arbitrary persisted labels out of aggregate output. The bounded layout policy does not establish complete visual coverage or attribution within mixed-source slides.
+
 **Real-model checks.** `tests/integration/test_live_chunked.py` exercises extraction and conversation resumption through the claude CLI and response cache. It needs a logged-in CLI and skips if unavailable. `$YIZKR_LIVE_CACHE` selects its cache; the default is `var/live-cache`. It does not acquire the stack lock. These checks do not establish broad extraction quality across the corpus, and a reused response establishes only the request/configuration it matches.
 
 ### Prose-only CI

@@ -407,6 +407,7 @@ ATTENTION_LABELS = frozenset(
         # an image whose own reading the check failed
         # (transcribe.READING_FAILED)
         "image reading failed the check",
+        "slide visual reading unsupported",
     }
 )
 # the leading labels of a document's failure outside its stages; any
@@ -1139,6 +1140,88 @@ def _pages(pages: Any) -> dict[str, Any]:
     }
 
 
+def _slide_routing(transcription: dict) -> dict:
+    """Read process decisions without inferring them from page content.
+
+    Structural inconsistencies make the plan unavailable for counting. Reason
+    labels use a closed vocabulary even in local detail, so aggregate readers
+    cannot accidentally promote arbitrary persisted text into a summary.
+    """
+    dependencies = transcription.get("provenance")
+    for key in ("metadata", "dependencies"):
+        dependencies = (
+            dependencies.get(key) if isinstance(dependencies, dict) else None
+        )
+    if (
+        not isinstance(dependencies, dict)
+        or "slide_routing" not in dependencies
+    ):
+        return {"status": "unavailable"}
+    raw = dependencies["slide_routing"]
+    invalid = {"status": "invalid"}
+    if not isinstance(raw, dict) or raw.get("policy") != "layout-v1":
+        return invalid
+    from yizkr.pipeline.slide_routing import ROUTE_LIMITATIONS, ROUTE_REASONS
+
+    slides, positions = raw.get("slides"), raw.get("positions")
+    pages = transcription.get("pages")
+    if (
+        not isinstance(slides, list)
+        or not isinstance(positions, list)
+        or not isinstance(pages, list)
+        or not pages
+        or len(slides) != len(pages)
+        or any(
+            type(position) is not int or position < 1 for position in positions
+        )
+        or len(set(positions)) != len(positions)
+    ):
+        return invalid
+    observed, selected = [], []
+    for slide, page in zip(slides, pages, strict=True):
+        if not isinstance(slide, dict) or not isinstance(page, dict):
+            return invalid
+        position, route = slide.get("position"), slide.get("route")
+        limitations = slide.get("limitations")
+        actual = page.get("provenance")
+        if (
+            type(position) is not int
+            or position != len(observed) + 1
+            or type(page.get("page")) is not int
+            or page["page"] != position
+            or route not in ("slide-xml", "vision")
+            or not isinstance(actual, dict)
+            or actual.get("method") != route
+            or not isinstance(slide.get("part_id"), str)
+            or not slide["part_id"]
+            or not isinstance(slide.get("reason"), str)
+            or not isinstance(limitations, list)
+            or any(not isinstance(item, str) for item in limitations)
+        ):
+            return invalid
+        if route == "vision":
+            selected.append(position)
+        observed.append(
+            {
+                "position": position,
+                "part_id": slide["part_id"],
+                "route": route,
+                "reason": _known(slide["reason"], ROUTE_REASONS),
+                "limitations": sorted(
+                    {_known(item, ROUTE_LIMITATIONS) for item in limitations}
+                ),
+            }
+        )
+    if set(positions) != set(selected):
+        return invalid
+    return {
+        "status": "recorded",
+        "policy": "layout-v1",
+        "positions": sorted(positions),
+        "slides": observed,
+    }
+
+
 def _read_views(document: Document, directory: Path, state: dict) -> None:
     """What the document's views hold, for each stage that completed: the
     transcription's language, route and how its language was resolved;
@@ -1165,6 +1248,7 @@ def _read_views(document: Document, directory: Path, state: dict) -> None:
                 if isinstance(language, dict)
                 else None,
                 **_pages(found.get("pages")),
+                "slide_routing": _slide_routing(found),
             }
     stage = next(
         (
@@ -2600,6 +2684,10 @@ def _aggregate_documents(
     resolved: Counter = Counter()
     page_methods: Counter = Counter()
     annotated_pages = 0
+    slide_states: Counter = Counter()
+    slide_routes: Counter = Counter()
+    slide_reasons: Counter = Counter()
+    slide_limitations: Counter = Counter()
     # each container's derived images, by the container's route (a PDF
     # read page by page, a deck): how many containers place how many
     # images, and the images themselves, each once however many place it
@@ -2627,6 +2715,13 @@ def _aggregate_documents(
         if container == "pdf-pages":
             page_methods.update(transcription.get("page_methods") or {})
             annotated_pages += transcription.get("annotated_pages") or 0
+        elif container == DECK:
+            routing = transcription["slide_routing"]
+            slide_states[routing["status"]] += 1
+            for slide in routing.get("slides", ()):
+                slide_routes[slide["route"]] += 1
+                slide_reasons[slide["reason"]] += 1
+                slide_limitations.update(slide["limitations"])
         placed = transcription.get("images") or []
         if placed:
             images_per[container][str(len(placed))] += 1
@@ -2653,6 +2748,14 @@ def _aggregate_documents(
         # the text layer leaves unread
         "pdf_pages": _by_count(page_methods),
         "pdf_pages_annotated": annotated_pages,
+        "slide_routing": {
+            "recorded_documents": slide_states["recorded"],
+            "unavailable_documents": slide_states["unavailable"],
+            "invalid_documents": slide_states["invalid"],
+            "by_route": _by_count(slide_routes),
+            "by_reason": _by_count(slide_reasons),
+            "limitations": _by_count(slide_limitations),
+        },
         # the images placed within the pages of the PDFs read page by page
         # and read on their own, per PDF (ADR-0008): the PDFs that place
         # any, the images they place (an image counted once per PDF), the
@@ -3787,6 +3890,18 @@ def _documents_section(
             f"layer leaves unread: {_n(documents['pdf_pages_annotated'])}",
             _images_line(documents),
             f"Language resolved: {_listed(documents['language_resolved'])}",
+        ]
+    )
+    routing = documents["slide_routing"]
+    blocks.append(
+        [
+            "PPTX layout routing: "
+            f"{_n(routing['recorded_documents'])} documents recorded; "
+            f"{_n(routing['unavailable_documents'])} unavailable; "
+            f"{_n(routing['invalid_documents'])} invalid",
+            f"Slide routes: {_listed(routing['by_route'])}; "
+            f"reasons: {_listed(routing['by_reason'])}; "
+            f"visual limitations: {_listed(routing['limitations'])}",
         ]
     )
     return _Section("Documents", blocks)
@@ -4950,6 +5065,16 @@ def _html_document(document: Mapping[str, Any]) -> str:
             f"{transcription['resolved'] or 'resolved ?'}; route "
             f"{transcription['route']}"
         )
+        routing = transcription["slide_routing"]
+        if routing["status"] == "recorded":
+            items.extend(
+                f"Slide {slide['position']}: {slide['route']} "
+                f"({slide['reason']}); visual limitations: "
+                + (", ".join(slide["limitations"]) or "none recorded")
+                for slide in routing["slides"]
+            )
+        elif document["kind"] == "presentation":
+            items.append(f"Slide layout routing: {routing['status']}")
     batch = document["batch"]
     if batch:
         items.append(

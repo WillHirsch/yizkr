@@ -1,7 +1,7 @@
-"""Explicit slide vision over admitted, container-owned visual content.
+"""Slide vision over admitted, container-owned visual content.
 
-The normal presentation reader remains native. This opt-in operation selects
-physical slides, preserves separately read original image owners and refuses
+The normal presentation reader remains native. Opt-in explicit or layout
+policies select physical slides, preserve original image owners and refuse
 selected composites whose visible image evidence cannot be attributed.
 """
 
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -35,7 +35,15 @@ if TYPE_CHECKING:
 ExclusionCheck = Callable[[str, Sequence[str]], bool]
 
 
-def _positions(positions: tuple[int, ...]) -> None:
+def _positions(positions: tuple[int, ...], mode: str) -> None:
+    if mode not in {"explicit", "layout"}:
+        raise ValueError("unknown slide vision mode")
+    if mode == "layout":
+        if positions != ():
+            raise ValueError(
+                "layout routing does not accept explicit positions"
+            )
+        return
     if (
         not isinstance(positions, tuple)
         or not positions
@@ -49,9 +57,13 @@ def _positions(positions: tuple[int, ...]) -> None:
         )
 
 
-def _configuration(positions, settings):
+def _configuration(positions, settings, mode):
     return {
-        "positions": sorted(positions),
+        **(
+            {"mode": mode}
+            if mode == "layout"
+            else {"positions": sorted(positions)}
+        ),
         "settings": {
             "executable": settings.executable,
             "long_edge": settings.long_edge,
@@ -64,39 +76,81 @@ def _configuration(positions, settings):
 class SlideVisionSelection:
     """A durable source-specific choice, independent of workspace paths."""
 
-    positions: tuple[int, ...]
+    positions: tuple[int, ...] = ()
     settings: SlideRenderSettings = SlideRenderSettings()
+    mode: str = "explicit"
 
     def __post_init__(self) -> None:
-        _positions(self.positions)
+        _positions(self.positions, self.mode)
 
     def configuration(self) -> dict[str, Any]:
-        return _configuration(self.positions, self.settings)
+        return _configuration(self.positions, self.settings, self.mode)
 
     def request(self, directory: Path) -> SlideVisionRequest:
-        return SlideVisionRequest(self.positions, directory, self.settings)
+        return SlideVisionRequest(
+            self.positions, directory, self.settings, self.mode
+        )
 
 
 @dataclass(frozen=True)
 class SlideVisionRequest:
-    """Selected physical slides and a dedicated, caller-owned render folder.
+    """A slide-reading policy and a dedicated caller-owned render folder.
 
     The folder retains render products independently of the model cache.
-    Positions are presentation order, including hidden slides. Selecting a
-    slide never changes its source owner or authorizes mixed-source evidence.
+    Explicit positions follow presentation order, including hidden slides;
+    layout mode resolves its own positions. Neither choice changes source
+    ownership or authorizes mixed-source evidence.
     """
 
     positions: tuple[int, ...]
     directory: Path
     settings: SlideRenderSettings = SlideRenderSettings()
+    mode: str = "explicit"
 
     def __post_init__(self) -> None:
-        _positions(self.positions)
+        _positions(self.positions, self.mode)
         if not isinstance(self.directory, Path):
             raise ValueError("slide vision needs a render workspace Path")
 
     def configuration(self) -> dict[str, Any]:
-        return _configuration(self.positions, self.settings)
+        return _configuration(self.positions, self.settings, self.mode)
+
+
+def resolve_slide_vision(
+    source: Path,
+    content: PresentationContent,
+    request: SlideVisionRequest,
+    *,
+    excluded: ExclusionCheck,
+) -> tuple[SlideVisionRequest | None, dict[str, Any] | None]:
+    """Resolve an optional layout policy without rendering or publication."""
+    if request.mode == "explicit":
+        return request, None
+    from yizkr.pipeline.slide_routing import plan_slide_layout
+
+    original = source.read_bytes()
+    if (
+        content.inventory is None
+        or content.inventory.source != ArtifactRef.from_bytes(original)
+    ):
+        raise ValueError("prepared presentation belongs to another source")
+    sources = project_sources(
+        content.inventory,
+        request.directory,
+        data=content.inventory_bytes,
+        excluded=excluded,
+    )
+    plan = plan_slide_layout(
+        original, sources, excluded=excluded, source_names=(source.name,)
+    )
+    if source.read_bytes() != original:
+        raise ValueError("presentation changed during slide routing")
+    effective = (
+        replace(request, positions=plan.positions, mode="explicit")
+        if plan.positions
+        else None
+    )
+    return effective, plan.configuration()
 
 
 def _selection(request, admission) -> None:
@@ -125,6 +179,14 @@ def slide_vision_dependencies(
     """Current visual generation basis, independent of saved output health."""
     from yizkr.pipeline.slide_admission import SlideAdmission
 
+    effective, report = resolve_slide_vision(
+        source, content, request, excluded=excluded
+    )
+    configuration = request.configuration()
+    if report is not None:
+        configuration["slide_routing"] = report
+    if effective is None:
+        return configuration
     observed = slide_render_dependencies(
         source,
         request.directory,
@@ -133,13 +195,13 @@ def slide_vision_dependencies(
         prepared=content,
     )
     _selection(
-        request,
+        effective,
         [
             SlideAdmission.model_validate(value)
             for value in observed.pop("admission")
         ],
     )
-    return {**request.configuration(), **observed}
+    return {**configuration, **observed}
 
 
 def slide_vision_reading_failure(
@@ -159,31 +221,58 @@ def slide_vision_reading_failure(
     from yizkr.pipeline.container_sources import source_context
     from yizkr.pipeline.transcribe import DECK_ENGINE, check_vision_page
 
-    product = inspect_slide_renders(
-        source,
-        request.directory,
-        excluded=excluded,
-        settings=request.settings,
-        prepared=content,
+    effective, report = resolve_slide_vision(
+        source, content, request, excluded=excluded
     )
-    if product is None:
-        return "slide render product is missing, damaged or stale"
-    _selection(request, [slide.admission for slide in product.slides])
+    if report is not None:
+        metadata = (
+            transcription.provenance.metadata
+            if transcription.provenance is not None
+            else {}
+        )
+        dependencies = metadata.get("dependencies", {})
+        if not isinstance(dependencies, dict) or (
+            dependencies.get("slide_routing") != report
+        ):
+            return "slide routing report is missing or stale"
+    product = None
+    if effective is not None:
+        product = inspect_slide_renders(
+            source,
+            request.directory,
+            excluded=excluded,
+            settings=request.settings,
+            prepared=content,
+        )
+        if product is None:
+            return "slide render product is missing, damaged or stale"
+        _selection(effective, [slide.admission for slide in product.slides])
+    if content.inventory is None:
+        raise ValueError("slide reading requires a current source inventory")
     if (
-        transcription.artifact != product.source
+        transcription.artifact != content.inventory.source
         or transcription.engine != DECK_ENGINE
     ):
         return "slide reading identifies another source or reader"
     pages = transcription.pages or ()
-    if [page.page for page in pages] != [
-        slide.admission.position for slide in product.slides
-    ]:
+    expected = sorted(
+        part.locator.position
+        for part in content.inventory.parts
+        if part.kind == "slide_body"
+    )
+    if [page.page for page in pages] != expected:
         return "slide reading lacks complete physical-slide provenance"
-    for page, slide in zip(pages, product.slides, strict=True):
-        selected = page.page in request.positions
+    rendered = (
+        {slide.admission.position: slide for slide in product.slides}
+        if product is not None
+        else {}
+    )
+    for page in pages:
+        selected = effective is not None and page.page in effective.positions
         if page.provenance.method != ("vision" if selected else "slide-xml"):
             return "selected slide reading routes have changed"
         if selected:
+            slide = rendered[page.page]
             if (
                 page.provenance.reading_input
                 != slide.representation.byte_object
@@ -202,8 +291,6 @@ def slide_vision_reading_failure(
             return (
                 "native slide reading carries incompatible render provenance"
             )
-    if content.inventory is None:
-        raise ValueError("slide reading requires a current source inventory")
     sources = project_sources(
         content.inventory,
         request.directory,
@@ -275,6 +362,69 @@ def restore_slide_render_representations(
         content.inventory_bytes[representation.byte_object.sha1] = data
 
 
+def slide_image_inputs(
+    read: ContainerPages,
+) -> dict[Path, tuple[ArtifactRef, ArtifactRef]]:
+    """Snapshot every independent outbound image, including unplaced ones."""
+    if read.sources is None:
+        raise ValueError("slide reading requires prepared source bindings")
+    inputs = {}
+    for owner, image in read.images.items():
+        bound = read.sources.sources.get(owner)
+        current = bound.current_input if bound is not None else None
+        if current is None:
+            raise ValueError("independent slide image has no current input")
+        inputs[image.path] = (bound.owner, current.representation)
+    return inputs
+
+
+def _check_image_input(
+    path, sources, image_inputs, directory, excluded
+) -> None:
+    expected = image_inputs.get(path)
+    if expected is None:
+        raise ValueError("unrecognized slide reading input")
+    owner, representation = expected
+    source = sources.sources.get(owner.sha1)
+    current = source.current_input if source is not None else None
+    if (
+        source is None
+        or not source.readable
+        or current is None
+        or current.representation != representation
+        or any(
+            excluded(reference.sha1, (*source.names, path.name))
+            for reference in (owner, representation)
+        )
+    ):
+        raise ValueError("independent slide image is excluded or changed")
+    payload = _read_regular(
+        directory,
+        path.relative_to(directory).as_posix(),
+    )
+    if payload is None or ArtifactRef.from_bytes(payload) != representation:
+        raise ValueError("independent slide image input is missing or damaged")
+
+
+def verify_slide_image_inputs(
+    content: PresentationContent,
+    directory: Path,
+    inputs: dict[Path, tuple[ArtifactRef, ArtifactRef]],
+    *,
+    excluded: ExclusionCheck,
+    path: Path | None = None,
+) -> None:
+    """Readmit actual outbound bytes independently of painted contributors."""
+    sources = project_sources(
+        content.inventory,
+        directory,
+        data=content.inventory_bytes,
+        excluded=excluded,
+    )
+    for target in (path,) if path is not None else inputs:
+        _check_image_input(target, sources, inputs, directory, excluded)
+
+
 @dataclass(frozen=True)
 class SlideVisionProof:
     source: Path
@@ -324,34 +474,13 @@ class SlideVisionProof:
             ):
                 _payload(self.reading_directory, slide, self.excluded)
                 return
-        expected = self.image_inputs.get(path)
-        if expected is None:
-            raise ValueError("unrecognized slide reading input")
-        owner, representation = expected
-        source = sources.sources.get(owner.sha1)
-        current = source.current_input if source is not None else None
-        if (
-            source is None
-            or not source.readable
-            or current is None
-            or current.representation != representation
-            or any(
-                self.excluded(reference.sha1, (*source.names, path.name))
-                for reference in (owner, representation)
-            )
-        ):
-            raise ValueError("independent slide image is excluded or changed")
-        payload = _read_regular(
+        _check_image_input(
+            path,
+            sources,
+            self.image_inputs,
             self.reading_directory,
-            path.relative_to(self.reading_directory).as_posix(),
+            self.excluded,
         )
-        if (
-            payload is None
-            or ArtifactRef.from_bytes(payload) != representation
-        ):
-            raise ValueError(
-                "independent slide image input is missing or damaged"
-            )
 
     def before_vision(self, path: Path) -> None:
         """Re-admit every actual provider input, including checked retries."""
@@ -458,13 +587,7 @@ def select_slide_vision(
         page.speaker_notes = notes.get(page.number, "")
         page.reading_input = slide.representation.byte_object
         page.render_product_sha256 = product.digest
-    inputs = {}
-    for owner, image in read.images.items():
-        bound = read.sources.sources.get(owner)
-        current = bound.current_input if bound is not None else None
-        if current is None:
-            raise ValueError("independent slide image has no current input")
-        inputs[image.path] = (bound.owner, current.representation)
+    inputs = slide_image_inputs(read)
     return SlideVisionProof(
         source, content, request, product, directory, excluded, inputs
     )

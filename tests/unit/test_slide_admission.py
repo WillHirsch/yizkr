@@ -281,7 +281,7 @@ def test_unproved_override_cannot_hide_inherited_image(tmp_path, fill):
             values["ppt/media/override.png"] = raster() + b"override"
 
     path = deck(tmp_path / "library-talk-2018.pptx", change)
-    with pytest.raises(ValueError, match="background"):
+    with pytest.raises(ValueError, match="background|excluded"):
         admission(path, tmp_path, lambda _, names: "letter.png" in names)
 
 

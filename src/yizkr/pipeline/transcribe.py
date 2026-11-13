@@ -1272,6 +1272,9 @@ class DeckTranscriber(PagedTranscriber):
         self.content = content
         self.slide_vision = slide_vision
         self.slide_vision_proof: SlideVisionProof | None = None
+        self.slide_routing: dict[str, Any] | None = None
+        self._slide_routing_source: Path | None = None
+        self._slide_routing_images: tuple[Path, dict] | None = None
 
     def _read(self, media_path: Path, directory: Path) -> Any:
         from yizkr.pipeline.presentation import slide_pages, unpack_pptx
@@ -1284,28 +1287,79 @@ class DeckTranscriber(PagedTranscriber):
             raise ValueError("prepared presentation belongs to another source")
         read = slide_pages(content, directory, excluded=self.excluded)
         if self.slide_vision is not None:
-            from yizkr.pipeline.slide_reading import select_slide_vision
+            from yizkr.pipeline.slide_reading import (
+                resolve_slide_vision,
+                select_slide_vision,
+                slide_image_inputs,
+            )
 
-            self.slide_vision_proof = select_slide_vision(
+            effective, self.slide_routing = resolve_slide_vision(
                 media_path,
-                directory,
                 content,
-                read,
                 self.slide_vision,
                 excluded=self.excluded,
             )
+            self._slide_routing_source = media_path
+            if self.slide_routing is not None:
+                self._slide_routing_images = (
+                    directory,
+                    slide_image_inputs(read),
+                )
+                for decision in self.slide_routing["slides"]:
+                    if decision["limitations"]:
+                        read.notes.append(
+                            "slide visual reading unsupported: "
+                            f"slide {decision['position']} "
+                            f"({', '.join(decision['limitations'])})"
+                        )
+            if effective is not None:
+                self.slide_vision_proof = select_slide_vision(
+                    media_path,
+                    directory,
+                    content,
+                    read,
+                    effective,
+                    excluded=self.excluded,
+                )
+            self.content = content
         return read
 
     def _before_vision(self, path: Path) -> None:
         if self.slide_vision_proof is not None:
             self.slide_vision_proof.before_vision(path)
+        elif self.slide_routing is not None:
+            self._verify_slide_routing(path)
+
+    def _verify_slide_routing(self, path: Path | None = None) -> None:
+        from yizkr.pipeline.slide_reading import (
+            resolve_slide_vision,
+            verify_slide_image_inputs,
+        )
+
+        _, current = resolve_slide_vision(
+            self._slide_routing_source,
+            self.content,
+            self.slide_vision,
+            excluded=self.excluded,
+        )
+        if current != self.slide_routing:
+            raise ValueError("slide routing changed during reading")
+        directory, inputs = self._slide_routing_images
+        verify_slide_image_inputs(
+            self.content, directory, inputs, excluded=self.excluded, path=path
+        )
 
     def transcribe(self, media_path: Path) -> Transcription | None:
         self.slide_vision_proof = None
+        self.slide_routing = None
+        self._slide_routing_source = None
+        self._slide_routing_images = None
         result = super().transcribe(media_path)
         try:
             if self.slide_vision_proof is not None:
                 self.slide_vision_proof.verify()
+            if self.slide_routing is not None:
+                self._verify_slide_routing()
         except BaseException:
             if result is not None and result.reading is not None:
                 result.reading.close()

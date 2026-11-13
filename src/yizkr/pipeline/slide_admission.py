@@ -40,6 +40,25 @@ class SlideAdmission(BaseModel):
     package_parts: dict[str, str]
 
 
+RENDERING_LIMITATIONS = frozenset(
+    {
+        "render-drawing",
+        "render-inheritance",
+        "render-background",
+        "render-image",
+        "render-relationship",
+    }
+)
+
+
+class UnsupportedSlideRendering(ValueError):
+    """A known rendering limit, separate from unsafe or inconsistent inputs."""
+
+    def __init__(self, reason: str, limitation: str):
+        self.limitation = limitation
+        super().__init__(f"slide render admission refused: {reason}")
+
+
 # Deliberately enumerate the understood native drawing vocabulary. Unknown
 # extensions, alternate representations, fields, charts, media, and effects
 # capable of carrying other images are not silently assumed invisible.
@@ -172,6 +191,12 @@ class _Package(PptxPackage):
         super().__init__(archive, source)
         self.consulted: set[str] = set()
         self.aliases: dict[str, list[str]] | None = None
+        self.limitations: list[UnsupportedSlideRendering] = []
+
+    def unsupported(self, reason, limitation="render-drawing"):
+        # Keep checking: a later malformed or excluded input must still stop
+        # processing, even when a known rendering limitation was seen first.
+        self.limitations.append(UnsupportedSlideRendering(reason, limitation))
 
     def image_names(self, reference):
         # Exclusion aliases are byte aliases, including media outside the
@@ -227,7 +252,10 @@ class _Package(PptxPackage):
                 _CORE_PROPERTIES,
                 _THUMBNAIL,
             }:
-                _fail(f"unsupported relationship type in {rels}")
+                self.unsupported(
+                    f"unsupported relationship type in {rels}",
+                    "render-relationship",
+                )
             target = element.get("Target", "")
             if (
                 not target
@@ -291,7 +319,9 @@ class _Package(PptxPackage):
                     PurePosixPath(relation.target).suffix,
                     self.bytes(relation.target),
                 ):
-                    _fail("unsupported declared package image")
+                    self.unsupported(
+                        "unsupported declared package image", "render-image"
+                    )
 
     def checked(self, part, expected):
         root = self.root(part)
@@ -302,10 +332,15 @@ class _Package(PptxPackage):
         if any(
             relation.kind not in allowed for relation in relations.values()
         ):
-            _fail(f"unsupported relationship context in {part}")
+            self.unsupported(
+                f"unsupported relationship context in {part}",
+                "render-relationship",
+            )
         for element in root.iter():
             if element.tag not in _P_TAGS | _A_TAGS:
-                _fail(f"unsupported drawing element in {part}: {element.tag}")
+                self.unsupported(
+                    f"unsupported drawing element in {part}: {element.tag}"
+                )
             for attribute, value in element.attrib.items():
                 if attribute.startswith(R_NS):
                     relation = relations.get(value)
@@ -331,7 +366,9 @@ class _Package(PptxPackage):
                             f"unsupported XML whitespace directive in {part}"
                         )
                 elif attribute.startswith("{"):
-                    _fail(f"unsupported namespaced attribute in {part}")
+                    self.unsupported(
+                        f"unsupported namespaced attribute in {part}"
+                    )
             if element.tag == A_NS + "blip" and not element.get(
                 R_NS + "embed"
             ):
@@ -349,7 +386,9 @@ class _Package(PptxPackage):
                     not in _tags(P_NS, "nvGrpSpPr grpSpPr sp pic grpSp cxnSp")
                     for child in tree
                 ):
-                    _fail(f"unsupported shape tree content in {part}")
+                    self.unsupported(
+                        f"unsupported shape tree content in {part}"
+                    )
         if expected in {A_NS + "theme", A_NS + "themeOverride"}:
             for element, _, ancestors in _walk(root):
                 if element.tag == A_NS + "blip" and not any(
@@ -357,7 +396,10 @@ class _Package(PptxPackage):
                     in {A_NS + "fillStyleLst", A_NS + "bgFillStyleLst"}
                     for parent, _ in ancestors
                 ):
-                    _fail(f"unsupported image-bearing theme style in {part}")
+                    self.unsupported(
+                        f"unsupported image-bearing theme style in {part}",
+                        "render-image",
+                    )
         return root
 
     def document(self):
@@ -410,11 +452,14 @@ class _Package(PptxPackage):
                 _fail("unsupported linked presentation settings")
 
 
-def _inherited_shapes(root, part):
+def _inherited_shapes(package, root, part):
     """Empty placeholder layout/formatting is safe; inherited paint is not."""
     for shape in root.findall(P_NS + "cSld/" + P_NS + "spTree/*"):
         if any(True for _ in shape.iter(A_NS + "blip")):
-            _fail(f"unrepresented inherited shape content in {part}")
+            package.unsupported(
+                f"unrepresented inherited shape content in {part}",
+                "render-inheritance",
+            )
         if shape.tag in {P_NS + "nvGrpSpPr", P_NS + "grpSpPr"}:
             continue
         if (
@@ -425,27 +470,38 @@ def _inherited_shapes(root, part):
                 (text.text or "").strip() for text in shape.iter(A_NS + "t")
             )
         ):
-            _fail(f"unrepresented inherited shape content in {part}")
+            package.unsupported(
+                f"unrepresented inherited shape content in {part}",
+                "render-inheritance",
+            )
         properties = shape.find(P_NS + "spPr")
         if properties is not None and any(
             child.tag not in {A_NS + "xfrm", A_NS + "noFill"}
             for child in properties
         ):
-            _fail(f"unrepresented inherited shape paint in {part}")
+            package.unsupported(
+                f"unrepresented inherited shape paint in {part}",
+                "render-inheritance",
+            )
         if shape.find(P_NS + "style") is not None:
-            _fail(f"unrepresented inherited shape style in {part}")
+            package.unsupported(
+                f"unrepresented inherited shape style in {part}",
+                "render-inheritance",
+            )
 
 
 def _chain(package, slide):
     chain = [slide]
     layout = package._related(slide, "slideLayout")
     if layout is not None:
-        _inherited_shapes(package.checked(layout, P_NS + "sldLayout"), layout)
+        _inherited_shapes(
+            package, package.checked(layout, P_NS + "sldLayout"), layout
+        )
         chain.append(layout)
         master = package._related(layout, "slideMaster")
         if master is not None:
             _inherited_shapes(
-                package.checked(master, P_NS + "sldMaster"), master
+                package, package.checked(master, P_NS + "sldMaster"), master
             )
             chain.append(master)
     for part in chain:
@@ -494,15 +550,24 @@ def _backgrounds(package, slide, chain):
             fill = resolved[1]
             plain = True
         else:
-            _fail("unsupported background definition")
+            package.unsupported(
+                "unsupported background definition", "render-background"
+            )
+            continue
         if fill.tag not in {A_NS + "solidFill", A_NS + "blipFill"}:
-            _fail("unsupported background fill for composed rendering")
+            package.unsupported(
+                "unsupported background fill for composed rendering",
+                "render-background",
+            )
         if any(
             element.tag.startswith(A_NS + "alpha")
             for root in (definition, fill)
             for element in root.iter()
         ):
-            _fail("transparent background modifiers are unsupported")
+            package.unsupported(
+                "transparent background modifiers are unsupported",
+                "render-background",
+            )
         color = fill[0] if len(fill) == 1 else None
         opaque = (
             plain
@@ -520,7 +585,10 @@ def _backgrounds(package, slide, chain):
         and any(image for image, _ in backgrounds[1:])
         and not backgrounds[0][1]
     ):
-        _fail("background override cannot prove ancestor images absent")
+        package.unsupported(
+            "background override cannot prove ancestor images absent",
+            "render-background",
+        )
 
 
 def _image_input(package, part, sources, excluded):
@@ -614,7 +682,10 @@ def admit_slides(
                     if fill is not None and any(
                         True for _ in fill[1].iter(A_NS + "blip")
                     ):
-                        _fail("theme image shape fills lack source placements")
+                        package.unsupported(
+                            "theme image shape fills lack source placements",
+                            "render-image",
+                        )
                 # Notes do not contribute to the composed slide.
                 parent = package.add_native_part(
                     target, position, "slide_body"
@@ -666,6 +737,8 @@ def admit_slides(
                         },
                     )
                 )
+            if package.limitations:
+                raise package.limitations[0]
             return tuple(result)
     except (zipfile.BadZipFile, ET.ParseError, KeyError, OSError) as error:
         raise ValueError(
