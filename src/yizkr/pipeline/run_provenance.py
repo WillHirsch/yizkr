@@ -271,6 +271,7 @@ def _loaded_templates(stage: str, configuration: Mapping) -> dict[str, str]:
                 "DOCUMENT_ITSELF",
                 "PLACED_ARTIFACTS",
                 "NO_PLACED_ARTIFACTS",
+                "PRIMARY_QUOTATION_NOTE",
             )
         }
         if configuration.get("strategy") != "chunked":

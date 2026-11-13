@@ -13,6 +13,12 @@ if TYPE_CHECKING:
     from yizkr.pipeline.transcribe import Transcription
 
 
+PRIMARY_QUOTE_MISSING = (
+    "interpretation context cannot supply claim evidence: "
+    "the excerpt must occur in the primary reading"
+)
+
+
 class LocatedReading(BaseModel):
     """One attributed or explicitly unresolved span of the reading text."""
 
@@ -110,17 +116,14 @@ def primary_evidence_reject(
     source = claim["source"]
     excerpt = source.get("transcription_excerpt")
     quote = excerpt.get("text") if isinstance(excerpt, dict) else None
-    if not primary_quote_present(transcription.text, quote):
-        problem = (
-            "interpretation context cannot supply claim evidence: "
-            "the excerpt must occur in the primary reading"
-        )
-    elif source.get("artifact") != transcription.artifact.model_dump(
+    if source.get("artifact") != transcription.artifact.model_dump(
         mode="json"
     ):
         problem = (
             "interpretation context cannot change the primary source owner"
         )
+    elif not primary_quote_present(transcription.text, quote):
+        problem = PRIMARY_QUOTE_MISSING
     else:
         return None
     return {

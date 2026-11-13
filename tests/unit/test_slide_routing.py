@@ -37,6 +37,25 @@ def edited(original, change):
     return output.getvalue()
 
 
+def metadata_extension(parts):
+    """An opaque fictional extension with a resolved internal metadata edge."""
+    key = "ppt/presentation.xml"
+    parts[key] = parts[key].replace(
+        "</p:presentation>",
+        '<p:extLst><p:ext uri="urn:example:review-metadata">'
+        '<example:metadata xmlns:example="urn:example:slide-extension" '
+        'r:id="metadata"/></p:ext></p:extLst></p:presentation>',
+    )
+    key = "ppt/_rels/presentation.xml.rels"
+    parts[key] = parts[key].replace(
+        "</Relationships>",
+        '<Relationship Id="metadata" '
+        'Type="https://example.invalid/relationships/metadata" '
+        'Target="metadata.xml"/></Relationships>',
+    )
+    parts["ppt/metadata.xml"] = '<metadata xmlns="urn:example:metadata"/>'
+
+
 def inputs(tmp_path, original=None):
     original = slides.layout_presentation() if original is None else original
     path = tmp_path / "library-talk-2018.pptx"
@@ -238,6 +257,97 @@ def test_known_rendering_limits_are_typed_and_diagnostic(tmp_path, kind, code):
         s.reason == "unsupported-rendering" and code in s.limitations
         for s in reading.slides
     )
+
+
+def test_opaque_extension_relation_keeps_native_reading_without_rendering(
+    tmp_path, monkeypatch
+):
+    from yizkr.pipeline import slide_renderer
+    from yizkr.pipeline.media_stages import MediaReadRequest, read_media
+    from yizkr.pipeline.slide_reading import SlideVisionRequest
+
+    original, sources = inputs(
+        tmp_path, edited(slides.layout_presentation(), metadata_extension)
+    )
+    with pytest.raises(UnsupportedSlideRendering) as caught:
+        admit_slides(original, sources, excluded=allowed)
+    assert caught.value.limitation == "render-relationship"
+
+    def no_visual_work(*args, **kwargs):
+        pytest.fail("unsupported extension must not render or start a model")
+
+    monkeypatch.setattr(slide_renderer, "renderer_identity", no_visual_work)
+    monkeypatch.setattr(slide_renderer, "render_slides", no_visual_work)
+    with read_media(
+        MediaReadRequest(
+            tmp_path / "library-talk-2018.pptx",
+            "paged",
+            excluded=allowed,
+            slide_vision=SlideVisionRequest(
+                (), tmp_path / "renders", mode="layout"
+            ),
+        ),
+        no_visual_work,
+    ) as result:
+        assert all(
+            page.provenance.method == "slide-xml"
+            for page in result.transcription.pages
+        )
+        decisions = result.dependencies["slide_routing"]
+        assert decisions["positions"] == []
+        assert all(
+            slide["reason"] == "unsupported-rendering"
+            and "render-relationship" in slide["limitations"]
+            for slide in decisions["slides"]
+        )
+        assert result.attention
+
+
+@pytest.mark.parametrize(
+    "fault,reason",
+    [
+        ("unresolved", "unresolved relationship"),
+        ("external", "external relationship"),
+        ("known-id", "unsupported relationship use"),
+        ("image-binding", "binding|unavailable|unresolved"),
+        ("image-excluded", "excluded"),
+    ],
+)
+def test_opaque_extension_cannot_mask_unsafe_relationships_or_sources(
+    tmp_path, fault, reason
+):
+    def change(parts):
+        metadata_extension(parts)
+        key = "ppt/presentation.xml"
+        if fault == "unresolved":
+            parts[key] = parts[key].replace(
+                'r:id="metadata"', 'r:id="missing"'
+            )
+        elif fault == "known-id":
+            parts[key] = parts[key].replace('r:id="rId1"', 'r:id="metadata"')
+        elif fault == "external":
+            key = "ppt/slides/_rels/slide3.xml.rels"
+            parts[key] = parts[key].replace(
+                "</Relationships>",
+                f'<Relationship Id="external" Type="{slides.R}/image" '
+                'Target="https://example.invalid/picture.png" '
+                'TargetMode="External"/></Relationships>',
+            )
+
+    original, sources = inputs(tmp_path, edited(slides.presentation(), change))
+    excluded = allowed
+    if fault.startswith("image-"):
+        part = next(p for p in sources.inventory.parts if p.owner_binding)
+        if fault == "image-binding":
+            part.owner_binding = None
+        else:
+
+            def excluded(sha, names):
+                return sha == part.byte_object.sha1
+
+    with pytest.raises(ValueError, match=reason) as caught:
+        slide_routing.plan_slide_layout(original, sources, excluded=excluded)
+    assert not isinstance(caught.value, UnsupportedSlideRendering)
 
 
 @pytest.mark.parametrize(

@@ -202,7 +202,7 @@ def test_context_cannot_launder_a_foreign_or_unlocated_claim(
     if quote is None:
         unsupported["source"].pop("transcription_excerpt")
     claims = ([claim(reading)] if keep_primary else []) + [unsupported]
-    replies = [answer(*claims)]
+    replies = [answer(*claims), answer(*claims)]
     if strategy == "chunked":
         replies.insert(0, manifest())
     diagnostic = tmp_path / "incomplete.json"

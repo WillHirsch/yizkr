@@ -18,6 +18,7 @@ fix to any of them costs no model call.
 
 from __future__ import annotations
 
+import copy
 import json
 import threading
 from collections import Counter
@@ -63,6 +64,7 @@ from yizkr.pipeline.extract import (
     entity_kind_prompt_lines,
     language_on_source,
     placed_by,
+    primary_quotation_note,
     run_metadata,
     salvage_valid_claims,
     scan_json_answer,
@@ -487,6 +489,8 @@ SIDE_OUTPUTS = (
     # the statement about the document's preparation that the reading
     # quoted (yizkr.pipeline.preparation): local, never in a report
     "preparation.json",
+    # Original and corrective model answers, retained without response cache.
+    "corrections.json",
 )
 
 
@@ -622,6 +626,7 @@ class ChunkedClaimExtractor:
         # each claim whose excerpt the transcription does not hold
         # (excerpt_audit)
         self._quotes: list[dict] = []
+        self._primary_corrections: dict[str, dict] = {}
         # what settling the manifest's names counted (_settle_names)
         self._appellations = {"labels": 0, "label_names": 0, "parts": 0}
         # how chunk calls saw the document: fork, inline or compressed
@@ -1113,8 +1118,8 @@ class ChunkedClaimExtractor:
         handle: Any,
         fallback_prompt: str,
         missing: Callable[[list[dict]], str | None] | None = None,
-    ) -> tuple[list[dict], str]:
-        """(claims, response) for one chunk: call (fork if possible) and
+    ) -> tuple[list[dict], str, Any]:
+        """(claims, response, effective handle) for one chunk: call and
         parse, with retries. A response cut off, at the engine's output
         limit or before its sentinel (parse_chunk_response), is rejected,
         so the retry asks again; one the client kept from an earlier call
@@ -1169,7 +1174,7 @@ class ChunkedClaimExtractor:
                 continue
             field = None if missing is None else missing(claims)
             if field is None:
-                return claims, response
+                return claims, response, handle
             return self._ask_again(
                 prompt, handle, fallback_prompt, field, claims, response
             )
@@ -1180,14 +1185,16 @@ class ChunkedClaimExtractor:
         prompt: str,
         handle: Any,
         fallback_prompt: str,
-        field: str,
+        field: str | None,
         claims: list[dict],
         response: str,
-    ) -> tuple[list[dict], str]:
-        """(claims, response) for a chunk whose answer, `claims` as parsed
-        from `response`, gives no claim with the required `field`: the
-        chunk asked again once, its prompt naming the field
-        (MISSING_FIELD_NOTE), as attempt 1 of the call (llm.for_attempt),
+        *,
+        note: str | None = None,
+        history: dict | None = None,
+    ) -> tuple[list[dict], str, Any]:
+        """(claims, response, effective handle) for a bounded correction.
+        The prompt appends either a supplied `note` or the required `field`
+        every claim lacks (MISSING_FIELD_NOTE), as attempt 1 (llm.for_attempt),
         in the same conversation the answer came from, or inline when it
         came inline. Behind the LLM cache the first answer is kept and the
         second is keyed apart, so a later run replays both.
@@ -1201,10 +1208,13 @@ class ChunkedClaimExtractor:
         for once more (llm.reject_response), so a later run asks the
         engine again; a give-up at the output limit is kept under the
         attempt's key behind the LLM cache, so a later run gives up on it
-        again without a call, and the first answer stands again."""
-        with self._state_lock:
-            self.retried_chunks += 1
-        note = MISSING_FIELD_NOTE.format(count=len(claims), field=field)
+        again without a call, and the first answer stands again. Primary
+        quotation corrections also retain every returned answer in `history`
+        and validate the replacement before accepting it in run_one."""
+        if note is None:
+            with self._state_lock:
+                self.retried_chunks += 1
+            note = MISSING_FIELD_NOTE.format(count=len(claims), field=field)
         client = for_attempt(self.client, 1)
         for _ask in range(2):
             check_cancelled()
@@ -1219,19 +1229,27 @@ class ChunkedClaimExtractor:
                     again = client.complete(fallback_prompt + note)
             except ConversationChanged:
                 raise
-            except ClassifierRefused:
+            except ClassifierRefused as exc:
+                if history is not None:
+                    history["error"] = f"{type(exc).__name__}: {exc}"
                 break
-            except Exception:
+            except Exception as exc:
                 check_cancelled()
+                if history is not None:
+                    history["error"] = f"{type(exc).__name__}: {exc}"
                 break
+            if history is not None:
+                history["responses"].append(again)
             check_cancelled()
             cut = at_output_limit(client, again)
             try:
-                return parse_chunk_response(again, cut_off=cut), again
+                return parse_chunk_response(again, cut_off=cut), again, handle
             except ChunkIncomplete as exc:
+                if history is not None:
+                    history["error"] = f"{type(exc).__name__}: {exc}"
                 if not reject_response(client, again, f"chunk: {exc}"):
                     break
-        return claims, response
+        return claims, response, handle
 
     # -- orchestration ---------------------------------------------------
 
@@ -1290,6 +1308,9 @@ class ChunkedClaimExtractor:
         self._dropped_kinds = {}
         self._quotes = []
         self._appellations = {"labels": 0, "label_names": 0, "parts": 0}
+        self._primary_corrections = {}
+        if self.state_dir is not None:
+            (self.state_dir / "corrections.json").unlink(missing_ok=True)
 
         self._preparation_answer = _ABSENT
         if self.read_preparation:
@@ -1361,16 +1382,103 @@ class ChunkedClaimExtractor:
             None."""
             return missing_field(cite_artifact(claims, artifact))
 
+        def quotation_rejects(claims: list[dict], chunk_id: str) -> list[dict]:
+            """Use the merge's guards before the originating session closes."""
+            if self.context is None or not self.context.has_context:
+                return []
+            transformed = []
+            transform_rejects = []
+            for claim in claims:
+                try:
+                    transformed.append(transform(claim, chunk_id))
+                except Exception as exc:
+                    transform_rejects.append(
+                        {
+                            "claim": claim,
+                            "problems": [f"transform failed: {exc}"],
+                            "reasons": [SCHEMA_REASON],
+                        }
+                    )
+            if self.read_preparation:
+                transformed, _ = preparation.drop_markers(transformed)
+            attributed, rejected = bind_source_support(
+                cite_artifact(
+                    transformed, artifact, transcription.printed_pages()
+                ),
+                transcription,
+                allow_literal_quote=True,
+            )
+            _, invalid = salvage_valid_claims(
+                attributed,
+                run_metadata(self.client.model_identifier).model_dump(
+                    mode="json"
+                ),
+                entities=[e.model_dump(mode="json") for e in entities or ()],
+                placed=placed_by(transcription, artifact),
+                dropped=self._dropped_kinds,
+                primary_transcription=transcription,
+            )
+            return transform_rejects + rejected + invalid
+
         def run_one(chunk_id: str, group: list) -> _Chunk | None:
             """One chunk end to end, or None on failure. Thread-safe:
             shared state goes through the lock."""
             try:
-                claims, response = self._run_chunk(
-                    build_prompt(group, False),
+                prompt = build_prompt(group, False)
+                fallback_prompt = build_prompt(group, inline_document)
+                claims, response, answer_handle = self._run_chunk(
+                    prompt,
                     handle,
-                    build_prompt(group, inline_document),
+                    fallback_prompt,
                     missing,
                 )
+                rejected = quotation_rejects(claims, chunk_id)
+                note = primary_quotation_note(rejected, response)
+                if note is not None:
+                    history = {
+                        "chunk": chunk_id,
+                        "original": response,
+                        "rejects": rejected,
+                        "responses": [],
+                    }
+                    self._keep_correction(chunk_id, history)
+                    try:
+                        corrected, corrected_response, _ = self._ask_again(
+                            prompt,
+                            answer_handle,
+                            fallback_prompt,
+                            None,
+                            claims,
+                            response,
+                            note=note,
+                            history=history,
+                        )
+                        invalid = quotation_rejects(corrected, chunk_id)
+                        unread = parse_chunk_unread(corrected_response)
+                        objects = scan_json_objects(corrected_response)
+                        malformed = [
+                            obj
+                            for obj in objects
+                            if "claims" in obj
+                            and not isinstance(obj["claims"], list)
+                        ]
+                        if not corrected and not any(
+                            obj.get("claims") == [] for obj in objects
+                        ):
+                            malformed.append(
+                                {"problem": "no explicit empty claims list"}
+                            )
+                        unread += malformed
+                        history["rejects_after"] = invalid
+                        if unread:
+                            history["unread_after"] = unread
+                        if invalid or unread:
+                            history["outcome"] = "incomplete"
+                        else:
+                            history["outcome"] = "corrected"
+                            claims, response = corrected, corrected_response
+                    finally:
+                        self._keep_correction(chunk_id, history)
             except ConversationChanged:
                 raise
             except Exception as exc:
@@ -1522,6 +1630,22 @@ class ChunkedClaimExtractor:
                 atomic_write_text(path, extras[name])
             else:
                 path.unlink(missing_ok=True)
+
+    def _keep_correction(self, chunk_id: str, history: dict) -> None:
+        """Keep bounded correction evidence even if another chunk fails."""
+        with self._state_lock:
+            self._primary_corrections[chunk_id] = copy.deepcopy(history)
+            if self.state_dir is not None:
+                atomic_write_text(
+                    self.state_dir / "corrections.json",
+                    json.dumps(
+                        [
+                            self._primary_corrections[k]
+                            for k in sorted(self._primary_corrections)
+                        ],
+                        indent=2,
+                    ),
+                )
 
     def _refuse_empty(self, batch: ClaimBatch, *, chunks: int) -> None:
         """Raise ExtractionFailed when the batch holds no claims because
@@ -1727,6 +1851,14 @@ class ChunkedClaimExtractor:
         )
         self._quotes = [] if quotes is None else quotes["missing"]
         extras: dict[str, str] = {}
+        if self._primary_corrections:
+            extras["corrections.json"] = json.dumps(
+                [
+                    self._primary_corrections[k]
+                    for k in sorted(self._primary_corrections)
+                ],
+                indent=2,
+            )
         if rejects:
             extras["rejects.json"] = json.dumps(rejects, indent=2)
         if gaps:

@@ -235,6 +235,7 @@ _EXTRACTION_PROMPTS = tuple(
         "entity-assignment",
         "line-assignment",
         "missing-field",
+        "primary-quotation",
         "preparation-manifest",
         "preparation-pointer",
     )

@@ -40,6 +40,7 @@ from pydantic import ValidationError
 import yizkr
 from yizkr.claims import (
     SCHEMA_REASON,
+    SOURCE_SUPPORT,
     VITAL_KIND,
     ArtifactRef,
     ClaimBatch,
@@ -52,26 +53,69 @@ from yizkr.claims import (
     vital_problems,
 )
 from yizkr.model.schema import load_acceptance, load_manifest
+from yizkr.pipeline.cancellation import check_cancelled
 from yizkr.pipeline.interpretation_context import InterpretationContext
 from yizkr.pipeline.llm import (
     CUT_OFF_AT_LIMIT,
     ClassifierRefused,
+    ConversationChanged,
     LlmClient,
     OutputLimitReached,
     at_output_limit,
+    for_attempt,
     reject_response,
 )
 from yizkr.pipeline.prompts import load_prompt
 from yizkr.pipeline.source_context import (
+    PRIMARY_QUOTE_MISSING,
     bind_source_support,
     placed_owners,
     placement_lines,
     primary_evidence_reject,
     support_failure,
 )
+from yizkr.pipeline.stages import atomic_write_text
 from yizkr.pipeline.transcribe import DECK_ENGINE, Transcription
 
 EXTRACTION_PROMPT = load_prompt("extraction.md")
+PRIMARY_QUOTATION_NOTE = "\n\n" + load_prompt("primary-quotation.md")
+
+
+def primary_quotation_note(rejects: list[dict], response: str) -> str | None:
+    """Offer correction only for missing quotes, never structural ambiguity."""
+    support = [r for r in rejects if SOURCE_SUPPORT in r.get("reasons", ())]
+    if not support or any(
+        r["problems"] != [PRIMARY_QUOTE_MISSING] for r in support
+    ):
+        return None
+    return PRIMARY_QUOTATION_NOTE.format(count=len(support), response=response)
+
+
+def correction_dump_path(raw_dump: Path | None) -> Path | None:
+    return (
+        raw_dump.with_name(raw_dump.name + ".corrections.json")
+        if raw_dump is not None
+        else None
+    )
+
+
+def _unread_correction(response: str) -> list[dict]:
+    """A corrective answer must not hide malformed claims beside valid ones."""
+    unread = []
+    for obj in scan_json_objects(response):
+        if "claims" in obj:
+            if not isinstance(obj["claims"], list):
+                unread.append(obj)
+            continue
+        if "subject" in obj and "property" in obj:
+            continue
+        if obj.get("done") is True and not any(
+            isinstance(value, (dict, list)) and value for value in obj.values()
+        ):
+            continue
+        if obj:
+            unread.append(obj)
+    return unread
 
 
 # The paragraph on what a document is, in both extraction prompts
@@ -797,7 +841,12 @@ class LlmClaimExtractor:
     (llm.OutputLimitReached), or one the safety classifier refused
     (llm.ClassifierRefused), gave no answer and so no claim: the
     extraction fails, with ExtractionFailed, and the cache keeps nothing
-    for it, so the next run asks again."""
+    for it, so the next run asks again.
+
+    A complete answer with only missing-primary-quotation support failures
+    gets one separately keyed correction. Its original answer and returned
+    corrections remain inspectable beside raw output, and an unusable
+    correction leaves the original incomplete diagnostic in place."""
 
     def __init__(
         self,
@@ -811,6 +860,7 @@ class LlmClaimExtractor:
         self.raw_dump = raw_dump
         self.rejects_dump = rejects_dump
         self.incomplete_reasons: list[str] = []
+        self.corrections: list[dict] = []
 
     def extract(
         self, transcription: Transcription, artifact: ArtifactRef
@@ -822,6 +872,7 @@ class LlmClaimExtractor:
         The prompt carries the transcription's text with each printed page
         number beside its page's marker (Transcription.prompt_text)."""
         self.incomplete_reasons = []
+        self.corrections = []
         if self.context is not None:
             self.context.validate_target(transcription)
         property_keys, item_keys = vocabulary_prompt_lines()
@@ -840,22 +891,32 @@ class LlmClaimExtractor:
         printed_pages = transcription.printed_pages()
         placed = placed_by(transcription, artifact)
         try:
-            return self._extract(
-                prompt,
-                artifact,
-                printed_pages,
-                placed,
-                transcription=transcription,
-            )
-        except _KeptAnswerRejected:
-            return self._extract(
-                prompt,
-                artifact,
-                printed_pages,
-                placed,
-                again=True,
-                transcription=transcription,
-            )
+            try:
+                return self._extract(
+                    prompt,
+                    artifact,
+                    printed_pages,
+                    placed,
+                    transcription=transcription,
+                )
+            except _KeptAnswerRejected:
+                return self._extract(
+                    prompt,
+                    artifact,
+                    printed_pages,
+                    placed,
+                    again=True,
+                    transcription=transcription,
+                )
+        finally:
+            self._write_corrections()
+
+    def _write_corrections(self) -> None:
+        if path := correction_dump_path(self.raw_dump):
+            if self.corrections:
+                atomic_write_text(path, json.dumps(self.corrections, indent=2))
+            else:
+                path.unlink(missing_ok=True)
 
     def _extract(
         self,
@@ -865,6 +926,8 @@ class LlmClaimExtractor:
         placed: Mapping[str, Collection[str]],
         again: bool = False,
         transcription: Transcription | None = None,
+        client: LlmClient | None = None,
+        correction: dict | None = None,
     ) -> ClaimBatch:
         """The batch one answer gives, each claim citing `artifact` and
         the page number printed on its page, where `printed_pages` gives
@@ -874,18 +937,25 @@ class LlmClaimExtractor:
         unless this is the call made `again` after one."""
 
         self.incomplete_reasons = []
+        client = self.client if client is None else client
 
         def reject_answer(response: str, reason: str) -> None:
-            if reject_response(self.client, response, reason) and not again:
+            if reject_response(client, response, reason) and not again:
                 raise _KeptAnswerRejected(reason)
 
         try:
-            response = self.client.complete(prompt)
+            response = client.complete(prompt)
         except (OutputLimitReached, ClassifierRefused) as exc:
             raise ExtractionFailed(
                 f"the engine gave no answer: {exc}"
             ) from exc
-        cut_off = at_output_limit(self.client, response)
+        if correction is not None:
+            correction["responses"].append(response)
+        check_cancelled()
+        if correction is not None and (unread := _unread_correction(response)):
+            correction["unread_after"] = unread
+            raise ExtractionFailed("corrective answer contains unread objects")
+        cut_off = at_output_limit(client, response)
         if self.raw_dump is not None:
             # Engine output is expensive; persist it before anything that
             # can fail, so a parse/validation error is debuggable and the
@@ -900,6 +970,10 @@ class LlmClaimExtractor:
         finished = any(
             obj.get("done") is True for obj in scan_json_objects(response)
         )
+        if correction is not None and (cut_off or not finished):
+            reason = CUT_OFF_AT_LIMIT if cut_off else "no terminal sentinel"
+            reject_answer(response, f"extraction: {reason}")
+            raise ExtractionFailed(f"corrective answer: {reason}")
         attributed, attribution_rejects = bind_source_support(
             cite_artifact(payload.get("claims", []), artifact, printed_pages),
             transcription,
@@ -918,6 +992,46 @@ class LlmClaimExtractor:
             ),
         )
         rejects = attribution_rejects + rejects
+        if correction is None and finished and not cut_off:
+            note = primary_quotation_note(rejects, response)
+            if note is not None:
+                history = {
+                    "original": response,
+                    "rejects": rejects,
+                    "responses": [],
+                }
+                self.corrections.append(history)
+                self._write_corrections()
+                try:
+                    for cached_retry in (False, True):
+                        try:
+                            return self._extract(
+                                prompt + note,
+                                artifact,
+                                printed_pages,
+                                placed,
+                                again=cached_retry,
+                                transcription=transcription,
+                                client=for_attempt(self.client, 1),
+                                correction=history,
+                            )
+                        except _KeptAnswerRejected:
+                            continue
+                except ConversationChanged:
+                    raise
+                except Exception as exc:
+                    history["error"] = f"{type(exc).__name__}: {exc}"
+                    self.incomplete_reasons = []
+        if correction is not None:
+            correction["rejects_after"] = rejects
+            if rejects:
+                correction["outcome"] = "incomplete"
+                raise ExtractionFailed(
+                    "corrective answer failed claim validation"
+                )
+            correction["outcome"] = (
+                "incomplete" if cut_off or not finished else "corrected"
+            )
         if reason := support_failure(rejects):
             self.incomplete_reasons.append(reason)
         if self.rejects_dump is not None:
@@ -927,9 +1041,18 @@ class LlmClaimExtractor:
             else:
                 self.rejects_dump.unlink(missing_ok=True)  # no stale rejects
         if not batch.claims and not (
-            self.context is not None
-            and self.context.has_context
-            and support_failure(rejects)
+            (
+                self.context is not None
+                and self.context.has_context
+                and support_failure(rejects)
+            )
+            or (
+                correction is not None
+                and not payload["claims"]
+                and not rejects
+                and finished
+                and not cut_off
+            )
         ):
             reject_answer(response, "extraction: no valid claim")
             if not rejects:

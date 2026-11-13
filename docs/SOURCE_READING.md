@@ -13,7 +13,7 @@ A reading preserves what a source says, its location and uncertainty, before [ex
 | Paged PDF/PPTX | A format reader assembles located page/slide text and provenance, with independent image readings and vision page readings where supported. The assembled container has no whole-document vision class. |
 | Adopted image reading | Verified existing reading products supply the independent image's transcription without another vision call. |
 
-These are shared [stage operations](ARCHITECTURE.md#shared-document-stage-operations), used by the [reviewed text-source workflow](TEXT_INGESTION.md) and the [whole-corpus workflow](SCRATCH_WORKFLOW.md). Direct callers and the whole-corpus driver can select [PPTX slides for vision](#pptx-selected-slide-vision) with constrained native-block ordering for supported mixed slides. Native XML remains the default; an opt-in [layout policy](#pptx-layout-routing) selects supported spatial text layouts automatically. Remaining graph and corpus verification is tracked in [#747](https://github.com/WillHirsch/yizkr/issues/747). The HTR adapter is a stub, not another supported reading engine.
+These are shared [stage operations](ARCHITECTURE.md#shared-document-stage-operations), used by the [reviewed text-source workflow](TEXT_INGESTION.md) and the [whole-corpus workflow](SCRATCH_WORKFLOW.md). Direct callers and the whole-corpus driver can select [PPTX slides for vision](#pptx-selected-slide-vision) with constrained native-block ordering for supported mixed slides. Native XML remains the default; an opt-in [layout policy](#pptx-layout-routing) selects supported spatial text layouts automatically. The HTR adapter is a stub, not another supported reading engine.
 
 ### Structured vision record (ADR-0037)
 
@@ -134,7 +134,7 @@ A composed slide can show native captions or table cells beside an independently
 
 `PageProvenance.native_layout` records the native part and byte identity, block-basis digest and accepted rows. Attribution reconstructs the blocks from the verified original slide XML and checks that the recorded arrangement produces exactly the saved body. A missing, changed or inconsistent proof leaves mixed-body attribution unsupported. Native speaker notes remain a separate source span. These checks establish where the emitted wording came from; they do not prove that the model interpreted a table or reading order correctly.
 
-This route supports ordinary native text boxes under the same bounded layout rules as automatic routing. It cannot recover words that exist only inside an image, arbitrary arrow meanings, or relationships between a photograph and a caption. Image-only content remains in its independent reading. Unsupported geometry or ambiguous native block correspondence is refused or recorded as a native-route limitation, according to the requested route. Remaining graph and corpus verification is tracked in [#747](https://github.com/WillHirsch/yizkr/issues/747).
+This route supports ordinary native text boxes under the same bounded layout rules as automatic routing. It cannot recover words that exist only inside an image, arbitrary arrow meanings, or relationships between a photograph and a caption. Image-only content remains in its independent reading. Unsupported geometry or ambiguous native block correspondence is refused or recorded as a native-route limitation, according to the requested route.
 
 ### PPTX layout routing
 

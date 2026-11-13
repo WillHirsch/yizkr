@@ -357,7 +357,17 @@ class _Package(PptxPackage):
                         and element.tag in _ID_KINDS
                         and relation.kind == _REL_BASE + _ID_KINDS[element.tag]
                     ):
-                        _fail(f"unsupported relationship use in {part}")
+                        if element.tag not in _P_TAGS | _A_TAGS:
+                            # An opaque extension still prevents rendering.
+                            # Its resolved internal edge is a capability
+                            # limit, not a missing source binding. Continue
+                            # checking later inputs before reporting it.
+                            self.unsupported(
+                                f"unsupported relationship use in {part}",
+                                "render-relationship",
+                            )
+                        else:
+                            _fail(f"unsupported relationship use in {part}")
                 elif (
                     attribute == "{http://www.w3.org/XML/1998/namespace}space"
                 ):
