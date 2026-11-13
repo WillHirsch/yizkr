@@ -428,6 +428,140 @@ def _assert_receipts(client, result):
     return roles
 
 
+def _assert_correction_impact(client, fixture, first, later, confirmed):
+    from yizkr.core.identity_assignments import AssignmentRevision
+    from yizkr.pipeline.correction_planning import (
+        CorrectionRequest,
+        plan_correction,
+    )
+
+    registry = CreationRegistry(client)
+    item = client.wbi.item.new()
+    item.labels.set("en", "Assignment correction target: Leopold Löbig")
+    target = registry.index_binding(
+        registry.create(
+            {"kind": "fictional-assignment-correction", "id": "leopold"},
+            item,
+            summary="fictional existing correction target",
+        )
+    )
+    original = registry.application_plan(first.plan_id)
+    nicholas = fixture.bindings["nicholas"].qid
+    father_receipt = next(r for r in first.receipts if r.qid == nicholas)
+    (later_receipt,) = later.receipts
+    (confirmed_receipt,) = confirmed.receipts
+    frozen = _snapshot(client)
+    for key, expected_roles in (
+        ("nicholas", {"subject", "qualifier"}),
+        ("gustav", {"object"}),
+    ):
+        source = registry.binding(fixture.bindings[key].entity_id)
+        selected = {
+            r["mention_id"]: AssignmentRevision.model_validate(r["assignment"])
+            for claim in original.claims
+            for r in claim.roles
+            if r["assignment"]["entity_id"] == source.binding.entity_id
+        }
+        assert len(selected) == 1
+        report = plan_correction(
+            registry,
+            CorrectionRequest(
+                source=source,
+                target=target,
+                assignments=tuple(selected.values()),
+                reason="Inspect a fictional mistaken identity assignment.",
+            ),
+        )
+        assert report.catalog_complete and not report.blockers
+        assert report.coverage == "current-generation reviewed applications"
+        assert report.complete_correction is False
+        assert report.mutation_authority is False
+        assert report.original_entity_preserved is True
+        assert {p.plan_id for p in report.applications} == {
+            first.plan_id,
+            confirmed.plan_id,
+        }
+        assert {
+            role.split(":", 1)[0]
+            for impact in report.impacts
+            for role in impact.selected_roles
+        } == expected_roles
+        assert {change.before for change in report.changes} == set(
+            selected.values()
+        )
+        assert all(
+            change.proposed.entity_id == target.binding.entity_id
+            and change.proposed_revision is None
+            for change in report.changes
+        )
+        father = next(
+            s
+            for s in report.statements
+            if s.guid == father_receipt.statement_guid
+        )
+        assert father.rank == "preferred"
+        assert father.affected_reference_hashes == (
+            father_receipt.primary_hash,
+        )
+        assert later_receipt.primary_hash in father.other_reference_hashes
+        assert {
+            (a.plan_id, a.claim_id, a.selected, a.primary_hash)
+            for a in father.authorities
+        } == {
+            (
+                first.plan_id,
+                father_receipt.claim_id,
+                True,
+                father_receipt.primary_hash,
+            ),
+            (
+                confirmed.plan_id,
+                confirmed_receipt.claim_id,
+                True,
+                father_receipt.primary_hash,
+            ),
+            (
+                later.plan_id,
+                later_receipt.claim_id,
+                False,
+                later_receipt.primary_hash,
+            ),
+        }
+        graph = _entity(client, nicholas)
+        (statement,) = graph["claims"][client.vocabulary()[0]["father"]]
+        assert {
+            r["hash"]: _without_snak_hashes(r) for r in father.references
+        } == {
+            r["hash"]: _without_snak_hashes(r) for r in statement["references"]
+        }
+        for impact in report.impacts:
+            assert impact.receipt is not None and impact.observed.complete
+            assert impact.proposed.primary == impact.before.primary
+            assert impact.proposed.process is None
+            if impact.selected_roles == ("subject",):
+                assert impact.proposed.qid == target.binding.qid
+            elif impact.selected_roles == ("object",):
+                assert (
+                    impact.proposed.statement["mainsnak"]["datavalue"][
+                        "value"
+                    ]["id"]
+                    == target.binding.qid
+                )
+            else:
+                assert any(
+                    role.startswith("qualifier:perspective:")
+                    for role in impact.selected_roles
+                )
+                perspective = impact.before.properties["perspective"]
+                assert (
+                    impact.proposed.statement["qualifiers"][perspective][0][
+                        "datavalue"
+                    ]["value"]["id"]
+                    == target.binding.qid
+                )
+    assert _snapshot(client) == frozen
+
+
 def test_reviewed_writes_keep_exact_shared_support_and_assignment_roles(
     fictional_client, tmp_path
 ):
@@ -532,15 +666,23 @@ def test_reviewed_writes_keep_exact_shared_support_and_assignment_roles(
         assert confirmed_support.primary_hash == original_support.primary_hash
         assert _entity(client, nicholas) == target_before
         assert _assert_receipts(client, confirmed) == {"subject", "object"}
+        _assert_correction_impact(
+            client, fixture, first_result, second_result, confirmed
+        )
 
 
 def test_partial_writes_recover_and_ambiguous_support_refuses(
     fictional_client, tmp_path, monkeypatch
 ):
+    from yizkr.core.instance import watermark
     from yizkr.pipeline import assigned_support
     from yizkr.pipeline.assignment_writes import (
         ApplicationInterrupted,
         apply_reviewed_claims,
+    )
+    from yizkr.pipeline.correction_planning import (
+        CorrectionRequest,
+        plan_correction,
     )
 
     client = fictional_client
@@ -594,6 +736,34 @@ def test_partial_writes_recover_and_ambiguous_support_refuses(
             key: _entity(client, binding.qid)["claims"]
             for key, binding in fixture.bindings.items()
         }
+        selected = {
+            role.mention_id: role.assignment
+            for claim in prepared.claims
+            for role in claim.roles
+            if role.assignment.entity_id
+            == fixture.bindings["nicholas"].entity_id
+        }
+        before_planning = watermark(client)
+        report = plan_correction(
+            registry,
+            CorrectionRequest(
+                source=registry.binding(
+                    fixture.bindings["nicholas"].entity_id
+                ),
+                target=registry.binding(fixture.bindings["gustav"].entity_id),
+                assignments=tuple(selected.values()),
+                reason="Inspect fictional support before recovery.",
+            ),
+        )
+        assert report.catalog_complete
+        assert any(b.code == "missing_receipt" for b in report.blockers)
+        assert any(
+            impact.receipt is None
+            and impact.observed is not None
+            and impact.observed.complete
+            for impact in report.impacts
+        ), "visible support was mistaken for a completed application"
+        assert watermark(client) == before_planning
         with monkeypatch.context() as patch:
             patch.setattr(assigned_support, "write_existing", counted_write)
             resumed = apply_reviewed_claims(

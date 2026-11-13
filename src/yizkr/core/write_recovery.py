@@ -26,6 +26,7 @@ from yizkr.core.wiki import RecoveryEvidenceError
 from yizkr.pipeline.cancellation import check_cancelled
 
 if TYPE_CHECKING:
+    from yizkr.core.claim_applications import ApplicationPlan
     from yizkr.core.identity_assignments import (
         AssignmentDelta,
         AssignmentSnapshot,
@@ -955,6 +956,79 @@ class CreationRegistry:
         if record is not None and record.plan_id != plan_id:
             raise CreationRefused("application plan differs from its locator")
         return record
+
+    def application_catalog(self) -> tuple[ApplicationPlan, ...]:
+        """Read every application plan and validate all present lineage.
+
+        Plans may legitimately lack intents or receipts. Present records must
+        belong to a known plan and claim, and receipts need their exact intent.
+        Enumerating every record also exposes orphan lineage that listing only
+        plan pages would conceal. This never recovers or publishes records;
+        callers still inspect graph effects and report pending applications.
+        """
+        generation = self.generation
+        if generation is None:
+            raise CreationRefused("application catalog requires a generation")
+        prefix = f"{PREFIX}{generation.generation}/applications/"
+        local_prefix = prefix.removeprefix("Project:")
+        titles = self.client.page_titles(prefix)
+        records = set()
+        lineage = {}
+        for title in titles:
+            namespace, separator, local_title = title.partition(":")
+            match = re.fullmatch(
+                re.escape(local_prefix)
+                + r"([0-9a-f]{64})/(?:plan|([0-9a-f]{64})/(intent|receipt))",
+                local_title,
+            )
+            if not namespace or not separator or match is None:
+                raise CreationRefused(
+                    "unrecognized application catalog record"
+                )
+            plan_id, claim_id, kind = match.groups()
+            key = (plan_id, claim_id, kind or "plan")
+            if key in records:
+                raise CreationRefused("duplicate application catalog record")
+            records.add(key)
+            lineage.setdefault(plan_id, []).append((claim_id, kind or "plan"))
+
+        plans = []
+        for plan_id in sorted(lineage):
+            if (plan_id, None, "plan") not in records:
+                raise CreationRefused(
+                    "application lineage has no cataloged plan"
+                )
+            plan = self.application_plan(plan_id)
+            if plan is None:
+                raise CreationRefused("cataloged application plan is missing")
+            plans.append(plan)
+            claim_ids = {claim.claim_id for claim in plan.claims}
+            related = sorted(
+                (claim_id, kind)
+                for claim_id, kind in lineage[plan_id]
+                if claim_id is not None
+            )
+            for claim_id, kind in related:
+                if claim_id not in claim_ids:
+                    raise CreationRefused(
+                        "application lineage names an unknown claim"
+                    )
+                if kind == "receipt":
+                    if (plan_id, claim_id, "intent") not in records:
+                        raise CreationRefused(
+                            "application receipt has no cataloged intent"
+                        )
+                    record = self.application_receipt(plan_id, claim_id)
+                else:
+                    record = self.application_intent(plan_id, claim_id)
+                if record is None:
+                    raise CreationRefused(
+                        "cataloged application lineage is missing"
+                    )
+        if sorted(self.client.page_titles(prefix)) != sorted(titles):
+            raise CreationRefused("application catalog changed during capture")
+        self._assert_generation(generation)
+        return tuple(plans)
 
     def record_application_plan(self, plan):
         """Reserve a reviewed scope, retaining its first process record."""
