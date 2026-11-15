@@ -29,10 +29,10 @@ Use the matching `stage:*` labels for changes that can affect stage outputs, inc
 
 ## 3. Dispatch and claiming
 
-- **Ready.** Dispatch ready issues without another permission request when their native blockers are closed. The #34 edge gates cloud dispatch only: a local session may take an issue whose only open blocker is #34. Parked and `exec:owner` issues are never dispatched.
+- **Ready.** Dispatch ready issues without another permission request when their native blockers are closed. The #34 edge gates cloud dispatch only: a local session may take an issue whose only open blocker is #34. Parked and `exec:owner` issues are never dispatched. Work that sends corpus content to a model starts only under the owner's mandate (§6).
 - **Conflict rule.** At most one in-flight repository-editing issue per `area:*` label; an issue with several area labels holds each. Read-only audits do not hold an editing area.
 - **Shared resources.** Coordinate access to each stack. Live tests, the mutation harness and scratch reset use the live-stack lock; bootstrap and other writers also need orchestration because they do not all acquire it. One LLM-heavy task at a time uses the claude-code subscription. Pace concurrent test-heavy agents to avoid contention; there is no separate ceiling on open draft PRs.
-- **Claiming.** Set the issue's Project Status to _In progress_ and add a dated comment naming the session kind. If work stalls, return it to _Ready_ or _Backlog_ with the reason.
+- **Claiming.** Set the issue's Project Status to _In progress_ and add a dated comment naming the session kind and, where the work sends corpus content to a model, the owner's mandate under which the session works, with its date (§6). If work stalls, return it to _Ready_ or _Backlog_ with the reason.
 
 ## 4. From issue to main
 
@@ -86,7 +86,9 @@ A _local session_ runs on the owner's machine and may read authorized private da
 - Archive or corpus-run instance records, including `~/.local/state/yizkr/instances` or `$YIZKR_INSTANCE_STATE`, retained-state markers, connection details and reset backups.
 - Archive and corpus-derived graphs, query services, volumes and dumps.
 
-**Fictional-instance exception.** An isolated test instance populated exclusively from repository fictional fixtures may run in a cloud session under the existing dispatch and connection controls. Its state and outputs must remain separate from archive and corpus-run state. It must not inherit archive credentials, mounts or connection defaults. This exception does not permit a cloud session to inspect a real development graph because a particular test writes fictional rows into it. Sending personal data to a model requires the owner's separate authorization under [CONTRACT.md](CONTRACT.md).
+**Fictional-instance exception.** An isolated test instance populated exclusively from repository fictional fixtures may run in a cloud session under the existing dispatch and connection controls. Its state and outputs must remain separate from archive and corpus-run state. It must not inherit archive credentials, mounts or connection defaults. This exception does not permit a cloud session to inspect a real development graph because a particular test writes fictional rows into it.
+
+**Model calls on corpus content.** A mandate to work on the resolution of an issue that requires model calls is itself the owner's authorization for those model calls, including calls that send corpus content to a model; no separate authorization is requested or recorded. The mandate is the owner's instruction to work on that issue. Work that sends corpus content to a model is done only by a local session that the owner has started or instructed for that work, directly or through the session that launches it; an issue's filing, labels, closed blockers and Ready status are not that instruction. The authorization covers the calls that the issue's resolution requires, through the engine and models that the pipeline is configured to use; a further run or experiment that the issue does not ask for is not covered. A mandate does not relax the rest of this section: only local sessions read corpus content, and exclusions fail closed. It authorizes no retention, publication or disclosure to anyone else ([CONTRACT.md](CONTRACT.md#human-authority-and-privacy)). Sending personal data to a model in any other case requires the owner's separate authorization.
 
 **Cloud-dispatch gate.** No cloud agent is dispatched until the owner closes #34. A new `exec:cloud-agent-ok` issue links to #34 directly or through a blocker already gated by it. This edge does not block local work.
 
