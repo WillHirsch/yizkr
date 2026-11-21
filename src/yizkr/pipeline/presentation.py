@@ -84,9 +84,11 @@ class PresentationContent:
     count."""
 
     # every slide part the presentation order names, whether or not the
-    # archive holds it: the deck's page count. A slide part the archive
-    # lacks is an unsupported part of the inventory, which `slide_pages`
-    # refuses to read.
+    # archive holds it, or, when it names none, every slide file of the
+    # archive (a compatibility order the inventory notes as a limitation):
+    # the deck's page count. A slide part the archive lacks is an
+    # unsupported part of the inventory, which `slide_pages` refuses to
+    # read.
     slide_count: int
     inventory: ContainerInventory | None = None
     inventory_bytes: dict[str, bytes] = field(default_factory=dict)
@@ -94,7 +96,9 @@ class PresentationContent:
 
 def unpack_pptx(path: Path) -> PresentationContent:
     """Parse the deck's original source parts once into its inventory, and
-    count the slide parts its presentation order names.
+    count the slide parts its presentation order names, or, when it names
+    none, the archive's slide files, which the inventory then notes as a
+    compatibility order.
 
     The inventory distinguishes structural placements from relationship-only
     references.

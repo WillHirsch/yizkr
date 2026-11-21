@@ -55,8 +55,10 @@ from yizkr.pipeline.extract import (
 from yizkr.pipeline.pdf_inventory import inventory_pdf
 from yizkr.pipeline.presentation import (
     DERIVED_MEDIA,
+    DERIVED_MEDIA_DIR,
     DerivedMediaRecord,
     DerivedMedium,
+    read_derived_media,
     unpack_pptx,
 )
 from yizkr.pipeline.source_context import (
@@ -763,6 +765,60 @@ def test_ambiguous_legacy_owner_mapping_stays_unresolved(tmp_path):
     assert all(
         "multiple distinct source parts" in item.reason
         for item in projected.unresolved
+    )
+
+
+@pytest.mark.parametrize("damage", [None, "missing", "other bytes", "symlink"])
+def test_an_older_record_binds_its_media_only_while_its_files_are_whole(
+    tmp_path, damage
+):
+    """An older derived-media record left in a deck's directory is read,
+    and binds the owner of each medium it names, only while each medium's
+    file is a regular file holding that medium's bytes. Otherwise it is not
+    read, and the owner is bound from the deck's own bytes."""
+    image = png(300, 120, 1, LETTER_IMAGE.data)
+    source = deck(
+        tmp_path / "library-talk-2018.pptx",
+        [((CAPTION,), ["letter.png"], "")],
+        {"letter.png": image},
+    )
+    content = unpack_pptx(source)
+    directory = tmp_path / "document"
+    kept = directory / DERIVED_MEDIA_DIR / f"{LETTER_SHA1}.png"
+    kept.parent.mkdir(parents=True)
+    record = DerivedMediaRecord(
+        source_sha1=content.inventory.source.sha1,
+        title="Library talk",
+        media={
+            LETTER_SHA1: DerivedMedium(
+                names=["letter.png"],
+                slides=[1],
+                file=kept.relative_to(directory).as_posix(),
+            )
+        },
+    )
+    (directory / DERIVED_MEDIA).write_text(record.model_dump_json())
+    if damage is None:
+        kept.write_bytes(image)
+    elif damage == "other bytes":
+        kept.write_bytes(pdfs.JPEG)
+    elif damage == "symlink":
+        elsewhere = tmp_path / "letter.png"
+        elsewhere.write_bytes(image)
+        kept.symlink_to(elsewhere)
+    legacy = read_derived_media(directory)
+    assert legacy == (record if damage is None else None)
+    prepared = prepare_sources(
+        content.inventory, content.inventory_bytes, directory, legacy=legacy
+    )
+    (binding,) = [
+        part.owner_binding
+        for part in prepared.parts
+        if part.owner_binding is not None
+    ]
+    assert binding.artifact.sha1 == LETTER_SHA1
+    assert binding.basis == (
+        "verified-legacy-reading" if damage is None else "original-media"
     )
 
 

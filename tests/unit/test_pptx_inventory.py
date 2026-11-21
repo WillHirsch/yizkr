@@ -1,4 +1,5 @@
-"""PPTX source occurrences survive reading filters and legacy projection."""
+"""PPTX source parts and occurrences survive reading filters, preparation
+and projection."""
 
 from __future__ import annotations
 

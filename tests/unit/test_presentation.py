@@ -61,7 +61,8 @@ NOTES_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships
 
 
 def build_deck(path, reorder=False):
-    """Two slides; slide FILE 1 shows an image and has notes; the deck's
+    """Two slides; slide FILE 1 has notes, and both relate to one image
+    that neither paints; slide FILE 2 also relates to a film. The deck's
     sldIdLst can present the files in reversed order."""
     order = (
         [("rId2", "slides/slide2.xml"), ("rId1", "slides/slide1.xml")]
@@ -183,6 +184,8 @@ class TestUnpack:
         ]
         assert image.kind == "embedded_resource"
         assert content.inventory_bytes[image.byte_object.sha1] == pdfs.JPEG
+        for slide in ("ppt/slides/slide1.xml", "ppt/slides/slide2.xml"):
+            assert any(slide in limit for limit in image.limitations)
         assert content.inventory.placements == []
 
     def test_non_image_media_are_parts_no_reader_reads(self, tmp_path):
