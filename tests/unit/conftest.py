@@ -85,8 +85,31 @@ changing what they check:
   test's, are not guarded; the processes inherit the environment
   without the proxy variables.
 
-test_conftest.py tests the first two and the last four, and
-test_anomalies.py the third.
+- **One checkout, as a write records it.** A write records the code
+  that made it, and looks at the package's checkout each time it does:
+  it asks git for its commit and a digest of how its files differ from
+  it (yizkr.pipeline.rundir.code_version, fresh), and it digests the
+  model manifest (yizkr.model.schema.DEFAULT_MANIFEST). So a test that
+  writes a batch twice and checks that the second write changes nothing
+  would see one write more if a file of the checkout changed between
+  the two, as one edited while the suite runs does. In every unit test,
+  and every fixture of theirs, the package's checkout keeps the code
+  version first observed in the session, fresh or not, and a write
+  digests the model manifest as it was when the unit tests started, from
+  a copy the package-scoped `_one_checkout` fixture makes then, as on CI,
+  where nothing changes the checkout during a run. Code that looks the
+  manifest's name up when it runs, as a write does, reads the copy;
+  code that bound the name on import, such as load_manifest's default,
+  reads the file. The hold is in the test's own process: a child
+  process a test starts observes the checkout afresh. Every other
+  place, a directory inside the package's checkout included, is
+  observed as before. The tests that tell a changed checkout from an
+  unchanged one run on temporary checkouts of their own, and
+  test_the_running_code observes the running code's own directory
+  (test_run_manifest.py).
+
+test_conftest.py tests the first two, the fourth, the fifth and the last
+two, test_anomalies.py the third and test_scratch_write.py the sixth.
 """
 
 from __future__ import annotations
@@ -98,6 +121,7 @@ import socket
 import sys
 import warnings
 from collections.abc import Container, Iterable, MutableMapping
+from pathlib import Path
 
 import pytest
 
@@ -482,5 +506,48 @@ def _process_records_in_test_directory(tmp_path_factory):
             run_provenance,
             "DEFAULT_RECORD_DIR",
             tmp_path_factory.getbasetemp() / "process-records",
+        )
+        yield
+
+
+def hold_checkout(
+    patch: pytest.MonkeyPatch, where: Path, copies: Path
+) -> dict:
+    """Make what a write records of the checkout at `where` keep what
+    this process first observed, and return its code version. Every
+    observation of the checkout through rundir.code_version, fresh or
+    not, gives the code version first observed there, and the model
+    manifest a write digests (yizkr.model.schema.DEFAULT_MANIFEST) is a
+    copy, in `copies`, of the manifest as it is now. Every other place is
+    observed as before."""
+    from yizkr.model import schema
+    from yizkr.pipeline import rundir
+
+    held = rundir.code_version(where)
+    observe = rundir._observe_code_version
+
+    def observed(place: Path) -> dict:
+        return dict(held) if Path(place) == where else observe(place)
+
+    copies.mkdir(parents=True, exist_ok=True)
+    manifest = copies / "manifest.yaml"
+    manifest.write_bytes(schema.DEFAULT_MANIFEST.read_bytes())
+    patch.setattr(rundir, "_observe_code_version", observed)
+    patch.setattr(schema, "DEFAULT_MANIFEST", manifest)
+    return held
+
+
+@pytest.fixture(scope="package", autouse=True)
+def _one_checkout(tmp_path_factory):
+    """Hold the package's checkout as the session first observed it
+    (hold_checkout), for every unit test and every fixture of theirs.
+    Package scope makes it set up before any fixture of a module, and
+    undo after the last unit test, so the live tests in the same session
+    observe the checkout afresh."""
+    from yizkr.pipeline import rundir
+
+    with pytest.MonkeyPatch.context() as patch:
+        hold_checkout(
+            patch, rundir.PACKAGE_DIR, tmp_path_factory.mktemp("checkout")
         )
         yield
