@@ -159,8 +159,6 @@ def test_legacy_unplaced_owner_reuses_reading_without_inventing_a_placement(
     tmp_path,
 ):
     """An unplaced original keeps its reading and owner on subsequent runs."""
-    from yizkr.pipeline.presentation import record_derived_media
-
     corpus = tmp_path / "corpus"
     corpus.mkdir()
     source = deck(
@@ -173,11 +171,15 @@ def test_legacy_unplaced_owner_reuses_reading_without_inventing_a_placement(
     container = document(first, source.name)
     original = container.transcription.read_bytes()
     excerpt = excerpt_of(first, LETTER_SHA1)
-    record_derived_media(
-        unpack_pptx(source),
-        source_sha1=container.sha1,
-        title=container.state.title,
-        directory=container.dir,
+    # an inventory kept without the run's reading of the image, whose owner
+    # its surviving reading gives
+    content = unpack_pptx(source)
+    keep_inventory(
+        prepare_sources(
+            content.inventory, content.inventory_bytes, container.dir
+        ),
+        content.inventory_bytes,
+        container.dir,
     )
     for _ in range(2):
         again = run(tmp_path, corpus, RefusingReader({}))

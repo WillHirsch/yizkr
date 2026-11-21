@@ -26,6 +26,7 @@ from pathlib import Path
 import pytest
 
 from tests.fixtures import example_universe as u
+from tests.fixtures.decks import deck_text
 from tests.fixtures.records import record_answer
 from tests.unit.stage_counts import disagreement
 from tests.unit.test_no_wiki_before_write import (  # noqa: F401
@@ -39,7 +40,6 @@ from yizkr.pipeline import clustering, document_state, llm, monitor, scratch
 from yizkr.pipeline.cancellation import current_cancellation
 from yizkr.pipeline.document_state import directory_names
 from yizkr.pipeline.llm import CliVersionMismatch, UsageLimitReached
-from yizkr.pipeline.presentation import slide_transcript, unpack_pptx
 from yizkr.pipeline.rundir import (
     CANCELLED,
     CONTROL,
@@ -114,7 +114,7 @@ class Corpus:
     def deck(self, name: str, firm: str, *, media: bool = False) -> None:
         """Native slide text by default; media-reading cases opt in."""
         path = build_deck(self.folder / name, firm=firm, media=media)
-        self.texts[name] = slide_transcript(unpack_pptx(path))
+        self.texts[name] = deck_text(path)
 
     def gedcom(self, name: str, note: str = "") -> None:
         (self.folder / name).write_text(u.GEDCOM_FIXTURE.read_text() + note)

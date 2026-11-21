@@ -346,7 +346,7 @@ def test_ordinary_insert_does_not_invent_full_page_context(tmp_path):
 
 def test_unplaced_presentation_image_does_not_invent_context(tmp_path):
     from tests.unit.test_deck_excerpts import deck
-    from yizkr.pipeline.presentation import read_slides
+    from yizkr.pipeline.presentation import slide_pages, unpack_pptx
     from yizkr.pipeline.transcribe import DeckTranscriber
 
     path = deck(
@@ -355,7 +355,7 @@ def test_unplaced_presentation_image_does_not_invent_context(tmp_path):
         {"image.jpeg": pdfs.JPEG},
         painted={1: []},
     )
-    pages = read_slides(path, tmp_path)
+    pages = slide_pages(unpack_pptx(path), tmp_path)
     parent = DeckTranscriber(lambda: None)._transcription(
         ArtifactRef.from_path(path), pages
     )

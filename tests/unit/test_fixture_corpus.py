@@ -54,6 +54,7 @@ from tests.fixtures import corpus as fc
 from tests.fixtures import example_universe as u
 from tests.fixtures.corpus import answers, build, verdicts
 from tests.fixtures.corpus.engine import Calls, RecordedEngine
+from tests.fixtures.decks import deck_text
 from tests.unit.test_clustering import Doc, assert_no_false_merge
 from tests.unit.test_no_wiki_before_write import refusals  # noqa: F401
 from tests.unit.test_run_provenance import fixed_capture  # noqa: F401
@@ -83,7 +84,6 @@ from yizkr.pipeline.extract import run_metadata, salvage_valid_claims
 from yizkr.pipeline.gedcom import parse_gedcom
 from yizkr.pipeline.presentation import (
     derived_transcription,
-    slide_transcript,
     unpack_pptx,
     unread_reason,
 )
@@ -411,10 +411,24 @@ class TestTheCorpus:
         ]
 
     def test_the_deck_reads_as_its_source(self):
-        content = unpack_pptx(fc.FOLDER / fc.DECK)
-        assert slide_transcript(content) == SOURCES["library-talk-2018"].text
-        (photograph,) = content.media
-        assert (photograph.slides, content.skipped_media) == ([2], {})
+        path = fc.FOLDER / fc.DECK
+        assert deck_text(path) == SOURCES["library-talk-2018"].text
+        content = unpack_pptx(path)
+        # its one medium is the photograph, which slide 2 paints
+        (photograph,) = [
+            part
+            for part in content.inventory.parts
+            if part.kind == "embedded_resource"
+        ]
+        assert (
+            content.inventory_bytes[photograph.byte_object.sha1]
+            == build.PHOTOGRAPH
+        )
+        assert [
+            (placement.locator.position, placement.occurrence)
+            for placement in content.inventory.placements
+            if placement.child == photograph.id
+        ] == [(2, "paint")]
 
     def test_the_deck_s_photograph_is_read_on_its_own(self):
         """The deck's photograph is large enough to be read on its own,

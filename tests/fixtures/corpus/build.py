@@ -264,7 +264,8 @@ def photograph(title: str, people: int = 2) -> bytes:
 # -- the deck -----------------------------------------------------------------
 
 # each slide as (its paragraphs, its speaker notes, whether the photograph
-# is on it); slide_transcript gives the deck's source text from them
+# is on it); tests.fixtures.decks.deck_text gives the deck's source text
+# from them
 SLIDES = (
     (
         ("Where the Lobigs came from", "Nicholas Lobig · library talk, 2018"),

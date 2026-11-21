@@ -3011,7 +3011,7 @@ class ScratchDriver:
             # a deck is a compound artifact: its slides ARE the page
             # fragments (ADR-0008), so claim locators point into slides
             artifact_type = "presentation"
-            pages = len(self._presentation(doc).slides)
+            pages = self._presentation(doc).slide_count
         elif doc.kind == "gedcom":
             artifact_type = "genealogical_report"
         result = registrar.register_artifact(

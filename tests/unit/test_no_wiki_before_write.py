@@ -48,15 +48,7 @@ from yizkr.pipeline.document_state import (
     REUSED,
     DocumentState,
 )
-from yizkr.pipeline.presentation import (
-    DERIVED_MEDIA_DIR,
-    DerivedMediaRecord,
-    PresentationContent,
-    Slide,
-    read_derived_media,
-    record_derived_media,
-    unpack_pptx,
-)
+from yizkr.pipeline.presentation import DERIVED_MEDIA_DIR
 from yizkr.pipeline.reconcile import (
     RosterEntity,
     adjudicate,
@@ -1032,53 +1024,3 @@ class TestTheRecordIsCurrentWhileItIsWhole:
         assert embedded_of(recorded) == {}
         assert inventory_files(deck) == kept
         assert not (deck.dir / DERIVED_MEDIA_DIR).exists()
-
-
-class TestRecordDerivedMedia:
-    def test_recording_again_leaves_every_file_untouched(self, tmp_path):
-        deck = build_deck(tmp_path / DECK)
-        content = unpack_pptx(deck)
-        directory = tmp_path / "document"
-
-        def files() -> dict[str, tuple[int, bytes]]:
-            return {
-                str(path.relative_to(directory)): (
-                    path.stat().st_ino,
-                    path.read_bytes(),
-                )
-                for path in sorted(directory.rglob("*"))
-                if path.is_file()
-            }
-
-        def record() -> DerivedMediaRecord:
-            return record_derived_media(
-                content,
-                source_sha1=sha1(deck.read_bytes()),
-                title="Hutmacherei zum Blauen Hut",
-                directory=directory,
-            )
-
-        first = record()
-        kept = files()
-        assert record() == first
-        assert files() == kept  # the same bytes, and the same files
-        inventory = read_inventory(directory)
-        assert inventory is not None
-        assert inventory.source.sha1 == first.source_sha1
-        assert read_derived_media(directory) == first
-
-    def test_a_deck_without_images_records_none(self, tmp_path):
-        content = PresentationContent(
-            slides=[Slide(number=1, text="Hutmacherei zum Blauen Hut")],
-            media=[],
-            skipped_media={".mp4": 1},
-        )
-        record = record_derived_media(
-            content,
-            source_sha1=sha1(b"a deck"),
-            title="Hutmacherei zum Blauen Hut",
-            directory=tmp_path,
-        )
-        assert record.media == {}
-        assert read_derived_media(tmp_path) == record
-        assert not (tmp_path / DERIVED_MEDIA_DIR).exists()

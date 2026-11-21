@@ -14,7 +14,7 @@ from yizkr.pipeline.container_inventory import (
     CONTAINER_INVENTORY,
     read_inventory,
 )
-from yizkr.pipeline.presentation import slide_transcript, unpack_pptx
+from yizkr.pipeline.presentation import unpack_pptx
 from yizkr.pipeline.rundir import DONE, run_state
 
 pytestmark = pytest.mark.usefixtures("fixed_capture")
@@ -132,35 +132,69 @@ def build_deck(path, reorder=False):
     return path
 
 
+def native(content):
+    """Each slide's (position, part, text, speaker notes), as the deck's
+    inventory records them."""
+    notes = {
+        part.locator.position: part.text
+        for part in content.inventory.parts
+        if part.kind == "speaker_notes"
+    }
+    return [
+        (
+            part.locator.position,
+            part.locator.package_part,
+            part.text,
+            notes.get(part.locator.position, ""),
+        )
+        for part in content.inventory.parts
+        if part.kind == "slide_body"
+    ]
+
+
+FIRST_FILE = (
+    "ppt/slides/slide1.xml",
+    "The Löbig family in Flörburg\nMarried 1905",
+    "Scanned from the family album",
+)
+SECOND_FILE = ("ppt/slides/slide2.xml", "Gustav's certificate", "")
+
+
 class TestUnpack:
     def test_slides_text_and_notes(self, tmp_path):
         content = unpack_pptx(build_deck(tmp_path / "deck.pptx"))
-        assert [slide.number for slide in content.slides] == [1, 2]
-        assert (
-            content.slides[0].text
-            == "The Löbig family in Flörburg\nMarried 1905"
-        )
-        assert content.slides[0].notes == "Scanned from the family album"
-        assert content.slides[1].text == "Gustav's certificate"
-        assert content.slides[1].notes == ""
+        assert native(content) == [(1, *FIRST_FILE), (2, *SECOND_FILE)]
+        assert content.slide_count == 2
 
     def test_slide_order_follows_presentation_not_filenames(self, tmp_path):
         content = unpack_pptx(build_deck(tmp_path / "deck.pptx", reorder=True))
         # sldIdLst puts file 2 first: it becomes slide NUMBER 1
-        assert content.slides[0].text == "Gustav's certificate"
-        assert content.slides[0].number == 1
-        assert "Married 1905" in content.slides[1].text
+        assert native(content) == [(1, *SECOND_FILE), (2, *FIRST_FILE)]
+        assert content.slide_count == 2
 
-    def test_media_mapped_to_slides_and_deduplicated(self, tmp_path):
+    def test_an_image_two_slides_relate_to_is_one_part(self, tmp_path):
+        """Both slides relate to the image, and neither paints it: one
+        part, its bytes kept, and no occurrence on either slide."""
         content = unpack_pptx(build_deck(tmp_path / "deck.pptx"))
-        (image,) = content.media
-        assert image.name == "image1.jpeg"
-        assert image.slides == [1, 2]  # same image used on both slides
-        assert image.data.startswith(b"\xff\xd8")
+        (image,) = [
+            part
+            for part in content.inventory.parts
+            if part.locator.package_part == "ppt/media/image1.jpeg"
+        ]
+        assert image.kind == "embedded_resource"
+        assert content.inventory_bytes[image.byte_object.sha1] == pdfs.JPEG
+        assert content.inventory.placements == []
 
-    def test_non_image_media_counted_not_extracted(self, tmp_path):
+    def test_non_image_media_are_parts_no_reader_reads(self, tmp_path):
         content = unpack_pptx(build_deck(tmp_path / "deck.pptx"))
-        assert content.skipped_media == {".mp4": 1}
+        (film,) = [
+            part
+            for part in content.inventory.parts
+            if part.locator.package_part == "ppt/media/clip1.mp4"
+        ]
+        assert film.kind == "embedded_resource"
+        assert content.inventory_bytes[film.byte_object.sha1] == b"fakemp4"
+        assert film.reading.state == "unsupported"
 
     def test_non_pptx_raises(self, tmp_path):
         bogus = tmp_path / "bogus.pptx"
@@ -174,8 +208,19 @@ class TestUnpack:
 
 class TestTranscript:
     def test_slide_markers_scope_the_text(self, tmp_path):
-        content = unpack_pptx(build_deck(tmp_path / "deck.pptx"))
-        transcript = slide_transcript(content)
+        from yizkr.pipeline.transcribe import DeckTranscriber
+
+        path = build_deck(tmp_path / "deck.pptx")
+        image = hashlib.sha1(pdfs.JPEG).hexdigest()
+
+        def engine():
+            raise AssertionError("the deck's text needs no engine")
+
+        transcription = DeckTranscriber(
+            engine, excluded=lambda sha1, names=(): sha1 == image
+        ).transcribe(path)
+        transcription.reading.close()
+        transcript = transcription.text
         assert transcript.index("[Slide 1]") < transcript.index("Married 1905")
         assert (
             transcript.index("Married 1905")
