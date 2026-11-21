@@ -117,6 +117,18 @@ class TestUsage:
             EXIT_REFUSED
         )
 
+    def test_no_command_merges_items(self, capsys):
+        """Merging established entities is not supported: the command
+        list offers no merge-items, and naming it with a pair of items is
+        refused as an unknown command."""
+        with pytest.raises(SystemExit) as raised:
+            cli.main(["--help"])
+        assert raised.value.code == 0
+        assert "merge-items" not in capsys.readouterr().out
+        assert cli.main(["merge-items", "Q1", "Q2"]) == EXIT_REFUSED
+        # a registered command would be refused too, for want of a host
+        assert "invalid choice: 'merge-items'" in capsys.readouterr().err
+
 
 class TestScratch:
     """The scratch commands keep a failure's status for a refusal."""

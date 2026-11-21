@@ -252,19 +252,6 @@ def _print_backup(args, manifest: dict) -> None:
         print(f"pruned old backups: {', '.join(manifest['pruned'])}")
 
 
-def cmd_merge_items(args) -> int:
-    client = _client(args)
-    for qid in (args.from_qid, args.to_qid):
-        if not client.fetch_entities([qid]).get(qid):
-            sys.exit(f"{qid} does not exist")
-    client.merge_items(args.from_qid, args.to_qid, summary=args.summary)
-    print(
-        f"merged {args.from_qid} into {args.to_qid}; "
-        f"{args.from_qid} is now a redirect"
-    )
-    return 0
-
-
 def cmd_publish_queries(args) -> int:
     from yizkr.queries.publish import publish_queries
 
@@ -913,9 +900,10 @@ def cmd_reconcile_graph(args) -> int:
     rows = export_graph_pairs_csv(proposals, roster, args.out)
     print(
         f"wrote {args.out} ({rows} pairs from a {len(roster)}-entity "
-        f"roster). Approved pairs are executed BY YOU: merge the items "
-        f"on the wiki, or add a referenced 'said to be the same as' "
-        f"statement where the equivalence is itself a judgement."
+        f"roster). The pairs are proposals: merging established entities "
+        f"is not supported. Where you approve a pair whose equivalence is "
+        f"itself a judgement, add a referenced 'said to be the same as' "
+        f"statement."
     )
     return 0
 
@@ -1588,20 +1576,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_publish_queries)
 
     p = sub.add_parser(
-        "merge-items",
-        help="merge one item into another (curator action; one explicit "
-        "pair per invocation — ADR-0007)",
-    )
-    p.add_argument("from_qid", metavar="FROM_QID")
-    p.add_argument("to_qid", metavar="TO_QID")
-    p.add_argument(
-        "--summary",
-        default="curator: reviewed duplicate merge (ADR-0007)",
-        help="edit summary recorded in item history",
-    )
-    p.set_defaults(func=cmd_merge_items)
-
-    p = sub.add_parser(
         "backup",
         help="database + media + RDF dump, and a possibly-living-excluded "
         "non-privileged export (ADR-0020)",
@@ -1644,8 +1618,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser(
         "reconcile-graph",
-        help="propose duplicate pairs among EXISTING items (ADR-0007); "
-        "execution of approved pairs stays a curator action",
+        help="propose duplicate pairs among EXISTING items (ADR-0007); the "
+        "pairs are proposals, and merging established entities is not "
+        "supported; where an equivalence is itself a judgement, a curator "
+        "adds a referenced 'said to be the same as' statement",
     )
     p.add_argument(
         "--llm", default="anthropic", choices=["anthropic", "claude-code"]
