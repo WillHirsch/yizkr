@@ -129,17 +129,20 @@ def test_current_inputs_and_processing_reuse_without_mutating_metadata():
 def test_missing_output_and_explicit_refresh_recompute(
     exists, refresh, reason
 ):
+    processing = {"format": 1, "stage": "extraction"}
     plan = plan_view(
         exists=exists,
         recorded_inputs={},
         current_inputs={},
+        recorded_processing=processing,
+        processing=processing,
         refresh=refresh,
     )
     assert plan.action == "recompute"
     assert plan.reasons == (reason,)
 
 
-def test_legacy_processing_metadata_recomputes_only_migrated_stages():
+def test_a_view_without_recorded_processing_recomputes():
     inputs = {"transcription.json": source_case("naturalisation-1952").sha1}
     legacy = plan_view(
         exists=True,
@@ -151,12 +154,16 @@ def test_legacy_processing_metadata_recomputes_only_migrated_stages():
     assert legacy.reasons == ("missing-processing",)
     assert legacy.changed_dependencies == ("processing",)
 
-    compatible = plan_view(
+
+def test_no_current_processing_descriptor_never_reuses_a_view():
+    inputs = {"transcription.json": source_case("naturalisation-1952").sha1}
+    plan = plan_view(
         exists=True,
         recorded_inputs=inputs,
         current_inputs=inputs,
+        recorded_processing={"format": 1, "stage": "extraction"},
     )
-    assert compatible.action == "reuse"
+    assert plan.action == "recompute"
 
 
 @pytest.mark.parametrize("broken", ["corrupt", [1], 1])
@@ -175,10 +182,13 @@ def test_malformed_persisted_dependencies_cannot_establish_reuse(broken):
 
 def test_changed_pointer_names_the_material_input():
     inputs = {"transcription.json": "reading", "preparation.pointer.txt": None}
+    processing = {"format": 1, "stage": "extraction"}
     plan = plan_view(
         exists=True,
         recorded_inputs=inputs,
         current_inputs=inputs | {"preparation.pointer.txt": "new-pointer"},
+        recorded_processing=processing,
+        processing=processing,
     )
     assert plan.action == "recompute"
     assert plan.reasons == ("inputs-changed",)

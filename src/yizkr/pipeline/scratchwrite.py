@@ -479,7 +479,7 @@ def write_key(
 
 def manifest_hash(run: Any) -> str:
     """The SHA-256 of the settings the run manifest records, those a run
-    that keeps its settings keeps (yizkr.pipeline.rundir)."""
+    keeps across its invocations (yizkr.pipeline.rundir)."""
     from yizkr.pipeline.rundir import _fixed_settings
 
     return sha256_text(canonical_json(_fixed_settings(run.manifest())))

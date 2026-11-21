@@ -28,10 +28,11 @@ contract. `cache_counts` and `usage_counts` total, from the events,
 what the cache did and what the engine's calls used.
 
 The manifest records settings and hashes, never a prompt or any document
-content. It describes the run as its latest invocation ran it. A run
-that must keep its settings across invocations (``fixed_settings``)
-refuses an invocation that asks for others (RunSettingsConflict).
-Callers that allow settings changes record the latest values.
+content. It describes the run as its latest invocation ran it. Every
+run keeps its settings across its invocations (SETTINGS, apart from what
+may change between them): once it has started, it refuses an invocation
+that asks for others, and an engine whose client or claude CLI version
+is not the one it recorded (RunSettingsConflict).
 
 Run state per document and stage is derived from the run manifest, events
 and the recorded invocation owner's current process identity (never from
@@ -167,8 +168,8 @@ def new_run_id() -> str:
 
 # -- what shapes a run --------------------------------------------------------
 
-# the manifest's settings: a run that keeps its settings must be invoked
-# again with the same values for each
+# the manifest's settings: a run must be invoked again with the same
+# values for each
 SETTINGS = (
     "mode",
     "project_stage",
@@ -178,7 +179,7 @@ SETTINGS = (
     "code",
     "config",
 )
-# settings that may still change between the invocations of such a run: a
+# settings that may still change between the invocations of a run: a
 # refresh belongs to its invocation, how many calls run at once shapes
 # pacing and not what is made, and what an engine applies (its CLI
 # version and its clients) is checked when the engine starts
@@ -192,15 +193,15 @@ _NOT_FIXED = (
     "config.chunk_concurrency",
     "config.extract_concurrency",
 )
-# what a role's engine client applies, which must stay the same once
-# recorded in a run that keeps its settings
+# what a role's engine client applies, which must stay the same once a
+# run has recorded it
 _CLIENT_FIXED = ("model", "effort", "config_hash")
 
 
 class RunSettingsConflict(BaseException):
-    """An invocation of a run that keeps its settings asked for others
-    than the ones the run recorded, or its engine applies others: a claude
-    CLI updated since the run recorded its version among them.
+    """An invocation of a run asked for other settings than the ones the
+    run recorded, or its engine applies others: a claude CLI updated since
+    the run recorded its version among them.
 
     Like a paused pass (yizkr.pipeline.llm.PassPaused), it is no
     document's failure: it passes through the per-document isolation and
@@ -264,9 +265,10 @@ def _fixed_settings(manifest: Mapping[str, Any]) -> dict[str, Any]:
 def settings_conflicts(
     recorded: Mapping[str, Any], asked: Mapping[str, Any]
 ) -> list[tuple[str, Any, Any]]:
-    """(setting, recorded, asked for) for every setting a run that keeps
-    its settings would change, by dotted path ("roles.extract.model");
-    what may change between its invocations is left out (_NOT_FIXED)."""
+    """(setting, recorded, asked for) for every setting an invocation that
+    asks for `asked` would change in a run that recorded `recorded`, by
+    dotted path ("roles.extract.model"); what may change between a run's
+    invocations is left out (_NOT_FIXED)."""
     before = _fixed_settings(recorded)
     after = _fixed_settings(json.loads(json.dumps(dict(asked))))
     return [
@@ -280,9 +282,9 @@ def _keep_observed(
     recorded: Mapping[str, Any], fields: dict[str, Any]
 ) -> dict[str, Any]:
     """`fields` with what the run's engines recorded when they started
-    (the CLI version, each role's client) carried over from `recorded`,
-    for a run that keeps its settings: a later invocation that starts no
-    engine still says what the run ran on."""
+    (the CLI version, each role's client) carried over from `recorded`:
+    a later invocation that starts no engine still says what the run ran
+    on."""
     fields = copy.deepcopy(fields)
     cli_version = (recorded.get("engine") or {}).get("cli_version")
     if cli_version and isinstance(fields.get("engine"), dict):
@@ -752,21 +754,21 @@ class RunDir:
             self._write_manifest(manifest)
         return manifest
 
-    def start(self, *, fixed_settings: bool = False, **fields: Any) -> dict:
+    def start(self, **fields: Any) -> dict:
         """Open an invocation: a run id on first start, the fields merged
         into the manifest, the invocation's start among its
         `invocations`, a control marker that clears earlier requests, and
         a run-start event.
 
-        With `fixed_settings`, an invocation of a run that has started
-        before must ask for the settings it recorded (SETTINGS, without
-        what may change between invocations): otherwise it raises
-        RunSettingsConflict and changes nothing. What the run's engines
-        recorded when they started is kept."""
+        An invocation of a run that has started before must ask for the
+        settings it recorded (SETTINGS, without what may change between
+        invocations): otherwise it raises RunSettingsConflict and changes
+        nothing. What the run's engines recorded when they started is
+        kept."""
         now = _now()
         with self._lock:
             manifest = self.manifest()
-            if fixed_settings and manifest.get("run_id"):
+            if manifest.get("run_id"):
                 conflicts = settings_conflicts(manifest, fields)
                 if conflicts:
                     raise RunSettingsConflict(self.path, conflicts)
@@ -827,7 +829,6 @@ class RunDir:
         client: Mapping[str, Any],
         *,
         cli_version: str | None = None,
-        fixed_settings: bool = False,
     ) -> None:
         """Record what a role's engine client applies once it has started
         (`roles[role].client`: its model, effort, configuration hash and
@@ -835,9 +836,8 @@ class RunDir:
         (`engine.cli_version`). Outside an invocation (before `start`)
         nothing is recorded.
 
-        With `fixed_settings`, a client or a CLI version other than the one
-        the run recorded raises RunSettingsConflict, and nothing is
-        recorded."""
+        A client or a CLI version other than the one the run recorded
+        raises RunSettingsConflict, and nothing is recorded."""
         if not self._started:
             return
         with self._lock:
@@ -849,25 +849,22 @@ class RunDir:
             engine = manifest.get("engine")
             if not isinstance(engine, dict):
                 engine = manifest["engine"] = {}
-            if fixed_settings:
-                conflicts = []
-                # a CLI updated since the run recorded its version comes
-                # first: it changes each client's configuration hash too
-                pinned = engine.get("cli_version")
-                if cli_version and pinned and pinned != cli_version:
-                    conflicts.append(
-                        ("engine.cli_version", pinned, cli_version)
-                    )
-                recorded = settings.get("client") or {}
-                conflicts += [
-                    (f"roles.{role}.client.{key}", recorded[key], client[key])
-                    for key in _CLIENT_FIXED
-                    if key in recorded
-                    and key in client
-                    and recorded[key] != client[key]
-                ]
-                if conflicts:
-                    raise RunSettingsConflict(self.path, conflicts)
+            conflicts = []
+            # a CLI updated since the run recorded its version comes first:
+            # it changes each client's configuration hash too
+            pinned = engine.get("cli_version")
+            if cli_version and pinned and pinned != cli_version:
+                conflicts.append(("engine.cli_version", pinned, cli_version))
+            recorded = settings.get("client") or {}
+            conflicts += [
+                (f"roles.{role}.client.{key}", recorded[key], client[key])
+                for key in _CLIENT_FIXED
+                if key in recorded
+                and key in client
+                and recorded[key] != client[key]
+            ]
+            if conflicts:
+                raise RunSettingsConflict(self.path, conflicts)
             settings["client"] = dict(client)
             if cli_version is not None:
                 engine["cli_version"] = cli_version

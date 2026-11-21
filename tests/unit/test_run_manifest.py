@@ -1,7 +1,6 @@
 """Offline tests for the run manifest (#96): what run.json records about
-what shapes a run, how an invocation that asks for other settings is
-refused in a run that keeps its settings, the refusal of model aliases,
-and `yizkr stages manifest`.
+what shapes a run, how a run refuses an invocation that asks for other
+settings, the refusal of model aliases, and `yizkr stages manifest`.
 
 The engine is a fake that `yizkr.pipeline.llm.make_client` returns, and
 the wiki steps are scripted, so every run here is offline. Documents and
@@ -187,7 +186,7 @@ class TestModelAliases:
         assert not model_alias(name)
 
 
-# -- a run that keeps its settings --------------------------------------------
+# -- a run keeps its settings -------------------------------------------------
 
 
 class TestRunDirManifest:
@@ -230,44 +229,33 @@ class TestRunDirManifest:
         assert manifest["engine"]["cli_version"] == CLI
 
     def test_a_resumed_run_keeps_what_its_engines_recorded(self, tmp_path):
-        RunDir(tmp_path).start(fixed_settings=True, **self.settings())
-        run = RunDir(tmp_path)
-        run.start(fixed_settings=True, **self.settings())
-        run.record_engine("extract", {"config_hash": "h"}, cli_version=CLI)
-        later = RunDir(tmp_path)
-        manifest = later.start(fixed_settings=True, **self.settings())
-        assert manifest["engine"]["cli_version"] == CLI
-        assert manifest["roles"]["extract"]["client"] == {"config_hash": "h"}
-        with pytest.raises(RunSettingsConflict, match="engine.cli_version"):
-            later.record_engine(
-                "extract",
-                {"config_hash": "h"},
-                cli_version="1",
-                fixed_settings=True,
-            )
-        with pytest.raises(RunSettingsConflict, match="client.config_hash"):
-            later.record_engine(
-                "extract",
-                {"config_hash": "g"},
-                cli_version=CLI,
-                fixed_settings=True,
-            )
-        # without fixed settings the same client is simply recorded
-        later.record_engine("extract", {"config_hash": "g"}, cli_version="1")
-        assert later.manifest()["engine"]["cli_version"] == "1"
-
-    def test_a_run_that_may_change_starts_its_engines_afresh(self, tmp_path):
+        RunDir(tmp_path).start(**self.settings())
         run = RunDir(tmp_path)
         run.start(**self.settings())
         run.record_engine("extract", {"config_hash": "h"}, cli_version=CLI)
-        manifest = RunDir(tmp_path).start(**self.settings())
-        assert manifest["engine"]["cli_version"] is None
-        assert manifest["roles"]["extract"]["client"] is None
+        later = RunDir(tmp_path)
+        manifest = later.start(**self.settings())
+        assert manifest["engine"]["cli_version"] == CLI
+        assert manifest["roles"]["extract"]["client"] == {"config_hash": "h"}
+        with pytest.raises(RunSettingsConflict) as cli:
+            later.record_engine(
+                "extract", {"config_hash": "h"}, cli_version="1"
+            )
+        assert cli.value.conflicts == [("engine.cli_version", CLI, "1")]
+        with pytest.raises(RunSettingsConflict) as client:
+            later.record_engine(
+                "extract", {"config_hash": "g"}, cli_version=CLI
+            )
+        assert client.value.conflicts == [
+            ("roles.extract.client.config_hash", "h", "g")
+        ]
+        # an engine refused is not recorded
+        assert later.manifest() == manifest
 
     @pytest.mark.parametrize(
         ("change", "setting"),
         [
-            ({"mode": "ingest run"}, "mode"),
+            ({"mode": "a foreign mode"}, "mode"),
             ({"project_stage": "kept"}, "project_stage"),
             ({"code": {"commit": "abd", "dirty": False}}, "code.commit"),
             ({"corpus": {"folder": "/elsewhere"}}, "corpus.folder"),
@@ -277,25 +265,42 @@ class TestRunDirManifest:
     def test_a_fixed_setting_that_changes_is_refused(
         self, tmp_path, change, setting
     ):
-        RunDir(tmp_path).start(fixed_settings=True, **self.settings())
+        RunDir(tmp_path).start(**self.settings())
+        before = (tmp_path / "run.json").read_bytes()
         with pytest.raises(RunSettingsConflict) as err:
-            RunDir(tmp_path).start(
-                fixed_settings=True, **self.settings(**change)
-            )
+            RunDir(tmp_path).start(**self.settings(**change))
         assert any(
             name.startswith(setting) for name, _, _ in err.value.conflicts
         )
+        assert (tmp_path / "run.json").read_bytes() == before
 
-    def test_what_may_change_between_invocations(self):
-        recorded = self.settings()
-        asked = self.settings(
-            config={"refresh": ["extract"], "epochs": {}},
-            engine={"name": "claude-code", "cli_version": CLI},
-            cache="/another/cache",
-        )
-        asked["roles"]["extract"]["refresh"] = True
-        asked["roles"]["extract"]["client"] = {"config_hash": "h"}
-        assert settings_conflicts(recorded, asked) == []
+    # what docs/RUN_MANIFEST.md lists as free to change between the
+    # invocations of a run
+    @pytest.mark.parametrize(
+        ("path", "value"),
+        [
+            ("roles.extract.refresh", True),
+            ("config.refresh", ["extract"]),
+            ("config.chunk_concurrency", 2),
+            ("config.extract_concurrency", 2),
+            ("engine.cli_version", CLI),
+            ("roles.extract.client", {"config_hash": "h"}),
+            ("cache", "/another/cache"),
+        ],
+    )
+    def test_what_may_change_between_invocations(self, tmp_path, path, value):
+        RunDir(tmp_path).start(**self.settings())
+        asked = self.settings()
+        *parents, leaf = path.split(".")
+        where = asked
+        for name in parents:
+            where = where[name]
+        where[leaf] = value
+        manifest = RunDir(tmp_path).start(**asked)
+        assert len(manifest["invocations"]) == 2
+        for name in parents:
+            manifest = manifest[name]
+        assert manifest[leaf] == value
 
     def test_tuples_and_lists_compare_as_json(self):
         recorded = self.settings(config={"refresh": [], "stages": ["a"]})
@@ -307,7 +312,7 @@ class TestRunDirManifest:
     ):
         RunDir(tmp_path).start(mode="scratch run")
         with pytest.raises(RunSettingsConflict, match="roles.extract"):
-            RunDir(tmp_path).start(fixed_settings=True, **self.settings())
+            RunDir(tmp_path).start(**self.settings())
 
     def test_invocations_accumulate(self, tmp_path):
         first = RunDir(tmp_path)

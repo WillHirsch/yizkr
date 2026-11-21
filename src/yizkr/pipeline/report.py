@@ -288,7 +288,7 @@ DOCUMENT_STAGE_NAMES = frozenset(
 # events name apart
 ADJUDICATION = "adjudication"
 ROLES = frozenset(MODEL_ROLES) | {ADJUDICATION, PLACE_STAGE}
-MODES = frozenset({"scratch run", "ingest run"})
+MODES = frozenset({"scratch run"})
 PROJECT_STAGES = frozenset({"development", "kept"})
 EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
 ENGINES = frozenset({"claude-code", "anthropic"})
@@ -1296,9 +1296,7 @@ def _read_views(document: Document, directory: Path, state: dict) -> None:
             "marriages": _marriages(entities, claims)
             if stage == "extraction"
             else None,
-            "subject_forms": _resolved_subject_forms(
-                directory / RESOLVED_BATCH, claims, entities
-            ),
+            "subject_forms": _subject_forms(claims, entities),
         }
         coverage = _json(directory / "extraction" / "coverage.json")
         if stage == "extraction" and isinstance(coverage, dict):
@@ -3342,28 +3340,6 @@ def _aggregate_content(
             key: flags[key] for key in ("status", "why") if key in flags
         },
     }
-
-
-# Saved document directories may include an explicitly resolved batch.
-# Reporting reads those recorded subject forms without granting write consent.
-RESOLVED_BATCH = "batch.resolved.json"
-
-
-def _resolved_subject_forms(
-    resolved: Path, claims: list[dict], entities: list[dict]
-) -> Counter:
-    """The document's document-subject claims by subject form
-    (_subject_forms): read from its resolved batch (`resolved`), where a
-    confirmation has turned a local subject into an existing item's QID,
-    when that file holds a batch, else from the stage's own batch view
-    (`claims`, `entities`)."""
-    found = _json(resolved)
-    if isinstance(found, dict):
-        claims = [c for c in _list(found.get("claims")) if isinstance(c, dict)]
-        entities = [
-            e for e in _list(found.get("entities")) if isinstance(e, dict)
-        ]
-    return _subject_forms(claims, entities)
 
 
 def _subject_forms(claims: list[dict], entities: list[dict]) -> Counter:

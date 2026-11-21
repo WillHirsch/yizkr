@@ -149,10 +149,10 @@ def plan_view(
 ) -> FreshnessPlan:
     """Compare supplied metadata without loading or changing any product.
 
-    Missing processing metadata makes a migrated stage stale. Passing no
-    current processing descriptor retains input-only compatibility for stages
-    whose adapters have not migrated. A recompute does not itself revoke a
-    review: callers separately compare the meaning of the completed result.
+    Processing metadata is always compared: a view with no recorded
+    processing, or with no current processing descriptor to compare it
+    with, is stale. A recompute does not itself revoke a review: callers
+    separately compare the meaning of the completed result.
     An unavailable dependency observation blocks a decision; the caller keeps
     its diagnostic reason rather than supplying guessed fingerprints.
     """
@@ -173,15 +173,14 @@ def plan_view(
     if recorded_inputs != current_inputs:
         reasons.append("inputs-changed")
         changed.extend(_changes(recorded_inputs or {}, current_inputs))
-    if processing is not None:
-        if recorded_processing is None:
-            reasons.append("missing-processing")
-            changed.append("processing")
-        elif recorded_processing != processing:
-            reasons.append("processing-changed")
-            changed.extend(
-                _changes(recorded_processing, processing, "processing.")
-            )
+    if recorded_processing is None:
+        reasons.append("missing-processing")
+        changed.append("processing")
+    elif recorded_processing != processing:
+        reasons.append("processing-changed")
+        changed.extend(
+            _changes(recorded_processing, processing or {}, "processing.")
+        )
     return FreshnessPlan(
         "recompute" if reasons else "reuse",
         tuple(reasons),

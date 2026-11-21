@@ -4314,8 +4314,8 @@ class TestWhatSourcesSayOfArtifacts:
                 "label": "death certificate",
                 "kind": "unclassified_entity",
             },
-            # a mention a curator confirms as an existing item, in the
-            # resolved batch below (#670)
+            # a mention that the resolved batch below confirms as an
+            # existing item (#670)
             {
                 "id": "u2",
                 "label": "photograph",
@@ -4339,7 +4339,7 @@ class TestWhatSourcesSayOfArtifacts:
                 **claim("e1", "main_subject", "seine Sterbeurkunde", CERT),
                 "subject": {"kind": "local", "local_id": "u1"},
             },
-            # its mention of a photograph, which a curator confirms
+            # its mention of a photograph, confirmed in the resolved batch
             {
                 **claim("e1", "inception", "1912", CERT),
                 "subject": {"kind": "local", "local_id": "u2"},
@@ -4353,8 +4353,10 @@ class TestWhatSourcesSayOfArtifacts:
             },
         ]
         (directory / "batch.json").write_text(json.dumps(view))
-        # the confirmation is saved in the resolved batch alone, as
-        # scratch writes it (DocumentRun.resolved)
+        # a resolved batch beside the view, as a document directory saved
+        # by an earlier per-document command may hold one: the report
+        # counts the stage's own batch view, so the claim it confirms
+        # still counts as a mention, and none as confirmed
         resolved = json.loads(json.dumps(view))
         for entity in resolved["entities"]:
             if entity["id"] == "u2":
@@ -4393,8 +4395,8 @@ class TestWhatSourcesSayOfArtifacts:
                 "source": 1,
                 "placed": 1,
                 "record": 1,
-                "mention": 1,
-                "confirmed": 1,
+                "mention": 2,
+                "confirmed": 0,
                 "other": 2,
             },
         }
@@ -4422,8 +4424,8 @@ class TestWhatSourcesSayOfArtifacts:
             "1. Claims of what an artifact is, by property: inception 4, "
             "author 1, main_subject 1, shows 1; by their subject: the "
             "source itself 1, an artifact it places 1, an artifact its "
-            "record makes 1, an artifact it mentions 1, an item its "
-            "mention or record is confirmed as 1, other 2."
+            "record makes 1, an artifact it mentions 2, an item its "
+            "mention or record is confirmed as 0, other 2."
         ) in text
         assert "Rejects by reason: placed_subject 2, other 1, schema 1" in (
             text

@@ -1174,7 +1174,7 @@ def test_same_named_copies_under_a_marked_title_both_register(
                 artifact_type="photograph",
                 title=title,
                 description=(
-                    "ingested by `yizkr ingest run` from letter-1958.png"
+                    "ingested by `yizkr scratch run` from letter-1958.png"
                 ),
                 pages=1,
             )
