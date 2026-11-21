@@ -495,7 +495,9 @@ class TestCodeVersion:
 
     def test_the_running_code(self):
         here = Path(rundir.__file__).parent
-        assert code_version()["commit"] == git(here, "rev-parse", "HEAD")
+        assert code_version(here, fresh=True)["commit"] == git(
+            here, "rev-parse", "HEAD"
+        )
 
 
 class TestExclusionsRecord:

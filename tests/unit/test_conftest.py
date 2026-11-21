@@ -2,8 +2,8 @@
 #254): one BLAS thread unless the environment gives a thread count, sync
 calls that flush nothing unless a test is marked `real_fsync`, a
 record of the instance of each test's own (#199), no settings from the
-host (#422), no network (#618), and one code version of the package's
-checkout for the session (#948).
+host (#422), no network (#618), and one state of the package's checkout,
+as a write records it, for the session (#948).
 """
 
 from __future__ import annotations
@@ -530,23 +530,39 @@ def checkout(root: Path) -> Path:
     return root
 
 
-class TestCodeVersion:
-    def test_a_held_checkout_keeps_its_first_code_version(
+def write_record():
+    """The record a write makes of the code that made it."""
+    from yizkr.pipeline.run_provenance import application_record
+
+    return application_record(
+        (), kind="batch-write-context", stage="write-preparation", metadata={}
+    )
+
+
+class TestOneCheckout:
+    def test_a_held_checkout_keeps_its_first_code_version_and_manifest(
         self, tmp_path, monkeypatch
     ):
         """However its files change, while another checkout is observed
-        afresh."""
+        afresh; and a write keeps digesting the manifest as it was."""
+        from yizkr.model import schema
         from yizkr.pipeline.rundir import code_version
 
         held = checkout(tmp_path / "held")
         other = checkout(tmp_path / "other")
-        first = conftest.hold_code_version(monkeypatch, held)
+        manifest = tmp_path / "manifest.yaml"
+        manifest.write_text("properties: {}\n")
+        monkeypatch.setattr(schema, "DEFAULT_MANIFEST", manifest)
+        first = conftest.hold_checkout(monkeypatch, held, tmp_path / "copies")
+        digest = write_record().manifest_hash
         for root in (held, other):
             (root / "stage.py").write_text("STAGE = 'extract'\n")
+        manifest.write_text("properties: {place: {}}\n")
 
         assert first["dirty"] is False
         assert code_version(held, fresh=True) == first
         assert code_version(other, fresh=True)["dirty"] is True
+        assert write_record().manifest_hash == digest
 
     def test_the_package_checkout_keeps_the_sessions_code_version(
         self, tmp_path, monkeypatch
@@ -554,6 +570,7 @@ class TestCodeVersion:
         """As a write records it: with git pointed at another checkout,
         which a fresh look at the package's checkout would then report,
         a unit test still sees the session's."""
+        from yizkr.core.provenance import CodeProvenance
         from yizkr.pipeline.rundir import code_version
 
         session = code_version(fresh=True)
@@ -564,3 +581,4 @@ class TestCodeVersion:
         assert code_version(other, fresh=True)["commit"] != session["commit"]
         assert code_version(fresh=True) == session
         assert code_version() == session
+        assert write_record().code == CodeProvenance.model_validate(session)
