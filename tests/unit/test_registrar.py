@@ -6,9 +6,10 @@ with, the additive statement helper derived-media registration uses (#50),
 and the registrar itself over an in-memory wiki whose uploads run the
 real `WikiClient.upload_file` against a fake MediaWiki (#186): artifacts
 found or made by SHA-1 alone, never by title; page fragments keyed by
-their artifact (#187); a container's derived media registered from their
-record (#128); upload names in the form MediaWiki takes, and
-descriptions, within MediaWiki's and Wikibase's limits (#373); the
+their artifact (#187); a container's derived media registered from its
+common source projection (#128); upload names in the form MediaWiki
+takes, and descriptions, within MediaWiki's and Wikibase's limits
+(#373); the
 never-ingest list (#29); and `ensure_self_typed`, which
 gives an item found without its kind that kind, stated in the item itself
 (#368; its use for the place-hierarchy pass's run item is tested in
@@ -34,6 +35,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.fixtures.projected_media import project_media
 from tests.fixtures.write_recovery import RecoveryWiki
 from tests.unit.test_no_wiki_before_write import DECK
 from tests.unit.test_no_wiki_before_write import build_deck as reference_deck
@@ -43,12 +45,6 @@ from yizkr.core.corpus import ExclusionList
 from yizkr.core.wiki import WikiClient
 from yizkr.core.write_recovery import GENERATION_PAGE, CreationRefused
 from yizkr.pipeline import registrar, writer
-from yizkr.pipeline.presentation import (
-    EmbeddedMedium,
-    PresentationContent,
-    Slide,
-    record_derived_media,
-)
 from yizkr.pipeline.registrar import (
     ExcludedMedia,
     Registrar,
@@ -61,7 +57,6 @@ from yizkr.pipeline.registrar import (
     _whole_letters,
     ensure_self_typed,
     register_artifact,
-    register_derived_media,
 )
 
 
@@ -1147,115 +1142,37 @@ class TestTermsInTheStoredForm:
         register_deck(wiki, tmp_path, "a", decomposed, media)
         assert wiki.writes == writes
 
-    def test_a_name_that_leaves_nothing_once_stored_is_image_n(self, tmp_path):
-        """A medium named only by control characters keeps no name once
-        stored: it is "image N", N its place among the record's media, so
-        its label ends in a name the instance keeps as sent, and a second
-        write of the deck sends no edit."""
-        wiki = StoringWiki()
-        media = [("\x01\x02", IMAGE, [1])]
-        _, derived = register_deck(wiki, tmp_path, "a", SHOP, media)
-        assert label_of(wiki, derived[sha1(IMAGE)]) == f"{SHOP} — image 1"
-        writes = wiki.writes
-        register_deck(wiki, tmp_path, "a", SHOP, media)
-        assert wiki.writes == writes
-
-    def test_nameless_media_are_numbered_in_the_order_of_their_sha1s(
-        self, tmp_path
-    ):
-        """Two media with names of control characters alone, one of them
-        on the never-ingest list, and one whose second name is such a
-        name: each nameless one is "image N", N its place among the
-        record's media in the order of their SHA-1s, excluded media
-        counted; a name the stored form leaves nothing of is no alias;
-        and a second write of the deck sends no edit."""
-        wiki = StoringWiki()
-        nameless = (IMAGE, OTHER_IMAGE, RESCAN)
-        # the deck holds them in the reverse of their SHA-1s' order
-        media = [
-            (control, data, [slide])
-            for slide, (control, data) in enumerate(
-                zip(
-                    ("\x01\x02", "\x03", "\x04"),
-                    sorted(nameless, key=sha1, reverse=True),
-                    strict=True,
-                ),
-                start=1,
-            )
-        ] + [("image1.png", PORTRAIT, [4]), ("\x01", PORTRAIT, [4])]
-        excluded_one = sorted(nameless, key=sha1)[1]
-        excluded = ExclusionList(sha1s=frozenset({sha1(excluded_one)}))
-        _, derived = register_deck(
-            wiki, tmp_path, "a", SHOP, media, exclusions=excluded
-        )
-        order = sorted(map(sha1, (*nameless, PORTRAIT)))
-        assert sha1(excluded_one) not in derived
-        for data in nameless:
-            if data != excluded_one:
-                number = order.index(sha1(data)) + 1
-                assert label_of(wiki, derived[sha1(data)]) == (
-                    f"{SHOP} — image {number}"
-                )
-        portrait = wiki.entities[derived[sha1(PORTRAIT)]]
-        assert label_of(wiki, derived[sha1(PORTRAIT)]) == (
-            f"{SHOP} — image1.png"
-        )
-        assert not portrait.get("aliases")
-        writes = wiki.writes
-        register_deck(wiki, tmp_path, "a", SHOP, media, exclusions=excluded)
-        assert wiki.writes == writes
-
-    def test_nameless_media_are_numbered_whatever_the_records_order(
-        self, tmp_path
-    ):
-        """A record that holds its media out of their SHA-1s' order numbers
-        them in that order all the same."""
-        wiki = StoringWiki()
-        deck = deck_file(tmp_path, "a")
-        registrar = Registrar(wiki)
-        registrar.register_artifact(deck, "presentation", SHOP)
-        media = [("\x01", IMAGE, [1]), ("\x02", OTHER_IMAGE, [2])]
-        record, directory = recorded(tmp_path, deck, SHOP, media)
-        backwards = dict(reversed(list(record.media.items())))
-        record = record.model_copy(update={"media": backwards})
-        derived = registrar.register_derived_media(record, directory)
-        for number, key in enumerate(sorted(derived), start=1):
-            assert label_of(wiki, derived[key]) == f"{SHOP} — image {number}"
-
     @pytest.mark.parametrize(
         "name",
         [
+            "\x01",
             "\N{ZERO WIDTH SPACE}",
             "\N{LEFT-TO-RIGHT MARK}",
             "\N{ZERO WIDTH SPACE}\N{RIGHT-TO-LEFT MARK}",
         ],
+        ids=[
+            "emptied once stored",
+            "zero width space",
+            "left-to-right mark",
+            "zero width space and right-to-left mark",
+        ],
     )
-    def test_a_name_that_shows_nothing_is_image_n(self, tmp_path, name):
-        """A name of characters that show nothing is no name: its label
-        would end in an invisible character."""
+    def test_a_name_that_shows_nothing_is_neither_label_nor_alias(
+        self, tmp_path, name
+    ):
+        """The deck holds the shop front under a name that shows nothing
+        once stored, as well as under its name: it is labelled by the name
+        that shows, the other is no alias, as a label ending in it would
+        end in nothing a reader sees, and a second write sends no edit."""
         wiki = StoringWiki()
-        media = [(name, IMAGE, [1])]
+        media = [(name, IMAGE, [1]), ("image3.png", IMAGE, [1])]
         _, derived = register_deck(wiki, tmp_path, "a", SHOP, media)
-        assert label_of(wiki, derived[sha1(IMAGE)]) == f"{SHOP} — image 1"
+        qid = derived[sha1(IMAGE)]
+        assert label_of(wiki, qid) == f"{SHOP} — image3.png"
+        assert not wiki.entities[qid].get("aliases")
         writes = wiki.writes
         register_deck(wiki, tmp_path, "a", SHOP, media)
         assert wiki.writes == writes
-
-    def test_a_nameless_medium_is_uploaded_as_image_n(self, tmp_path):
-        """Its file takes the name its label ends in, with no extension,
-        as its record's file has none: MediaWiki adds its type's."""
-        wiki = FakeWiki()
-        media = [("\x01\x02", IMAGE, [1])]
-        register_deck(wiki, tmp_path, "a", SHOP, media)
-        assert uploaded(wiki, sha1(IMAGE)) == f"File:{SHOP} image 1"
-
-    def test_a_surviving_name_comes_before_an_emptied_one(self, tmp_path):
-        """A medium whose first name the stored form empties and whose
-        second survives is labelled by the second."""
-        wiki = StoringWiki()
-        media = [("\x01", IMAGE, [1]), ("image3.png", IMAGE, [1])]
-        _, derived = register_deck(wiki, tmp_path, "a", SHOP, media)
-        assert label_of(wiki, derived[sha1(IMAGE)]) == f"{SHOP} — image3.png"
 
     def test_titles_and_labels_share_the_writers_rule(self):
         # one rule for the terms both write, and one limit (#369)
@@ -1328,13 +1245,12 @@ class TestLongDeckTitles:
         )
         # the shop front under two names in the archive: one medium
         shop = unicodedata.normalize(form, "Flörburg-shop.png")
-        record, directory = recorded(
-            tmp_path,
-            deck,
-            given,
-            [(shop, IMAGE, [1]), ("image3.png", IMAGE, [2])],
+        sources, directory = projected(
+            tmp_path, deck, [(shop, IMAGE, [1]), ("image3.png", IMAGE, [2])]
         )
-        derived = registrar.register_derived_media(record, directory)
+        derived = registrar.register_container_sources(
+            sources, directory, title=given
+        )
 
         assert label_of(wiki, result.artifact_qid) == self.TITLE
         for page, qid in result.fragment_qids.items():
@@ -1357,7 +1273,7 @@ class TestLongDeckTitles:
         writes = wiki.writes
         again = Registrar(wiki)
         again.register_artifact(deck, "presentation", given, pages=2)
-        again.register_derived_media(record, directory)
+        again.register_container_sources(sources, directory, title=given)
         assert wiki.writes == writes
 
     def test_a_cut_label_another_item_holds_is_tagged_and_fits(self, tmp_path):
@@ -1608,16 +1524,17 @@ class TestUploadNames:
 
     def test_a_pdf_title_that_leaves_nothing_names_the_pdf(self, tmp_path):
         """The container's kind stands for the title: a PDF's images are
-        "pdf <name>"."""
+        "pdf <name>", the name its place in the PDF, with the suffix of the
+        file its bytes are kept in."""
         wiki = FakeWiki()
-        deck = deck_file(tmp_path, "a")
-        registrar = Registrar(wiki)
-        registrar.register_artifact(deck, "presentation", "_")
-        record, directory = recorded(
-            tmp_path, deck, "_", [("page 6, image 1.png", IMAGE, [6])]
+        register_deck(
+            wiki,
+            tmp_path,
+            "a",
+            "_",
+            [("image.png", IMAGE, [6])],
+            container="pdf",
         )
-        pdf = record.model_copy(update={"container": "pdf"})
-        registrar.register_derived_media(pdf, directory)
         assert uploaded(wiki, sha1(IMAGE)) == "File:Pdf page 6, image 1.png"
         assert not overridden(wiki)
 
@@ -2487,7 +2404,7 @@ class TestFragments:
         assert_labels_unique(wiki)
 
 
-# -- derived media, from their record (ADR-0008; #50, #128) -------------------
+# -- derived media, from the common source projection (ADR-0008; #50, #128) --
 
 
 def unplaced_source(
@@ -2678,33 +2595,42 @@ def deck_file(tmp_path, name: str) -> Path:
     return scan(tmp_path, f"PK synthetic deck {name}".encode(), f"{name}.pptx")
 
 
-def recorded(tmp_path, deck: Path, title: str, media) -> tuple:
-    """The deck's derived media, recorded as the stages before the write
-    record them, in a directory of its own: (record, directory). `media`
-    is a list of (name, bytes, slides)."""
-    directory = tmp_path / "state" / deck.stem
-    content = PresentationContent(
-        slides=[Slide(number=n, text="") for n in range(1, 9)],
-        media=[
-            EmbeddedMedium(name=name, data=data, slides=slides)
-            for name, data, slides in media
-        ],
-    )
-    record = record_derived_media(
-        content, source_sha1=sha1(deck.read_bytes()), title=title,
-        directory=directory,
-    )  # fmt: skip
-    return record, directory
+def pdf_file(tmp_path, name: str) -> Path:
+    """A PDF's bytes: only their SHA-1 matters to registration."""
+    return scan(tmp_path, f"%PDF synthetic {name}".encode(), f"{name}.pdf")
 
 
-def register_deck(wiki, tmp_path, name, title, media, exclusions=None):
-    """Register a deck and then its derived media, as the write does:
-    (the deck's QID, {media SHA-1 -> QID})."""
-    deck = deck_file(tmp_path, name)
+def projected(tmp_path, source: Path, media, container="presentation"):
+    """The common projection of the media the container `source` holds,
+    kept as the stages before the write keep it, in a directory of its
+    own: (projection, directory). `media` is a list of (name, bytes,
+    slides or pages), as tests.fixtures.projected_media takes them."""
+    directory = tmp_path / "state" / source.stem
+    sources = project_media(directory, source, media, container=container)
+    return sources, directory
+
+
+def register_deck(
+    wiki,
+    tmp_path,
+    name,
+    title,
+    media,
+    exclusions=None,
+    container="presentation",
+):
+    """Register a deck, or a PDF, and then its derived media, as the write
+    does: (the container's QID, {media SHA-1 -> QID})."""
+    if container == "pdf":
+        source, kind = pdf_file(tmp_path, name), "artifact"
+    else:
+        source, kind = deck_file(tmp_path, name), "presentation"
     registrar = Registrar(wiki, exclusions=exclusions)
-    qid = registrar.register_artifact(deck, "presentation", title).artifact_qid
-    record, directory = recorded(tmp_path, deck, title, media)
-    return qid, registrar.register_derived_media(record, directory)
+    qid = registrar.register_artifact(source, kind, title).artifact_qid
+    sources, directory = projected(tmp_path, source, media, container)
+    return qid, registrar.register_container_sources(
+        sources, directory, title=title
+    )
 
 
 def assert_additive(before: dict, after: dict) -> None:
@@ -2952,11 +2878,13 @@ class TestRegisterDerivedMedia:
     def test_the_container_is_registered_first(self, tmp_path):
         wiki = FakeWiki()
         deck = deck_file(tmp_path, "a")
-        record, directory = recorded(
-            tmp_path, deck, "Deck A", [("image1.png", IMAGE, [1])]
+        sources, directory = projected(
+            tmp_path, deck, [("image1.png", IMAGE, [1])]
         )
-        with pytest.raises(LookupError, match="register the container"):
-            register_derived_media(wiki, record, directory)
+        with pytest.raises(LookupError):
+            Registrar(wiki).register_container_sources(
+                sources, directory, title="Deck A"
+            )
         assert wiki.writes == 0 and wiki.media.requests == []
 
     def test_a_medium_whose_kept_bytes_changed_is_refused(self, tmp_path):
@@ -2964,15 +2892,18 @@ class TestRegisterDerivedMedia:
         deck = deck_file(tmp_path, "a")
         registrar = Registrar(wiki)
         registrar.register_artifact(deck, "presentation", "Deck A")
-        record, directory = recorded(
-            tmp_path, deck, "Deck A", [("image1.png", IMAGE, [1])]
+        sources, directory = projected(
+            tmp_path, deck, [("image1.png", IMAGE, [1])]
         )
-        (medium,) = record.media.values()
-        (directory / medium.file).write_bytes(OTHER_IMAGE)
+        (directory / sources.sources[sha1(IMAGE)].file).write_bytes(
+            OTHER_IMAGE
+        )
         requests, writes = len(wiki.media.requests), wiki.writes
 
-        with pytest.raises(RuntimeError, match="does not hold the bytes"):
-            registrar.register_derived_media(record, directory)
+        with pytest.raises(RuntimeError):
+            registrar.register_container_sources(
+                sources, directory, title="Deck A"
+            )
         assert len(wiki.media.requests) == requests
         assert wiki.writes == writes
 
@@ -3010,10 +2941,14 @@ class TestRegisterDerivedMedia:
         for name, title in (("a", "Deck A"), ("b", "Deck B")):
             deck = deck_file(tmp_path, name)
             registrar.register_artifact(deck, "presentation", title)
-            record, directory = recorded(
-                tmp_path, deck, title, [("image1.png", IMAGE, [1])]
+            sources, directory = projected(
+                tmp_path, deck, [("image1.png", IMAGE, [1])]
             )
-            found.append(registrar.register_derived_media(record, directory))
+            found.append(
+                registrar.register_container_sources(
+                    sources, directory, title=title
+                )
+            )
         assert found[0] == found[1]
         assert [
             qid
@@ -3028,10 +2963,12 @@ class TestRegisterDerivedMedia:
         registrar = Registrar(wiki)
         deck = deck_file(tmp_path, "a")
         registrar.register_artifact(deck, "presentation", "Deck A")
-        record, directory = recorded(
-            tmp_path, deck, "Deck A", [("image1.png", IMAGE, [1])]
+        sources, directory = projected(
+            tmp_path, deck, [("image1.png", IMAGE, [1])]
         )
-        registrar.register_derived_media(record, directory)
+        registrar.register_container_sources(
+            sources, directory, title="Deck A"
+        )
         later = registrar.register_artifact(
             scan(tmp_path, PORTRAIT), "photograph", "Deck A — image1.png"
         )
@@ -3047,22 +2984,18 @@ class TestRegisterDerivedMedia:
         list naming either name leaves it out: never registered or
         uploaded."""
         wiki = FakeWiki()
-        registrar = Registrar(
-            wiki, exclusions=ExclusionList.parse("image4.png\n")
-        )
-        deck = deck_file(tmp_path, "a")
-        registrar.register_artifact(deck, "presentation", SHOP)
-        record, directory = recorded(
+        _, derived = register_deck(
+            wiki,
             tmp_path,
-            deck,
+            "a",
             SHOP,
             [
                 ("image2.png", IMAGE, [2]),
                 ("image4.png", IMAGE, [3]),
                 ("image5.png", OTHER_IMAGE, [4]),
             ],
+            exclusions=ExclusionList.parse("image4.png\n"),
         )
-        derived = registrar.register_derived_media(record, directory)
         assert list(derived) == [sha1(OTHER_IMAGE)]
         assert sha1(IMAGE) not in wiki.files.values()
         assert not any(
@@ -3083,35 +3016,33 @@ class TestRegisterDerivedMedia:
         whichever of its places it matches. A deck's medium keeps matching
         by its names in the archive, any of them."""
         wiki = FakeWiki()
-        registrar = Registrar(wiki, exclusions=ExclusionList.parse("page*\n"))
-        deck = deck_file(tmp_path, "a")
-        registrar.register_artifact(deck, "presentation", "Our Family")
-        record, directory = recorded(
+        _, derived = register_deck(
+            wiki,
             tmp_path,
-            deck,
+            "a",
             "Our Family",
             [
                 ("image5.png", IMAGE, [6]),
                 ("page 7, image 1.png", IMAGE, [7]),
                 ("page 8, image 1.png", OTHER_IMAGE, [8]),
             ],
+            exclusions=ExclusionList.parse("page*\n"),
+            container=container,
         )
-        record = record.model_copy(update={"container": container})
-        derived = registrar.register_derived_media(record, directory)
         assert sorted(derived) == sorted(map(sha1, kept))
 
     def test_a_pdf_s_image_the_list_names_by_sha1_is_left_out(self, tmp_path):
         wiki = FakeWiki()
-        registrar = Registrar(
-            wiki, exclusions=ExclusionList.parse(f"{sha1(IMAGE)}\n")
+        _, derived = register_deck(
+            wiki,
+            tmp_path,
+            "a",
+            "Our Family",
+            [("image.png", IMAGE, [6])],
+            exclusions=ExclusionList.parse(f"{sha1(IMAGE)}\n"),
+            container="pdf",
         )
-        deck = deck_file(tmp_path, "a")
-        registrar.register_artifact(deck, "presentation", "Our Family")
-        record, directory = recorded(
-            tmp_path, deck, "Our Family", [("page 6, image 1.png", IMAGE, [6])]
-        )
-        record = record.model_copy(update={"container": "pdf"})
-        assert registrar.register_derived_media(record, directory) == {}
+        assert derived == {}
         assert sha1(IMAGE) not in wiki.files.values()
 
     @pytest.mark.parametrize("container", ["pdf", "presentation"])
@@ -3126,54 +3057,75 @@ class TestRegisterDerivedMedia:
         exclusions = ExclusionList.parse("image2.png\n").with_embedded(
             [sha1(IMAGE)]
         )
-        registrar = Registrar(wiki, exclusions=exclusions)
-        deck = deck_file(tmp_path, "a")
-        registrar.register_artifact(deck, "presentation", "Our Family")
-        record, directory = recorded(
+        _, derived = register_deck(
+            wiki,
             tmp_path,
-            deck,
+            "a",
             "Our Family",
             [
                 ("page 6, image 1.png", IMAGE, [6]),
                 ("page 7, image 1.png", OTHER_IMAGE, [7]),
             ],
+            exclusions=exclusions,
+            container=container,
         )
-        record = record.model_copy(update={"container": container})
-        derived = registrar.register_derived_media(record, directory)
         assert sorted(derived) == [sha1(OTHER_IMAGE)]
         assert sha1(IMAGE) not in wiki.files.values()
 
     def test_a_kept_medium_reached_through_a_link_is_refused(self, tmp_path):
-        """The file a record keeps must be a regular file: one replaced by a
-        link is never uploaded through, even to the medium's own bytes."""
+        """The file a projection keeps must be a regular file: one replaced
+        by a link is never uploaded through, even to the medium's own
+        bytes."""
         wiki = FakeWiki()
         registrar = Registrar(wiki)
         deck = deck_file(tmp_path, "a")
         registrar.register_artifact(deck, "presentation", "Deck A")
-        record, directory = recorded(
-            tmp_path, deck, "Deck A", [("image1.png", IMAGE, [1])]
+        sources, directory = projected(
+            tmp_path, deck, [("image1.png", IMAGE, [1])]
         )
-        (medium,) = record.media.values()
         elsewhere = tmp_path / "elsewhere.png"
         elsewhere.write_bytes(IMAGE)
-        kept = directory / medium.file
+        kept = directory / sources.sources[sha1(IMAGE)].file
         kept.unlink()
         kept.symlink_to(elsewhere)
         requests, writes = len(wiki.media.requests), wiki.writes
-        with pytest.raises(RuntimeError, match="does not hold the bytes"):
-            registrar.register_derived_media(record, directory)
+        with pytest.raises(RuntimeError):
+            registrar.register_container_sources(
+                sources, directory, title="Deck A"
+            )
         assert (len(wiki.media.requests), wiki.writes) == (requests, writes)
 
     def test_no_media_asks_nothing(self, tmp_path):
         wiki = Untouchable()
-        record = record_derived_media(
-            PresentationContent(slides=[Slide(number=1, text="")], media=[]),
-            source_sha1=sha1(b"PK a deck"),
-            title="Deck A",
-            directory=tmp_path,
+        sources, directory = projected(tmp_path, deck_file(tmp_path, "a"), [])
+        assert (
+            Registrar(wiki).register_container_sources(
+                sources, directory, title="Deck A"
+            )
+            == {}
         )
-        assert register_derived_media(wiki, record, tmp_path) == {}
         assert wiki.asked == []
+
+    def test_an_emf_picture_is_an_artifact_and_a_png_a_photograph(
+        self, tmp_path
+    ):
+        """A deck's EMF picture is an image the projection binds, but not
+        one of a photograph's file types: it is an `artifact`, and the
+        PNG beside it a `photograph`."""
+        wiki = FakeWiki()
+        _, derived = register_deck(
+            wiki,
+            tmp_path,
+            "a",
+            SHOP,
+            [("image1.png", IMAGE, [1]), ("image2.emf", OTHER_IMAGE, [2])],
+        )
+        assert strings(wiki, derived[sha1(IMAGE)], "instance_of") == [
+            ITEMS["photograph"]
+        ]
+        assert strings(wiki, derived[sha1(OTHER_IMAGE)], "instance_of") == [
+            ITEMS["artifact"]
+        ]
 
 
 # -- the write's registration of a document (ScratchDriver._step_register) ----
@@ -3496,16 +3448,23 @@ class TestStepRegister:
             .register_artifact(other, "presentation", "Deck other")
             .artifact_qid
         )
-        record_derived_media(
-            PresentationContent(
-                slides=[Slide(number=1, text="")],
-                media=[
-                    EmbeddedMedium(name="image1.png", data=IMAGE, slides=[1])
-                ],
-            ),
-            source_sha1=sha1(other.read_bytes()),
-            title="Deck other",
-            directory=doc.dir,
+        kept = f"derived-media/{sha1(IMAGE)}.png"
+        (doc.dir / kept).parent.mkdir(parents=True)
+        (doc.dir / kept).write_bytes(IMAGE)
+        (doc.dir / "derived-media.json").write_text(
+            json.dumps(
+                {
+                    "source_sha1": sha1(other.read_bytes()),
+                    "title": "Deck other",
+                    "media": {
+                        sha1(IMAGE): {
+                            "names": ["image1.png"],
+                            "slides": [1],
+                            "file": kept,
+                        }
+                    },
+                }
+            )
         )
         deck = orchestrator._step_register(doc)
         assert deck != other_qid

@@ -142,7 +142,7 @@ from yizkr.core.corpus import ExclusionList, file_sha1, is_excluded
 from yizkr.core.wiki import WikiClient
 from yizkr.core.write_recovery import CreationRegistry, write_existing
 from yizkr.pipeline.cancellation import check_cancelled
-from yizkr.pipeline.presentation import IMAGE_SUFFIXES, DerivedMediaRecord
+from yizkr.pipeline.presentation import IMAGE_SUFFIXES
 
 # a title is compared with the instance's labels, and set, in the form
 # Wikibase stores a label, a description or an alias in, by the writer's
@@ -1485,26 +1485,14 @@ class Registrar:
         )
         return self._register_media(record, directory)
 
-    def register_derived_media(
-        self, record: DerivedMediaRecord, directory: Path
-    ) -> dict[str, str]:
-        """Compatibility adapter for an explicit older byte-owner record.
-
-        It supplies no native occurrence evidence. Container runs use
-        ``register_container_sources`` after reconstructing inventory from
-        their original bytes, preserving verified existing owner bindings.
-        """
-        return self._register_media(record, directory)
-
     def _register_media(
-        self, record: DerivedMediaRecord | _RegistrationMedia, directory: Path
+        self, record: _RegistrationMedia, directory: Path
     ) -> dict[str, str]:
         """Ensure each medium a container embeds has its artifact item and
-        its file on the wiki, from `record`: the bound sources of the
-        container projection (register_container_sources), or an explicit
-        older derived-media record (register_derived_media), each medium's
-        bytes read from the file `record` names under `directory`; returns
-        {media SHA-1 -> QID}.
+        its file on the wiki, from `record`, which register_container_sources
+        makes of the bound sources of the container projection, each
+        medium's bytes read from the file `record` names under `directory`;
+        returns {media SHA-1 -> QID}.
 
         The container is the item whose `media SHA-1` is the record's
         source SHA-1, registered before its media. Each admitted medium is
@@ -1512,18 +1500,20 @@ class Registrar:
         image bytes shared across containers retain one item, `part of`
         each container; prepared images reach this loop after their owner
         binding check. It is labelled ``"<container title> — <name>"`` by
-        its first name: in the deck's archive (``image1.png``), or its
-        first place in the PDF (``page 6, image 1``; ADR-0008), of the
-        names that show something once stored (_shows), or ``image N``
-        when none does, N its place among the record's media in
-        the order of their SHA-1s, excluded media counted; its other
-        names become aliases, unless another item has one as its label.
+        its first name that shows something once stored (_shows): in the
+        deck's archive (``image1.png``), or its first place in the PDF
+        (``page 6, image 1``; ADR-0008). The projection gives every bound
+        source one: a deck's image keeps the archive name whose suffix its
+        media type is read from, and a PDF's image is named for its
+        places. Its other names that show something become aliases,
+        unless another item has one as its label.
         Its bytes are uploaded from the file the record keeps, under the
         name ``"<title> <name>"``, with the file's suffix when the name has
         none, in the form MediaWiki takes, its title cut or left out to
         fit (_upload_name), only when no file of the item holds them.
-        It is a `photograph` when that file is an image's, and an
-        `artifact` otherwise.
+        It is a `photograph` when that file's suffix is one of
+        IMAGE_SUFFIXES, and an `artifact` otherwise, as a deck's EMF, WMF
+        or SVG picture is.
 
         Each container asserts its media additively: one ``part of ->
         container`` per slide or page the medium is on, qualified with its
@@ -1556,8 +1546,7 @@ class Registrar:
             )
         properties, items = self.client.vocabulary()
         located = any(
-            getattr(medium, "locators", {})
-            or getattr(medium, "unplaced_locators", ())
+            medium.locators or medium.unplaced_locators
             for medium in record.media.values()
         )
         if located and "source_part_locator" not in properties:
@@ -1570,8 +1559,7 @@ class Registrar:
         media_sha1 = properties["media_sha1"]
         title = _stored_term(record.title)
         derived: dict[str, str] = {}
-        media = sorted(record.media.items())
-        for number, (key, medium) in enumerate(media, start=1):
+        for key, medium in sorted(record.media.items()):
             # a PDF's image is named for its places ("page 6, image 1"),
             # no file's name, so no glob is matched against them
             globbed = medium.names if record.container != "pdf" else []
@@ -1588,14 +1576,13 @@ class Registrar:
                     f"names; nothing of it was registered or uploaded"
                 )
             # the names that show something once stored (_shows), in
-            # their order: a medium with none, its names control
-            # characters or a zero-width space alone, say, is "image N",
-            # N its place among the record's media in the order of their
-            # SHA-1s, excluded media counted; its label then ends in a
-            # name the instance keeps as sent, and a re-run finds it
+            # their order, so that a label ends in a name the instance
+            # keeps as sent and a re-run finds it: another name the deck
+            # holds the bytes under, of control characters or a zero-width
+            # space alone, say, is neither label nor alias
             kept = [name for name in medium.names if _shows(name)]
-            first = kept[0] if kept else f"image {number}"
-            names = list(dict.fromkeys(map(_stored_term, kept))) or [first]
+            first = kept[0]
+            names = list(dict.fromkeys(map(_stored_term, kept)))
             # the container's title is cut to fit, if need be: a medium's
             # labels and aliases only display it
             labels = [_fitted(title, f" — {name}") for name in names]
@@ -1683,14 +1670,12 @@ class Registrar:
                         container,
                         slide,
                         locator_property=properties.get("source_part_locator"),
-                        locators=getattr(medium, "locators", {}).get(
-                            slide, ()
-                        ),
+                        locators=medium.locators.get(slide, ()),
                     )
                     for slide in medium.slides
                 ),
             ]
-            if unplaced := getattr(medium, "unplaced_locators", ()):
+            if unplaced := medium.unplaced_locators:
                 statements.append(
                     _part_of_claim(
                         properties["part_of"],
@@ -1770,21 +1755,3 @@ def register_artifact(
     return Registrar(client, exclusions=exclusions).register_artifact(
         media_path, artifact_type, title, description, pages
     )
-
-
-def register_derived_media(
-    client: WikiClient,
-    record: DerivedMediaRecord,
-    directory: Path,
-    *,
-    exclusions: ExclusionList | None = None,
-    flags: list[RegistrationFlag] | None = None,
-) -> dict[str, str]:
-    """Register the media a registered container embeds, from their
-    record, reading the instance afresh (Registrar.register_derived_media).
-    What the media were flagged for is added to `flags`, when given."""
-    registrar = Registrar(client, exclusions=exclusions)
-    derived = registrar.register_derived_media(record, directory)
-    if flags is not None:
-        flags.extend(registrar.flags)
-    return derived

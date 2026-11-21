@@ -37,6 +37,7 @@ import pytest
 
 from tests.fixtures import example_universe as u
 from tests.fixtures.identity import write_mapped
+from tests.fixtures.projected_media import project_media
 from tests.integration.conftest import (
     fictional_png,
     fixture_mark,
@@ -46,11 +47,6 @@ from tests.integration.conftest import (
 from yizkr import staticsite
 from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.pipeline import registrar, writer
-from yizkr.pipeline.presentation import (
-    DERIVED_MEDIA_DIR,
-    DerivedMediaRecord,
-    DerivedMedium,
-)
 from yizkr.pipeline.registrar import Registrar
 from yizkr.pipeline.writer import BatchWriter
 from yizkr.staticsite import publish_site
@@ -258,20 +254,12 @@ def site(client, config, tmp_path_factory):
     data = fictional_png(f"yizkr live test: {BOOKLET}, page 6, image 1")
     image = ArtifactRef.from_bytes(data)
     directory = tmp_path_factory.mktemp("derived")
-    (directory / DERIVED_MEDIA_DIR).mkdir()
-    file = f"{DERIVED_MEDIA_DIR}/{image.sha1}.png"
-    (directory / file).write_bytes(data)
-    record = DerivedMediaRecord(
-        source_sha1=booklet.ref.sha1,
-        container="pdf",
-        title=BOOKLET,
-        media={
-            image.sha1: DerivedMedium(
-                names=["page 6, image 1"], slides=[6], file=file
-            )
-        },
+    sources = project_media(
+        directory, booklet.ref, [("image.png", data, [6])], container="pdf"
     )
-    derived = Registrar(client).register_derived_media(record, directory)
+    derived = Registrar(client).register_container_sources(
+        sources, directory, title=BOOKLET
+    )
     image_qid = derived[image.sha1]
     written = write_mapped(
         BatchWriter(client),

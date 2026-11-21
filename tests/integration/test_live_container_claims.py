@@ -10,10 +10,10 @@ SHA-1, stated in the booklet with its page; the image's own dateline
 gives its `inception`, stated in the image itself. A re-run adds
 nothing. A caption written without the derived media its container
 registered is refused before the first write. `yizkr ingest write` takes
-them from the booklet's record of derived media with `--placed` (#551),
-and without it refuses the caption and says how to give them. The
-non-privileged export leaves the caption out, whole, and keeps the
-image's own statement.
+them from the directory keeping the booklet's container inventory with
+`--placed` (#551), and without it refuses the caption and says how to
+give them. The non-privileged export leaves the caption out, whole, and
+keeps the image's own statement.
 
 Every title, label, caption and media byte carries the session's marker
 (conftest.fixture_mark), so each session meets the fixture as a first
@@ -33,6 +33,7 @@ from pathlib import Path
 import pytest
 
 from tests.fixtures.identity import write_mapped
+from tests.fixtures.projected_media import project_media
 from tests.integration.conftest import (
     fictional_png,
     fixture_mark,
@@ -49,12 +50,6 @@ from yizkr.claims import (
 )
 from yizkr.core.exits import EXIT_OK
 from yizkr.pipeline import registrar, writer
-from yizkr.pipeline.presentation import (
-    DERIVED_MEDIA,
-    DERIVED_MEDIA_DIR,
-    DerivedMediaRecord,
-    DerivedMedium,
-)
 from yizkr.pipeline.registrar import Registrar
 from yizkr.pipeline.review import claim_id
 from yizkr.pipeline.writer import BatchWriter
@@ -135,28 +130,21 @@ def dateline_batch(image: ArtifactRef) -> ClaimBatch:
 
 @pytest.fixture(scope="module")
 def placed(client, tmp_path_factory):
-    """The booklet and the image it places on its page 6, registered as
-    the write registers a PDF read page by page: (the booklet, the image's
-    key, the image's item)."""
+    """The booklet and the image it places on its page 6, registered from
+    the booklet's container projection as the write registers a PDF read
+    page by page: (the booklet, the image's key, {its SHA-1 -> its item},
+    the directory keeping the booklet's container inventory)."""
     booklet = register_fictional(client, TITLE, "artifact")
     data = fictional_png(f"yizkr live test: {TITLE}, page 6, image 1")
     image = ArtifactRef.from_bytes(data)
     directory = tmp_path_factory.mktemp("derived")
-    (directory / DERIVED_MEDIA_DIR).mkdir()
-    file = f"{DERIVED_MEDIA_DIR}/{image.sha1}.png"
-    (directory / file).write_bytes(data)
-    record = DerivedMediaRecord(
-        source_sha1=booklet.ref.sha1,
-        container="pdf",
-        title=TITLE,
-        media={
-            image.sha1: DerivedMedium(
-                names=["page 6, image 1"], slides=[6], file=file
-            )
-        },
+    sources = project_media(
+        directory, booklet.ref, [("image.png", data, [6])], container="pdf"
     )
-    derived = Registrar(client).register_derived_media(record, directory)
-    return booklet, image, derived
+    derived = Registrar(client).register_container_sources(
+        sources, directory, title=TITLE
+    )
+    return booklet, image, derived, directory
 
 
 def statements(client, qid: str, key: str) -> list[dict]:
@@ -183,7 +171,7 @@ def cited(client, statement: dict, key: str) -> list:
 def test_a_caption_is_written_on_the_image_its_container_places(
     client, placed
 ):
-    booklet, image, derived = placed
+    booklet, image, derived, _directory = placed
     image_qid = derived[image.sha1]
     batch = caption_batch(booklet.ref, image)
     where = {booklet.ref.sha1: set(derived)}
@@ -216,7 +204,7 @@ def test_a_caption_is_written_on_the_image_its_container_places(
 def test_a_caption_without_its_registered_media_is_refused(client, placed):
     """The writer holds the placed-subject rule itself: `yizkr write`
     takes a batch without the derived media its container registered."""
-    booklet, image, derived = placed
+    booklet, image, derived, _directory = placed
     before = statements(client, derived[image.sha1], "caption")
     batch = caption_batch(booklet.ref, image)
     result = write_mapped(BatchWriter(client), batch)
@@ -227,14 +215,14 @@ def test_a_caption_without_its_registered_media_is_refused(client, placed):
     assert statements(client, booklet.qid, "caption") == []
 
 
-def test_ingest_write_takes_the_placed_media_from_their_record(
+def test_ingest_write_takes_the_placed_media_from_their_inventory(
     client, placed, tmp_path, capsys
 ):
     """`yizkr ingest write` refuses the caption without the booklet's
     placed media, and says how to give them; with `--placed` naming the
-    directory that keeps the booklet's record of derived media, the
-    caption is on the image's item, once."""
-    booklet, image, derived = placed
+    directory that keeps the booklet's container inventory, the caption
+    is on the image's item, once."""
+    booklet, image, derived, directory = placed
     image_qid = derived[image.sha1]
     before = statements(client, image_qid, "caption")
     batch = caption_batch(booklet.ref, image)
@@ -251,22 +239,6 @@ def test_ingest_write_takes_the_placed_media_from_their_record(
     assert unplaced_hint(1) in err
     assert statements(client, image_qid, "caption") == before
 
-    directory = tmp_path / "booklet"
-    directory.mkdir()
-    (directory / DERIVED_MEDIA).write_text(
-        DerivedMediaRecord(
-            source_sha1=booklet.ref.sha1,
-            container="pdf",
-            title=TITLE,
-            media={
-                image.sha1: DerivedMedium(
-                    names=["page 6, image 1"],
-                    slides=[6],
-                    file=f"{DERIVED_MEDIA_DIR}/{image.sha1}.png",
-                )
-            },
-        ).model_dump_json(indent=2)
-    )
     status = cli.main(
         [
             *("ingest", "write", "--batch", str(batch_json)),
@@ -291,7 +263,7 @@ def test_ingest_write_takes_the_placed_media_from_their_record(
 
 
 def test_a_document_s_date_is_written_on_its_own_item(client, placed):
-    _booklet, image, derived = placed
+    _booklet, image, derived, _directory = placed
     image_qid = derived[image.sha1]
     batch = dateline_batch(image)
     assert validate_against_manifest(batch) == []
@@ -310,7 +282,7 @@ def test_the_nonprivileged_export_leaves_the_caption_out(
 ):
     if not (DEPLOY / "docker-compose.yml").is_file():
         pytest.skip("run from the repo root")
-    booklet, image, derived = placed
+    booklet, image, derived, _directory = placed
     image_qid = derived[image.sha1]
     where = {booklet.ref.sha1: set(derived)}
     write_mapped(
