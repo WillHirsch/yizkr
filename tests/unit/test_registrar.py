@@ -9,13 +9,12 @@ found or made by SHA-1 alone, never by title; page fragments keyed by
 their artifact (#187); a container's derived media registered from its
 common source projection (#128); upload names in the form MediaWiki
 takes, and descriptions, within MediaWiki's and Wikibase's limits
-(#373); the
-never-ingest list (#29); and `ensure_self_typed`, which
-gives an item found without its kind that kind, stated in the item itself
+(#373); the never-ingest list (#29); and `ensure_self_typed`, which gives
+an item found without its kind that kind, stated in the item itself
 (#368; its use for the place-hierarchy pass's run item is tested in
-tests/unit/test_places.py). The orchestrator's
-write-time registration of a document runs here too, through its real
-`_step_register`. The flow is also verified live
+tests/unit/test_places.py). The orchestrator's write-time registration
+of a document runs here too, through its real `_step_register`. The flow
+is also verified live
 (tests/integration/test_live_write_time_registration.py,
 test_live_registrar.py, test_live_pipeline.py,
 test_live_presentation.py and test_live_upload_names.py).
@@ -2857,6 +2856,7 @@ class TestRegisterDerivedMedia:
             f"{SHOP} — image4.png"
         ]
         assert sorted(page for _, page in part_of(entity)) == ["2", "3"]
+        assert uploaded(wiki, sha1(IMAGE)) == f"File:{SHOP} image2.png"
 
     def test_an_image_ingested_on_its_own_too_is_one_item(self, tmp_path):
         """The shop front is a document of its own and a deck's image: one

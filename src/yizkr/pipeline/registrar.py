@@ -1502,11 +1502,13 @@ class Registrar:
         binding check. It is labelled ``"<container title> — <name>"`` by
         its first name that shows something once stored (_shows): in the
         deck's archive (``image1.png``), or its first place in the PDF
-        (``page 6, image 1``; ADR-0008). The projection gives every bound
-        source one: a deck's image keeps the archive name whose suffix its
-        media type is read from, and a PDF's image is named for its
-        places. Its other names that show something become aliases,
-        unless another item has one as its label.
+        (``page 6, image 1``; ADR-0008). The projection (project_sources)
+        gives every bound source one, and nothing here supplies another: a
+        deck's image keeps the archive name whose suffix its media type is
+        read from, and a PDF's image is named for its places, or
+        ``image source`` and the first 12 hex digits of its SHA-1 when no
+        paint places it. Its other names that show something become
+        aliases, unless another item has one as its label.
         Its bytes are uploaded from the file the record keeps, under the
         name ``"<title> <name>"``, with the file's suffix when the name has
         none, in the form MediaWiki takes, its title cut or left out to
@@ -1579,7 +1581,8 @@ class Registrar:
             # their order, so that a label ends in a name the instance
             # keeps as sent and a re-run finds it: another name the deck
             # holds the bytes under, of control characters or a zero-width
-            # space alone, say, is neither label nor alias
+            # space alone, say, is neither label nor alias. The projection
+            # gives every bound source at least one name that shows.
             kept = [name for name in medium.names if _shows(name)]
             first = kept[0]
             names = list(dict.fromkeys(map(_stored_term, kept)))

@@ -1,13 +1,25 @@
 """A container's fictional media, projected as registration receives them.
 
-`project_media` builds the inventory a deck or PDF reader would record for
-named media bytes on given slides or pages, prepares its owner bindings and
-keeps it as the stages before the write do, and returns the common
-projection (yizkr.pipeline.container_sources) that
+`project_media` builds a container inventory for named media bytes on
+given slides or pages, prepares its owner bindings and keeps it as the
+stages before the write do, and returns the common projection
+(yizkr.pipeline.container_sources) that
 `Registrar.register_container_sources` takes. Preparation decides what is
 bound, so only what a projection can hold reaches registration: a deck's
 part whose name gives no image type is no source of its own, though its
 name stays one of its bytes' names.
+
+A deck's medium is recorded as the deck reader records package media. A
+PDF's image is not recorded as the PDF reader records it: it is modelled
+as complete original image media, a part of an image media type that
+holds the bytes itself, so it binds with basis ``original-media``, as the
+reader's DCT (JPEG) image does. The reader records the stream as
+``application/vnd.pdf.image-stream`` (kept as ``.pdf-stream``) with a
+``pdfium-image`` representation that becomes the owner, and a decoded
+(PNG) image then binds as ``prepared-part``. That basis, and the
+registrar's check of a prepared image against an existing owner, are not
+exercised through this helper; tests/unit/test_container_citations.py
+reads real PDFs for them.
 """
 
 from __future__ import annotations
@@ -87,8 +99,10 @@ def project_media(
     it as ``ppt/media/<name>``, its media type read from the name's suffix
     as the deck reader reads it, so the same bytes under two names are one
     source with both names. A PDF's images have no names of their own: a
-    PDF's image is a stream of its own, kept in a file with the name's
-    suffix, and named by its places (``page 6, image 1``)."""
+    PDF's image is modelled as original image media, a part of the image
+    media type the name's suffix gives, kept in a file with that suffix,
+    bound as ``original-media`` and named by its places
+    (``page 6, image 1``)."""
     if isinstance(source, Path):
         source = ArtifactRef.from_path(source)
     bodies: dict[int, SourcePart] = {}
@@ -114,8 +128,9 @@ def project_media(
             media_type=MEDIA_TYPES.get(suffix, "application/octet-stream"),
         )
         if container == "pdf":
-            # an image stream kept as the image it is extracted as, allowed
-            # and a source of its own, as the PDF's preparation leaves it
+            # allowed and a source of its own, as the PDF's preparation
+            # leaves an image stream, but holding its image bytes itself,
+            # with no pdfium-image representation: original media
             part.eligibility = Eligibility(state="allowed")
             part.source_role = "independent"
         parts.append(part)
