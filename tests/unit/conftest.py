@@ -85,8 +85,22 @@ changing what they check:
   test's, are not guarded; the processes inherit the environment
   without the proxy variables.
 
-test_conftest.py tests the first two and the last four, and
-test_anomalies.py the third.
+- **One code version of the checkout.** A write records the code that
+  made it, and asks git about the package's checkout each time it does:
+  its commit, and a digest of how its files differ from it
+  (yizkr.pipeline.rundir.code_version, fresh). So a test that writes a
+  batch twice and checks that the second write changes nothing would
+  see one write more if a file of the checkout changed between the two,
+  as one edited while the suite runs does. In every unit test, and every
+  fixture of theirs, the package's checkout keeps the code version first
+  observed in the session, fresh or not (the package-scoped
+  `_one_code_version` fixture), as on CI, where nothing changes the
+  checkout during a run. Every other place is observed as before, and
+  the tests of the code version run on temporary checkouts of their own
+  (test_run_manifest.py).
+
+test_conftest.py tests the first two, the fourth, the fifth and the last
+two, and test_anomalies.py the third.
 """
 
 from __future__ import annotations
@@ -98,6 +112,7 @@ import socket
 import sys
 import warnings
 from collections.abc import Container, Iterable, MutableMapping
+from pathlib import Path
 
 import pytest
 
@@ -483,4 +498,35 @@ def _process_records_in_test_directory(tmp_path_factory):
             "DEFAULT_RECORD_DIR",
             tmp_path_factory.getbasetemp() / "process-records",
         )
+        yield
+
+
+def hold_code_version(patch: pytest.MonkeyPatch, where: Path) -> dict:
+    """Make every observation of the checkout at `where` through
+    rundir.code_version, fresh or not, give the code version first
+    observed there in this process, and return it. Every other place is
+    observed as before."""
+    from yizkr.pipeline import rundir
+
+    held = rundir.code_version(where)
+    observe = rundir._observe_code_version
+
+    def observed(place: Path) -> dict:
+        return dict(held) if Path(place) == where else observe(place)
+
+    patch.setattr(rundir, "_observe_code_version", observed)
+    return held
+
+
+@pytest.fixture(scope="package", autouse=True)
+def _one_code_version():
+    """Hold the package's checkout at the code version first observed in
+    the session (hold_code_version), for every unit test and every
+    fixture of theirs. Package scope makes it set up before any fixture
+    of a module, and undo after the last unit test, so the live tests in
+    the same session observe the checkout afresh."""
+    from yizkr.pipeline import rundir
+
+    with pytest.MonkeyPatch.context() as patch:
+        hold_code_version(patch, rundir.PACKAGE_DIR)
         yield
