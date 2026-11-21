@@ -993,9 +993,9 @@ class TestADeckSImages:
         self, tmp_path, listed
     ):
         """By its SHA-1 or by a glob on its name in the archive, as the
-        write leaves it out (registrar.register_derived_media): it reaches
-        no engine and is no excerpt, though the record keeps it; a second
-        run reuses the deck's view, setting nothing aside."""
+        write leaves it out (registrar.register_container_sources): it
+        reaches no engine and is no excerpt, though the record keeps it; a
+        second run reuses the deck's view, setting nothing aside."""
         corpus = talk_folder(tmp_path)
         exclusions = ExclusionList.parse(f"{listed}\n")
         orchestrator = run(

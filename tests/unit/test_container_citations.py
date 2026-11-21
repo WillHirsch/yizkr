@@ -17,7 +17,6 @@ from tests.unit.test_registrar import (
     StoringWiki,
     assert_additive,
     deck_file,
-    recorded,
 )
 from yizkr.claims import (
     ArtifactRef,
@@ -193,15 +192,28 @@ def test_common_registration_enriches_existing_owner_without_duplicates(
 ):
     wiki = StoringWiki()
     path = deck_file(tmp_path, "library-talk-2018")
-    registrar = Registrar(wiki)
-    registrar.register_artifact(path, "presentation", "Library Talk 2018")
-    legacy, directory = recorded(
-        tmp_path, path, "Library Talk 2018", [("image1.png", IMAGE, [1])]
+    deck = (
+        Registrar(wiki)
+        .register_artifact(path, "presentation", "Library Talk 2018")
+        .artifact_qid
     )
-    before_mapping = registrar.register_derived_media(legacy, directory)
+    # the image's item as the deck registered it before source parts were
+    # located: hashed, its file on the wiki, part of the deck on slide 1,
+    # every statement stated in the deck with no source-part locator
     image = ArtifactRef.from_bytes(IMAGE)
-    qid = before_mapping[image.sha1]
+    wiki.media.store("Library_Talk_2018_image1.png", IMAGE)
+    qid = wiki.item(
+        "Library Talk 2018 — image1.png",
+        ("instance_of", wiki.ITEMS["photograph"], None),
+        ("media_file", "File:Library Talk 2018 image1.png", None),
+        ("media_sha1", image.sha1, None),
+        ("part_of", deck, "1"),
+        stated_in=deck,
+    )
+    before_mapping = {image.sha1: qid}
     before = copy.deepcopy(wiki.entities[qid])
+    registrar = Registrar(wiki)
+    directory = tmp_path / "state"
     inventory = common_record(directory, ArtifactRef.from_path(path))
     sources = project_sources(inventory, directory)
     assert (

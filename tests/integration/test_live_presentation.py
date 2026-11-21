@@ -1,7 +1,7 @@
 """Live PPTX compound-artifact flow (ADR-0008): deck registration with
 slide fragments, derived-media items with deck-referenced provenance,
-registered from the record the stages before the write keep of them
-(#128, #103), one derived item per distinct image across decks
+registered from the deck's container projection as the write registers
+them (#128, #103), one derived item per distinct image across decks
 (ADR-0010, #50), and idempotent re-registration. No LLM involved — the
 adapter is deterministic; claim extraction is covered elsewhere.
 
@@ -23,10 +23,11 @@ from tests.unit.test_presentation import (
     IMAGE_REL,
     SLIDE_REL,
     rels_xml,
-    slide_xml,
 )
 from yizkr.pipeline import presentation, registrar
-from yizkr.pipeline.presentation import record_derived_media, unpack_pptx
+from yizkr.pipeline.container_inventory import keep_inventory
+from yizkr.pipeline.container_sources import project_sources
+from yizkr.pipeline.media_stages import PreparationRequest, prepare_container
 from yizkr.pipeline.registrar import Registrar
 
 from .conftest import fictional_png, fixture_mark
@@ -43,11 +44,35 @@ DECK_TITLE = f"Integration-test presentation {MARK}"
 SECOND_DECK_TITLE = f"Integration-test presentation, second deck {MARK}"
 FIXED_TIME = (2020, 1, 1, 0, 0, 0)  # deterministic ZIP bytes across runs
 IMAGE = fictional_png(f"yizkr live test: the decks' image {MARK}")
+NAMESPACES = (
+    'xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"'
+    ' xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"'
+    ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/'
+    'relationships"'
+)
+
+
+def live_slide_xml(text: str, *, picture: bool) -> str:
+    """A slide of one line of `text`, painting the test image as a
+    picture when `picture`."""
+    shape = (
+        '<p:pic><p:nvPicPr><p:cNvPr id="2" name="test image"/>'
+        "<p:cNvPicPr/><p:nvPr/></p:nvPicPr>"
+        '<p:blipFill><a:blip r:embed="rId7"/></p:blipFill>'
+        "<p:spPr/></p:pic>"
+        if picture
+        else ""
+    )
+    return (
+        f"<p:sld {NAMESPACES}><p:cSld><p:spTree>"
+        f"<a:p><a:r><a:t>{text}</a:t></a:r></a:p>{shape}"
+        "</p:spTree></p:cSld></p:sld>"
+    )
 
 
 def build_live_deck(path, image_slide: int = 1, slides: int = 1):
-    """A synthetic deck of `slides` slides; the one test image sits on
-    `image_slide`. Identical arguments give identical bytes."""
+    """A synthetic deck of `slides` slides; the one test image is painted
+    on `image_slide`. Identical arguments give identical bytes."""
     presentation = (
         "<p:presentation"
         ' xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"'
@@ -80,8 +105,9 @@ def build_live_deck(path, image_slide: int = 1, slides: int = 1):
             write(
                 archive,
                 f"ppt/slides/slide{n}.xml",
-                slide_xml(
-                    [f"written by tests/integration, slide {n} of {slides}"]
+                live_slide_xml(
+                    f"written by tests/integration, slide {n} of {slides}",
+                    picture=n == image_slide,
                 ),
             )
             links = (
@@ -97,28 +123,33 @@ def build_live_deck(path, image_slide: int = 1, slides: int = 1):
 
 
 def register_deck(client, tmp_path, title, **layout):
-    """Register a deck as the write does: the deck with its slides, then
-    its derived media from their record. Returns (the deck's registration,
-    {media SHA-1 -> QID})."""
+    """Register a deck as the write does: its container inventory kept,
+    the deck with a fragment for each slide body the inventory holds, then
+    its derived media from its container projection. Returns (the deck's
+    registration, {media SHA-1 -> QID})."""
     tmp_path.mkdir(parents=True, exist_ok=True)
     deck_path = build_live_deck(tmp_path / f"{title}.pptx", **layout)
-    content = unpack_pptx(deck_path)
+    directory = tmp_path / "state" / title
+    prepared = prepare_container(
+        PreparationRequest(deck_path, existing_directory=directory)
+    )
+    keep_inventory(prepared.inventory, prepared.data, directory)
     registrar = Registrar(client)
     deck = registrar.register_artifact(
         deck_path,
         artifact_type="presentation",
         title=title,
         description="written by tests/integration; safe to delete",
-        pages=len(content.slides),
+        pages=sum(
+            part.kind == "slide_body" for part in prepared.inventory.parts
+        ),
     )
-    directory = tmp_path / "state" / title
-    record = record_derived_media(
-        content,
-        source_sha1=deck.content_sha1,
-        title=title,
-        directory=directory,
+    sources = project_sources(
+        prepared.inventory, directory, data=prepared.data
     )
-    return deck, registrar.register_derived_media(record, directory)
+    return deck, registrar.register_container_sources(
+        sources, directory, title=title
+    )
 
 
 def cited(claim, stated_in: str) -> set[str]:

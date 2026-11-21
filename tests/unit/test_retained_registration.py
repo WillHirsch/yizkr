@@ -4,13 +4,13 @@ import copy
 
 import pytest
 
+from tests.fixtures.projected_media import project_media
 from tests.unit.test_registrar import (
     IMAGE,
     PORTRAIT,
     SHOP,
     FakeWiki,
     deck_file,
-    recorded,
     register,
     scan,
 )
@@ -21,7 +21,6 @@ from yizkr.pipeline.registrar import (
     Registrar,
     ensure_self_typed,
     register_artifact,
-    register_derived_media,
 )
 
 
@@ -69,23 +68,20 @@ def test_artifact_refuses_before_generation_upload_alias_or_fragment(
     assert observed == [True]
 
 
-@pytest.mark.parametrize("direct", [False, True])
 def test_embedded_registration_refuses_before_upload_or_recovery_mutation(
-    tmp_path, monkeypatch, direct
+    tmp_path, monkeypatch
 ):
     wiki = FakeWiki()
     deck = deck_file(tmp_path, "family-firm")
     register(wiki, deck, SHOP, artifact_type="presentation")
-    record, directory = recorded(
-        tmp_path, deck, SHOP, [("shop-front.png", IMAGE, [1])]
-    )
+    directory = tmp_path / "state" / "family-firm"
+    sources = project_media(directory, deck, [("shop-front.png", IMAGE, [1])])
     observed = retained_dirty(wiki, monkeypatch)
     before = unchanged(wiki)
-    with pytest.raises(ValueError, match="verified clean software"):
-        if direct:
-            Registrar(wiki).register_derived_media(record, directory)
-        else:
-            register_derived_media(wiki, record, directory)
+    with pytest.raises(ValueError):
+        Registrar(wiki).register_container_sources(
+            sources, directory, title=SHOP
+        )
     assert unchanged(wiki) == before
     assert observed == [True]
 

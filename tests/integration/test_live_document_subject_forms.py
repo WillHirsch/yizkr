@@ -38,6 +38,7 @@ from pathlib import Path
 import pytest
 
 from tests.fixtures.identity import write_mapped
+from tests.fixtures.projected_media import project_media
 from tests.integration.conftest import (
     fictional_png,
     fixture_mark,
@@ -49,11 +50,6 @@ from yizkr.backup import dump_rdf, export_nonprivileged
 from yizkr.claims import ArtifactRef, ClaimBatch, validate_against_manifest
 from yizkr.pipeline import gedcom, registrar, writer
 from yizkr.pipeline.gedcom import adapt_gedcom
-from yizkr.pipeline.presentation import (
-    DERIVED_MEDIA_DIR,
-    DerivedMediaRecord,
-    DerivedMedium,
-)
 from yizkr.pipeline.registrar import Registrar
 from yizkr.pipeline.review import claim_id
 from yizkr.pipeline.writer import BatchWriter
@@ -157,26 +153,19 @@ def dateline_batch(image: ArtifactRef) -> ClaimBatch:
 
 def place(client, tmp_path_factory, title: str):
     """A booklet titled `title` and the image it places on its page 6,
-    registered as the write registers a PDF read page by page: (the
-    booklet, the image's key, the image's item)."""
+    registered from the booklet's container projection as the write
+    registers a PDF read page by page: (the booklet, the image's key, the
+    image's item)."""
     booklet = register_fictional(client, title, "artifact")
     data = fictional_png(f"yizkr live test: {title}, page 6, image 1")
     image = ArtifactRef.from_bytes(data)
     directory = tmp_path_factory.mktemp("derived")
-    (directory / DERIVED_MEDIA_DIR).mkdir()
-    file = f"{DERIVED_MEDIA_DIR}/{image.sha1}.png"
-    (directory / file).write_bytes(data)
-    record = DerivedMediaRecord(
-        source_sha1=booklet.ref.sha1,
-        container="pdf",
-        title=title,
-        media={
-            image.sha1: DerivedMedium(
-                names=["page 6, image 1"], slides=[6], file=file
-            )
-        },
+    sources = project_media(
+        directory, booklet.ref, [("image.png", data, [6])], container="pdf"
     )
-    derived = Registrar(client).register_derived_media(record, directory)
+    derived = Registrar(client).register_container_sources(
+        sources, directory, title=title
+    )
     return booklet, image, derived[image.sha1]
 
 

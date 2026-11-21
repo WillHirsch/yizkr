@@ -31,6 +31,7 @@ from argparse import Namespace
 import pytest
 
 from tests.fixtures.identity import corpus, mapped, write_mapped
+from tests.fixtures.projected_media import project_media
 
 # the module, not its TestStepRegister, so pytest collects that class once
 from tests.unit import test_registrar
@@ -49,7 +50,6 @@ from tests.unit.test_registrar import (
     assert_labels_unique,
     deck_file,
     label_of,
-    recorded,
     register_deck,
     scan,
     sha1,
@@ -775,7 +775,7 @@ class TestArtifactFlags:
         ]
 
 
-# -- register_derived_media ---------------------------------------------------
+# -- derived media, from the common source projection -------------------------
 
 
 class TestDerivedMediaFlags:
@@ -791,11 +791,12 @@ class TestDerivedMediaFlags:
         deck = deck_file(tmp_path, "a")
         registrar = Registrar(wiki)
         container = registrar.register_artifact(deck, "presentation", "Deck A")
-        record, directory = recorded(
-            tmp_path, deck, "Deck A", [("image1.png", IMAGE, [1])]
-        )
+        directory = tmp_path / "state" / "a"
+        sources = project_media(directory, deck, [("image1.png", IMAGE, [1])])
 
-        derived = registrar.register_derived_media(record, directory)
+        derived = registrar.register_container_sources(
+            sources, directory, title="Deck A"
+        )
 
         medium = derived[sha1(IMAGE)]
         assert medium != old
@@ -825,10 +826,14 @@ class TestDerivedMediaFlags:
         registrar = Registrar(wiki)
         deck = deck_file(tmp_path, "b")
         registrar.register_artifact(deck, "presentation", "Deck B")
-        record, directory = recorded(
-            tmp_path, deck, "Deck B", [("image1.png", IMAGE, [2])]
+        directory = tmp_path / "state" / "b"
+        sources = project_media(directory, deck, [("image1.png", IMAGE, [2])])
+        assert (
+            registrar.register_container_sources(
+                sources, directory, title="Deck B"
+            )
+            == derived
         )
-        assert registrar.register_derived_media(record, directory) == derived
         assert flag_tuples(registrar.flags) == [
             (SHARED_FILE, derived[sha1(IMAGE)], sha1(IMAGE), (old,))
         ]
@@ -848,10 +853,14 @@ class TestDerivedMediaFlags:
         registrar = Registrar(wiki)
         deck = deck_file(tmp_path, "b")
         registrar.register_artifact(deck, "presentation", "Deck B")
-        record, directory = recorded(
-            tmp_path, deck, "Deck B", [("image1.png", IMAGE, [2])]
+        directory = tmp_path / "state" / "b"
+        sources = project_media(directory, deck, [("image1.png", IMAGE, [2])])
+        assert (
+            registrar.register_container_sources(
+                sources, directory, title="Deck B"
+            )
+            == derived
         )
-        assert registrar.register_derived_media(record, directory) == derived
         assert flag_tuples(registrar.flags) == [
             (UNHASHED_TITLE, derived[sha1(IMAGE)], sha1(IMAGE), (old,))
         ]
@@ -867,13 +876,15 @@ class TestDerivedMediaFlags:
         deck = deck_file(tmp_path, "a")
         registrar = Registrar(wiki)
         registrar.register_artifact(deck, "presentation", "Deck A")
-        record, directory = recorded(
-            tmp_path,
+        directory = tmp_path / "state" / "a"
+        sources = project_media(
+            directory,
             deck,
-            "Deck A",
             [("image1.png", IMAGE, [1]), ("shop.png", IMAGE, [2])],
         )
-        derived = registrar.register_derived_media(record, directory)
+        derived = registrar.register_container_sources(
+            sources, directory, title="Deck A"
+        )
         assert label_of(wiki, derived[sha1(IMAGE)]) == "Deck A — image1.png"
         assert registrar.flags == []
 
@@ -885,19 +896,22 @@ class TestDerivedMediaFlags:
         deck = deck_file(tmp_path, "a")
         registrar = Registrar(wiki)
         registrar.register_artifact(deck, "presentation", "Deck A")
-        record, directory = recorded(
-            tmp_path, deck, "Deck A", [("image1.png", IMAGE, [1])]
+        directory = tmp_path / "state" / "a"
+        sources = project_media(directory, deck, [("image1.png", IMAGE, [1])])
+        derived = registrar.register_container_sources(
+            sources, directory, title="Deck A"
         )
-        derived = registrar.register_derived_media(record, directory)
         assert flag_tuples(registrar.flags) == [
             (SHARED_FILE, derived[sha1(IMAGE)], sha1(IMAGE), (old,))
         ]
-        # the same record again: found, and one registrar gathers the
+        # the same projection again: found, and one registrar gathers the
         # flag once; a fresh one, as the next run's, gathers it again
-        registrar.register_derived_media(record, directory)
+        registrar.register_container_sources(
+            sources, directory, title="Deck A"
+        )
         assert len(registrar.flags) == 1
         fresh = Registrar(wiki)
-        fresh.register_derived_media(record, directory)
+        fresh.register_container_sources(sources, directory, title="Deck A")
         assert fresh.flags == registrar.flags
 
     def test_a_mediums_title_alone(self, tmp_path):
@@ -908,45 +922,12 @@ class TestDerivedMediaFlags:
         deck = deck_file(tmp_path, "a")
         registrar = Registrar(wiki)
         registrar.register_artifact(deck, "presentation", "Deck A")
-        record, directory = recorded(
-            tmp_path, deck, "Deck A", [("image1.png", IMAGE, [1])]
+        directory = tmp_path / "state" / "a"
+        sources = project_media(directory, deck, [("image1.png", IMAGE, [1])])
+        derived = registrar.register_container_sources(
+            sources, directory, title="Deck A"
         )
-        derived = registrar.register_derived_media(record, directory)
         assert flag_tuples(registrar.flags) == [
-            (UNHASHED_TITLE, derived[sha1(IMAGE)], sha1(IMAGE), (old,))
-        ]
-
-    def test_the_module_wrapper_registers_as_before(self, tmp_path):
-        wiki = FakeWiki()
-        deck = deck_file(tmp_path, "a")
-        registrar_module.register_artifact(
-            wiki, deck, "presentation", "Deck A"
-        )
-        record, directory = recorded(
-            tmp_path, deck, "Deck A", [("image1.png", IMAGE, [1])]
-        )
-        derived = registrar_module.register_derived_media(
-            wiki, record, directory
-        )
-        assert list(derived) == [sha1(IMAGE)]
-
-    def test_the_module_wrapper_adds_the_flags_it_is_given(self, tmp_path):
-        wiki = FakeWiki()
-        old = unhashed(
-            wiki, "Deck A — image1.png", "File:Shop-retouched.png", OTHER_IMAGE
-        )
-        deck = deck_file(tmp_path, "a")
-        registrar_module.register_artifact(
-            wiki, deck, "presentation", "Deck A"
-        )
-        record, directory = recorded(
-            tmp_path, deck, "Deck A", [("image1.png", IMAGE, [1])]
-        )
-        flags: list[RegistrationFlag] = []
-        derived = registrar_module.register_derived_media(
-            wiki, record, directory, flags=flags
-        )
-        assert flag_tuples(flags) == [
             (UNHASHED_TITLE, derived[sha1(IMAGE)], sha1(IMAGE), (old,))
         ]
 
@@ -999,16 +980,18 @@ class TestScratchInstance:
             results.append(
                 registrar.register_artifact(deck, "presentation", "Deck")
             )
-            record, directory = recorded(
-                tmp_path,
+            directory = tmp_path / "state" / name
+            sources = project_media(
+                directory,
                 deck,
-                "Deck",
                 [
                     ("image1.png", IMAGE, [1]),
                     (f"{name}.png", OTHER_IMAGE, [2]),
                 ],
             )
-            registrar.register_derived_media(record, directory)
+            registrar.register_container_sources(
+                sources, directory, title="Deck"
+            )
         registered(IMAGE, "image1", "image1.png")
         registered(IMAGE, "Deck — image1.png", "shop.png")
         registered(OTHER_IMAGE, "Deck — image1.png", "retouched.png")
@@ -1069,11 +1052,12 @@ class TestScratchInstance:
         registrar = Registrar(wiki)
         deck = deck_file(tmp_path, "a")
         container = registrar.register_artifact(deck, "presentation", "Deck A")
-        record, directory = recorded(
-            tmp_path, deck, "Deck A", [("image1.png", IMAGE, [1])]
-        )
+        directory = tmp_path / "state" / "a"
+        sources = project_media(directory, deck, [("image1.png", IMAGE, [1])])
 
-        derived = registrar.register_derived_media(record, directory)
+        derived = registrar.register_container_sources(
+            sources, directory, title="Deck A"
+        )
 
         assert container.flags == []
         assert flag_tuples(registrar.flags) == [
@@ -1232,14 +1216,15 @@ class TestFlagsReachTheRunsAlerts:
         old = unhashed(wiki, "Deck", "File:A.pptx", b"PK synthetic deck a")
         deck = deck_file(tmp_path, "a")
         doc = SimpleDoc(deck, "presentation")
-        record, _ = recorded(
-            tmp_path, deck, "Deck", [("image1.png", IMAGE, [1])]
-        )
+        directory = tmp_path / "state" / "a"
+        sources = project_media(directory, deck, [("image1.png", IMAGE, [1])])
 
         def register(registrar, document):
             registrar.register_artifact(deck, "presentation", "Deck")
             wiki.refuse = lambda data: True
-            registrar.register_derived_media(record, tmp_path / "state" / "a")
+            registrar.register_container_sources(
+                sources, directory, title="Deck"
+            )
 
         orchestrator._register_document = register
         from yizkr.core.write_recovery import AmbiguousCreation
@@ -1438,10 +1423,9 @@ def test_the_instance_read_is_kept_current_with_the_files(tmp_path):
     registrar.register_artifact(scan(tmp_path, PORTRAIT), "photograph", TITLE)
     deck = deck_file(tmp_path, "a")
     registrar.register_artifact(deck, "presentation", "Deck A")
-    record, directory = recorded(
-        tmp_path, deck, "Deck A", [("image1.png", IMAGE, [1])]
-    )
-    registrar.register_derived_media(record, directory)
+    directory = tmp_path / "state" / "a"
+    sources = project_media(directory, deck, [("image1.png", IMAGE, [1])])
+    registrar.register_container_sources(sources, directory, title="Deck A")
 
     fresh = _Instance.read(wiki, *wiki.vocabulary())
     assert registrar._read().files == fresh.files
