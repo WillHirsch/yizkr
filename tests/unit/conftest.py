@@ -95,8 +95,8 @@ changing what they check:
   the two, as one edited while the suite runs does. In every unit test,
   and every fixture of theirs, the package's checkout keeps the code
   version first observed in the session, fresh or not, and a write
-  digests the model manifest as the session first read it, from a copy
-  made then (the package-scoped `_one_checkout` fixture), as on CI,
+  digests the model manifest as it was when the unit tests started, from
+  a copy the package-scoped `_one_checkout` fixture makes then, as on CI,
   where nothing changes the checkout during a run. Code that looks the
   manifest's name up when it runs, as a write does, reads the copy;
   code that bound the name on import, such as load_manifest's default,
