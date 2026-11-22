@@ -2,7 +2,7 @@
 
 A personal knowledge system for digitised historical family records: an extensible knowledge graph of people, places, times, and artifacts, where historical assertions are traceable to their sources and reliable locations within them – including when sources contradict each other.
 
-**Status:** the supported development workflow is whole-corpus scratch execution against a designated disposable instance, with reports and diffs for inspection. Retained ingestion is an enduring requirement with implementation work outstanding; the owner authorizes the keeper transition in #159. The [current contract](docs/CONTRACT.md) defines policy and limitations. The plan lives in GitHub issues and the Project.
+**Status:** the supported development workflow is whole-corpus scratch execution against a designated disposable instance, with reports and diffs for inspection. Retained ingestion is an enduring requirement with implementation work outstanding; only the owner's authorization in #159 designates an instance retained. The [current contract](docs/CONTRACT.md) defines policy and limitations. The plan lives in GitHub issues and the Project.
 
 Start here:
 

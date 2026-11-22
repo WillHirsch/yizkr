@@ -2,7 +2,7 @@
 
 This guide expands the [whole-corpus overview](ARCHITECTURE.md#whole-corpus-scratch-runs) into the inputs, processing and outputs of each implemented stage. Use the [scratch-run runbook](runbooks/scratch-run.md) for commands and operational procedures.
 
-This is the implemented disposable rebuild mode. The [current contract](CONTRACT.md) also requires retained ingestion and permits explicit graph-snapshot inputs for reconciliation; shared document operations and their freshness planning are implemented, while durable identity/review state remains implementation work. Current scratch writes refuse retained instances and never confer human approval.
+This is the implemented disposable rebuild mode. The [current contract](CONTRACT.md) also requires retained ingestion and permits explicit graph-snapshot inputs for reconciliation; shared document operations and their freshness planning are implemented, and so is [durable identity review](IDENTITY_REVIEW.md) for bounded additions. Current scratch writes refuse retained instances and never confer human approval. The write stage uses the map-bound writer today; the target is that it uses the unreviewed mode of the assignment writer, the writer of retained data, so that scratch runs exercise the retained write path ([#862](https://github.com/WillHirsch/yizkr/issues/862), [#883](https://github.com/WillHirsch/yizkr/issues/883)).
 
 In the paths below, `R` is a run directory such as `var/scratch/<run-id>`, and `D` is one document's directory within it. Ordinary documents use `R/<document-directory>/`; independently read embedded images use `R/excerpts/<media-sha1>/`. These are path templates, not example corpus contents. For real corpus runs, all these products are local-only runtime data.
 
@@ -263,11 +263,11 @@ flowchart TD
     validate --> record[("adjudication.json<br/>verdicts, calls, raw answers and counts")]
 ```
 
-In development scratch runs, validated `same` and `different` verdicts can join or keep apart the candidate's components, subject to the deterministic contradiction checks. An uncertain or missing verdict leaves the candidate at its deterministic result. People and other initial kinds are settled before unions, and unions before events, so later questions use the earlier identity decisions. A verdict does not replace any source-attributed claim value. Keeper mode records verdicts for review without applying these model-driven merges.
+In development scratch runs, validated `same` and `different` verdicts can join or keep apart the candidate's components, subject to the deterministic contradiction checks. An uncertain or missing verdict leaves the candidate at its deterministic result. People and other initial kinds are settled before unions, and unions before events, so later questions use the earlier identity decisions. A verdict does not replace any source-attributed claim value. The code's other branch, for a run whose manifest records another project stage than `development`, records verdicts for review without applying these model-driven merges; no command starts such a run today. The target is that whether verdicts merge follows the increment's write policy, not a project stage ([#903](https://github.com/WillHirsch/yizkr/issues/903), [#906](https://github.com/WillHirsch/yizkr/issues/906)).
 
 The identity map contains `mentions` keyed by fingerprint with cluster membership and decision method; `clusters` with their members; `review` candidates and supporting evidence; aggregate `summary`; and reuse `inputs`/configuration and a decision `hash`. Fingerprints incorporate source identity, kind, label and mention span rather than relying on a document's temporary local IDs. Methods can include `confident_component` and `adjudicated`, as well as confident, ambiguous, conflicting and singleton outcomes.
 
-The stage reuses its map and adjudication record only while their inputs and model configuration stand and no call was refused. Recomputed calls can still reuse cached model responses. The records contain source words and remain local. The map's `review` field is inspection data, not a human approval gate in a development scratch run.
+The stage reuses its map and adjudication record only while their inputs and model configuration stand and no call was refused. Recomputed calls can still reuse cached model responses. The records contain source words and remain local. The map's `review` field is inspection data, not a human approval gate in a development scratch run. For retained data the map supplies proposals to durable identity review and is not the authority at write time (target, [#835](https://github.com/WillHirsch/yizkr/issues/835)).
 
 Implementation: [deterministic clustering](../src/yizkr/pipeline/clustering.py), [adjudication](../src/yizkr/pipeline/adjudication.py), [fingerprints](../src/yizkr/pipeline/fingerprints.py) and the [clustering detail](../src/yizkr/pipeline/README.md#corpus-clustering-clusteringpy-the-scratch-runs-identity-map).
 
@@ -301,6 +301,8 @@ Implementation: [reset and registration stages](../src/yizkr/pipeline/scratchwri
 <a id="writing-accepted-claims-become-graph-statements"></a>
 
 ## Writing: validated scratch claims become graph statements
+
+The write stage uses the map-bound writer today; the target is that it uses the unreviewed mode of the assignment writer, the writer of retained data, so that scratch runs exercise the retained write path ([#862](https://github.com/WillHirsch/yizkr/issues/862), [#883](https://github.com/WillHirsch/yizkr/issues/883)). The diagram and the paragraphs below describe the map-bound write.
 
 ```mermaid
 flowchart TD

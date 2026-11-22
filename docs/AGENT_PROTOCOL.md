@@ -63,7 +63,7 @@ The lane checks real bootstrap, registration, contradictory sourced writes, prod
 
 Additional centralized live checks may supply evidence on an explicitly disposable local target. A persistence-boundary change waits when its necessary evidence cannot be obtained; unrelated work need not wait. Test runs, mutants and development resets must not mutate retained data. The existing configured-stack live fixtures can skip when configuration or the stack is missing, so verify which checks actually ran; their zero exit status does not satisfy a required check by itself.
 
-**Corpus evidence.** Require a whole-corpus run when risk depends on cross-document interactions or remains materially uncertain after bounded evidence, such as broad identity/source-boundary changes, an unexplained corpus regression or keeper readiness. A changed pre-write file, prompt or model alone does not impose this requirement. Small semantic acceptance checks and bounded observed model outputs are permitted alongside corpus review.
+**Corpus evidence.** Require a whole-corpus run when risk depends on cross-document interactions or remains materially uncertain after bounded evidence, such as broad identity/source-boundary changes, an unexplained corpus regression or the readiness of an instance to be designated retained. A changed pre-write file, prompt or model alone does not impose this requirement. Small semantic acceptance checks and bounded observed model outputs are permitted alongside corpus review.
 
 When whole-corpus evidence is needed:
 
