@@ -57,9 +57,9 @@ class Case(NamedTuple):
 # comes first, and each runs its cases in the order listed. The pytest
 # selectors, result checks, evidence, cleanup and the `list` command all
 # derive from this tuple: a new case is one entry and a new group is a new
-# name. Keep each group's recorded checks within the per-group allowance in
-# docs/TESTING.md; a case that resets or restarts its stack takes a group of
-# its own.
+# name. To keep the lane within its time budget in docs/TESTING.md, a new
+# case joins the group with the most room, and a case that resets or
+# restarts its stack takes a group of its own.
 REQUIRED_CASES = (
     Case(
         "cohort",
@@ -146,7 +146,8 @@ REQUIRED_CASES = (
 # Group names become Compose project suffixes and evidence folder names.
 GROUP_NAME = re.compile(r"[a-z][a-z0-9-]*")
 # At most this many group stacks exist at once unless --stacks says
-# otherwise; CI's runner has four CPUs and 16 GB of memory.
+# otherwise. Of the limits measured on CI's four-CPU runner, four gave the
+# shortest lane, although each case runs slower than with two at once.
 DEFAULT_STACKS = 4
 
 
