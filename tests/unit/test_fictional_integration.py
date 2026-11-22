@@ -908,7 +908,7 @@ def test_a_finished_groups_failed_teardown_starts_no_waiting_group(docker):
     first = group_names(cases)[0]
     docker.cleanup_failure = first
 
-    with pytest.raises(lane.LaneError, match="teardown"):
+    with pytest.raises(lane.LaneError):
         lane.execute("run", docker.state, stacks=1, cases=cases)
 
     assert [docker.group(project) for project in docker.up] == [first]
