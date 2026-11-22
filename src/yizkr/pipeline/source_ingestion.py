@@ -1,9 +1,10 @@
-"""A resumable, explicitly reviewed text-source addition to an existing graph.
+"""A resumable, explicitly reviewed one-source addition to an existing graph.
 
-Document products live in the workspace, consent in ReviewStore, and accepted
-identities and graph effects in CreationRegistry. Each mutating phase can be
-retried independently; a local checkpoint never substitutes for those shared
-authorities. Callers own clients, cancellation scopes and reviewer interaction.
+Document products live in the workspace's text checkpoint or in an explicit
+saved document directory, consent in ReviewStore, and accepted identities and
+graph effects in CreationRegistry. Each mutating phase can be retried
+independently; local products never substitute for those shared authorities.
+Callers own clients, cancellation scopes and reviewer interaction.
 """
 
 from __future__ import annotations
@@ -11,16 +12,17 @@ from __future__ import annotations
 import fcntl
 import json
 import os
-from collections.abc import Collection, Iterator
+from collections.abc import Collection, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from yizkr.core.corpus import read_exclusions
+from yizkr.claims import ArtifactRef, ClaimBatch
+from yizkr.core.corpus import ExclusionList, read_exclusions
 from yizkr.core.instance import require_retained_code
 from yizkr.core.mutation_guard import protected_mutation
 from yizkr.core.wiki import WikiClient
@@ -41,7 +43,8 @@ from yizkr.pipeline.cohort_additions import (
     apply_cohort_additions,
     prepare_cohort_additions,
 )
-from yizkr.pipeline.critique import sheet_notes
+from yizkr.pipeline.critique import Finding, Invalid, sheet_notes
+from yizkr.pipeline.document_products import load_document_products
 from yizkr.pipeline.identity_review import ReviewRefused, ReviewStore
 from yizkr.pipeline.registrar import Registrar, RegistrationResult
 from yizkr.pipeline.review_stages import (
@@ -53,13 +56,65 @@ from yizkr.pipeline.review_stages import (
 from yizkr.pipeline.source_bindings import unique_source_qids
 from yizkr.pipeline.stages import atomic_write_text, content_hash
 from yizkr.pipeline.text_products import (
-    TextProducts,
     TextSettings,
     load_text_products,
     prepare_text_products,
 )
 from yizkr.pipeline.text_stages import validate_paths
+from yizkr.pipeline.transcribe import Transcription
 from yizkr.pipeline.writer import artifact_kinds
+
+
+class CritiqueWarnings(Protocol):
+    """The critic's advisory output, shown beside the claims it concerns."""
+
+    @property
+    def findings(self) -> Sequence[Finding | Invalid]: ...
+
+    @property
+    def attention(self) -> Sequence[str]: ...
+
+
+class ReviewedProducts(Protocol):
+    """What registration, identity and claim review use of a source's
+    complete products.
+
+    `digest` binds the other members: registration pins it, and a later
+    phase refuses products whose digest differs. Extraction attention,
+    critique attention and critique findings are the warnings shown with
+    each claim for approval.
+    """
+
+    @property
+    def artifact(self) -> ArtifactRef: ...
+
+    @property
+    def source_sha256(self) -> str: ...
+
+    @property
+    def digest(self) -> str: ...
+
+    @property
+    def reading(self) -> Transcription: ...
+
+    @property
+    def batch(self) -> ClaimBatch: ...
+
+    @property
+    def extraction_attention(self) -> Sequence[str]: ...
+
+    @property
+    def critique(self) -> CritiqueWarnings: ...
+
+
+class ProductsLoader(Protocol):
+    """Admit complete products from `directory` after rechecking the source's
+    current bytes and exclusions, refusing with a ValueError otherwise.
+    `load_text_products` and `load_document_products` implement this."""
+
+    def __call__(
+        self, source: Path, directory: Path, *, exclusions: ExclusionList
+    ) -> ReviewedProducts: ...
 
 
 class _Record(BaseModel):
@@ -102,13 +157,20 @@ class _Registration(_Record):
     complete: bool = False
 
 
-class TextIngestion:
-    """Add one immutable plain-text source, stopping at each review boundary.
+class SourceIngestion:
+    """Add one immutable source, stopping at each review boundary.
 
-    Reopen with the same workspace, source bytes, review store and deployment.
-    Completed products do not require model clients or a response cache.
-    Different source bytes/settings need a new workspace. This interface never
-    marks an instance retained, resets it, or changes established assignments.
+    Products come from one of two places. Without `document_dir`, the
+    workspace keeps a text source's checkpoint, which `prepare` makes with
+    the shared text stages. With `document_dir`, products are one document's
+    complete saved views, such as those a run made for a plain-text source
+    or a standalone image; this workflow runs no stage for them.
+
+    Reopen with the same workspace, products, source bytes, review store and
+    deployment. Completed products do not require model clients or a
+    response cache. Different source bytes/settings need a new workspace.
+    This interface never marks an instance retained, resets it, or changes
+    established assignments.
     """
 
     def __init__(
@@ -119,16 +181,31 @@ class TextIngestion:
         client: WikiClient,
         review_store: ReviewStore,
         exclusions_file: Path,
+        document_dir: Path | None = None,
     ) -> None:
         self.source = Path(source)
         self.directory = Path(directory)
         self.client = client
         self.store = review_store
         self.exclusions_file = Path(exclusions_file)
+        self.document_dir = (
+            None if document_dir is None else Path(document_dir)
+        )
         validate_paths(
-            inputs=(self.source, self.exclusions_file, review_store.path),
+            inputs=(
+                self.source,
+                self.exclusions_file,
+                review_store.path,
+                self.document_dir,
+            ),
             workspaces=(self.directory,),
         )
+        self._load: ProductsLoader = (
+            load_text_products
+            if self.document_dir is None
+            else load_document_products
+        )
+        self._products_dir = self.document_dir or self.directory / "products"
         self.registry = CreationRegistry(client)
 
     @contextmanager
@@ -143,9 +220,7 @@ class TextIngestion:
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as exc:
-                raise ReviewRefused(
-                    "text ingestion workspace is in use"
-                ) from exc
+                raise ReviewRefused("ingestion workspace is in use") from exc
             check_cancelled()
             yield
         finally:
@@ -157,22 +232,37 @@ class TextIngestion:
         settings: TextSettings | None = None,
         extractor_client=None,
         critic_client=None,
-    ) -> TextProducts:
-        """Read, extract and critique without accessing the graph."""
-        with self._workspace():
-            return prepare_text_products(
-                self.source,
-                self.directory / "products",
-                exclusions=read_exclusions(self.exclusions_file),
-                settings=settings,
-                extractor_client=extractor_client,
-                critic_client=critic_client,
-            )
+    ) -> ReviewedProducts:
+        """Make or admit complete products without accessing the graph.
 
-    def _products(self) -> TextProducts:
-        return load_text_products(
+        The text checkpoint reads, extracts and critiques what is not yet
+        complete. Saved document products are admitted as saved: a setting
+        or client for a stage refuses, since this workflow runs none.
+        """
+        with self._workspace():
+            if self.document_dir is None:
+                return prepare_text_products(
+                    self.source,
+                    self._products_dir,
+                    exclusions=read_exclusions(self.exclusions_file),
+                    settings=settings,
+                    extractor_client=extractor_client,
+                    critic_client=critic_client,
+                )
+            if any(
+                value is not None
+                for value in (settings, extractor_client, critic_client)
+            ):
+                raise ReviewRefused(
+                    "saved document products run no stage here; "
+                    "a run makes them"
+                )
+            return self._products()
+
+    def _products(self) -> ReviewedProducts:
+        return self._load(
             self.source,
-            self.directory / "products",
+            self._products_dir,
             exclusions=read_exclusions(self.exclusions_file),
         )
 
@@ -180,7 +270,7 @@ class TextIngestion:
         generation = self.registry.generation
         if generation is None:
             raise ReviewRefused(
-                "text additions require an established deployment generation"
+                "source additions require an established deployment generation"
             )
         return IngestionTarget(
             wikibase_url=self.client.config.wikibase_url,
@@ -189,7 +279,7 @@ class TextIngestion:
 
     def _pin_target(self, target: IngestionTarget) -> None:
         if self._target() != target:
-            raise ReviewRefused("text ingestion destination changed")
+            raise ReviewRefused("ingestion destination changed")
         path = self.directory / "target.json"
         if path.exists():
             if IngestionTarget.model_validate_json(path.read_text()) != target:
@@ -214,6 +304,8 @@ class TextIngestion:
             )
 
     def _operation(self, kind: str, material) -> str:
+        # A stable guard operation ID, persisted while protection is held;
+        # its prefix names the operation, not the source's kind.
         return f"text-{kind}:{content_hash(material)}"
 
     def register_source(
@@ -283,7 +375,7 @@ class TextIngestion:
                 )
                 return result
 
-    def _admit_registration(self, products: TextProducts) -> None:
+    def _admit_registration(self, products: ReviewedProducts) -> None:
         """Refuse legacy or conflicting ownership before registrar effects.
 
         An exact interrupted creation may have a verified binding before its
@@ -314,7 +406,7 @@ class TextIngestion:
                 "existing source ownership needs verified migration"
             )
 
-    def _verify_source(self, products: TextProducts) -> None:
+    def _verify_source(self, products: ReviewedProducts) -> None:
         binding = self.registry.lookup(
             {"kind": "source", "sha1": products.artifact.sha1}
         )
@@ -328,7 +420,7 @@ class TextIngestion:
         if sources[products.artifact.sha1] != binding.qid:
             raise ReviewRefused("source ownership differs from registration")
 
-    def _registered(self) -> TextProducts:
+    def _registered(self) -> ReviewedProducts:
         products = self._products()
         path = self.directory / "registration.json"
         if not path.is_file():
@@ -344,11 +436,13 @@ class TextIngestion:
         self._verify_source(products)
         return products
 
-    def _admit_products(self, expected: TextProducts) -> None:
+    def _admit_products(self, expected: ReviewedProducts) -> None:
         if self._registered().digest != expected.digest:
             raise ReviewRefused("source products changed during application")
 
-    def _request(self, products, choices=()) -> ReviewRequest:
+    def _request(
+        self, products: ReviewedProducts, choices=()
+    ) -> ReviewRequest:
         request = ReviewRequest(
             sources=(
                 ReviewSource(
@@ -424,7 +518,9 @@ class TextIngestion:
                 admit=admit,
             )
 
-    def _claims(self, products, indices) -> PreparedClaimReview:
+    def _claims(
+        self, products: ReviewedProducts, indices
+    ) -> PreparedClaimReview:
         chosen = tuple(indices)
         notes = sheet_notes(
             products.critique.findings, products.batch, products.batch

@@ -59,7 +59,7 @@ No `derived-media.json` is written by current preparation. Existing files remain
 
 ## Registration and held media (ADR-0010)
 
-Source preparation needs no Wikibase item. Registration establishes graph correspondence before historical claims are written. The scratch registration stage uses the disposable run's authority; the [retained text-source workflow](TEXT_INGESTION.md) requires explicit registration confirmation. Registration alone approves no historical claim, and that text workflow does not establish general retained PDF/PPTX or GEDCOM ingestion.
+Source preparation needs no Wikibase item. Registration establishes graph correspondence before historical claims are written. The scratch registration stage uses the disposable run's authority; the [retained one-source workflow](SOURCE_INGESTION.md) requires explicit registration confirmation. Registration alone approves no historical claim, and that workflow, which admits text and standalone image sources, does not establish retained PDF/PPTX or GEDCOM ingestion.
 
 ### Source lookup and interrupted creation
 

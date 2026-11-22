@@ -1,12 +1,15 @@
 """Document admission and review remain distinct through local resume.
 
-Stages and review/registry records are real. The unit wiki/guard isolates the
-workflow's admission checks; the required retained integration case exercises
-registration and guarded HTTP writes against actual services.
+Stages and review/registry records are real. Each case runs with the text
+checkpoint's products and with a document's saved views, which the production
+scheduler makes from the same fixed fictional answers. The unit wiki/guard
+isolates the workflow's admission checks; the required integration cases
+exercise registration and guarded HTTP writes against actual services.
 """
 
 import copy
 import fcntl
+import hashlib
 import json
 from contextlib import contextmanager
 from dataclasses import replace
@@ -15,16 +18,27 @@ from types import SimpleNamespace
 import pytest
 from wikibaseintegrator.datatypes import String
 
+from tests.fixtures.saved_products import (
+    GRAVESTONE_FILE,
+    gravestone_answers,
+    gravestone_claim,
+    gravestone_image,
+    saved_document,
+)
 from tests.fixtures.semantic_acceptance import birth_batch, source_case
 from tests.unit.test_identity_provenance import Wiki
 from tests.unit.test_text_stages import ScriptedClient
-from yizkr.core.corpus import is_excluded
+from yizkr.core.corpus import ExclusionList, is_excluded
 from yizkr.core.write_recovery import CreationRegistry
-from yizkr.pipeline import text_ingestion
+from yizkr.pipeline import source_ingestion
 from yizkr.pipeline.assignment_stages import accept_reviewed_assignments
 from yizkr.pipeline.claim_review import (
     ClaimDecisionInput,
     record_claim_decisions,
+)
+from yizkr.pipeline.document_products import (
+    ProductsRefused,
+    load_document_products,
 )
 from yizkr.pipeline.identity_review import ReviewRefused, ReviewStore
 from yizkr.pipeline.registrar import RegistrationResult
@@ -33,24 +47,71 @@ from yizkr.pipeline.review_stages import (
     ReviewProposal,
     prepare_review,
 )
-from yizkr.pipeline.text_ingestion import TextIngestion
+from yizkr.pipeline.source_ingestion import SourceIngestion
 from yizkr.pipeline.text_products import TextProductsError, TextSettings
 
 WHEN = "2026-01-01T12:00:00Z"
+# Either implementation's refusal of its saved products or current inputs
+PRODUCTS_REFUSED = (TextProductsError, ProductsRefused)
+FINDING = {
+    "entity": "missing-fictional-mention",
+    "axis": "subject",
+    "category": "wrong_kind",
+    "issue": "Check the fictional name.",
+}
 
 
-@pytest.fixture
-def lifecycle(tmp_path, monkeypatch):
+def text_answers():
+    batch = birth_batch("birth-extract-1938")
+    claim = batch.claims[0].model_copy(deep=True)
+    claim.source.page_number = None
+    manifest = json.dumps(
+        {
+            "entities": [
+                {
+                    "id": "gustav",
+                    "label": "Gustav",
+                    "kind": "human",
+                    "mention_lines": [1],
+                }
+            ],
+            "preparation": None,
+        }
+    )
+    return {
+        "extract": [manifest, claim.model_dump_json() + '\n{"done":true}'],
+        "critique": [json.dumps(FINDING) + '\n{"done":true}'],
+    }
+
+
+def source_and_answers(kind):
+    if kind == "text":
+        name = "birth-extract-1938.txt"
+        data = source_case("birth-extract-1938").source_bytes
+        return name, data, text_answers(), "Gustav", "gustav"
+    data = gravestone_image()
+    sha1 = hashlib.sha1(data).hexdigest()
+    answers = gravestone_answers(
+        sha1,
+        claims=(gravestone_claim(sha1), gravestone_claim(sha1, "LÖBIG")),
+    )
+    return GRAVESTONE_FILE, data, answers, "Eugen", "eugen"
+
+
+@contextmanager
+def lifecycle_case(tmp_path, monkeypatch, products, kind="text"):
+    """A workflow over one fictional source's complete products: the text
+    checkpoint, or the saved views of a scheduler run (`document`)."""
     monkeypatch.setattr("yizkr.pipeline.run_provenance.now", lambda: WHEN)
-    source = tmp_path / "birth-extract-1938.txt"
-    source.write_bytes(source_case("birth-extract-1938").source_bytes)
+    name, data, answers, label, mention = source_and_answers(kind)
+    tmp_path.mkdir(parents=True, exist_ok=True)
     policy = tmp_path / "exclusions.txt"
     policy.write_text("")
     wiki = Wiki(detached=True)
     wiki.config.wikibase_url = wiki.config.concept_uri
     registry = CreationRegistry(wiki)
     person = wiki.wbi.item.new()
-    person.labels.set("en", "Gustav")
+    person.labels.set("en", label)
     target = registry.create(
         {"kind": "fictional-text-target"}, person, summary="fictional target"
     )
@@ -68,75 +129,84 @@ def lifecycle(tmp_path, monkeypatch):
     class Registrar:
         def __init__(self, client, *, exclusions):
             assert guarded
+            self.client = client
             self.exclusions = exclusions
 
         def register_artifact(self, path, kind, title, description, *, sha1):
             assert guarded
             assert not is_excluded(self.exclusions, path, sha1=sha1)
-            item = wiki.wbi.item.new()
+            item = self.client.wbi.item.new()
             item.labels.set("en", title)
             item.claims.add(
-                String(prop_nr=wiki.vocabulary()[0]["media_sha1"], value=sha1)
+                String(
+                    prop_nr=self.client.vocabulary()[0]["media_sha1"],
+                    value=sha1,
+                )
             )
-            binding = registry.create(
+            binding = CreationRegistry(self.client).create(
                 {"kind": "source", "sha1": sha1},
                 item,
                 summary="fictional source registration",
             )
             return RegistrationResult(binding.qid, None, content_sha1=sha1)
 
-    monkeypatch.setattr(text_ingestion, "protected_mutation", guard)
-    monkeypatch.setattr(text_ingestion, "Registrar", Registrar)
-    batch = birth_batch("birth-extract-1938")
-    claim = batch.claims[0].model_copy(deep=True)
-    claim.source.page_number = None
-    extractor = ScriptedClient(
-        json.dumps(
-            {
-                "entities": [
-                    {
-                        "id": "gustav",
-                        "label": "Gustav",
-                        "kind": "human",
-                        "mention_lines": [1],
-                    }
-                ],
-                "preparation": None,
-            }
-        ),
-        claim.model_dump_json() + '\n{"done":true}',
-    )
-    finding = {
-        "entity": "missing-fictional-mention",
-        "axis": "subject",
-        "category": "wrong_kind",
-        "issue": "Check the fictional name.",
-    }
+    monkeypatch.setattr(source_ingestion, "protected_mutation", guard)
+    monkeypatch.setattr(source_ingestion, "Registrar", Registrar)
+    scratch = tmp_path / "scratch"
+    if products == "checkpoint":
+        source, document_dir = tmp_path / name, None
+        source.write_bytes(data)
+    else:
+        status, doc = saved_document(scratch, name, data, answers)
+        assert status == 0
+        source, document_dir = doc.source, doc.dir
+
+    def rerun(changed, **options):
+        """Run the scheduler again over the saved document."""
+        return saved_document(
+            scratch, name, data, answers | changed, **options
+        )
+
     with ReviewStore(tmp_path / "review.sqlite") as store:
-        workflow = TextIngestion(
-            source,
-            tmp_path / "workflow",
-            client=wiki,
-            review_store=store,
-            exclusions_file=policy,
-        )
-        products = workflow.prepare(
-            settings=TextSettings(strategy="chunked", language="de"),
-            extractor_client=extractor,
-            critic_client=ScriptedClient(
-                json.dumps(finding) + '\n{"done":true}'
-            ),
-        )
+
+        def reopen(review_store=store):
+            return SourceIngestion(
+                source,
+                tmp_path / "workflow",
+                client=wiki,
+                review_store=review_store,
+                exclusions_file=policy,
+                document_dir=document_dir,
+            )
+
+        workflow = reopen()
+        if products == "checkpoint":
+            prepared = workflow.prepare(
+                settings=TextSettings(strategy="chunked", language="de"),
+                extractor_client=ScriptedClient(*answers["extract"]),
+                critic_client=ScriptedClient(*answers["critique"]),
+            )
+        else:
+            prepared = workflow.prepare()
         yield SimpleNamespace(
             workflow=workflow,
-            products=products,
+            products=prepared,
             source=source,
             policy=policy,
             wiki=wiki,
             registry=registry,
             store=store,
             target=target,
+            mention=mention,
+            reopen=reopen,
+            rerun=rerun,
         )
+
+
+@pytest.fixture(params=["checkpoint", "document"])
+def lifecycle(request, tmp_path, monkeypatch):
+    with lifecycle_case(tmp_path, monkeypatch, request.param) as case:
+        yield case
 
 
 def snapshot(case):
@@ -145,9 +215,9 @@ def snapshot(case):
     }
 
 
-def register(case):
+def register(case, artifact_type="certificate"):
     proposed = case.workflow.prepare_registration(
-        "certificate", "Fictional source"
+        artifact_type, "Fictional source"
     )
     return case.workflow.register_source(
         proposed, expected_digest=proposed.digest, actor="fictional curator"
@@ -170,7 +240,7 @@ def test_changed_registration_material_has_no_graph_effect(lifecycle, change):
     else:
         case.wiki.config.wikibase_url = "https://another-fictional.invalid"
     before = snapshot(case)
-    with pytest.raises((ReviewRefused, TextProductsError)):
+    with pytest.raises((ReviewRefused, *PRODUCTS_REFUSED)):
         case.workflow.register_source(
             proposal, expected_digest=expected, actor="fictional curator"
         )
@@ -221,7 +291,7 @@ def assign(case):
         operation="assign",
         mentions=(
             MentionKey(
-                artifact_sha1=products.artifact.sha1, local_id="gustav"
+                artifact_sha1=products.artifact.sha1, local_id=case.mention
             ),
         ),
         target=case.target,
@@ -281,13 +351,7 @@ def test_resume_requires_original_review_correspondence(lifecycle, tmp_path):
     register(case)
     assign(case)
     with ReviewStore(tmp_path / "wrong-review.sqlite") as other:
-        workflow = TextIngestion(
-            case.source,
-            case.workflow.directory,
-            client=case.wiki,
-            review_store=other,
-            exclusions_file=case.policy,
-        )
+        workflow = case.reopen(other)
         before = snapshot(case)
         with pytest.raises(ReviewRefused, match="original review store"):
             workflow.prepare_claims((0,))
@@ -299,7 +363,7 @@ def test_updated_exclusions_block_an_already_registered_source(lifecycle):
     register(case)
     case.policy.write_text(case.products.artifact.sha1)
     before = snapshot(case)
-    with pytest.raises(TextProductsError, match="never-ingest"):
+    with pytest.raises(PRODUCTS_REFUSED, match="never-ingest"):
         case.workflow.prepare_identities()
     assert snapshot(case) == before
 
@@ -363,7 +427,7 @@ def test_claim_application_rechecks_exclusions_after_guarded_preparation(
         assignment_writes, "prepare_claim_review", edited_policy
     )
     before = snapshot(case)
-    with pytest.raises(TextProductsError, match="never-ingest"):
+    with pytest.raises(PRODUCTS_REFUSED, match="never-ingest"):
         case.workflow.apply_claims((0,))
     assert snapshot(case) == before
 
@@ -374,3 +438,81 @@ def test_workspace_cannot_be_used_concurrently(lifecycle):
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         with pytest.raises(ReviewRefused, match="workspace is in use"):
             case.workflow.prepare()
+
+
+def test_both_products_give_claim_review_the_same_warnings(
+    tmp_path, monkeypatch
+):
+    reviewed = {}
+    for products in ("checkpoint", "document"):
+        with lifecycle_case(
+            tmp_path / products, monkeypatch, products
+        ) as case:
+            register(case)
+            assign(case)
+            (claim,) = case.workflow.prepare_claims((0,)).claims
+            reviewed[products] = (case.products, claim.selection.warnings)
+    (checkpoint, warnings), (document, same) = reviewed.values()
+    assert same == warnings
+    assert document.extraction_attention == checkpoint.extraction_attention
+    assert set(document.extraction_attention) <= set(warnings)
+    assert document.extraction_attention
+    assert any(FINDING["issue"] in warning for warning in warnings)
+
+
+@pytest.mark.parametrize("lifecycle", ["document"], indirect=True)
+def test_saved_document_products_run_no_stage(lifecycle):
+    case = lifecycle
+    with pytest.raises(ReviewRefused):
+        case.workflow.prepare(critic_client=ScriptedClient('{"done":true}'))
+    assert case.workflow.prepare() == case.products
+
+
+@pytest.mark.parametrize("lifecycle", ["document"], indirect=True)
+def test_saved_products_changed_after_registration_refuse(lifecycle):
+    case = lifecycle
+    register(case)
+    assign(case)
+    assert case.workflow.prepare_claims((0,)).claims
+    # A later run makes a different, complete critique of the same batch.
+    _status, doc = case.rerun(
+        {"critique": ['{"done":true}']}, refresh=("critique",)
+    )
+    changed = load_document_products(
+        doc.source, doc.dir, exclusions=ExclusionList()
+    )
+    assert changed.batch == case.products.batch
+    assert changed.digest != case.products.digest
+    before = snapshot(case)
+    for phase in (
+        case.workflow.prepare_identities,
+        lambda: case.workflow.apply_identities((case.mention,)),
+        lambda: case.workflow.prepare_claims((0,)),
+        lambda: case.workflow.apply_claims((0,)),
+    ):
+        with pytest.raises(ReviewRefused):
+            phase()
+    assert snapshot(case) == before
+
+
+def test_image_review_locates_mentions_and_excerpts_in_its_reading(
+    tmp_path, monkeypatch
+):
+    with lifecycle_case(tmp_path, monkeypatch, "document", "image") as case:
+        assert case.products.kind == "media"
+        register(case, "photograph")
+        assign(case)
+        reading = case.products.reading
+        (claim,) = case.workflow.prepare_claims((0,)).claims
+        located = claim.provenance["source"]
+        assert reading.text[located["start"] : located["end"]] == (
+            claim.claim.source.transcription_excerpt.text
+        )
+        assert located["physical_page"] == 1
+        (occurrence,) = claim.basis["occurrences"].values()
+        assert reading.text.count(occurrence["quote"]) == 1
+        # The second claim cites a name the inscription gives twice.
+        before = snapshot(case)
+        with pytest.raises(ReviewRefused):
+            case.workflow.prepare_claims((1,))
+        assert snapshot(case) == before

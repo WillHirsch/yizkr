@@ -86,6 +86,10 @@ REQUIRED_CASES = (
         "tests.fictional_integration.test_graph_projection",
         "test_recorded_graph_projection_replays_and_refuses_stale_capture",
     ),
+    (
+        "tests.fictional_integration.test_cohort_additions",
+        "test_saved_image_reading_reaches_reviewed_claim_application",
+    ),
 )
 GROUPS = {
     "assignments": tuple(

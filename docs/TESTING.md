@@ -193,20 +193,20 @@ make test-integration ARGS="--state /tmp/yizkr-fictional-evidence"
 make test-integration ARGS="--sequential"
 ```
 
-The launcher needs Python 3.11+, Git and Docker with Compose on the local socket; host package installation and `deploy/.env` are unnecessary. It stages only its allowlisted repository source, fixtures and deployment controls, and builds one test image with the locked Python dependencies. The three assignment-writing cases and the remaining twelve cases run in two fresh MariaDB/Wikibase/WDQS stacks. Their test processes run concurrently within the same runner and Actions job; each stack starts empty, so unrelated groups do not inherit each other's fixture history. `--sequential` runs and removes one group before starting the other, with the same required coverage.
+The launcher needs Python 3.11+, Git and Docker with Compose on the local socket; host package installation and `deploy/.env` are unnecessary. It stages only its allowlisted repository source, fixtures and deployment controls, and builds one test image with the locked Python dependencies. The three assignment-writing cases and the remaining thirteen cases run in two fresh MariaDB/Wikibase/WDQS stacks. Their test processes run concurrently within the same runner and Actions job; each stack starts empty, so unrelated groups do not inherit each other's fixture history. `--sequential` runs and removes one group before starting the other, with the same required coverage.
 
 ```mermaid
 flowchart TD
     A["One runner: launcher"] --> B["Stage and build one image"]
     B --> C["Assignment writes: 3 cases<br/>Isolated stack"]
-    B --> D["Other boundaries: 12 cases<br/>Isolated stack"]
-    C --> E["Validate all 15 cases<br/>Collect evidence"]
+    B --> D["Other boundaries: 13 cases<br/>Isolated stack"]
+    C --> E["Validate all 16 cases<br/>Collect evidence"]
     D --> E
     E --> F["Teardown both stacks"]
     A -. "Failure or interruption" .-> F
 ```
 
-All fifteen required cases must run exactly once and pass. Setup failure, test failure, a skipped, omitted, duplicated or unexpected case fails the invocation. Each group stops after its first failure and reports the twenty slowest test stages; failure or interruption stops its sibling and cleans both projects. An incomplete run cannot pass the aggregate required-case check. The default offline command deselects these tests; invoking a test directly without its dedicated setup fails rather than falling back to another deployment.
+All sixteen required cases must run exactly once and pass. Setup failure, test failure, a skipped, omitted, duplicated or unexpected case fails the invocation. Each group stops after its first failure and reports the twenty slowest test stages; failure or interruption stops its sibling and cleans both projects. An incomplete run cannot pass the aggregate required-case check. The default offline command deselects these tests; invoking a test directly without its dedicated setup fails rather than falling back to another deployment.
 
 [The dedicated Compose file](../deploy/fictional-integration/compose.yml) is independent of the archive deployment. Its fixed fictional credentials and connection settings, project-specific volumes, instance records and locks never inherit archive defaults. Each group's services use their own internal network with no published ports; no archive credentials, corpus directories, runtime state or Docker socket are mounted into them. Host bind mounts contain only allowlisted, staged deployment controls: upload settings, mutation-guard code/configuration and the fictional guard probe. The checkout, selected state directory and group determine each project identity, and a nonblocking lock refuses concurrent use of that lane. Different worktrees have separate projects and locks.
 
@@ -265,6 +265,8 @@ Whole-graph readers reject unsupported dates such as BCE or non-Gregorian dates.
 The required [cohort-additions case](../tests/fictional_integration/test_cohort_additions.py) exercises current candidate review, original creation approval, assignment acceptance and graph provenance against the real server guard. It includes newly appearing candidates, direct competing API writes, receipt recovery and reuse after a display rename. Historical claims retain separate review and applied-support receipts. The lane also executes a PHP subprocess/database probe before cases: request shutdown keeps the server lock, restart retains its owner, stale capabilities are refused, and draining an orphaned database transaction waits for rollback. This uses the existing fictional stack, with no additional bootstrap or Actions matrix. The deployment's single-host/dedicated-database-account assumptions remain explicit; these checks do not establish arbitrary external SQL or multi-host exclusion.
 
 The cohort case also runs the shared text stages with fixed fictional answers on an actually marked retained instance. It confirms source registration, separately reviews identities and claims, preserves a curator’s terms and preferred statement rank with earlier references, interrupts after a real support write, then resumes with a fresh client/store and no model clients. An unchanged repeat adds no graph revisions. Retained markers are removed from this isolated fixture before unrelated cases; no archive target is used.
+
+The required saved-image case in the same module draws the example universe's gravestone inscription on a generated PNG. The production scheduler saves that image's reading, batch and critique from authored answers, so no provider is called. `SourceIngestion` admits those saved views from their document directory and runs no stage: registration uploads the image and binds its source item through `Registrar.register_artifact`, and the test checks the uploaded file's SHA-1 and type. It then assigns the mention to an existing fictional person and applies a separately approved birth claim whose reference cites the image item and its literal excerpt; an unchanged repeat adds no graph revisions. Unit tests cover the admission refusals. This case establishes the real upload and reviewed write boundary for an image source, not vision reading quality.
 
 The fictional test image contains its own committed Git snapshot of the copied package and test files. `runtime_snapshot_commit` identifies that synthetic test-source commit; `revision` remains the original checkout revision and `source_sha256` identifies the staged inputs. They are distinct provenance fields. A once-per-image probe calls the real retained clean-code guard, proves that a tracked executable edit refuses, restores it and checks clean admission again. No production admission check is patched or bypassed.
 

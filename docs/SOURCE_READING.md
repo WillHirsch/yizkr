@@ -13,7 +13,7 @@ A reading preserves what a source says, its location and uncertainty, before [ex
 | Paged PDF/PPTX | A format reader assembles located page/slide text and provenance, with independent image readings and vision page readings where supported. The assembled container has no whole-document vision class. |
 | Adopted image reading | Verified existing reading products supply the independent image's transcription without another vision call. |
 
-These are shared [stage operations](ARCHITECTURE.md#shared-document-stage-operations), used by the [reviewed text-source workflow](TEXT_INGESTION.md) and the [whole-corpus workflow](SCRATCH_WORKFLOW.md). Direct callers and the whole-corpus driver can select [PPTX slides for vision](#pptx-selected-slide-vision) with constrained native-block ordering for supported mixed slides. Native XML remains the default; an opt-in [layout policy](#pptx-layout-routing) selects supported spatial text layouts automatically. The HTR adapter is a stub, not another supported reading engine.
+These are shared [stage operations](ARCHITECTURE.md#shared-document-stage-operations), used by the [reviewed one-source workflow](SOURCE_INGESTION.md) and the [whole-corpus workflow](SCRATCH_WORKFLOW.md). Direct callers and the whole-corpus driver can select [PPTX slides for vision](#pptx-selected-slide-vision) with constrained native-block ordering for supported mixed slides. Native XML remains the default; an opt-in [layout policy](#pptx-layout-routing) selects supported spatial text layouts automatically. The HTR adapter is a stub, not another supported reading engine.
 
 ### Structured vision record (ADR-0037)
 
