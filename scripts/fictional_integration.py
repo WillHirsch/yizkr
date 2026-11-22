@@ -147,7 +147,8 @@ REQUIRED_CASES = (
 GROUP_NAME = re.compile(r"[a-z][a-z0-9-]*")
 # At most this many group stacks exist at once unless --stacks says
 # otherwise. Of the limits measured on CI's four-CPU runner, four gave the
-# shortest lane, although each case runs slower than with two at once.
+# shortest lane, although cases on the whole run slower than with two at
+# once.
 DEFAULT_STACKS = 4
 
 
@@ -609,22 +610,28 @@ def run_groups(groups: list[Group], stacks: int, docker, env) -> None:
 
     Groups start in declaration order. A waiting group starts only after a
     finished group's stack is removed, so no more than `stacks` stacks exist
-    at a time, and the first failure stops the lane before another starts.
+    at a time. The running groups are checked again before every start, so
+    a failure that has happened, even during another group's start or
+    teardown, stops the lane before another group starts.
     """
+    if stacks < 1:
+        raise LaneError("the lane needs at least one stack at a time")
     pending, running = list(groups), []
     while pending or running:
-        while pending and len(running) < stacks:
-            group = pending.pop(0)
-            start_stack(group, env)
-            start_checks(group, env)
-            running.append(group)
         finished = finished_checks(running, docker, env)
         for group in finished:
             running.remove(group)
             cleanup_groups([group], docker, env)
             if group.evidence["teardown"] != "passed":
                 raise LaneError("teardown failed; run make integration-down")
-        if running and not finished:
+        if finished:
+            continue
+        if pending and len(running) < stacks:
+            group = pending.pop(0)
+            start_stack(group, env)
+            start_checks(group, env)
+            running.append(group)
+        else:
             time.sleep(0.1)
 
 

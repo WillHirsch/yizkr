@@ -29,8 +29,31 @@ _spec.loader.exec_module(lane)
 
 # Only bounds a missed readiness/exit cue; never a delay under test.
 HANG_GUARD = 60
-# The declared groups, first to last; nothing below depends on their names.
-NAMES = list(lane.GROUPS)
+# Fake seconds a stack start, guard probe and stack removal take.
+UP_SECONDS, PROBE_SECONDS, DOWN_SECONDS = 7.0, 2.0, 3.0
+
+
+def group_names(cases=lane.REQUIRED_CASES) -> list[str]:
+    """Group names in the order of each one's first declared case."""
+    return list(dict.fromkeys(case.group for case in cases))
+
+
+def declared(name, cases=lane.REQUIRED_CASES) -> tuple:
+    """A group's cases in the order the declaration lists them."""
+    return tuple(case for case in cases if case.group == name)
+
+
+def spread(count: int) -> tuple:
+    """The required cases dealt into `count` groups no declaration names."""
+    return tuple(
+        lane.Case(f"part-{index % count}", case.module, case.name)
+        for index, case in enumerate(lane.REQUIRED_CASES)
+    )
+
+
+# Expectations come from the declaration itself, not from the launcher's
+# grouping of it; nothing below depends on the groups' names.
+NAMES = group_names()
 FIRST, LAST = NAMES[0], NAMES[-1]
 
 
@@ -242,13 +265,11 @@ def results(path: Path, cases, seconds=None) -> Path:
     root = ET.Element("testsuites")
     suite = ET.SubElement(root, "testsuite")
     for class_name, name, outcome in cases:
-        case = ET.SubElement(
-            suite,
-            "testcase",
-            classname=class_name,
-            name=name,
-            time=str((seconds or {}).get(name, 1.5)),
-        )
+        attributes = {"classname": class_name, "name": name}
+        # A time of None leaves the attribute out.
+        if (value := (seconds or {}).get(name, 1.5)) is not None:
+            attributes["time"] = str(value)
+        case = ET.SubElement(suite, "testcase", **attributes)
         if outcome:
             ET.SubElement(case, outcome)
     ET.ElementTree(root).write(path)
@@ -321,9 +342,27 @@ def test_required_results_refuse_extra_cases_even_when_all_required_pass(
         lane.verify_results(path)
 
 
+def test_a_case_without_a_recorded_time_is_reported_last_without_one(
+    tmp_path,
+):
+    cases = lane.REQUIRED_CASES[:3]
+    untimed = cases[0]
+    path = results(
+        tmp_path / "results.xml", passing(cases), {untimed.name: None}
+    )
+    observed = lane.verify_results(path, cases)
+    assert [case["seconds"] for case in observed["cases"]] == [None, 1.5, 1.5]
+
+    report = lane.timing_report({"groups": {FIRST: {"checks": observed}}})
+    rows = [line for line in report.splitlines() if "::" in line]
+    assert len(rows) == len(cases)
+    assert untimed.name in rows[-1]
+    assert rows[-1].startswith("| - |")
+
+
 def test_group_results_cannot_borrow_a_case_from_another_group(tmp_path):
-    own = lane.GROUPS[FIRST]
-    other = lane.GROUPS[LAST]
+    own = declared(FIRST)
+    other = declared(LAST)
     path = results(tmp_path / "results.xml", passing((*own[:-1], other[0])))
     with pytest.raises(lane.LaneError):
         lane.verify_results(path, own)
@@ -331,8 +370,8 @@ def test_group_results_cannot_borrow_a_case_from_another_group(tmp_path):
 
 def test_group_reports_combine_into_complete_required_results(tmp_path):
     paths = [
-        results(tmp_path / name / "results.xml", passing(cases))
-        for name, cases in lane.GROUPS.items()
+        results(tmp_path / name / "results.xml", passing(declared(name)))
+        for name in NAMES
     ]
     combined = tmp_path / "results.xml"
     lane.combine_results(paths, combined, lane.REQUIRED_CASES)
@@ -343,7 +382,7 @@ def test_group_reports_combine_into_complete_required_results(tmp_path):
 
 
 def test_combining_reports_cannot_hide_duplicate_or_missing_groups(tmp_path):
-    only = results(tmp_path / "first.xml", passing(lane.GROUPS[FIRST]))
+    only = results(tmp_path / "first.xml", passing(declared(FIRST)))
     with pytest.raises(lane.LaneError):
         lane.combine_results(
             [only, only], tmp_path / "results.xml", lane.REQUIRED_CASES
@@ -496,12 +535,6 @@ class CheckProcess:
     def poll(self):
         if self.returncode is not None:
             return self.returncode
-        if self.docker.interrupt:
-            interruption = self.docker.interrupt
-            self.docker.interrupt = None
-            if interruption == "term":
-                signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
-            raise KeyboardInterrupt("fictional interrupted check")
         if self.docker.ticks > self.created:
             code = self.docker.returncodes.get(self.group, 0)
             if code is not None:
@@ -548,7 +581,13 @@ class Docker:
         self.seconds = {}
         self.leftovers = {}
         self.stubborn = set()
+        # A group's stack removal makes another group's checks exit.
+        self.exits_on_down = {}
+        # Polls see a check finish once ticks pass; only evidence reads the
+        # clock, which also advances while a stack starts or is removed.
         self.ticks = 0
+        self.clock = 0.0
+        self.up_times = []
         self.maximum_running = 0
         self.maximum_stacks = 0
         self.builds = 0
@@ -567,7 +606,7 @@ class Docker:
         monkeypatch.setattr(lane.subprocess, "run", self.run)
         monkeypatch.setattr(lane.subprocess, "Popen", self.start)
         monkeypatch.setattr(lane.time, "sleep", self.advance)
-        monkeypatch.setattr(lane.time, "monotonic", lambda: float(self.ticks))
+        monkeypatch.setattr(lane.time, "monotonic", lambda: self.clock)
         monkeypatch.setattr(lane.os, "killpg", self.signal_process)
 
     @staticmethod
@@ -592,7 +631,14 @@ class Docker:
         return "fixture-source-hash"
 
     def advance(self, delay):
+        # An interruption arrives while the launcher waits for its checks.
+        if self.interrupt:
+            interruption, self.interrupt = self.interrupt, None
+            if interruption == "term":
+                signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
+            raise KeyboardInterrupt("fictional interrupted check")
         self.ticks += 1
+        self.clock += 1
         assert self.ticks < 10, "supervisor did not stop after child failure"
 
     def start(self, args, **kwargs):
@@ -636,6 +682,8 @@ class Docker:
             )
         elif "up" in args:
             self.up.append(project)
+            self.up_times.append(self.clock)
+            self.clock += UP_SECONDS
             self.active.add(project)
             self.maximum_stacks = max(self.maximum_stacks, len(self.active))
             if group == self.setup_failure:
@@ -659,6 +707,7 @@ class Docker:
                 "/yizkr-fictional-mutation-guard-probe.php",
             ]
             self.guard_probes.append(group)
+            self.clock += PROBE_SECONDS
             result = {
                 "protocol": "yizkr-mutation-guard-v1",
                 "request_drain": True,
@@ -673,7 +722,11 @@ class Docker:
             output = json.dumps(result)
         elif "down" in args:
             self.down.append(project)
+            self.clock += DOWN_SECONDS
             assert_cleanup_covers_all_volumes(args)
+            if group in self.exits_on_down and project in self.active:
+                other, exit_code = self.exits_on_down.pop(group)
+                self.returncodes[other] = exit_code
             if group == self.cleanup_failure and project in self.active:
                 raise OSError("fictional cleanup transport failed")
             self.active.discard(project)
@@ -783,10 +836,11 @@ def test_success_runs_every_group_once_and_requires_complete_evidence(
     assert docker.evidence()["dirty_code_refused"] is True
     observed = lane.verify_results(docker.state / "results.xml")
     assert set(ran(observed)) == {case.result for case in lane.REQUIRED_CASES}
-    for name, expected in lane.GROUPS.items():
+    for name in NAMES:
         assert docker.evidence(name)["status"] == "passed"
         assert docker.evidence(name)["runtime_snapshot_commit"] == "f" * 40
         assert docker.evidence(name)["mutation_guard_probe"]["database_drain"]
+        expected = declared(name)
         observed = lane.verify_results(
             docker.state / name / "results.xml", expected
         )
@@ -800,18 +854,16 @@ def test_groups_beyond_the_stack_limit_wait_for_a_removed_stack(
 ):
     # Five groups, none of them declared ones: a new group needs no change
     # to the launcher or to any other group.
-    cases = tuple(
-        lane.Case(f"part-{index % 5}", case.module, case.name)
-        for index, case in enumerate(lane.REQUIRED_CASES)
-    )
-    groups = lane.case_groups(cases)
+    cases = spread(5)
 
     lane.execute("run", docker.state, stacks=stacks, cases=cases)
 
     assert docker.maximum_stacks == docker.maximum_running == stacks
-    assert [docker.group(project) for project in docker.up] == list(groups)
+    names = group_names(cases)
+    assert [docker.group(project) for project in docker.up] == names
     assert docker.evidence()["stacks"] == stacks
-    for name, members in groups.items():
+    for name in names:
+        members = declared(name, cases)
         observed = lane.verify_results(
             docker.state / name / "results.xml", members
         )
@@ -833,6 +885,37 @@ def test_a_failure_stops_the_lane_before_a_waiting_group_starts(docker):
     docker.assert_clean()
 
 
+def test_a_failure_during_another_groups_teardown_starts_no_waiting_group(
+    docker,
+):
+    cases = spread(3)
+    first, second, _ = group_names(cases)
+    # The second group's checks fail while the first group's stack is
+    # being removed, before the third group has started.
+    docker.returncodes[second] = None
+    docker.exits_on_down[first] = (second, 1)
+
+    with pytest.raises(lane.LaneError):
+        lane.execute("run", docker.state, stacks=2, cases=cases)
+
+    assert [docker.group(project) for project in docker.up] == [first, second]
+    assert docker.evidence()["status"] == "failed"
+    docker.assert_clean()
+
+
+def test_a_finished_groups_failed_teardown_starts_no_waiting_group(docker):
+    cases = spread(3)
+    first = group_names(cases)[0]
+    docker.cleanup_failure = first
+
+    with pytest.raises(lane.LaneError, match="teardown"):
+        lane.execute("run", docker.state, stacks=1, cases=cases)
+
+    assert [docker.group(project) for project in docker.up] == [first]
+    assert docker.evidence(first)["teardown"] == "failed"
+    assert docker.evidence()["teardown"] == "failed"
+
+
 def test_run_records_case_and_group_durations_and_reports_slowest_first(
     docker, monkeypatch, capsys, tmp_path
 ):
@@ -843,17 +926,22 @@ def test_run_records_case_and_group_durations_and_reports_slowest_first(
         for index, case in enumerate(lane.REQUIRED_CASES)
     }
 
-    lane.execute("run", docker.state)
+    # One stack at a time, so no group's phases overlap another's.
+    lane.execute("run", docker.state, stacks=1)
 
-    assert docker.evidence()["setup_seconds"] >= 0
-    for group, cases in lane.GROUPS.items():
+    assert docker.evidence()["setup_seconds"] == docker.up_times[0]
+    assert docker.evidence()["elapsed_seconds"] == docker.clock
+    for group in NAMES:
         recorded = docker.evidence(group)
         assert {
             case["name"]: case["seconds"]
             for case in recorded["checks"]["cases"]
-        } == {case.name: docker.seconds[case.name] for case in cases}
-        for phase in ("stack_seconds", "checks_seconds", "teardown_seconds"):
-            assert 0 <= recorded[phase] <= recorded["elapsed_seconds"]
+        } == {case.name: docker.seconds[case.name] for case in declared(group)}
+        assert recorded["stack_seconds"] == UP_SECONDS + PROBE_SECONDS
+        assert recorded["checks_seconds"] > 0
+        assert recorded["teardown_seconds"] == DOWN_SECONDS
+        phases = ("stack_seconds", "checks_seconds", "teardown_seconds")
+        assert recorded["elapsed_seconds"] == sum(map(recorded.get, phases))
     printed = capsys.readouterr().out
     slowest = sorted(docker.seconds, key=docker.seconds.get, reverse=True)
     shown = [printed.index(name) for name in slowest[: lane.SLOWEST]]
@@ -874,8 +962,8 @@ def test_failed_run_still_reports_the_durations_it_recorded(
         lane.execute("run", docker.state)
 
     report = summary.read_text()
-    assert all(case.name in report for case in lane.GROUPS[FIRST])
-    assert not any(case.name in report for case in lane.GROUPS[LAST])
+    assert all(case.name in report for case in declared(FIRST))
+    assert not any(case.name in report for case in declared(LAST))
 
 
 def test_runtime_code_admission_failure_prevents_service_startup(docker):
@@ -919,18 +1007,49 @@ def test_list_prints_each_group_with_its_cases_in_run_order(
     assert lane.main() == 0
 
     lines = capsys.readouterr().out.splitlines()
-    for name, members in lane.GROUPS.items():
-        heading = next(
-            index
-            for index, line in enumerate(lines)
-            if line.split(" ", 1)[0] == name
-        )
+    headings = [
+        index
+        for index, line in enumerate(lines)
+        if line.split(" ", 1)[0] in NAMES
+    ]
+    assert [lines[index].split(" ", 1)[0] for index in headings] == NAMES
+    for name, heading in zip(NAMES, headings, strict=True):
+        members = declared(name)
         listed = lines[heading + 1 : heading + 1 + len(members)]
         assert [line.strip() for line in listed] == [
             case.selector for case in members
         ]
     selectors = [line.strip() for line in lines if "::" in line]
     assert len(selectors) == len(lane.REQUIRED_CASES)
+
+
+def test_list_refuses_an_invalid_declaration(monkeypatch, capsys):
+    twice = (lane.REQUIRED_CASES[0], lane.REQUIRED_CASES[0])
+    monkeypatch.setattr(lane, "REQUIRED_CASES", twice)
+    monkeypatch.setattr(sys, "argv", [str(SCRIPT), "list"])
+
+    assert lane.main() == 1
+
+    assert "::" not in capsys.readouterr().out
+
+
+def test_a_stack_limit_given_on_the_command_line_bounds_the_run(
+    docker, monkeypatch
+):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [str(SCRIPT), "run", "--stacks", "2", "--state", str(docker.state)],
+    )
+    previous_handler = signal.getsignal(signal.SIGTERM)
+    try:
+        assert lane.main() == 0
+    finally:
+        signal.signal(signal.SIGTERM, previous_handler)
+
+    assert docker.evidence()["stacks"] == 2
+    assert docker.maximum_stacks == min(2, len(NAMES))
+    docker.assert_clean()
 
 
 def test_execute_refuses_a_stack_limit_below_one(docker):
@@ -980,33 +1099,36 @@ def test_group_children_do_not_inherit_archive_or_compose_settings(
     docker.assert_clean()
 
 
+@pytest.mark.parametrize("group", NAMES)
 @pytest.mark.parametrize("failure", ["exit", "missing", "skipped", "wrong"])
-def test_first_failed_or_invalid_group_stops_its_running_siblings(
-    docker, failure
+def test_a_failed_or_invalid_group_stops_its_running_siblings(
+    docker, failure, group
 ):
-    for name in NAMES[1:]:
-        docker.returncodes[name] = None
+    for name in NAMES:
+        if name != group:
+            docker.returncodes[name] = None
     if failure == "exit":
-        docker.returncodes[FIRST] = 1
+        docker.returncodes[group] = 1
     elif failure == "missing":
-        docker.reports[FIRST] = None
+        docker.reports[group] = None
     elif failure == "skipped":
-        docker.reports[FIRST] = [
+        docker.reports[group] = [
             (*case.result, "skipped" if index == 0 else None)
-            for index, case in enumerate(lane.GROUPS[FIRST])
+            for index, case in enumerate(declared(group))
         ]
     else:
-        docker.reports[FIRST] = passing(lane.GROUPS[LAST])
+        other = LAST if group != LAST else FIRST
+        docker.reports[group] = passing(declared(other))
 
     with pytest.raises((lane.LaneError, subprocess.CalledProcessError)):
-        lane.execute("run", docker.state)
+        lane.execute("run", docker.state, stacks=len(NAMES))
 
-    siblings = [p for p in docker.processes.values() if p.group != FIRST]
-    assert len(siblings) == min(len(NAMES), lane.DEFAULT_STACKS) - 1
+    siblings = [p for p in docker.processes.values() if p.group != group]
+    assert len(siblings) == len(NAMES) - 1
     assert all(p.name in docker.stopped for p in siblings)
     assert not any(p.completed for p in siblings)
     assert docker.evidence()["status"] == "failed"
-    assert (docker.state / FIRST / "tests.log").exists()
+    assert (docker.state / group / "tests.log").exists()
     docker.assert_clean()
 
 
@@ -1014,7 +1136,7 @@ def test_cleanup_kills_a_compose_child_that_ignores_termination(docker):
     docker.returncodes.update({FIRST: 1, LAST: None})
     docker.stubborn.add(LAST)
     with pytest.raises(lane.LaneError):
-        lane.execute("run", docker.state)
+        lane.execute("run", docker.state, stacks=len(NAMES))
 
     sibling = next(p for p in docker.processes.values() if p.group == LAST)
     assert sibling.terminated and sibling.killed
@@ -1042,12 +1164,12 @@ def test_interruption_stops_children_and_cleans_every_project(
     docker.assert_clean()
 
 
-@pytest.mark.parametrize("setup_failure", ["stage", LAST])
+@pytest.mark.parametrize("setup_failure", ["stage", *NAMES])
 @pytest.mark.parametrize("diagnostic_failure", ["open", "timeout"])
 def test_failed_setup_cleans_every_project_even_when_diagnostics_fail(
     docker, monkeypatch, diagnostic_failure, setup_failure
 ):
-    for folder in [docker.state, *(docker.state / n for n in lane.GROUPS)]:
+    for folder in [docker.state, *(docker.state / n for n in NAMES)]:
         put(folder, "evidence.json", '{"status": "passed", "revision": "old"}')
         put(folder, "results.xml", "old successful result")
     docker.stage_failure = setup_failure == "stage"
@@ -1063,26 +1185,24 @@ def test_failed_setup_cleans_every_project_even_when_diagnostics_fail(
     if diagnostic_failure == "open":
         monkeypatch.setattr(Path, "open", fail_log_open)
     with pytest.raises((lane.LaneError, subprocess.CalledProcessError)):
-        lane.execute("run", docker.state)
+        lane.execute("run", docker.state, stacks=len(NAMES))
 
     assert {docker.group(p) for p in docker.down} >= set(NAMES)
     assert docker.evidence()["status"] == "failed"
     assert docker.evidence()["revision"] == "fixture-revision"
     assert docker.evidence(FIRST)["diagnostics_error"]
     assert not (docker.state / "results.xml").exists()
-    assert not any(
-        (docker.state / n / "results.xml").exists() for n in lane.GROUPS
-    )
+    assert not any((docker.state / n / "results.xml").exists() for n in NAMES)
     docker.assert_clean()
 
 
-@pytest.mark.parametrize("group", [FIRST, LAST])
+@pytest.mark.parametrize("group", NAMES)
 def test_guard_probe_failure_prevents_that_groups_checks_and_cleans_projects(
     docker, group
 ):
     docker.guard_probe_failure = group
     with pytest.raises(lane.LaneError, match="mutation guard"):
-        lane.execute("run", docker.state)
+        lane.execute("run", docker.state, stacks=len(NAMES))
     assert docker.evidence()["status"] == "failed"
     assert group not in {p.group for p in docker.processes.values()}
     assert all(p.name in docker.stopped for p in docker.processes.values())
@@ -1090,41 +1210,47 @@ def test_guard_probe_failure_prevents_that_groups_checks_and_cleans_projects(
     docker.assert_clean()
 
 
-def test_one_group_cleanup_error_does_not_leave_its_siblings_running(docker):
-    docker.cleanup_failure = FIRST
+@pytest.mark.parametrize("group", NAMES)
+def test_one_group_cleanup_error_does_not_leave_its_siblings_running(
+    docker, group
+):
+    docker.cleanup_failure = group
     with pytest.raises(lane.LaneError, match="teardown"):
-        lane.execute("run", docker.state)
+        lane.execute("run", docker.state, stacks=len(NAMES))
 
-    assert {docker.group(p) for p in docker.active} == {FIRST}
+    assert {docker.group(p) for p in docker.active} == {group}
     assert docker.evidence()["status"] == "failed"
     assert docker.evidence()["teardown"] == "failed"
-    assert all(docker.evidence(n)["teardown"] == "passed" for n in NAMES[1:])
+    assert all(
+        docker.evidence(n)["teardown"] == "passed" for n in NAMES if n != group
+    )
     assert (docker.state / "instance.json").exists()
 
-    failed = docker.evidence(FIRST)
+    failed = docker.evidence(group)
     assert failed["cleanup_error"]
     # A previous attempt can also have failed to reap its Compose child.
     failed["process_cleanup_error"] = "fictional previous reap failure"
-    put(docker.state / FIRST, "evidence.json", json.dumps(failed))
+    put(docker.state / group, "evidence.json", json.dumps(failed))
     docker.cleanup_failure = None
     lane.execute("down", docker.state)
 
     docker.assert_clean()
     assert docker.evidence()["status"] == "failed"
     assert docker.evidence()["revision"] == "fixture-revision"
-    for name in lane.GROUPS:
+    for name in NAMES:
         recovered = docker.evidence(name)
         assert recovered["teardown"] == "passed"
         assert "cleanup_error" not in recovered
         assert "process_cleanup_error" not in recovered
 
 
+@pytest.mark.parametrize("group", NAMES)
 @pytest.mark.parametrize("command", ["run", "down"])
 def test_leftover_group_volume_fails_lane_and_keeps_recovery_marker(
-    docker, command
+    docker, command, group
 ):
     put(docker.state, "instance.json", '{"status": "interrupted"}')
-    docker.leftovers[FIRST, "volume"] = 1
+    docker.leftovers[group, "volume"] = 1
     with pytest.raises(lane.LaneError, match="teardown|resources remain"):
         lane.execute(command, docker.state)
 
