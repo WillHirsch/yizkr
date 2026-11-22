@@ -345,12 +345,13 @@ class TestRecordLinks:
         (aside / "state.json").write_text(
             (tmp_path / "marriage" / "state.json").read_text()
         )
-        # extracted, and never written: the record does not name it
+        # extracted, with its place reconciled, and never written: the
+        # record does not name it, so its reconciled place states nothing
         letter = tmp_path / "letter"
         letter.mkdir()
         (letter / "batch.json").write_text(
             _batch(
-                [_entity("e1", "Fläckfeld", ["Kreis Peiltal"])]
+                [_entity("e1", "Fläckfeld", ["Kreis Peiltal"], qid="Q22")]
             ).model_dump_json()
         )
         (letter / "state.json").write_text(
@@ -390,9 +391,7 @@ class TestRecordLinks:
         (link,) = record_links(tmp_path)
         assert (link.place, link.container) == ("Q20", "Kreis Mockburg")
 
-    def test_a_run_directory_with_no_write_record_states_no_links(
-        self, tmp_path
-    ):
+    def test_a_run_directory_with_no_write_record_is_refused(self, tmp_path):
         _written(
             tmp_path,
             "marriage",
@@ -410,7 +409,7 @@ class TestRecordLinks:
         "written",
         ["[]", "null", "not json", "[" * 100_000, '{"documents": []}'],
     )
-    def test_a_write_record_of_another_shape_states_no_links(
+    def test_a_write_record_of_another_shape_is_refused(
         self, tmp_path, written
     ):
         _written(
@@ -1708,9 +1707,9 @@ class TestApply:
         (statement,) = statements(wiki, town)
         assert statement.mainsnak.datavalue["value"]["id"] == qids["Hesse"]
         assert "links written: 2," in capsys.readouterr().out
+        # the fake instance merges an equal claim into the statement it
+        # has, so the command's own count is what shows a second write
         assert cli.cmd_reconcile_places(args) == 0
-        assert len(statements(wiki, prison)) == 1
-        assert len(statements(wiki, town)) == 1
         assert "links written: 0," in capsys.readouterr().out
 
 

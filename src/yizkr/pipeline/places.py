@@ -423,8 +423,12 @@ def record_links(run_dir: Path) -> list[StatedLink]:
     the content SHA-1 its state.json records (gaps.document_directories,
     which passes over a directory set aside, with a dot name, and a
     duplicate's). Raises NoWriteRecord when the run directory holds no
-    write record that can be read, or one of a write that wrote nothing
-    as it found the instance holding another run's write."""
+    write record that can be read, when the record is no JSON object or
+    holds no `documents` object, or when it is of a write that wrote
+    nothing as it found the instance holding another run's write. A
+    record whose `documents` is empty, of a write that wrote no document,
+    gives no link. The record is read as it stands: an incomplete write's
+    gives the links of the documents it has recorded so far."""
     from yizkr.pipeline.gaps import document_directories
     from yizkr.pipeline.scratch import CORPUS_DIR
     from yizkr.pipeline.scratchwrite import RECORD, WRITE
@@ -457,7 +461,7 @@ def record_links(run_dir: Path) -> list[StatedLink]:
                 f"{written.get('run_id')} wrote; give that run's directory"
             )
         raise NoWriteRecord(
-            f"the write record {path} names no documents written, so no "
+            f"the write record {path} holds no documents object, so no "
             "link its documents state can be read"
         )
     return written_links(
