@@ -1,28 +1,16 @@
 """Live reconciliation reads for the impossibility filter (ADR-0017).
 
-The extended roster query (kinship QIDs, last activity) and the
-place-containment closure are what let blocking prune pairs the graph
-already forbids. This exercises both against a real stack: write a
-kinship edge and a containment edge under labels carrying the session's
-marker (conftest.fixture_mark), so each session meets them as a first
-write, then assert `fetch_roster` / `fetch_place_containment` round-trip
-them and `impossible_pair` rules the same-name pairs out.
+The extended roster query (kinship QIDs, last activity) is what lets
+blocking prune pairs the graph already forbids. This writes a kinship
+edge under labels carrying the session's marker (conftest.fixture_mark),
+so each session meets it as a first write, then asserts that
+`impossible_pair` rules out the two roster entities the edge joins.
 
-The elder's birth and death are stated at century and decade precision,
-and the younger's birth and death by events dated to a decade and a
-year, so the
-roster's dates round-trip at the precision each statement states, as
-"the 19th century" or "the 1850s", never as a first year (#337). The
-events are curator-made (ADR-0040 Q5; conftest.curator_event_writes),
-the younger their principal, as the roster reads an event's principal
-alone. A brother's death, stated without its date, is a `date of death`
-of unknown value, which the roster gives as "date not stated" (ADR-0040
-§2.2, #687).
-
-Two grandmothers each carry the alias "Oma" and a `referred_to_as`
-statement giving it (ADR-0018), so the roster reads each one's
-appellations, and the alias they share is no key: the two are no
-graph-candidate pair (#523).
+The fixture also holds dates at century and decade precision, curator-made
+events (ADR-0040 Q5; conftest.curator_event_writes), a death of unknown
+value, a containment edge and two grandmothers' appellations. The roster's
+reading of such data and the containment closure are checked in the
+required lane (tests/fictional_integration/test_production_queries.py).
 """
 
 from __future__ import annotations
@@ -41,10 +29,8 @@ from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.pipeline import reconcile, writer
 from yizkr.pipeline.reconcile import (
     _roster_pair_facts,
-    fetch_place_containment,
     fetch_roster,
     impossible_pair,
-    propose_graph_pairs,
 )
 from yizkr.pipeline.registrar import register_artifact
 from yizkr.pipeline.writer import BatchWriter
@@ -273,106 +259,8 @@ def _by_label(roster, label):
     return matches[0]
 
 
-def test_roster_exposes_kinship_qids(client, config, written):
-    roster = fetch_roster(client, config)
-    younger = _by_label(roster, YOUNGER)
-    elder = _by_label(roster, ELDER)
-    # the father edge round-trips as a raw QID the filter can read
-    assert elder.qid in younger.father_qids
-    assert elder.qid in younger.kin_qids
-    # each kind maps back to its manifest key by the kind item's QID
-    # (#388)
-    assert younger.kind == elder.kind == "human"
-    assert _by_label(roster, TOWN).kind == "place"
-
-
-def test_roster_dates_round_trip_at_their_precision(client, config, written):
-    roster = fetch_roster(client, config)
-    elder = _by_label(roster, ELDER)
-    younger = _by_label(roster, YOUNGER)
-    # Direct and principal-event readings retain precision and attribution.
-    (direct,) = elder.births
-    (event,) = younger.births
-    assert (direct.value.text(), elder.death) == (
-        "the 19th century",
-        "the 1890s",
-    )
-    assert direct.event is None
-    assert (event.value.text(), younger.death) == ("the 1850s", "1938")
-    assert event.event == _by_label(roster, BIRTH).qid
-    for reading in (direct, event):
-        assert reading.rank == "normal"
-        assert written in {
-            source.source
-            for reference in reading.references
-            for source in reference.sources
-        }
-    assert "the 19th century" in elder.facts()
-    assert "the 1850s" in younger.facts()
-    # a death its source states without its date
-    assert _by_label(roster, BROTHER).death == "date not stated"
-
-
 def test_kinship_edge_makes_the_pair_impossible(client, config, written):
     roster = fetch_roster(client, config)
     younger = _roster_pair_facts(_by_label(roster, YOUNGER))
     elder = _roster_pair_facts(_by_label(roster, ELDER))
     assert impossible_pair(younger, elder) == "kinship-edge"
-
-
-def test_place_containment_closure_round_trips(client, config, written):
-    roster = fetch_roster(client, config)
-    town = _by_label(roster, TOWN)
-    country = _by_label(roster, COUNTRY)
-    containment = fetch_place_containment(client, config)
-    # the town is transitively contained in the country
-    assert containment.contains(country.qid, town.qid)
-    assert country.qid in containment.containers(town.qid)
-    # ... so the same-name pair is ruled out before adjudication
-    assert (
-        impossible_pair(
-            _roster_pair_facts(town),
-            _roster_pair_facts(country),
-            containment=containment,
-        )
-        == "place-containment"
-    )
-
-
-class _NoCall:
-    """An LLM client that records each prompt and proposes nothing."""
-
-    model_identifier = "integration-test"
-
-    def __init__(self) -> None:
-        self.prompts: list[str] = []
-
-    def complete(self, prompt, image_paths=()):
-        self.prompts.append(prompt)
-        return '{"done": true}'
-
-
-def test_appellation_aliases_make_no_candidate_pair(client, config, written):
-    """The roster reads each grandmother's `referred_to_as` value beside
-    her aliases, and the "Oma" they share keys neither, so the two are
-    never put to the adjudicator; read without their appellations, the
-    same two items would be (#523)."""
-    roster = fetch_roster(client, config)
-    grandmothers = [
-        _by_label(roster, GRANDMOTHER_A),
-        _by_label(roster, GRANDMOTHER_B),
-    ]
-    for grandmother, name in zip(grandmothers, (NAME_A, NAME_B), strict=True):
-        assert set(grandmother.aliases) == {APPELLATION, name}
-        assert grandmother.appellations == [APPELLATION]
-    llm = _NoCall()
-    assert propose_graph_pairs(llm, grandmothers) == []
-    assert llm.prompts == []
-    propose_graph_pairs(
-        llm,
-        [
-            grandmother.model_copy(update={"appellations": []})
-            for grandmother in grandmothers
-        ],
-    )
-    assert len(llm.prompts) == 1

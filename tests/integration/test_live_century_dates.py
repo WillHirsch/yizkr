@@ -9,9 +9,10 @@ in 1900 and in 1800, and reads them back through the stack:
 * the writer stores the 19th century as 1801 at century precision, and
   Wikibase shows it as "19. century";
 * the query service serves the century's year as stored, and the static
-  site's format_time names the century Wikibase shows;
-* the disagreement report gives the 19th century the span Wikibase
-  counts: 1900, its last year, lies inside it, and 1800 does not.
+  site's format_time names the century Wikibase shows.
+
+The disagreement report's span for a century is checked in the required
+lane (tests/fictional_integration/test_production_queries.py).
 
 A date before the common era is unsupported (ADR-0034, #338):
 test_live_unsupported_dates.py checks that the writer refuses one.
@@ -33,7 +34,6 @@ import pytest
 
 from tests.fixtures.identity import write_mapped
 from yizkr.claims import ArtifactRef, ClaimBatch, TimeValue
-from yizkr.disagreement import disagreements
 from yizkr.pipeline import writer
 from yizkr.pipeline.writer import BatchWriter
 from yizkr.queries.publish import prefix_block
@@ -258,34 +258,3 @@ def test_the_site_names_the_century_wikibase_shows(
     value, precision = row["value"]["value"], row["precision"]["value"]
     assert (value, precision) == (served, "7")
     assert format_time(value, precision) == shown
-
-
-def test_the_report_spans_the_century_wikibase_shows(
-    client, config, fixture_graph
-):
-    qids, source = fixture_graph
-    properties, items = client.vocabulary()
-    letter = {qid: name for name, qid in source.items()}
-
-    def described(side) -> str:
-        day = side.value.term.value.lstrip("+")[:10]
-        return f"{day}/{side.value.precision} per " + ",".join(
-            letter[s.qid] for s in side.sources
-        )
-
-    found = disagreements(
-        lambda query: run_sparql(config, query),
-        properties,
-        items,
-        config.concept_uri,
-    )
-    rows = {
-        frozenset({described(row.a), described(row.b)})
-        for row in found
-        if row.entity_qid == qids["person"]
-    }
-    # 1900 lies inside the 19th century, so A and B agree; 1800 does not
-    assert rows == {
-        frozenset({"1801-01-01/7 per A", "1800-01-01/9 per C"}),
-        frozenset({"1900-01-01/9 per B", "1800-01-01/9 per C"}),
-    }

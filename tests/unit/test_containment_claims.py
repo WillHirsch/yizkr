@@ -6,8 +6,9 @@ with the qualifiers that date a period (`start_time`, `end_time`), an
 observation (`point_in_time`), their ranges and circa, and the writer
 writes them as it writes any claim's: a dated containment and an undated
 one of the same place and container coexist as two statements, each with
-its source and its run. The live test is
-tests/integration/test_live_containment.py.
+its source and its run. The required lane's
+tests/fictional_integration/test_production_queries.py reads such containments
+through the production containment query on a real query service.
 
 The fixtures are fictional (docs/EXAMPLES.md): Koshnovka, Kaldovsky
 District and Chadsk Oblast, with the pattern index's worked examples of a

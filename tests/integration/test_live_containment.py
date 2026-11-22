@@ -6,24 +6,12 @@ one hamlet in one district (`part_of` with a `point_in_time`, per a
 letter that says the hamlet belonged to the district in 1941, and
 without, per a certificate's district field), and the district in an
 oblast from 1937, the only link to the oblast, so the path runs through
-a dated claim. Then it checks:
-
-* the two containments of the hamlet coexist as two statements, the dated
-  one with its point in time and range, the undated one with no time;
-* the containment query lists each edge with its rank and whether a
-  source states it;
-* the inconsistency report reads the path through them at any time: a
-  person born in the hamlet per one source and in the oblast per another
-  differs only in resolution, and no row lists the pair;
-* a containment a curator deprecated is not followed: a second person,
-  born in the hamlet per one source and in a decoy district per another,
-  is listed, though a deprecated claim puts the hamlet in the decoy;
-* a containment that cites a run alone, as the place-hierarchy pass
-  writes one, is not followed: a third person, born in the hamlet per one
-  source and in a second decoy per another, is listed, and the query
-  says no source states that edge;
-* the impossibility filter's closure (ADR-0017 rule 2) reads the same
-  edges.
+a dated claim. Then it checks that the two containments of the hamlet
+coexist as two statements, the dated one with its point in time and
+range, the undated one with no time. The containment query, the
+inconsistency report and the impossibility filter's closure are checked
+on such edges in the required lane
+(tests/fictional_integration/test_production_queries.py).
 
 The places are the universe's Koshnovka, Kaldovsky District and Chadsk
 Oblast (docs/EXAMPLES.md), with the pattern index's worked example of a
@@ -42,27 +30,17 @@ from tests.fixtures.identity import by_label, write_mapped
 from tests.integration.conftest import (
     fixture_mark,
     register_fictional,
-    run_sparql,
     wait_for_query_service,
 )
 from yizkr import disagreement
 from yizkr.claims import ClaimBatch
-from yizkr.disagreement import (
-    CONTAINMENT,
-    DEPRECATED,
-    disagreements,
-    place_within,
-    read_containment,
-)
 from yizkr.pipeline import reconcile, writer
-from yizkr.pipeline.reconcile import fetch_place_containment
 from yizkr.pipeline.registrar import (
     _append,
     _existing_claim_targets,
     _item_claim,
 )
 from yizkr.pipeline.writer import BatchWriter
-from yizkr.queries.publish import load_templates, render_for_instance
 
 pytestmark = pytest.mark.live
 
@@ -265,81 +243,3 @@ def test_a_dated_and_an_undated_containment_coexist(client, written):
     for statement in in_district:
         assert statement["rank"] == "normal"
         assert statement["references"], "a containment without its source"
-
-
-def _containment_rows(client, config) -> list[dict]:
-    properties, items = client.vocabulary()
-    query = render_for_instance(
-        load_templates()[CONTAINMENT], properties, items, config.concept_uri
-    )
-    return run_sparql(config, query)
-
-
-def test_the_query_lists_each_edge_with_its_rank_and_source(
-    client, config, written
-):
-    entity = f"{config.concept_uri}/entity/"
-    hamlet, district, decoy, unstated = (
-        entity + written[key]
-        for key in ("hamlet", "district", "decoy", "unstated")
-    )
-    edges = sorted(
-        (
-            row["target"]["value"],
-            row["rank"]["value"].rsplit("#", 1)[-1],
-            row["stated"]["value"],
-        )
-        for row in _containment_rows(client, config)
-        if row["item"]["value"] == hamlet
-    )
-    assert edges == sorted(
-        [
-            (district, "NormalRank", "true"),
-            (district, "NormalRank", "true"),
-            (decoy, DEPRECATED.rsplit("#", 1)[-1], "true"),
-            (unstated, "NormalRank", "false"),
-        ]
-    )
-
-
-def test_the_report_reads_the_path_at_any_time(client, config, written):
-    entity = f"{config.concept_uri}/entity/"
-    containment = read_containment(_containment_rows(client, config))
-    hamlet, oblast, decoy, unstated = (
-        entity + written[key]
-        for key in ("hamlet", "oblast", "decoy", "unstated")
-    )
-    # through the district, whose only link to the oblast is dated
-    assert place_within(containment, hamlet, oblast)
-    # never through a deprecated claim, nor one no source states
-    assert not place_within(containment, hamlet, decoy)
-    assert not place_within(containment, hamlet, unstated)
-    properties, items = client.vocabulary()
-    rows = {
-        row.entity_qid: row
-        for row in disagreements(
-            lambda query: run_sparql(config, query),
-            properties,
-            items,
-            config.concept_uri,
-        )
-        if row.entity_qid
-        in (written["refined"], written["listed"], written["run-only"])
-    }
-    assert written["refined"] not in rows
-    for person, place in (("listed", decoy), ("run-only", unstated)):
-        row = rows[written[person]]
-        assert {row.a.value.term.value, row.b.value.term.value} == {
-            hamlet,
-            place,
-        }
-
-
-def test_the_impossibility_filter_reads_the_same_edges(
-    client, config, written
-):
-    containment = fetch_place_containment(client, config)
-    assert containment.contains(written["district"], written["hamlet"])
-    assert containment.contains(written["oblast"], written["hamlet"])
-    assert not containment.contains(written["decoy"], written["hamlet"])
-    assert not containment.contains(written["unstated"], written["hamlet"])

@@ -1,11 +1,10 @@
 """Live pipeline flow: register -> write, idempotency, the overwrite
 regression (two values on one property must COEXIST — the second write
 must never replace the first; ADR-0002), the provenance of a minted
-item's type statements, which the reappraisal queue and the unreferenced
-report must count correctly (#88), and a later source's kind for an item
-that already exists, which the queue must reflect (#233). Every claim
-cites its artifact by the SHA-1 of the artifact's media (#102), which the
-writer resolves to the registered item.
+item's type statements (#88), and a later source's kind for an item
+that already exists (#233). Every claim cites its artifact by the SHA-1
+of the artifact's media (#102), which the writer resolves to the
+registered item.
 
 Every label, title and image carries the session's marker
 (conftest.fixture_mark), so each session meets the fixture as a first
@@ -29,13 +28,11 @@ from yizkr.pipeline.reconcile import apply_equivalences
 from yizkr.pipeline.registrar import register_artifact
 from yizkr.pipeline.resolve import resolve_batch
 from yizkr.pipeline.writer import BatchWriter
-from yizkr.queries.publish import load_templates, render_for_instance
 
 from .conftest import (
     fictional_png,
     fixture_mark,
     register_fictional,
-    run_sparql,
     wait_for_query_service,
 )
 
@@ -884,7 +881,7 @@ def test_adr0014_vocabulary_writes(client, artifact):
     }
 
 
-# -- a minted item's type statements, and the two queues (#88) -------------
+# -- a minted item's type statements (#88) ---------------------------------
 #
 # A slice of the example universe (tests/fixtures/example_universe.py): the
 # family firm as two of its sources give it. Read alone, the 2002 interview
@@ -1071,27 +1068,6 @@ def cited(client, statement: dict) -> list[set[tuple[str, str]]]:
     ]
 
 
-def statement_uri(config, guid: str) -> str:
-    """API statement GUID (``Q5$uuid``) -> its RDF node URI."""
-    return f"{config.concept_uri}/entity/statement/{guid.replace('$', '-', 1)}"
-
-
-def rows_about(client, config, query: str, var: str, qids) -> list[dict]:
-    """The rows of packaged query `query` whose `var` is one of `qids`.
-    Rows about anything else on the instance are dropped before any
-    assertion or failure report can show them."""
-    properties, items = client.vocabulary()
-    rendered = render_for_instance(
-        load_templates()[query], properties, items, config.concept_uri
-    )
-    wanted = {f"{config.concept_uri}/entity/{qid}" for qid in qids}
-    return [
-        row
-        for row in run_sparql(config, rendered)
-        if row[var]["value"] in wanted
-    ]
-
-
 def test_minted_type_statements_cite_artifact_and_run(client, typed_firm):
     """Rules 1 and 2 (ADR-0003): the kind and type hint the writer wrote
     when it minted the firm are stated in the interview and, in a second
@@ -1114,47 +1090,6 @@ def test_minted_type_statements_cite_artifact_and_run(client, typed_firm):
             {("stated_in", typed_firm.sources[source])},
             {("inferred_from_extraction_run", typed_firm.runs[source])},
         ]
-
-
-def test_queue_lists_every_type_statement(client, config, typed_firm):
-    """ADR-0023 §5: each of the firm's statements is a machine statement
-    with one source and no curator sibling, so the reappraisal queue lists
-    all five, one row each. The minted kind is not a curator witness for
-    the directory's later `instance of`: both are listed. The artifacts'
-    and run items' own type statements are not machine writes, and none
-    is listed."""
-    statements = statements_by_key(client, typed_firm.firm)
-    # two kinds, the type hint, the interview's name for the firm and the
-    # directory's founding year
-    assert {key: len(s) for key, s in statements.items()} == {
-        "instance_of": 2,
-        "type_hint": 1,
-        "referred_to_as": 1,
-        "start_time": 1,
-    }
-    expected = sorted(
-        statement_uri(config, s["id"])
-        for claims in statements.values()
-        for s in claims
-    )
-    queue = "under-witnessed-statements"
-    rows = rows_about(client, config, queue, "subject", [typed_firm.firm])
-    assert sorted(row["statement"]["value"] for row in rows) == expected
-
-    others = [*typed_firm.sources.values(), *typed_firm.runs.values()]
-    assert rows_about(client, config, queue, "subject", others) == []
-
-
-def test_no_statement_of_the_slice_is_unreferenced(client, config, typed_firm):
-    """ADR-0003 §3: the unreferenced report lists none of the slice's
-    statements, whether the writer or the registrar wrote them."""
-    qids = [
-        typed_firm.firm,
-        *typed_firm.sources.values(),
-        *typed_firm.runs.values(),
-    ]
-    report = "unreferenced-statements"
-    assert rows_about(client, config, report, "entity", qids) == []
 
 
 def test_rewriting_the_slice_writes_nothing(client, typed_firm):
@@ -1455,46 +1390,6 @@ def test_later_source_kind_coexists(client, witnessed):
             {("stated_in", witnessed.sources[source])},
             {("inferred_from_extraction_run", witnessed.runs[source])},
         ]
-
-
-def test_queue_reflects_the_added_witness(client, config, witnessed):
-    """ADR-0023 §5: Sebastian's kind has two sources now, so the
-    under-witnessed queue no longer lists it. Every other statement of the
-    slice has one source and no curator sibling, and is listed, one row
-    each: the firm's two kinds among them."""
-    statements = {
-        name: statements_by_key(client, qid)
-        for name, qid in witnessed.items.items()
-    }
-    assert {
-        name: {key: len(claims) for key, claims in by_key.items()}
-        for name, by_key in statements.items()
-    } == {
-        "sebastian": {"instance_of": 1, "occupation": 1, "employer": 1},
-        "hatter": {"instance_of": 1},
-        "firm": {
-            "instance_of": 2,
-            "type_hint": 1,
-            "referred_to_as": 1,
-            "start_time": 1,
-        },
-    }
-    (witnessed_kind,) = statements["sebastian"]["instance_of"]
-    expected = sorted(
-        statement_uri(config, s["id"])
-        for by_key in statements.values()
-        for claims in by_key.values()
-        for s in claims
-        if s["id"] != witnessed_kind["id"]
-    )
-    rows = rows_about(
-        client,
-        config,
-        "under-witnessed-statements",
-        "subject",
-        witnessed.items.values(),
-    )
-    assert sorted(row["statement"]["value"] for row in rows) == expected
 
 
 def test_rewriting_the_later_slice_adds_nothing(client, witnessed):

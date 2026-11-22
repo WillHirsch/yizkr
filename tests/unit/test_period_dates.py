@@ -200,8 +200,9 @@ def event_arm(q: str) -> str:
 class TestThePersonTimeline:
     """person-timeline.rq lists a marriage by its spouse statement's start
     and end time, a point in time as an observation, and each date with the
-    range its source states for it. tests/integration/test_live_period_dates.py
-    pins its rows for a fictional marriage on the running stack."""
+    range its source states for it. The required lane's
+    tests/fictional_integration/test_production_queries.py
+    checks its rows for a fictional marriage on a real query service."""
 
     @pytest.fixture
     def q(self) -> str:

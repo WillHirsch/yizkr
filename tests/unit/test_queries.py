@@ -129,7 +129,7 @@ class TestLibrary:
     def test_unclassified_entities_group_by_the_english_hint(self, templates):
         # ADR-0013 §A, as ADR-0035 amends it: the holding class's entities
         # grouped by their type hint, in lower case, by frequency (#91);
-        # tests/integration/test_live_unclassified.py pins the rows live
+        # the required lane's test_production_queries.py checks the rows
         q = templates["unclassified-entities"]
         query = "\n".join(
             line for line in q.splitlines() if not line.startswith("#")
@@ -202,8 +202,9 @@ class TestDisagreementReport:
     attributed values of the compared properties, place-containment.rq the
     recorded containment, and yizkr.disagreement compares them
     (tests/unit/test_disagreement.py). The published page lists the values
-    side by side, not pairs. tests/integration/test_live_disagreement.py
-    pins the report's rows live."""
+    side by side, not pairs. The required lane's
+    tests/fictional_integration/test_production_queries.py
+    checks the report's rows."""
 
     @pytest.fixture
     def q(self, templates) -> str:
