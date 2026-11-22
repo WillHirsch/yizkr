@@ -62,7 +62,6 @@ from yizkr.pipeline.review_stages import (
 )
 from yizkr.pipeline.run_provenance import read_record
 from yizkr.pipeline.source_ingestion import SourceIngestion
-from yizkr.pipeline.text_products import TextSettings
 from yizkr.pipeline.transcribe import TranscribedPage, Transcription
 
 from .test_write_query import _synchronize
@@ -328,14 +327,14 @@ def _retained_text_source(client, directory, target, old_support, monkeypatch):
                 exclusions_file=exclusions,
             )
             products = workflow.prepare(
-                settings=TextSettings(strategy="chunked", language="de"),
-                extractor_client=extractor,
-                critic_client=critic,
+                language="de", extractor_client=extractor, critic_client=critic
             )
             assert (extractor.calls, critic.calls) == (2, 1)
             assert tuple(
-                stage.stage for stage in products.critique.provenance.stages
-            ) == ("transcription", "extraction", "critique")
+                stage.stage
+                for stage in products.batch.extraction_run.provenance.stages
+            ) == ("transcription", "extraction")
+            assert products.critique.findings == ()
             registration = workflow.prepare_registration(
                 "certificate", "Retained fictional birth certificate"
             )

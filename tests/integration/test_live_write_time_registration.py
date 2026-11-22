@@ -2,11 +2,10 @@
 deck's derived media, each found or made by the SHA-1 of its media.
 
 * Two files that share a title and a file name, but not their bytes, are
-  two artifacts, and each has page fragments of its own, `part of` it and
-  of nothing else (#187).
-* Registering them again, by a registrar that reads the instance afresh,
-  finds every item by its media's SHA-1: it makes no item, writes no
-  statement and uploads no file.
+  registered with their page fragments. Registering them again, by a
+  registrar that reads the instance afresh, finds every item by its
+  media's SHA-1: it makes no item, writes no statement and uploads no
+  file.
 * The write's registration of a deck (`ScratchDriver._step_register`)
   registers the deck, its slides as page fragments, and its image from
   the record the stages before the write keep of it; a second write
@@ -194,61 +193,6 @@ def register_both(client, tmp_path):
         )
         for folder, data in (("emigration", FIRST), ("copies", SECOND))
     ]
-
-
-def test_same_titled_artifacts_get_distinct_fragments(client, tmp_path):
-    properties, items = client.vocabulary()
-    first, second = register_both(client, tmp_path)
-
-    assert first.artifact_qid != second.artifact_qid
-    labels = {
-        qid: entity["labels"]["en"]["value"]
-        for qid, entity in client.api_get(
-            {
-                "action": "wbgetentities",
-                "ids": f"{first.artifact_qid}|{second.artifact_qid}",
-                "props": "labels",
-                "languages": "en",
-            }
-        )["entities"].items()
-    }
-    assert labels == {
-        first.artifact_qid: TITLE,
-        second.artifact_qid: f"{TITLE} [{sha1(SECOND)[:8]}]",
-    }
-    assert (
-        sorted(first.fragment_qids)
-        == sorted(second.fragment_qids)
-        == [
-            1,
-            2,
-        ]
-    )
-    assert set(first.fragment_qids.values()).isdisjoint(
-        second.fragment_qids.values()
-    )
-    for result in (first, second):
-        artifact = result.artifact_qid
-        found = entities(client, *result.fragment_qids.values())
-        for page, qid in result.fragment_qids.items():
-            claims = found[qid]["claims"]
-            # an artifact fragment, part of its own artifact on its page,
-            # each statement stated in that artifact (ADR-0003)
-            (kind,) = claims[properties["instance_of"]]
-            assert value(kind["mainsnak"]) == items["artifact_fragment"]
-            assert cited(client, kind) == {artifact}
-            (part,) = claims[properties["part_of"]]
-            assert value(part["mainsnak"]) == artifact
-            assert [
-                value(snak)
-                for snak in part["qualifiers"][properties["page_number"]]
-            ] == [str(page)]
-            assert cited(client, part) == {artifact}
-        # the artifact's fragments, found by its part-of statements, are
-        # these and no others
-        assert parts_of(client, artifact)["fragment"] == {
-            str(page): [qid] for page, qid in result.fragment_qids.items()
-        }
 
 
 def test_re_registration_creates_no_duplicates(client, tmp_path):

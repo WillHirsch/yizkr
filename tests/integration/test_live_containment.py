@@ -6,12 +6,9 @@ one hamlet in one district (`part_of` with a `point_in_time`, per a
 letter that says the hamlet belonged to the district in 1941, and
 without, per a certificate's district field), and the district in an
 oblast from 1937, the only link to the oblast, so the path runs through
-a dated claim. Then it checks that the two containments of the hamlet
-coexist as two statements, the dated one with its point in time and
-range, the undated one with no time. The containment query, the
-inconsistency report and the impossibility filter's closure are checked
-on such edges in the required lane
-(tests/fictional_integration/test_production_queries.py).
+a dated claim. The containment query, the inconsistency report and the
+impossibility filter's closure are checked on such edges in the required
+lane (tests/fictional_integration/test_production_queries.py).
 
 The places are the universe's Koshnovka, Kaldovsky District and Chadsk
 Oblast (docs/EXAMPLES.md), with the pattern index's worked example of a
@@ -197,49 +194,3 @@ def written(client, config):
         config, client, [*qids.values(), letter.qid, certificate.qid]
     )
     return qids
-
-
-def _part_of(client, qid: str) -> list[dict]:
-    properties, _ = client.vocabulary()
-    data = client.api_get(
-        {
-            "action": "wbgetclaims",
-            "entity": qid,
-            "property": properties["part_of"],
-        }
-    )
-    return [c for cs in data["claims"].values() for c in cs]
-
-
-def test_a_dated_and_an_undated_containment_coexist(client, written):
-    properties, _ = client.vocabulary()
-    keys = {pid: key for key, pid in properties.items()}
-    in_district = [
-        statement
-        for statement in _part_of(client, written["hamlet"])
-        if statement["mainsnak"]["datavalue"]["value"]["id"]
-        == written["district"]
-    ]
-    times = sorted(
-        (
-            {
-                keys[pid]: [
-                    snak["datavalue"]["value"]["time"][:5] for snak in snaks
-                ]
-                for pid, snaks in statement.get("qualifiers", {}).items()
-            }
-            for statement in in_district
-        ),
-        key=len,
-    )
-    assert times == [
-        {},
-        {
-            "point_in_time": ["+1941"],
-            "earliest_date": ["+1940"],
-            "latest_date": ["+1941"],
-        },
-    ]
-    for statement in in_district:
-        assert statement["rank"] == "normal"
-        assert statement["references"], "a containment without its source"

@@ -15,22 +15,17 @@ item itself (ADR-0003):
 * one as the GEDCOM import makes a media object's item: a label and
   `instance of artifact`, no file and no hash.
 
-Then:
-
-* other bytes registered under the first item's label make a new item,
-  content-tagged, flagged `unhashed-title`;
-* its bytes registered under another title and file name upload to one
-  of the two files (MediaWiki's `duplicate`), and make a new item that
-  shares both, flagged `shared-file` against both items, as MediaWiki
-  lists every file of those bytes;
-* bytes registered under exactly the media object's title make a new
-  item flagged `unhashed-title` against it;
-
-and the items with no hash are left as they are: their revisions do not
-move, and none gains a `media SHA-1` or a `media file`. Registered again,
-by a registrar that reads the instance afresh, each item is found by its
-SHA-1, nothing is written, and it is flagged again, as a flag repeats on
-every run while its condition holds.
+Then the two items' bytes registered under another title and file name
+upload to one of the two files (MediaWiki's `duplicate`), and make a new
+item that shares both, flagged `shared-file` against both items, as
+MediaWiki lists every file of those bytes, and the items with no hash
+are left as they are: their revisions do not move, and none gains a
+`media SHA-1` or a `media file`. That copy, other bytes under the first
+item's label and bytes under exactly the media object's title are each
+registered twice, the second time by a registrar that reads the instance
+afresh: each is found by its SHA-1, nothing is written, and it is
+flagged again as it was, as a flag repeats on every run while its
+condition holds.
 
 Fictional synthetic media only (docs/EXAMPLES.md): the Löbig family's studio
 portrait of the 1890s. Every title, file name and label carries a marker, eight
@@ -55,7 +50,6 @@ from yizkr.core import wiki
 from yizkr.pipeline import registrar
 from yizkr.pipeline.registrar import (
     SHARED_FILE,
-    UNHASHED_TITLE,
     Registrar,
     _ensure_referenced,
     _files_holding,
@@ -231,25 +225,6 @@ def test_the_fixture_items_are_unhashed(client, tmp_path):
     assert {old, second, media_object} <= Registrar(client)._read().unhashed
 
 
-def test_other_bytes_under_its_label_are_flagged(client, tmp_path):
-    old = unhashed_item(client, tmp_path)
-    before = revision(client, old)
-    path = write(tmp_path, "rescan", RESCAN_NAME, RESCAN)
-
-    result = Registrar(client).register_artifact(
-        path, "photograph", LABEL, description=DESCRIPTION
-    )
-
-    new = result.artifact_qid
-    assert new != old
-    # flagged on the run that makes it and on every run that finds it
-    assert flagged(result) == [(UNHASHED_TITLE, new, sha1(RESCAN), (old,))]
-    assert strings(client, new, "media_sha1") == [sha1(RESCAN)]
-    assert result.file_page != f"File:{FILE_NAME}"
-    assert revision(client, old) == before
-    assert strings(client, old, "media_sha1") == []
-
-
 def test_its_bytes_under_another_title_are_flagged(client, tmp_path):
     old = unhashed_item(client, tmp_path)
     second = second_unhashed_item(client, tmp_path)
@@ -274,26 +249,6 @@ def test_its_bytes_under_another_title_are_flagged(client, tmp_path):
     assert (revision(client, old), revision(client, second)) == before
     assert strings(client, old, "media_sha1") == []
     assert strings(client, second, "media_sha1") == []
-
-
-def test_bytes_under_a_media_objects_title_are_flagged(client, tmp_path):
-    media_object = media_object_item(client)
-    before = revision(client, media_object)
-    path = write(tmp_path, "group", GROUP_NAME, GROUP)
-
-    result = Registrar(client).register_artifact(
-        path, "photograph", MEDIA_OBJECT_LABEL, description=DESCRIPTION
-    )
-
-    new = result.artifact_qid
-    assert new != media_object
-    assert flagged(result) == [
-        (UNHASHED_TITLE, new, sha1(GROUP), (media_object,))
-    ]
-    assert strings(client, new, "media_sha1") == [sha1(GROUP)]
-    assert revision(client, media_object) == before
-    assert strings(client, media_object, "media_file") == []
-    assert strings(client, media_object, "media_sha1") == []
 
 
 def test_a_re_run_finds_each_and_flags_it_again(client, tmp_path):

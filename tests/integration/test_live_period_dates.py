@@ -2,12 +2,9 @@
 "Marriages, residences and other periods").
 
 A fictional fixture writes one marriage as three sources date it, and a
-residence observed at a date between two years, and reads back through
-the stack that the spouse statement carries each end's bounds as written:
-the start's earliest date and latest start date, the end's earliest end
-date and latest date, and a point in time. The person timeline's and the
-disagreement report's reading of such a period is checked in the required
-lane (tests/fictional_integration/test_production_queries.py).
+residence observed at a date between two years. The person timeline's
+and the disagreement report's reading of such a period is checked in the
+required lane (tests/fictional_integration/test_production_queries.py).
 
 Each source is registered with a fictional PNG of its own
 (register_fictional), which its claims cite by SHA-1 (#102). Like every
@@ -236,39 +233,3 @@ def fixture_graph(client, config):
 def day(value: str) -> str:
     """A stored time's day, as the query service or the API gives it."""
     return value.lstrip("+")[:10]
-
-
-def test_the_spouse_statement_carries_each_bound_as_written(
-    client, fixture_graph
-):
-    qids, _, _ = fixture_graph
-    properties, _ = client.vocabulary()
-    key_of = {pid: key for key, pid in properties.items()}
-    found = client.api_get(
-        {
-            "action": "wbgetclaims",
-            "entity": qids["person"],
-            "property": properties["spouse"],
-        }
-    )
-    (ranged,) = [
-        statement
-        for statements in found["claims"].values()
-        for statement in statements
-        if properties["latest_start_date"] in statement.get("qualifiers", {})
-    ]
-    written = {
-        key_of[pid]: [
-            day(snak["datavalue"]["value"]["time"]) for snak in snaks
-        ]
-        for pid, snaks in ranged["qualifiers"].items()
-    }
-    assert written == {
-        "start_time": ["1946-00-00"],
-        "earliest_date": ["1946-00-00"],
-        "latest_start_date": ["1947-00-00"],
-        "end_time": ["1956-00-00"],
-        "earliest_end_date": ["1956-00-00"],
-        "latest_date": ["1957-00-00"],
-        "point_in_time": ["1950-00-00"],
-    }

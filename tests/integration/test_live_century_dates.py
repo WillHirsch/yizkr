@@ -15,7 +15,7 @@ The disagreement report's span for a century is checked in the required
 lane (tests/fictional_integration/test_production_queries.py).
 
 A date before the common era is unsupported (ADR-0034, #338):
-test_live_unsupported_dates.py checks that the writer refuses one.
+tests/unit/test_unsupported_dates.py checks that the writer refuses one.
 
 Each source is registered with a fictional PNG of its own
 (register_fictional), which its claims cite by SHA-1 (#102). Like every

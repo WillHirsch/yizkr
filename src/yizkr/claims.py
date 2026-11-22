@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Claim JSON schema: the contract between extraction and writing.
 
 Every step of the ingestion pipeline (ADR-0003) exchanges claims in
@@ -71,22 +70,13 @@ names an artifact kind for an entity (artifact_kind_problems, ADR-0039
 §10.1(b)), so an entity of one is a structured record's or a
 hand-written batch's. The writer checks the same rules and resolves an
 artifact subject to the artifact item as it resolves the source.
-
-CLI:
-    python3 claims.py --json-schema  # print JSON Schema (for LLM prompts)
-    python3 claims.py --validate batch.json  # parse + manifest-check a file
-    python3 claims.py --validate batch.json --placed container-inventory.json
-        # ... with the artifacts a container places, for its claims
-        # about them
 """
 
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 import re
-import sys
 import unicodedata
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -1244,93 +1234,14 @@ def placed_artifacts(pages: Iterable[object] | None) -> frozenset[str]:
     )
 
 
-# How a command line gives the artifacts a source places (read_placed),
-# which a caption's refusal there names.
+# How a command line gives the artifacts a source places (read by
+# yizkr.cli.read_placed), which a caption's refusal there names.
 PLACED_OPTION = (
     "--placed <container-inventory.json> (or its document directory), "
     "an explicit --placed <derived-media.json> compatibility record, or "
     "--placed <source sha1>=<artifact sha1>"
     "[,<artifact sha1>...]"
 )
-_PLACED_PAIR = re.compile(
-    r"([0-9a-f]{40})=([0-9a-f]{40}(?:,[0-9a-f]{40})*)", re.IGNORECASE
-)
-
-
-def read_placed(values: Iterable[str]) -> dict[str, frozenset[str]]:
-    """The artifacts each source places, by the SHA-1 of its media, as a
-    command line gives them (PLACED_OPTION), in the form
-    validate_against_manifest and the writer take as `placed`. Each value
-    is a source's SHA-1 and the SHA-1s of the artifacts it places, or
-    a verified common inventory, or an explicit compatibility record of
-    derived media. Directories prefer their common inventory; an invalid
-    common record never falls back to older metadata. A directory holding
-    only an older record retains the compatibility adapter, which provides
-    owner keys but no structural provenance. Common records verify their
-    named bytes and project eligible bound owners; older records name
-    already registered owners without requiring their local media files.
-    Values for one source add up. Raises ValueError for invalid records or
-    a source said to place itself."""
-    from yizkr.pipeline.container_inventory import (
-        CONTAINER_INVENTORY,
-        read_inventory,
-    )
-    from yizkr.pipeline.container_sources import project_sources
-    from yizkr.pipeline.presentation import DERIVED_MEDIA, DerivedMediaRecord
-
-    placed: dict[str, set[str]] = {}
-    for value in values:
-        pair = _PLACED_PAIR.fullmatch(value)
-        if pair is not None:
-            source = pair[1].lower()
-            artifacts = {sha1.lower() for sha1 in pair[2].split(",")}
-        else:
-            path = Path(value)
-            if path.is_dir():
-                common = path / CONTAINER_INVENTORY
-                path = (
-                    common
-                    if common.exists() or common.is_symlink()
-                    else path / DERIVED_MEDIA
-                )
-            if path.name == CONTAINER_INVENTORY:
-                inventory = read_inventory(path.parent)
-                if inventory is None:
-                    raise ValueError(
-                        f"{path} is missing or invalid; reconstruct the "
-                        "container inventory from its original source"
-                    )
-                projection = project_sources(inventory, path.parent)
-                source, artifacts = (
-                    inventory.source.sha1,
-                    set(projection.sources),
-                )
-                if source in artifacts:
-                    raise ValueError(
-                        f"{value}: a source does not place itself"
-                    )
-                placed.setdefault(source, set()).update(artifacts)
-                continue
-            try:
-                record = DerivedMediaRecord.model_validate_json(
-                    path.read_bytes()
-                )
-            except OSError as exc:
-                raise ValueError(
-                    f"{path}: {exc.strerror}; give {PLACED_OPTION}"
-                ) from None
-            except ValidationError:
-                raise ValueError(
-                    f"{path} is not a record of a container's derived media "
-                    f"({DERIVED_MEDIA}); give {PLACED_OPTION}"
-                ) from None
-            source, artifacts = record.source_sha1, set(record.media)
-        if source in artifacts:
-            raise ValueError(
-                f"{value}: a source does not place itself (ADR-0039 §2.1)"
-            )
-        placed.setdefault(source, set()).update(artifacts)
-    return {source: frozenset(found) for source, found in placed.items()}
 
 
 def unplaced_claims(
@@ -2531,75 +2442,3 @@ def drop_containers(
     if len(kept) == len(within):
         return entity, audit
     return {**entity, "structure": {**structure, "within": kept}}, audit
-
-
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument(
-        "--json-schema",
-        action="store_true",
-        help="print the ClaimBatch JSON Schema (for LLM extraction prompts)",
-    )
-    group.add_argument(
-        "--validate",
-        type=Path,
-        metavar="FILE",
-        help="parse FILE as a claim batch and check it against the manifest",
-    )
-    parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
-    parser.add_argument(
-        "--placed",
-        action="append",
-        default=[],
-        metavar="RECORD|SOURCE=SHA1,...",
-        help="the artifacts a source places, which its captions and "
-        "document-subject claims may take as their subject (ADR-0039 §2.1, "
-        "§10.1): container-inventory.json or its document directory, an "
-        "explicit derived-media.json compatibility record, or a source's "
-        "SHA-1 and theirs; repeatable",
-    )
-    args = parser.parse_args()
-
-    if args.json_schema:
-        print(json.dumps(ClaimBatch.model_json_schema(), indent=2))
-        return 0
-
-    try:
-        placed = read_placed(args.placed)
-    except ValueError as exc:
-        print(f"--placed: {exc}", file=sys.stderr)
-        return 1
-    try:
-        batch = ClaimBatch.model_validate_json(args.validate.read_text())
-    except ValidationError as exc:
-        print(f"Schema errors in {args.validate}:\n{exc}", file=sys.stderr)
-        return 1
-    acceptance = load_acceptance(args.manifest)
-    problems = validate_against_manifest(
-        batch,
-        manifest_path=args.manifest,
-        acceptance=acceptance,
-        placed=placed,
-    )
-    for problem in problems:
-        print(f"manifest check: {problem}", file=sys.stderr)
-    unplaced = unplaced_claims(batch, placed, acceptance)
-    if unplaced:
-        print(unplaced_hint(unplaced), file=sys.stderr)
-    if problems:
-        return 1
-    print(
-        f"{args.validate}: valid ({len(batch.claims)} claims, "
-        f"run {batch.extraction_run.model_identifier})"
-    )
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

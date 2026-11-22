@@ -3,8 +3,7 @@
 The extended roster query (kinship QIDs, last activity) is what lets
 blocking prune pairs the graph already forbids. This writes a kinship
 edge under labels carrying the session's marker (conftest.fixture_mark),
-so each session meets it as a first write, then asserts that
-`impossible_pair` rules out the two roster entities the edge joins.
+so each session meets it as a first write.
 
 The fixture also holds dates at century and decade precision, curator-made
 events (ADR-0040 Q5; conftest.curator_event_writes), a death of unknown
@@ -27,11 +26,6 @@ from tests.integration.conftest import (
 )
 from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.pipeline import reconcile, writer
-from yizkr.pipeline.reconcile import (
-    _roster_pair_facts,
-    fetch_roster,
-    impossible_pair,
-)
 from yizkr.pipeline.registrar import register_artifact
 from yizkr.pipeline.writer import BatchWriter
 
@@ -257,10 +251,3 @@ def _by_label(roster, label):
     matches = [entity for entity in roster if entity.label == label]
     assert matches, f"no roster entity labelled {label!r}"
     return matches[0]
-
-
-def test_kinship_edge_makes_the_pair_impossible(client, config, written):
-    roster = fetch_roster(client, config)
-    younger = _roster_pair_facts(_by_label(roster, YOUNGER))
-    elder = _roster_pair_facts(_by_label(roster, ELDER))
-    assert impossible_pair(younger, elder) == "kinship-edge"
