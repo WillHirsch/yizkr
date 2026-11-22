@@ -103,6 +103,41 @@ REQUIRED_CASES = (
         "test_competing_reviewed_plans_dispatch_one_historical_write",
     ),
     Case(
+        "identity",
+        "test_production_queries",
+        "test_the_disagreement_report_pairs_what_different_artifacts_state",
+    ),
+    Case(
+        "identity",
+        "test_production_queries",
+        "test_the_containment_edges_carry_their_rank_and_source",
+    ),
+    Case(
+        "identity",
+        "test_production_queries",
+        "test_the_person_timeline_dates_events_and_periods",
+    ),
+    Case(
+        "identity",
+        "test_production_queries",
+        "test_the_kinship_rows_follow_the_stated_steps_at_their_ranks",
+    ),
+    Case(
+        "identity",
+        "test_production_queries",
+        "test_the_review_queues_list_what_needs_a_reviewer",
+    ),
+    Case(
+        "identity",
+        "test_production_queries",
+        "test_the_reconcile_roster_reads_kinship_dates_and_appellations",
+    ),
+    Case(
+        "identity",
+        "test_production_queries",
+        "test_the_gallery_and_the_map_name_media_and_connections",
+    ),
+    Case(
         "write-query",
         "test_container_sources",
         "test_common_sources_preserve_owners_placements_and_citations",
@@ -141,6 +176,12 @@ REQUIRED_CASES = (
         "write-query",
         "test_graph_projection",
         "test_recorded_graph_projection_replays_and_refuses_stale_capture",
+    ),
+    # It asserts over its whole stack, so it has a stack of its own.
+    Case(
+        "queries",
+        "test_production_queries",
+        "test_every_production_query_runs_and_no_statement_is_unreferenced",
     ),
 )
 # Group names become Compose project suffixes and evidence folder names.
