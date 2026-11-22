@@ -48,11 +48,13 @@ import itertools
 import json
 import math
 import os
+import re
 import sqlite3
 import sys
+from collections.abc import Iterable
 from pathlib import Path
 
-from yizkr.claims import ClaimBatch
+from yizkr.claims import PLACED_OPTION, ClaimBatch
 from yizkr.core.config import Config
 from yizkr.core.corpus import ExclusionList
 from yizkr.core.privacy import DEFAULT_CUTOFF_YEARS
@@ -71,13 +73,94 @@ def _load_batch(path: Path) -> ClaimBatch:
     return ClaimBatch.model_validate_json(path.read_text())
 
 
+_PLACED_PAIR = re.compile(
+    r"([0-9a-f]{40})=([0-9a-f]{40}(?:,[0-9a-f]{40})*)", re.IGNORECASE
+)
+
+
+def read_placed(values: Iterable[str]) -> dict[str, frozenset[str]]:
+    """The artifacts each source places, by the SHA-1 of its media, as a
+    command line gives them (PLACED_OPTION), in the form
+    validate_against_manifest and the writer take as `placed`. Each value
+    is a source's SHA-1 and the SHA-1s of the artifacts it places, or
+    a verified common inventory, or an explicit compatibility record of
+    derived media. Directories prefer their common inventory; an invalid
+    common record never falls back to older metadata. A directory holding
+    only an older record retains the compatibility adapter, which provides
+    owner keys but no structural provenance. Common records verify their
+    named bytes and project eligible bound owners; older records name
+    already registered owners without requiring their local media files.
+    Values for one source add up. Raises ValueError for invalid records or
+    a source said to place itself."""
+    from pydantic import ValidationError
+
+    from yizkr.pipeline.container_inventory import (
+        CONTAINER_INVENTORY,
+        read_inventory,
+    )
+    from yizkr.pipeline.container_sources import project_sources
+    from yizkr.pipeline.presentation import DERIVED_MEDIA, DerivedMediaRecord
+
+    placed: dict[str, set[str]] = {}
+    for value in values:
+        pair = _PLACED_PAIR.fullmatch(value)
+        if pair is not None:
+            source = pair[1].lower()
+            artifacts = {sha1.lower() for sha1 in pair[2].split(",")}
+        else:
+            path = Path(value)
+            if path.is_dir():
+                common = path / CONTAINER_INVENTORY
+                path = (
+                    common
+                    if common.exists() or common.is_symlink()
+                    else path / DERIVED_MEDIA
+                )
+            if path.name == CONTAINER_INVENTORY:
+                inventory = read_inventory(path.parent)
+                if inventory is None:
+                    raise ValueError(
+                        f"{path} is missing or invalid; reconstruct the "
+                        "container inventory from its original source"
+                    )
+                projection = project_sources(inventory, path.parent)
+                source, artifacts = (
+                    inventory.source.sha1,
+                    set(projection.sources),
+                )
+                if source in artifacts:
+                    raise ValueError(
+                        f"{value}: a source does not place itself"
+                    )
+                placed.setdefault(source, set()).update(artifacts)
+                continue
+            try:
+                record = DerivedMediaRecord.model_validate_json(
+                    path.read_bytes()
+                )
+            except OSError as exc:
+                raise ValueError(
+                    f"{path}: {exc.strerror}; give {PLACED_OPTION}"
+                ) from None
+            except ValidationError:
+                raise ValueError(
+                    f"{path} is not a record of a container's derived media "
+                    f"({DERIVED_MEDIA}); give {PLACED_OPTION}"
+                ) from None
+            source, artifacts = record.source_sha1, set(record.media)
+        if source in artifacts:
+            raise ValueError(
+                f"{value}: a source does not place itself (ADR-0039 §2.1)"
+            )
+        placed.setdefault(source, set()).update(artifacts)
+    return {source: frozenset(found) for source, found in placed.items()}
+
+
 def _placed(args) -> dict[str, frozenset[str]]:
     """The artifacts each source places, as `--placed` gives them
-    (yizkr.claims.read_placed): what a caption may take as its subject
-    (ADR-0039 §2.1). Exits, before any batch is read, on a value that
-    gives none."""
-    from yizkr.claims import read_placed
-
+    (read_placed): what a caption may take as its subject (ADR-0039
+    §2.1). Exits, before any batch is read, on a value that gives
+    none."""
     try:
         return read_placed(args.placed)
     except ValueError as exc:
@@ -370,6 +453,7 @@ def cmd_claims(args) -> int:
         unplaced_hint,
         validate_against_manifest,
     )
+    from yizkr.model.schema import DEFAULT_MANIFEST, load_acceptance
 
     if args.json_schema:
         print(json.dumps(ClaimBatch.model_json_schema(), indent=2))
@@ -380,10 +464,14 @@ def cmd_claims(args) -> int:
     except ValidationError as exc:
         print(f"Schema errors in {args.validate}:\n{exc}", file=sys.stderr)
         return 1
-    problems = validate_against_manifest(batch, placed=placed)
+    manifest = DEFAULT_MANIFEST if args.manifest is None else args.manifest
+    acceptance = load_acceptance(manifest)
+    problems = validate_against_manifest(
+        batch, manifest_path=manifest, acceptance=acceptance, placed=placed
+    )
     for problem in problems:
         print(f"manifest check: {problem}", file=sys.stderr)
-    unplaced = unplaced_claims(batch, placed)
+    unplaced = unplaced_claims(batch, placed, acceptance)
     if unplaced:
         print(unplaced_hint(unplaced), file=sys.stderr)
     if problems:
@@ -1689,6 +1777,14 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         metavar="FILE",
         help="schema + manifest check a batch file",
+    )
+    p.add_argument(
+        "--manifest",
+        type=Path,
+        default=None,
+        metavar="FILE",
+        help="the model manifest --validate checks against (default: the "
+        "package's model/manifest.yaml)",
     )
     _add_placed(p)
     p.set_defaults(func=cmd_claims)
