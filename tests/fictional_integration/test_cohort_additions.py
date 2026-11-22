@@ -1,7 +1,7 @@
 """Protected cohort choices use real review, exclusion and creation receipts.
 
-The cohort case runs before other fixtures intentionally leave untyped legacy
-items; the saved-image case assigns an existing identity and creates none.
+These cases run before other fixtures intentionally leave untyped legacy
+items, which make cohort candidate coverage incomplete for every mention.
 Readings are authored fiction; no provider call or simulated server guard
 substitutes for the configured Wikibase persistence boundary.
 """

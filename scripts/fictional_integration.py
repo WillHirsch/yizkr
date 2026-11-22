@@ -30,6 +30,11 @@ REQUIRED_CASES = (
         "tests.fictional_integration.test_cohort_additions",
         "test_protected_cohort_choices_claims_and_creation_recovery",
     ),
+    # Before the cases below, which leave untyped legacy items.
+    (
+        "tests.fictional_integration.test_cohort_additions",
+        "test_saved_image_reading_reaches_reviewed_claim_application",
+    ),
     (
         "tests.fictional_integration.test_assignment_authority",
         "test_reviewed_assignments_are_atomic_recoverable_and_graph_preserving",
@@ -85,10 +90,6 @@ REQUIRED_CASES = (
     (
         "tests.fictional_integration.test_graph_projection",
         "test_recorded_graph_projection_replays_and_refuses_stale_capture",
-    ),
-    (
-        "tests.fictional_integration.test_cohort_additions",
-        "test_saved_image_reading_reaches_reviewed_claim_application",
     ),
 )
 GROUPS = {
