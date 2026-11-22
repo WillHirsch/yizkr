@@ -52,7 +52,7 @@ Retained ingestion preserves existing identities, source evidence and human deci
 
 The owner authorizes designating an instance retained under #159 after readiness is demonstrated for supported workflows: reviewed admission, stable identity, safe retries, correction/recovery, privacy controls and workable backup/restore. No fixed number of unchanged runs or end to extraction development is required. Missing advanced operations can remain explicit refusals when the supported workflow is safe and useful.
 
-The code already reads both the `Project:Kept state` page and the host's `kept.json` marker, and `core.instance.mark_kept` can write both. Reset refuses if either marks the instance kept or the necessary state cannot be established. These helpers neither designate an instance retained (#904) nor implement increments onto one (#822). Current writes through a single identity map must not be treated as support for evolving retained identities; #723 is the narrow incremental addition milestone.
+The code already reads both the `Project:Kept state` page and the host's `kept.json` marker, and `core.instance.mark_kept` can write both. Reset refuses if either marks the instance kept or the necessary state cannot be established. Writing these markers is not the designation of an instance as retained: that needs the owner's authorization under #159 and is to be one owner-invoked command (#904). Nor do these helpers implement increments onto a retained instance (#822). Current writes through a single identity map must not be treated as support for evolving retained identities; #723 is the narrow incremental addition milestone.
 
 <a id="7-development-stage-code-may-run-ahead-of-the-proposed-drafts"></a>
 
