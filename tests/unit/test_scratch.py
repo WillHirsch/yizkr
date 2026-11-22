@@ -3272,7 +3272,7 @@ class TestRunsDirectory:
         # the latest directory there is no scratch run: the command takes
         # the latest scratch run, and --resume refuses the other
         state = runs / "20260929T090000Z-0000aa"
-        RunDir(state).update_manifest(run_id="x", mode="ingest run")
+        RunDir(state).update_manifest(run_id="x", mode="a foreign mode")
         assert scratch.choose_run(runs) == newer
         with pytest.raises(ScratchRefused, match="not a scratch run"):
             scratch.choose_run(runs, resume=state.name)

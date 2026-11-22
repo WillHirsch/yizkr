@@ -184,7 +184,7 @@ class Derivations:
 
     The dependency record behind safe re-runs, kept in `derivations.json`:
     `current` compares file inputs; the shared view planner additionally
-    compares migrated stages' `processing` metadata. The canonical content
+    compares each stage's `processing` metadata. The canonical content
     hashes of transcription and batch views distinguish changed products
     from identical recomputations.
     """

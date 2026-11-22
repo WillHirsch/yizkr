@@ -154,7 +154,7 @@ def manifest(*, ended: str | None = None, outcome: str | None = None) -> dict:
     return {
         "format": 1,
         "run_id": RUN_ID,
-        "mode": "ingest run",
+        "mode": "scratch run",
         "project_stage": "development",
         "documents": documents,
         "started_at": at(0),
@@ -3508,7 +3508,7 @@ class TestWatch:
         # each refresh draws the whole view; the screen sends what changed
         assert len(screen.frames) == 3
         assert screen.shown(0)[0] == (
-            "yizkr run 20260927T100000Z-4f2a9c  (ingest run, development "
+            "yizkr run 20260927T100000Z-4f2a9c  (scratch run, development "
             "stage)"
         )
         # nothing is written to the output but through the screen

@@ -1672,7 +1672,7 @@ class ScratchDriver:
         deciding whether to reuse it does not change the run's settings.
         """
         refreshed = (doc.sha1, stage) in self._refreshed
-        return self._role_refreshed(doc, role, stage) and not refreshed
+        return role in self.refresh and not refreshed
 
     def _run_stage_of(self, doc: DocumentRun, stage: str) -> None:
         """One per-document stage of one document, through the
@@ -2160,7 +2160,7 @@ class ScratchDriver:
         self._refreshed = self._refreshes_made()
         self.state_dir.mkdir(parents=True, exist_ok=True)
         # refused here, before anything is written, when the settings differ
-        self.rundir.start(fixed_settings=True, **fields)
+        self.rundir.start(**fields)
         if carry:
             self._carry()
         self._control_active = True
@@ -2330,11 +2330,7 @@ class ScratchDriver:
             model=model,
             cancellation=self.cancellation,
             rundir=self.rundir,
-            fixed_settings=True,
         )
-
-    def _llm_cache(self) -> Any:
-        return self.resources.response_cache()
 
     def role_client(
         self, role: str, *, events: Callable[..., Any] | None = None
@@ -2699,10 +2695,6 @@ class ScratchDriver:
         self.rundir.emit("done", attention=reasons or None, **where)
         return result
 
-    def _role_refreshed(self, doc: DocumentRun, role: str, stage: str) -> bool:
-        """Whether invocation policy requires this view to be recomputed."""
-        return role in self.refresh
-
     def _processing_dependencies(
         self, doc: DocumentRun, stage: str, *, route: str | None = None
     ) -> dict[str, Any]:
@@ -2879,7 +2871,7 @@ class ScratchDriver:
     ) -> Any:
         """The document's `view`, loaded, when the shared plan reuses it.
 
-        Inputs and migrated processing dependencies must match, refresh
+        Inputs and processing dependencies must match, refresh
         must not request recomputation, and `recheck` must pass. A reuse is an
         event, with the attention reasons noted when the view was made.
         A view `recheck` fails is moved aside, never deleted, with a

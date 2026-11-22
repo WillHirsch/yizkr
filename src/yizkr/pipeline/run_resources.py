@@ -46,7 +46,6 @@ class RunResources:
         model: str | None = None,
         cancellation: Cancellation | None = None,
         rundir: RunDir | None = None,
-        fixed_settings: bool = False,
     ) -> Any:
         """Start one engine per role, checking recorded invocation settings."""
         with self._lock:
@@ -73,7 +72,6 @@ class RunResources:
                                 ),
                             },
                             cli_version=_text(client, "cli_version"),
-                            fixed_settings=fixed_settings,
                         )
                 except BaseException as primary:
                     try:
