@@ -395,3 +395,16 @@ Disagreement comparison accounts for date precision and ranges, derived bounds, 
 The current site reads the live graph and includes possibly-living people, with runtime badges. Those badges do not filter the site; this build is for private/LAN use. Its media links point back to the wiki. [Runtime privacy](PRIVACY.md) describes the shared eligibility check and the export-only exclusions; the [query guide](../src/yizkr/queries/README.md#disagreement-comparison-adr-0033) defines the comparison scope and limits.
 
 Implementation: [query library](../src/yizkr/queries/README.md), [query publisher](../src/yizkr/queries/publish.py), [static site builder](../src/yizkr/staticsite.py) and [disagreement comparison](../src/yizkr/disagreement.py), with shared [death and union derivation](../src/yizkr/died_by.py).
+
+## Package layering
+
+Packages import in one direction. The lower layer is `yizkr.core`, `yizkr.model` and every module they reach through imports outside the pipeline and the CLI, such as the claim schema, the query publisher and the static site builder; it imports neither `yizkr.pipeline` nor `yizkr.cli`. The pipeline builds on the lower layer and does not import the CLI, which may import any package. This keeps shared configuration and the Wikibase client independent of the ingestion pipeline. Modules the lower layer does not reach, such as `reset.py`, `backup.py` and `smoke.py`, have no layering rule, and neither do imports within one package.
+
+```mermaid
+flowchart LR
+    cli["yizkr.cli"] -->|imports| pipeline["yizkr.pipeline"]
+    cli -->|imports| lower["Lower layer<br/>yizkr.core, yizkr.model<br/>and the modules they reach"]
+    pipeline -->|imports| lower
+```
+
+The offline [import-boundary test](../tests/unit/test_import_boundary.py) enforces the layering. It parses every module under `src/yizkr` and counts every import, at module scope, inside a function or under `TYPE_CHECKING`, absolute or relative, and literal `importlib.import_module` and `__import__` calls; importing a module also reaches the packages that hold it. Its allow-list holds the current exceptions, imports of pipeline modules from the lower layer. The test also fails when an allowed import no longer occurs, so a change that removes one deletes its entry and the list only shrinks.
