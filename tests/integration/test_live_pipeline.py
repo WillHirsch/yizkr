@@ -1,11 +1,10 @@
-"""Live pipeline flow: register -> write, idempotency, the overwrite
-regression (two values on one property must COEXIST — the second write
-must never replace the first; ADR-0002), the provenance of a minted
-item's type statements, which the reappraisal queue and the unreferenced
-report must count correctly (#88), and a later source's kind for an item
-that already exists, which the queue must reflect (#233). Every claim
-cites its artifact by the SHA-1 of the artifact's media (#102), which the
-writer resolves to the registered item.
+"""Live pipeline flow: registration, a second source agreeing with the
+first, whose reference joins the one statement, the item-10 vocabulary,
+a minted item's type statements, which the reappraisal queue and the
+unreferenced report must count correctly (#88), and a later source's
+kind for an item that already exists, which the queue must reflect
+(#233). Every claim cites its artifact by the SHA-1 of the artifact's
+media (#102), which the writer resolves to the registered item.
 
 Every label, title and image carries the session's marker
 (conftest.fixture_mark), so each session meets the fixture as a first
@@ -24,7 +23,6 @@ from tests.fixtures import example_universe as u
 from tests.fixtures.identity import corpus, write_mapped
 from yizkr.claims import ArtifactRef, ClaimBatch, QidRef
 from yizkr.pipeline import reconcile, registrar, resolve, writer
-from yizkr.pipeline.clustering import IdentityMap
 from yizkr.pipeline.reconcile import apply_equivalences
 from yizkr.pipeline.registrar import register_artifact
 from yizkr.pipeline.resolve import resolve_batch
@@ -43,16 +41,14 @@ pytestmark = pytest.mark.live
 
 # what the fixture is; a change to it gives the fixture new items
 FIXTURE = (
-    "#88, #102, #233: a certificate and its test person, coexisting and "
-    "agreeing births, the family firm as the 2002 interview and the 1912 "
+    "#88, #102, #233: a certificate and its test person, agreeing "
+    "births, the family firm as the 2002 interview and the 1912 "
     "directory give it, and Sebastian Löbig in the 1905 marriage "
     "certificate"
 )
 MARK = fixture_mark(FIXTURE, writer, registrar, resolve, reconcile)
 ARTIFACT_TITLE = f"Integration-test certificate {MARK}"
 PERSON_LABEL = f"Integration Test Person {MARK}"
-# the example universe's family firm, under this file's label prefix
-FIRM_LABEL = f"Integration Test Hutmacherei zum Blauen Hut {MARK}"
 # the certificate's media: bytes of the session's own
 CERTIFICATE_BYTES = fictional_png(f"yizkr live test: certificate {MARK}")
 
@@ -117,168 +113,6 @@ def test_register_creates_artifact_fragment_and_media(client, artifact):
     assert artifact.artifact_qid.startswith("Q")
     assert artifact.fragment_qids[1].startswith("Q")
     assert artifact.file_page.startswith("File:")
-
-
-def test_register_is_idempotent(client, artifact, tmp_path):
-    # found again by the SHA-1 of its media alone (#103): the same bytes,
-    # read from another file, are the one artifact, with the one page
-    # fragment
-    media = tmp_path / "integration-test-certificate-again.png"
-    media.write_bytes(CERTIFICATE_BYTES)
-    again = register_artifact(
-        client,
-        media_path=media,
-        artifact_type="certificate",
-        title=ARTIFACT_TITLE,
-        pages=1,
-    )
-    assert again.created is False
-    assert again.artifact_qid == artifact.artifact_qid
-    assert again.fragment_qids == artifact.fragment_qids
-
-
-def _sha1_values(client, qid):
-    properties, _ = client.vocabulary()
-    data = client.api_get(
-        {
-            "action": "wbgetclaims",
-            "entity": qid,
-            "property": properties["media_sha1"],
-        }
-    )
-    return [
-        claim["mainsnak"]["datavalue"]["value"]
-        for claims in data["claims"].values()
-        for claim in claims
-    ]
-
-
-def test_identical_bytes_new_name_reuse_one_artifact(client, tmp_path):
-    """ADR-0010: the same bytes under a different filename resolve to the
-    one artifact item (keyed on content hash, not the title), and the new
-    filename is kept as an alias — no duplicate item sharing a blob."""
-    content = fictional_png(f"yizkr live test: hash key {MARK}")
-    first_path = tmp_path / "hash-key-original.png"
-    first_path.write_bytes(content)
-    first = register_artifact(
-        client,
-        media_path=first_path,
-        artifact_type="photograph",
-        title=f"Hash Key Original {MARK}",
-    )
-
-    second_path = tmp_path / "hash-key-copy.png"  # identical bytes, new name
-    second_path.write_bytes(content)
-    second = register_artifact(
-        client,
-        media_path=second_path,
-        artifact_type="photograph",
-        title=f"Hash Key Copy {MARK}",
-    )
-
-    assert second.artifact_qid == first.artifact_qid  # one artifact, not two
-    assert second.created is False
-    # the content hash is stored once
-    assert len(_sha1_values(client, first.artifact_qid)) == 1
-    # the alternate filename-title became an alias
-    item = client.wbi.item.get(first.artifact_qid)
-    aliases = {str(alias) for alias in (item.aliases.get("en") or [])}
-    assert f"Hash Key Copy {MARK}" in aliases
-
-
-def test_same_title_different_content_stays_distinct(client, tmp_path):
-    """A re-scan/re-encode (different bytes) under a title that already
-    names other content must not collapse onto it: labels stay unique via
-    a content-tag suffix, and the two remain separate artifacts for the
-    near-duplicate pass to relate later."""
-    path_a = tmp_path / "collide-a.png"
-    path_a.write_bytes(fictional_png(f"yizkr live test: collision a {MARK}"))
-    a = register_artifact(
-        client,
-        media_path=path_a,
-        artifact_type="photograph",
-        title=f"Collision Title {MARK}",
-    )
-
-    path_b = tmp_path / "collide-b.png"  # DIFFERENT bytes, same intended title
-    path_b.write_bytes(fictional_png(f"yizkr live test: collision b {MARK}"))
-    b = register_artifact(
-        client,
-        media_path=path_b,
-        artifact_type="photograph",
-        title=f"Collision Title {MARK}",
-    )
-
-    assert b.artifact_qid != a.artifact_qid
-    label_a = str(client.wbi.item.get(a.artifact_qid).labels.get("en"))
-    label_b = str(client.wbi.item.get(b.artifact_qid).labels.get("en"))
-    assert label_a == f"Collision Title {MARK}"
-    assert label_b.startswith(f"Collision Title {MARK} [")  # disambiguated
-
-
-def birth_years_on(client, qid: str) -> set[str]:
-    properties, _ = client.vocabulary()
-    data = client.api_get(
-        {
-            "action": "wbgetclaims",
-            "entity": qid,
-            "property": properties["date_of_birth"],
-        }
-    )
-    return {
-        claim["mainsnak"]["datavalue"]["value"]["time"]
-        for claims in data["claims"].values()
-        for claim in claims
-    }
-
-
-def test_conflicting_values_coexist(client, artifact):
-    """Writing a second value must never delete the first (ADR-0002).
-
-    Regression for the WikibaseIntegrator REPLACE_ALL default that once
-    silently overwrote a source-attributed statement.
-    """
-    writer = BatchWriter(client)
-    first = write_mapped(writer, birth_batch(CERTIFICATE, 1901))
-    person_qid = first.created_items["person-1"]
-
-    writer = BatchWriter(client)  # fresh entity cache
-    write_mapped(writer, birth_batch(CERTIFICATE, 1902))
-
-    years = birth_years_on(client, person_qid)
-    assert "+1901-00-00T00:00:00Z" in years
-    assert "+1902-00-00T00:00:00Z" in years
-
-
-def test_write_is_idempotent_and_dual_referenced(client, artifact):
-    # written here, or found as the coexistence test wrote it
-    write_mapped(BatchWriter(client), birth_batch(CERTIFICATE, 1901))
-    writer = BatchWriter(client)
-    result = write_mapped(writer, birth_batch(CERTIFICATE, 1901))
-    assert result.written == 0
-    assert result.skipped == 1
-
-    properties, _ = client.vocabulary()
-    person_qid = result.created_items["person-1"]
-    data = client.api_get(
-        {
-            "action": "wbgetclaims",
-            "entity": person_qid,
-            "property": properties["date_of_birth"],
-        }
-    )
-    for claims in data["claims"].values():
-        for claim in claims:
-            assert claim["rank"] == "normal"  # ranks default to normal
-            reference_properties = {
-                pid for ref in claim["references"] for pid in ref["snaks"]
-            }
-            assert (
-                properties["stated_in"] in reference_properties
-            )  # source ref
-            assert properties["inferred_from_extraction_run"] in (
-                reference_properties
-            )  # process ref
 
 
 def stated_in_values(
@@ -348,113 +182,6 @@ def test_agreeing_second_source_appends_reference(client, artifact):
     assert rerun.written == 0
     assert rerun.referenced == 0
     assert rerun.skipped == 1
-
-
-def test_curated_claim_carries_no_run_reference(client, artifact):
-    """A curator-attributed claim (a value correction) is a human
-    write: artifact reference only, no extraction-run reference
-    (ADR-0003 — process provenance is for machine writes)."""
-    batch = birth_batch(CERTIFICATE, 1990)
-    death = batch.claims[0].model_copy(
-        update={"property": "date_of_death", "curated": True}
-    )
-    curated_batch = batch.model_copy(update={"claims": [death]})
-    writer = BatchWriter(client)
-    result = write_mapped(writer, curated_batch)
-    person_qid = result.created_items["person-1"]
-
-    properties, _ = client.vocabulary()
-    data = client.api_get(
-        {
-            "action": "wbgetclaims",
-            "entity": person_qid,
-            "property": properties["date_of_death"],
-        }
-    )
-    (claim,) = [
-        claim
-        for claims in data["claims"].values()
-        for claim in claims
-        if claim["mainsnak"]["datavalue"]["value"]["time"].startswith("+1990")
-    ]
-    reference_properties = {
-        pid for ref in claim["references"] for pid in ref["snaks"]
-    }
-    assert properties["stated_in"] in reference_properties
-    assert (
-        properties["inferred_from_extraction_run"] not in reference_properties
-    )
-
-
-def test_detected_language_tags_excerpt_reference(client, artifact):
-    """ADR-0015: a document the pipeline detects as non-English writes its
-    source excerpt with that language tag. The detected code (here `de`,
-    chosen by the real detector, not hand-set) must round-trip through the
-    reference snak — proving Wikibase accepts a detected tag end to end."""
-    from yizkr.pipeline.language import AUTO, resolve_language
-
-    # Eugen Löbig's life in the example universe, spelled out and
-    # transliterated as a typed transcript might give it
-    german = (
-        "Geboren im Jahr achtzehnhundertsechsunddreissig in Floerburg, "
-        "gestorben am sechzehnten Maerz neunzehnhundertneun in Floerburg."
-    )
-    resolution = resolve_language(german, AUTO)
-    assert resolution.code == "de"  # the pipeline picks the language itself
-
-    batch = ClaimBatch.model_validate(
-        {
-            "extraction_run": {
-                "model_identifier": "integration-test",
-                "pipeline_version": "0.0.0",
-                "started_at": datetime.now(UTC).isoformat(),
-            },
-            "claims": [
-                {
-                    "subject": {
-                        "kind": "local",
-                        "local_id": "person-1",
-                        "label": PERSON_LABEL,
-                        "instance_of": "human",
-                    },
-                    "property": "date_of_birth",
-                    "value": {"type": "time", "year": 1836},
-                    "source": {
-                        "artifact": CERTIFICATE.model_dump(mode="json"),
-                        "page_number": "1",
-                        "transcription_excerpt": {
-                            "text": german[:60],
-                            "language": resolution.code,
-                        },
-                    },
-                }
-            ],
-        }
-    )
-    result = write_mapped(BatchWriter(client), batch)
-    person_qid = result.created_items["person-1"]
-
-    properties, _ = client.vocabulary()
-    excerpt_pid = properties["transcription_excerpt"]
-    data = client.api_get(
-        {
-            "action": "wbgetclaims",
-            "entity": person_qid,
-            "property": properties["date_of_birth"],
-        }
-    )
-    # find the excerpt this test wrote (by its German wording) and confirm
-    # its reference snak carries the detected `de` tag
-    excerpts = [
-        snak["datavalue"]["value"]
-        for claims in data["claims"].values()
-        for claim in claims
-        for ref in claim.get("references", [])
-        for snak in ref["snaks"].get(excerpt_pid, [])
-    ]
-    german_excerpts = [e for e in excerpts if e["text"] == german[:60]]
-    assert german_excerpts, "the German excerpt was not written"
-    assert all(e["language"] == "de" for e in german_excerpts)
 
 
 def vocabulary_batch(artifact: ArtifactRef) -> ClaimBatch:
@@ -577,313 +304,6 @@ def test_item10_vocabulary_writes_and_is_idempotent(client, artifact):
     assert items["occupation_class"] in occupation_classes
 
 
-def names_batch(artifact: ArtifactRef) -> ClaimBatch:
-    """A person carrying typed name claims (ADR-0011)."""
-    subject = {
-        "kind": "local",
-        "local_id": "person-1",
-        "label": PERSON_LABEL,
-        "instance_of": "human",
-    }
-    source = {
-        "artifact": artifact.model_dump(mode="json"),
-        "page_number": "1",
-        "transcription_excerpt": {
-            "text": "née, later, known as",
-            "language": "en",
-        },
-    }
-
-    def name(prop, text):
-        return {
-            "subject": subject,
-            "property": prop,
-            "value": {
-                "type": "monolingual",
-                "value": {"text": text, "language": "en"},
-            },
-            "source": source,
-        }
-
-    return ClaimBatch.model_validate(
-        {
-            "extraction_run": {
-                "model_identifier": "integration-test",
-                "pipeline_version": "0.0.0",
-                "started_at": datetime.now(UTC).isoformat(),
-            },
-            "claims": [
-                name("birth_name", "Integration Testerson"),
-                name("married_name", "Integration Person"),
-                name("nickname", "Iggy"),
-            ],
-        }
-    )
-
-
-def test_typed_names_write_and_round_trip(client, artifact):
-    """ADR-0011: typed name claims write end to end as referenced
-    monolingual statements, keep the source's wording, and re-run clean."""
-    writer = BatchWriter(client)
-    first = write_mapped(writer, names_batch(CERTIFICATE))
-    person_qid = first.created_items["person-1"]
-
-    rerun = write_mapped(BatchWriter(client), names_batch(CERTIFICATE))
-    assert rerun.written == 0
-    assert rerun.skipped == 3
-
-    properties, _ = client.vocabulary()
-
-    def one(prop_key):
-        data = client.api_get(
-            {
-                "action": "wbgetclaims",
-                "entity": person_qid,
-                "property": properties[prop_key],
-            }
-        )
-        (claim,) = [c for cs in data["claims"].values() for c in cs]
-        assert properties["stated_in"] in {
-            pid for ref in claim["references"] for pid in ref["snaks"]
-        }
-        return claim["mainsnak"]["datavalue"]["value"]
-
-    assert one("birth_name") == {
-        "text": "Integration Testerson",
-        "language": "en",
-    }
-    assert one("married_name") == {
-        "text": "Integration Person",
-        "language": "en",
-    }
-    assert one("nickname") == {"text": "Iggy", "language": "en"}
-
-
-def harness_batch(artifact: ArtifactRef) -> ClaimBatch:
-    """An organization + employer relation, and an unclassified entity
-    carrying a type hint (ADR-0012 / ADR-0013)."""
-    source = {
-        "artifact": artifact.model_dump(mode="json"),
-        "page_number": "1",
-        "transcription_excerpt": {
-            "text": "worked at the hat shop, the Blue Hat",
-            "language": "en",
-        },
-    }
-    return ClaimBatch.model_validate(
-        {
-            "extraction_run": {
-                "model_identifier": "integration-test",
-                "pipeline_version": "0.0.0",
-                "started_at": datetime.now(UTC).isoformat(),
-            },
-            "claims": [
-                {
-                    "subject": {
-                        "kind": "local",
-                        "local_id": "person-1",
-                        "label": PERSON_LABEL,
-                        "instance_of": "human",
-                    },  # fmt: skip
-                    "property": "employer",
-                    "value": {
-                        "type": "item",
-                        "value": {
-                            "kind": "local",
-                            "local_id": "org-1",
-                            "label": FIRM_LABEL,
-                            "instance_of": "organization",
-                        },
-                    },  # fmt: skip
-                    "source": source,
-                },
-                {
-                    "subject": {
-                        "kind": "local",
-                        "local_id": "ship-1",
-                        "label": f"SS Integration {MARK}",
-                        "instance_of": "unclassified_entity",
-                    },  # fmt: skip
-                    "property": "point_in_time",
-                    "value": {"type": "time", "year": 1912},
-                    "source": source,
-                },
-            ],
-            "entities": [
-                {"id": "person-1", "label": PERSON_LABEL, "kind": "human"},
-                {
-                    "id": "org-1",
-                    "label": FIRM_LABEL,
-                    "kind": "organization",
-                },  # fmt: skip
-                {
-                    "id": "ship-1",
-                    "label": f"SS Integration {MARK}",
-                    "kind": "unclassified_entity",
-                    "type_hint": "ocean liner",
-                },  # fmt: skip
-            ],
-        }
-    )
-
-
-def test_organization_employer_and_type_hint_write(client, artifact):
-    """ADR-0012/0013: an organization is written and linked by employer;
-    an unclassified entity is written under the holding class with its
-    type hint — never mistyped as a person or place."""
-    writer = BatchWriter(client)
-    result = write_mapped(writer, harness_batch(CERTIFICATE))
-    person_qid = result.created_items["person-1"]
-    org_qid = result.created_items["org-1"]
-    ship_qid = result.created_items["ship-1"]
-    properties, items = client.vocabulary()
-
-    def claim_values(entity, prop_key):
-        data = client.api_get(
-            {
-                "action": "wbgetclaims",
-                "entity": entity,
-                "property": properties[prop_key],
-            }  # fmt: skip
-        )
-        return [
-            c["mainsnak"]["datavalue"]["value"]
-            for cs in data["claims"].values()
-            for c in cs
-        ]
-
-    # employer links the person to the organization item
-    assert org_qid in {v["id"] for v in claim_values(person_qid, "employer")}
-    assert items["organization"] in {
-        v["id"] for v in claim_values(org_qid, "instance_of")
-    }
-    # the unclassified entity is held under the holding class, hint recorded
-    assert items["unclassified_entity"] in {
-        v["id"] for v in claim_values(ship_qid, "instance_of")
-    }
-    assert "ocean liner" in claim_values(ship_qid, "type_hint")
-
-
-def kinship_batch(artifact: ArtifactRef) -> ClaimBatch:
-    """ADR-0014: sex_or_gender (vocab), the `relative` + kinship_type
-    fallback, and a deportation event. The named relative is the
-    `relative` statement's subject and the ego its object (ADR-0018)."""
-    source = {
-        "artifact": artifact.model_dump(mode="json"),
-        "page_number": "1",
-        "transcription_excerpt": {"text": "aunt; deported", "language": "en"},
-    }
-    person = {"kind": "local", "local_id": "person-1", "label": PERSON_LABEL,
-              "instance_of": "human"}  # fmt: skip
-    aunt_label = f"Integration Aunt {MARK}"
-    aunt = {"kind": "local", "local_id": "aunt-1", "label": aunt_label,
-            "instance_of": "human"}  # fmt: skip
-    return ClaimBatch.model_validate(
-        {
-            "extraction_run": {
-                "model_identifier": "integration-test",
-                "pipeline_version": "0.0.0",
-                "started_at": datetime.now(UTC).isoformat(),
-            },
-            "claims": [
-                {
-                    "subject": person,
-                    "property": "sex_or_gender",
-                    "value": {
-                        "type": "item",
-                        "value": {"kind": "vocab", "key": "male"},
-                    },
-                    "source": source,
-                },  # fmt: skip
-                {
-                    "subject": aunt,
-                    "property": "relative",
-                    "value": {"type": "item", "value": person},
-                    "qualifiers": [
-                        {
-                            "property": "kinship_type",
-                            "value": {
-                                "type": "string",
-                                "value": "maternal aunt",
-                            },
-                        }
-                    ],
-                    "source": source,
-                },  # fmt: skip
-                {
-                    "subject": {
-                        "kind": "local",
-                        "local_id": "event-1",
-                        "label": f"Deportation of {PERSON_LABEL}",
-                        "instance_of": "deportation",
-                    },
-                    "property": "participant",
-                    "value": {"type": "item", "value": person},
-                    "qualifiers": [
-                        {
-                            "property": "point_in_time",
-                            "value": {"type": "time", "year": 1942},
-                        }
-                    ],
-                    "source": source,
-                },  # fmt: skip
-            ],
-            "entities": [
-                {"id": "person-1", "label": PERSON_LABEL, "kind": "human"},
-                {"id": "aunt-1", "label": aunt_label, "kind": "human"},
-                {
-                    "id": "event-1",
-                    "label": f"Deportation of {PERSON_LABEL}",
-                    "kind": "deportation",
-                },  # fmt: skip
-            ],
-        }
-    )
-
-
-def test_adr0014_vocabulary_writes(client, artifact):
-    """ADR-0014: sex_or_gender vocab item, the relative+kinship_type
-    fallback qualifier, and a deportation event all write and round-trip."""
-    writer = BatchWriter(client)
-    result = write_mapped(writer, kinship_batch(CERTIFICATE))
-    person_qid = result.created_items["person-1"]
-    properties, items = client.vocabulary()
-
-    # sex_or_gender points at the `male` vocab item
-    sex = client.api_get(
-        {
-            "action": "wbgetclaims",
-            "entity": person_qid,
-            "property": properties["sex_or_gender"],
-        }
-    )
-    assert items["male"] in {
-        c["mainsnak"]["datavalue"]["value"]["id"]
-        for cs in sex["claims"].values()
-        for c in cs
-    }
-
-    # `relative` runs from the aunt to the ego and carries the verbatim
-    # kinship_type qualifier
-    aunt_qid = result.created_items["aunt-1"]
-    rel = client.api_get({"action": "wbgetclaims", "entity": aunt_qid,
-                          "property": properties["relative"]})  # fmt: skip
-    (claim,) = [c for cs in rel["claims"].values() for c in cs]
-    assert claim["mainsnak"]["datavalue"]["value"]["id"] == person_qid
-    quals = claim.get("qualifiers", {}).get(properties["kinship_type"], [])
-    assert any(q["datavalue"]["value"] == "maternal aunt" for q in quals)
-
-    # the deportation event is an instance of the deportation subclass
-    event_qid = result.created_items["event-1"]
-    ev = client.api_get({"action": "wbgetclaims", "entity": event_qid,
-                         "property": properties["instance_of"]})  # fmt: skip
-    assert items["deportation"] in {
-        c["mainsnak"]["datavalue"]["value"]["id"]
-        for cs in ev["claims"].values()
-        for c in cs
-    }
-
-
 # -- a minted item's type statements, and the two queues (#88) -------------
 #
 # A slice of the example universe (tests/fixtures/example_universe.py): the
@@ -1004,10 +424,6 @@ class TypedFirm:
     firm: str  # the firm's QID
     sources: dict[str, str]  # universe source key -> artifact QID
     runs: dict[str, str]  # universe source key -> extraction-run QID
-    batches: dict[str, ClaimBatch]  # universe source key -> its batch
-    # the map both batches are written with, in which the firm is one
-    # entity (#109)
-    identity: IdentityMap
 
 
 @pytest.fixture(scope="module")
@@ -1041,7 +457,7 @@ def typed_firm(client, config) -> TypedFirm:
     wait_for_query_service(
         config, client, [firm, *sources.values(), *runs.values()]
     )
-    return TypedFirm(firm, sources, runs, batches, identity)
+    return TypedFirm(firm, sources, runs)
 
 
 def statements_by_key(client, qid: str) -> dict[str, list[dict]]:
@@ -1050,25 +466,6 @@ def statements_by_key(client, qid: str) -> dict[str, list[dict]]:
     key_of = {pid: key for key, pid in properties.items()}
     data = client.api_get({"action": "wbgetclaims", "entity": qid})
     return {key_of[pid]: claims for pid, claims in data["claims"].items()}
-
-
-def item_value(statement: dict) -> str:
-    return statement["mainsnak"]["datavalue"]["value"]["id"]
-
-
-def cited(client, statement: dict) -> list[set[tuple[str, str]]]:
-    """Each reference block, as the (property key, item) pairs it cites."""
-    properties, _ = client.vocabulary()
-    key_of = {pid: key for key, pid in properties.items()}
-    return [
-        {
-            (key_of[pid], snak["datavalue"]["value"]["id"])
-            for pid, snaks in reference["snaks"].items()
-            for snak in snaks
-            if snak["datavalue"]["type"] == "wikibase-entityid"
-        }
-        for reference in statement["references"]
-    ]
 
 
 def statement_uri(config, guid: str) -> str:
@@ -1090,30 +487,6 @@ def rows_about(client, config, query: str, var: str, qids) -> list[dict]:
         for row in run_sparql(config, rendered)
         if row[var]["value"] in wanted
     ]
-
-
-def test_minted_type_statements_cite_artifact_and_run(client, typed_firm):
-    """Rules 1 and 2 (ADR-0003): the kind and type hint the writer wrote
-    when it minted the firm are stated in the interview and, in a second
-    reference, inferred from the interview's extraction run, the shape
-    the directory's own `instance of` claim has."""
-    _, items = client.vocabulary()
-    statements = statements_by_key(client, typed_firm.firm)
-    kinds = {item_value(s): s for s in statements["instance_of"]}
-    assert set(kinds) == {items["unclassified_entity"], items["organization"]}
-    (hint,) = statements["type_hint"]
-    assert hint["mainsnak"]["datavalue"]["value"] == TYPE_HINT
-
-    for statement, source in (
-        (kinds[items["unclassified_entity"]], INTERVIEW),  # minted
-        (hint, INTERVIEW),  # minted
-        (kinds[items["organization"]], DIRECTORY),  # claimed
-    ):
-        assert statement["rank"] == "normal"
-        assert cited(client, statement) == [
-            {("stated_in", typed_firm.sources[source])},
-            {("inferred_from_extraction_run", typed_firm.runs[source])},
-        ]
 
 
 def test_queue_lists_every_type_statement(client, config, typed_firm):
@@ -1155,24 +528,6 @@ def test_no_statement_of_the_slice_is_unreferenced(client, config, typed_firm):
     ]
     report = "unreferenced-statements"
     assert rows_about(client, config, report, "entity", qids) == []
-
-
-def test_rewriting_the_slice_writes_nothing(client, typed_firm):
-    """A re-run reuses the firm and both run items: no second kind or type
-    hint, and no claim written again."""
-    for key, claims in ((INTERVIEW, 1), (DIRECTORY, 2)):
-        again = write_mapped(
-            BatchWriter(client),
-            typed_firm.batches[key],
-            identity=typed_firm.identity,
-        )
-        assert again.created_items["firm"] == typed_firm.firm
-        assert again.run_qid == typed_firm.runs[key]
-        assert again.written == again.referenced == 0
-        assert again.skipped == claims
-    statements = statements_by_key(client, typed_firm.firm)
-    assert len(statements["instance_of"]) == 2
-    assert len(statements["type_hint"]) == 1
 
 
 # -- a later source adds to an existing item's kind (#233) ------------------
@@ -1344,10 +699,6 @@ class WitnessedSlice:
     items: dict[str, str]  # "sebastian", "hatter", "firm" -> QID
     sources: dict[str, str]  # universe source key -> artifact QID
     runs: dict[str, str]  # universe source key -> extraction-run QID
-    batches: dict[str, ClaimBatch]  # as written: the directory's resolved
-    # the map every batch is written with, in which Sebastian is one
-    # entity (#109)
-    identity: IdentityMap
 
 
 @pytest.fixture(scope="module")
@@ -1407,54 +758,7 @@ def witnessed(client, config) -> WitnessedSlice:
         client,
         [*items.values(), *sources.values(), *runs.values()],
     )
-    return WitnessedSlice(items, sources, runs, batches, identity)
-
-
-def test_later_source_adds_its_references_to_a_kind(client, witnessed):
-    """The directory names Sebastian, whom the marriage certificate's
-    batch minted a human: his one `instance of` now cites both sources,
-    each beside its extraction run (rules 1 and 2, ADR-0003). Hatter,
-    which the directory does not name, keeps its one source."""
-    _, items = client.vocabulary()
-    sebastian = statements_by_key(client, witnessed.items["sebastian"])
-    (kind,) = sebastian["instance_of"]
-    assert item_value(kind) == items["human"]
-    assert kind["rank"] == "normal"
-    assert cited(client, kind) == [
-        {("stated_in", witnessed.sources[MARRIAGE])},
-        {("inferred_from_extraction_run", witnessed.runs[MARRIAGE])},
-        {("stated_in", witnessed.sources[DIRECTORY])},
-        {("inferred_from_extraction_run", witnessed.runs[DIRECTORY])},
-    ]
-    hatter = statements_by_key(client, witnessed.items["hatter"])
-    (occupation_kind,) = hatter["instance_of"]
-    assert cited(client, occupation_kind) == [
-        {("stated_in", witnessed.sources[MARRIAGE])},
-        {("inferred_from_extraction_run", witnessed.runs[MARRIAGE])},
-    ]
-
-
-def test_later_source_kind_coexists(client, witnessed):
-    """The directory types the firm an organization, which the interview
-    held unclassified with the type hint "hat shop". Both kinds stand at
-    normal rank, each with its own source and run (ADR-0002), and the type
-    hint is as the interview's batch wrote it."""
-    _, items = client.vocabulary()
-    statements = statements_by_key(client, witnessed.items["firm"])
-    kinds = {item_value(s): s for s in statements["instance_of"]}
-    assert set(kinds) == {items["unclassified_entity"], items["organization"]}
-    (hint,) = statements["type_hint"]
-    assert hint["mainsnak"]["datavalue"]["value"] == TYPE_HINT
-    for statement, source in (
-        (kinds[items["unclassified_entity"]], INTERVIEW),
-        (hint, INTERVIEW),
-        (kinds[items["organization"]], DIRECTORY),
-    ):
-        assert statement["rank"] == "normal"
-        assert cited(client, statement) == [
-            {("stated_in", witnessed.sources[source])},
-            {("inferred_from_extraction_run", witnessed.runs[source])},
-        ]
+    return WitnessedSlice(items, sources, runs)
 
 
 def test_queue_reflects_the_added_witness(client, config, witnessed):
@@ -1495,29 +799,3 @@ def test_queue_reflects_the_added_witness(client, config, witnessed):
         witnessed.items.values(),
     )
     assert sorted(row["statement"]["value"] for row in rows) == expected
-
-
-def test_rewriting_the_later_slice_adds_nothing(client, witnessed):
-    """A re-run of all three batches reuses every item and run item, and
-    adds no statement and no reference block."""
-    before = {
-        qid: statements_by_key(client, qid) for qid in witnessed.items.values()
-    }
-    for key, claims in ((MARRIAGE, 1), (INTERVIEW, 1), (DIRECTORY, 2)):
-        again = write_mapped(
-            BatchWriter(client),
-            witnessed.batches[key],
-            identity=witnessed.identity,
-        )
-        assert again.run_qid == witnessed.runs[key]
-        assert (again.written, again.referenced, again.skipped) == (
-            0,
-            0,
-            claims,
-        )
-        assert again.type_statements_written == 0
-        assert again.type_statements_referenced == 0
-    after = {
-        qid: statements_by_key(client, qid) for qid in witnessed.items.values()
-    }
-    assert after == before

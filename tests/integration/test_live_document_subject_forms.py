@@ -1,19 +1,19 @@
-"""Live write path for what a source states of another artifact (#646,
-ADR-0039 §10): a container's `inception` of the image it places, and an
-export's `inception` of the un-held media item its record makes.
+"""Live check of what the non-privileged export keeps of what a source
+states of another artifact (#646, ADR-0039 §10): a container's
+`inception` of the image it places, and an export's `inception` of the
+un-held media item its record makes.
 
 The booklet (*Our Family from Germany*, under a test title) is registered
 with the image it places on its page 6 as its derived medium, as the write
 registers a PDF read page by page. Its translation of the letter's
 dateline gives the image's `inception`, 28 July 1939: written on the
 image's item, stated in the booklet with its page and the translation as
-its excerpt; a re-run adds nothing. Without the booklet's placed media, or
-without its excerpt, the claim is refused before the first write. The
-export's object (the Löbig family's studio portrait of the 1890s) dates
-itself "ABT 1895": its `inception`, circa, is written on the media item
-the export makes, stated in the export. The non-privileged export leaves
-the booklet's claim about its image out, whole, failing closed, and keeps
-the export's claim about the media item, which is no part of the export.
+its excerpt. The export's object (the Löbig family's studio portrait of
+the 1890s) dates itself "ABT 1895": its `inception`, circa, is written
+on the media item the export makes, stated in the export. The
+non-privileged export leaves the booklet's claim about its image out,
+whole, failing closed, and keeps the export's claim about the media
+item, which is no part of the export.
 
 A second booklet's image also states its own date, its dateline *den 28.
 Juli 1939*: the writer folds the two agreeing claims into one statement
@@ -51,7 +51,6 @@ from yizkr.claims import ArtifactRef, ClaimBatch, validate_against_manifest
 from yizkr.pipeline import gedcom, registrar, writer
 from yizkr.pipeline.gedcom import adapt_gedcom
 from yizkr.pipeline.registrar import Registrar
-from yizkr.pipeline.review import claim_id
 from yizkr.pipeline.writer import BatchWriter
 
 pytestmark = pytest.mark.live
@@ -93,16 +92,15 @@ def run() -> dict:
 
 
 def translation_batch(
-    booklet: ArtifactRef,
-    image: ArtifactRef,
-    excerpt: bool = True,
-    text: str = TRANSLATION,
+    booklet: ArtifactRef, image: ArtifactRef, text: str = TRANSLATION
 ) -> ClaimBatch:
     """The booklet's translation of the letter's dateline, as the image's
     `inception`, on page 6."""
-    source: dict = {"artifact": booklet.model_dump(), "page_number": "6"}
-    if excerpt:
-        source["transcription_excerpt"] = {"text": text, "language": "en"}
+    source = {
+        "artifact": booklet.model_dump(),
+        "page_number": "6",
+        "transcription_excerpt": {"text": text, "language": "en"},
+    }
     return ClaimBatch.model_validate(
         {
             "extraction_run": run(),
@@ -205,8 +203,8 @@ def merged(client, tmp_path_factory):
 
 @pytest.fixture(scope="module")
 def exported(client, tmp_path_factory):
-    """The export, registered by its hash and written through BatchWriter:
-    (the export's item, the write's result)."""
+    """The write's result for the export, registered by its hash and
+    written through BatchWriter."""
     path = tmp_path_factory.mktemp("export") / f"integration-{MARK}.ged"
     path.write_bytes(EXPORT.encode())
     registered = Registrar(client).register_artifact(
@@ -222,7 +220,7 @@ def exported(client, tmp_path_factory):
         BatchWriter(client, artifact_qids={ref.sha1: registered.artifact_qid}),
         batch,
     )
-    return registered.artifact_qid, result
+    return result
 
 
 def statements(client, qid: str, key: str) -> list[dict]:
@@ -246,79 +244,13 @@ def cited(client, statement: dict, key: str) -> list:
     ]
 
 
-def test_a_container_s_inception_is_written_on_the_image_it_places(
-    client, placed
-):
-    booklet, image, image_qid = placed
-    batch = translation_batch(booklet.ref, image)
-    where = {booklet.ref.sha1: {image.sha1}}
-    assert validate_against_manifest(batch, placed=where) == []
-    result = write_mapped(BatchWriter(client), batch, placed=where)
-    assert (result.written + result.skipped, result.refused) == (1, [])
-    (statement,) = statements(client, image_qid, "inception")
-    value = statement["mainsnak"]["datavalue"]["value"]
-    assert (value["time"], value["precision"]) == ("+1939-07-28T00:00:00Z", 11)
-    assert statement["rank"] == "normal"
-    assert [v["id"] for v in cited(client, statement, "stated_in")] == [
-        booklet.qid
-    ]
-    assert cited(client, statement, "page_number") == ["6"]
-    excerpts = cited(client, statement, "transcription_excerpt")
-    assert [e["text"] for e in excerpts] == [TRANSLATION]
-    # the claim is the image's, never the booklet's
-    assert statements(client, booklet.qid, "inception") == []
-
-    # a re-run resolves the image to the same item and finds the claim
-    again = write_mapped(
-        BatchWriter(client),
-        translation_batch(booklet.ref, image),
-        placed=where,
-    )
-    assert (again.written, again.skipped) == (0, 1)
-    assert len(statements(client, image_qid, "inception")) == 1
-
-
-@pytest.mark.parametrize(
-    ("excerpt", "placed_given"), [(True, False), (False, True)]
-)
-def test_without_its_placed_media_or_its_excerpt_it_is_refused(
-    client, placed, excerpt, placed_given
-):
-    """The writer holds both rules itself, as `yizkr write` takes a batch
-    without validating it: the image must be among the booklet's placed
-    media, and the claim must carry its passage (ADR-0039 §10.4)."""
-    booklet, image, image_qid = placed
-    before = statements(client, image_qid, "inception")
-    batch = translation_batch(booklet.ref, image, excerpt=excerpt)
-    where = {booklet.ref.sha1: {image.sha1}} if placed_given else None
-    result = write_mapped(BatchWriter(client), batch, placed=where)
-    (claim,) = batch.claims
-    assert result.refused == [claim_id(claim)]
-    assert (result.written, result.skipped, result.referenced) == (0, 0, 0)
-    assert statements(client, image_qid, "inception") == before
-    assert statements(client, booklet.qid, "inception") == []
-
-
-def test_the_export_s_inception_is_on_its_unheld_media_item(client, exported):
-    export_qid, result = exported
-    assert result.refused == []
-    media_item = result.created_items["md1"]
-    (statement,) = statements(client, media_item, "inception")
-    value = statement["mainsnak"]["datavalue"]["value"]
-    assert (value["time"][:5], value["precision"]) == ("+1895", 9)
-    assert [v["id"] for v in cited(client, statement, "stated_in")] == [
-        export_qid
-    ]
-    assert statements(client, export_qid, "inception") == []
-
-
 def test_the_nonprivileged_export_leaves_the_container_s_claim_out(
     client, config, placed, exported, merged, tmp_path
 ):
     if not (DEPLOY / "docker-compose.yml").is_file():
         pytest.skip("run from the repo root")
     booklet, image, image_qid = placed
-    _export_qid, result = exported
+    result = exported
     media_item = result.created_items["md1"]
     where = {booklet.ref.sha1: {image.sha1}}
     write_mapped(

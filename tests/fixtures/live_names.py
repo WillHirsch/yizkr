@@ -1,6 +1,5 @@
-"""The LLM-path fixture of the live names test (tests/integration/
-test_live_names.py), shared with its offline mirror (tests/unit/
-test_live_names_fixture.py) so the two cannot drift apart.
+"""The LLM-path names fixture that tests/unit/test_live_names_fixture.py
+runs through the real extractor wiring.
 
 One fictional person, Ida Livecheck, in two fictional documents. Each
 document's entity manifest gives her the mention record extraction hands

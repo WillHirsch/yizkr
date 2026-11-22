@@ -10,13 +10,19 @@ from wikibaseintegrator.datatypes import String
 
 from tests.unit.test_identity_provenance import Wiki
 from yizkr.claims import ArtifactRef, Claim, ClaimBatch
-from yizkr.core.write_recovery import CreationRegistry, write_existing
+from yizkr.core.write_recovery import (
+    GENERATION_PAGE,
+    CreationRegistry,
+    write_existing,
+)
 from yizkr.pipeline.assignment_stages import accept_reviewed_assignments
 from yizkr.pipeline.claim_review import (
     ClaimDecisionInput,
+    ClaimRefused,
     ClaimSelection,
     pin_claim_review,
     prepare_claim_review,
+    prepare_source_claims,
     record_claim_decisions,
 )
 from yizkr.pipeline.identity_review import ReviewRefused, ReviewStore
@@ -919,3 +925,332 @@ def test_saved_claim_role_requires_its_exact_assignment_binding(case, fault):
     assert (
         ClaimRole.model_validate(original.model_dump(mode="json")) == original
     )
+
+
+RESIDENCE = "Agnes Nertler lived in Rekau."
+
+
+def whole(case, request, sources=None, **kwargs):
+    return prepare_source_claims(
+        case.store,
+        request,
+        case.registry,
+        sources=sources or (request.sources[0].artifact_sha1,),
+        **kwargs,
+    )
+
+
+def refused(prepared):
+    return {
+        (r.artifact_sha1, r.index): (r.code, r.category)
+        for r in prepared.refusals
+    }
+
+
+def stored_claim_proposals(case):
+    db = sqlite3.connect(case.database)
+    try:
+        return db.execute("SELECT COUNT(*) FROM claim_proposals").fetchone()[0]
+    finally:
+        db.close()
+
+
+def three_claims(case):
+    """The fixture's source with an unlocatable and an unassigned claim."""
+    source = case.request.sources[0]
+    raw = source.batch.model_dump(mode="json")
+    raw["entities"].append(
+        {
+            "id": "agnes",
+            "label": "Agnes Nertler",
+            "kind": "human",
+            "mention_lines": [2],
+        }
+    )
+    absent = copy.deepcopy(raw["claims"][0])
+    absent["source"]["transcription_excerpt"]["text"] = TEXT.replace(
+        "Rekau", "Flörburg"
+    )
+    unassigned = {
+        "subject": local("agnes"),
+        "property": "residence",
+        "value": item("rekau"),
+        "source": {
+            "artifact": raw["claims"][0]["source"]["artifact"],
+            "transcription_excerpt": {"text": RESIDENCE, "language": "en"},
+        },
+    }
+    raw["claims"] += [absent, unassigned]
+    reading = source.reading.model_copy(
+        update={"text": TEXT + "\n" + RESIDENCE}
+    )
+    return replace(
+        case.request,
+        sources=(
+            replace(
+                source, batch=ClaimBatch.model_validate(raw), reading=reading
+            ),
+        ),
+    )
+
+
+def test_whole_source_prepares_admitted_claims_and_reports_the_rest(case):
+    request = three_claims(case)
+    sha1 = request.sources[0].artifact_sha1
+    with pytest.raises(ClaimRefused) as explicit:
+        prepare(
+            case,
+            request,
+            tuple(ClaimSelection(artifact_sha1=sha1, index=i) for i in (0, 2)),
+        )
+    assert explicit.value.code == "no_assignment"
+    assert stored_claim_proposals(case) == 0
+    prepared = whole(case, request, warnings={(sha1, 0): ("caller note",)})
+    assert [c.selection.index for c in prepared.claims] == [0]
+    assert prepared.selections == (prepared.claims[0].selection,)
+    assert prepared.claims[0].selection.warnings == ("caller note",)
+    assert refused(prepared) == {
+        (sha1, 1): ("excerpt_absent", "support"),
+        (sha1, 2): ("no_assignment", "assignments"),
+    }
+    assert all(r.message for r in prepared.refusals)
+    assert stored_claim_proposals(case) == 1
+    selected = prepare(case, request, (prepared.claims[0].selection,))
+    assert selected.claims[0].proposal == prepared.claims[0].proposal
+
+
+def test_whole_source_reports_an_excerpt_the_reading_repeats(case):
+    request = three_claims(case)
+    source = request.sources[0]
+    batch = source.batch.model_copy(deep=True)
+    repeated = batch.claims[0].model_copy(deep=True)
+    repeated.source.transcription_excerpt.text = "Löbig"
+    batch.claims.append(repeated)
+    prepared = whole(case, replace_batch(request, batch))
+    assert [c.selection.index for c in prepared.claims] == [0]
+    assert refused(prepared)[source.artifact_sha1, 3] == (
+        "excerpt_repeated",
+        "support",
+    )
+
+
+@pytest.mark.parametrize(
+    "fault", ["empty", "repeated", "outside", "index", "unnamed"]
+)
+def test_malformed_whole_source_arguments_refuse_the_call(case, fault):
+    sha1 = case.request.sources[0].artifact_sha1
+    absent = ArtifactRef.from_bytes(b"fictional absent source").sha1
+    sources = {
+        "empty": (),
+        "repeated": (sha1, sha1),
+        "outside": (sha1, absent),
+    }.get(fault, (sha1,))
+    warnings = {
+        "index": {(sha1, 1): ("caller note",)},
+        "unnamed": {(absent, 0): ("caller note",)},
+    }.get(fault)
+    with pytest.raises(ReviewRefused) as refusal:
+        prepare_source_claims(
+            case.store,
+            case.request,
+            case.registry,
+            sources=sources,
+            warnings=warnings,
+        )
+    assert type(refusal.value) is ReviewRefused
+    assert stored_claim_proposals(case) == 0
+
+
+@pytest.mark.parametrize(
+    ("problem", "code"),
+    [
+        ("unregistered", "source_not_unique"),
+        ("registered_twice", "source_not_unique"),
+        ("unbound", "source_unbound"),
+        ("unverifiable", "source_unbound"),
+        ("no_reading", "no_reading"),
+        ("resolved", "resolved_entities"),
+    ],
+)
+def test_source_problem_refuses_only_that_source(case, problem, code):
+    other = ArtifactRef.from_bytes(b"fictional Stupfield residence note")
+    text = "Gustav Löbig lived in Stupfield."
+    first = case.request.sources[0].artifact_sha1
+    residence = {
+        "subject": local("gustav"),
+        "property": "residence",
+        "value": item("stupfield"),
+        "source": {
+            "artifact": other.model_dump(),
+            "transcription_excerpt": {"text": text, "language": "en"},
+        },
+    }
+    # The second claim also fails a check of its own: it cites the first
+    # source. The problem of its source is still the one reported for it.
+    cites_first = copy.deepcopy(residence)
+    cites_first["source"]["artifact"]["sha1"] = first
+    batch = ClaimBatch.model_validate(
+        {
+            "extraction_run": {
+                "model_identifier": "fictional",
+                "pipeline_version": "test",
+                "started_at": WHEN,
+            },
+            "entities": [
+                {
+                    "id": "gustav",
+                    "label": "Gustav Löbig",
+                    "kind": "human",
+                    "mention_lines": [1],
+                    "qid": "Q999" if problem == "resolved" else None,
+                },
+                {
+                    "id": "stupfield",
+                    "label": "Stupfield",
+                    "kind": "place",
+                    "mention_lines": [1],
+                },
+            ],
+            "claims": [residence, cites_first],
+        }
+    )
+    reading = Transcription(
+        artifact=other, text=text, language="en", engine="fixture"
+    )
+
+    def source_item():
+        new = case.wiki.wbi.item.new()
+        new.labels.set("en", "Fictional Stupfield residence note")
+        new.claims.add(
+            String(
+                prop_nr=case.wiki.vocabulary()[0]["media_sha1"],
+                value=other.sha1,
+            )
+        )
+        return new
+
+    if problem in ("registered_twice", "unverifiable"):
+        binding = case.registry.create(
+            {"kind": "source", "sha1": other.sha1},
+            source_item(),
+            summary="fixture source",
+        )
+    if problem in ("registered_twice", "unbound"):
+        source_item().write()
+    if problem == "unverifiable":
+        # The creation receipt survives without its dispatch record, so the
+        # registry cannot verify the source's binding.
+        (dispatch,) = [
+            title
+            for title in case.wiki._recovery_pages
+            if title.endswith(f"/{binding.intent_key}/dispatch")
+        ]
+        del case.wiki._recovery_pages[dispatch]
+    request = replace(
+        case.request,
+        sources=(
+            *case.request.sources,
+            ReviewSource(
+                other.sha1, batch, None if problem == "no_reading" else reading
+            ),
+        ),
+    )
+    prepared = whole(case, request, sources=(first, other.sha1))
+    assert [c.selection.artifact_sha1 for c in prepared.claims] == [first]
+    assert [(r.artifact_sha1, r.index, r.code) for r in prepared.refusals] == [
+        (other.sha1, 0, code),
+        (other.sha1, 1, code),
+    ]
+    assert stored_claim_proposals(case) == len(prepared.claims)
+    context = whole(case, request, sources=(first,))
+    assert context.refusals == ()
+    assert [c.proposal for c in context.claims] == [
+        c.proposal for c in prepared.claims
+    ]
+
+
+def test_preparing_a_source_again_keeps_its_proposals_and_decisions(case):
+    request = three_claims(case)
+    first = whole(case, request)
+    decisions = approve(case, first)
+    again = whole(case, request)
+    assert [c.proposal for c in again.claims] == [
+        c.proposal for c in first.claims
+    ]
+    assert [c.decision for c in again.claims] == list(decisions)
+    assert again.refusals == first.refusals
+    assert stored_claim_proposals(case) == len(first.claims)
+
+
+def test_refused_claim_is_prepared_once_its_cause_is_removed(case):
+    request = three_claims(case)
+    sha1 = request.sources[0].artifact_sha1
+    assert refused(whole(case, request))[sha1, 2][0] == "no_assignment"
+    target = case.wiki.wbi.item.new()
+    target.labels.set("en", "Agnes Nertler")
+    binding = case.registry.create(
+        {"kind": "fictional-claim-target", "name": "agnes"},
+        target,
+        summary="fixture target",
+    )
+    mention = MentionKey(artifact_sha1=sha1, local_id="agnes")
+    current = replace(
+        request,
+        proposals=(
+            *request.proposals,
+            ReviewProposal(
+                operation="assign", mentions=(mention,), target=binding
+            ),
+        ),
+        current_targets=(*request.current_targets, binding),
+    )
+    review = prepare_review(case.store, current)
+    proposal = next(
+        p
+        for p in review.proposals
+        if p.target and p.target.entity_id == binding.entity_id
+    )
+    case.store.decide(
+        proposal.id,
+        proposal.revision,
+        expected_digest=proposal.digest,
+        outcome="approve",
+        actor="curator",
+        time=WHEN,
+    )
+    accept_reviewed_assignments(
+        case.store,
+        current,
+        case.registry,
+        scope=(review.mentions[mention.key].id,),
+    )
+    prepared = whole(case, current)
+    assert [c.selection.index for c in prepared.claims] == [0, 2]
+    assert set(refused(prepared)) == {(sha1, 1)}
+
+
+@pytest.mark.parametrize("problem", ["no_generation", "absent_mention"])
+def test_request_problem_still_refuses_whole_source_preparation(case, problem):
+    request, registry = case.request, case.registry
+    sha1 = request.sources[0].artifact_sha1
+    if problem == "no_generation":
+        # A server whose deployment generation was never established.
+        empty = Wiki(detached=True)
+        del empty._recovery_pages[GENERATION_PAGE]
+        registry = CreationRegistry(empty)
+    else:
+        absent = MentionKey(artifact_sha1=sha1, local_id="nobody")
+        request = replace(
+            request,
+            proposals=(
+                *request.proposals,
+                ReviewProposal(
+                    operation="assign",
+                    mentions=(absent,),
+                    target=case.bindings["leopold"],
+                ),
+            ),
+        )
+    with pytest.raises(ReviewRefused):
+        prepare_source_claims(case.store, request, registry, sources=(sha1,))
+    assert stored_claim_proposals(case) == 0

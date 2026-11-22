@@ -23,9 +23,9 @@ from yizkr.claims import (
     PlacementSupport,
     SourceReference,
     SourceSupport,
-    read_placed,
     source_support_locators,
 )
+from yizkr.cli import read_placed
 from yizkr.pipeline.container_inventory import (
     CONTAINER_INVENTORY,
     ContainerInventory,

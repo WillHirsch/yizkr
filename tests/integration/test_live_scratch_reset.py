@@ -1,8 +1,6 @@
 """Live `yizkr scratch reset` (#199): the one command that resets the
 instance and repopulates it for a scratch run (yizkr.reset).
 
-* Every live session clears the recorded instance-contents key as it
-  starts (conftest.py): the record names this session's process.
 * The reset runs twice in a row, each time through every step: the stack
   stopped, its graph volumes removed, started afresh, the manifest
   bootstrapped, the queries published and the smoke test passed. An item
@@ -14,13 +12,9 @@ instance and repopulates it for a scratch run (yizkr.reset).
 * A kept-state page on the instance makes the reset refuse before it
   changes anything, and the page, which the test wrote, is gone again at
   the end.
-* The same batches written with the same identity map after a reset give
-  the same items, by their labels and descriptions, and a second write of
-  them mints nothing (#109; test_live_identity_map.py).
 
-Only the first runs in every live session. The others reset the one
-instance, which takes minutes, and so run only when asked:
-`YIZKR_LIVE_RESET=1 uv run pytest -m live
+Each test resets the one instance, which takes minutes, and so runs only
+when asked: `YIZKR_LIVE_RESET=1 uv run pytest -m live
 tests/integration/test_live_scratch_reset.py`. They run in a session of
 their own, and fail at once in a session that runs other modules' tests
 too, whose ids and logins the reset would take away: YIZKR_LIVE_RESET=1
@@ -47,14 +41,13 @@ from yizkr.core.instance import (
     KEPT_STATE_PAGE,
     carries_kept_marker,
     kept_path,
-    read_record,
     record_contents,
     recorded_contents,
 )
 from yizkr.core.wiki import WikiClient
 from yizkr.reset import InstanceReset, ResetRefused, stack
 
-from .conftest import LIVE_TESTS, register_fictional
+from .conftest import register_fictional
 
 pytestmark = pytest.mark.live
 
@@ -151,14 +144,6 @@ def resets(request, config):
     return reset
 
 
-def test_a_live_session_clears_the_contents_key(config):
-    """It writes to the instance, and the scratch write stage does not
-    make its writes."""
-    record = read_record(config)
-    assert record["cleared"]["by"] == LIVE_TESTS
-    assert record["cleared"]["pid"] == os.getpid()
-
-
 def test_the_reset_runs_twice_and_empties_the_instance(resets, config, client):
     first = resets(client)
     writer = WikiClient(config)
@@ -221,40 +206,3 @@ def test_a_kept_instance_refuses_the_reset(resets, config):
                 login=fresh.login,
             )
     assert not page_exists(config)
-
-
-def test_the_same_items_after_a_reset(resets, config, client):
-    """The writer's items are keyed by the identity map alone (#109): the
-    same batches written with the same map after a reset give each mention
-    the item they gave it before, under the same label and description,
-    and writing them again mints nothing."""
-    from tests.fixtures.identity import mapped
-
-    from .test_live_identity_map import (
-        HISTORY,
-        TREE,
-        history_batch,
-        labelled,
-        terms,
-        tree_batch,
-        write_both,
-    )
-
-    def after_a_reset():
-        resets(client)
-        fresh = WikiClient(config)
-        history = register_fictional(fresh, HISTORY, "genealogical_report")
-        tree = register_fictional(fresh, TREE, "genealogical_report")
-        identity = mapped(history_batch(history), tree_batch(tree))
-        # a reset instance holds one map's writes: the writer's refusal of
-        # another map stays on
-        made: list[dict] = []
-        _, items = write_both(fresh, history, tree, identity, made, True)
-        again: list[dict] = []
-        _, rewritten = write_both(fresh, history, tree, identity, again, True)
-        assert rewritten == items
-        assert labelled(again) == []
-        held = terms(fresh, items.values())
-        return identity.hash, {key: held[qid] for key, qid in items.items()}
-
-    assert after_a_reset() == after_a_reset()

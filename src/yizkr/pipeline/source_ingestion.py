@@ -1,10 +1,12 @@
 """A resumable, explicitly reviewed one-source addition to an existing graph.
 
-Document products live in the workspace's text checkpoint or in an explicit
-saved document directory, consent in ReviewStore, and accepted identities and
-graph effects in CreationRegistry. Each mutating phase can be retried
-independently; local products never substitute for those shared authorities.
-Callers own clients, cancellation scopes and reviewer interaction.
+Document products are a run's saved views of the source: those of the run of
+the shared document stages that `prepare` makes in the workspace, or those of
+an explicit saved document directory. Consent lives in ReviewStore, and
+accepted identities and graph effects in CreationRegistry. Each mutating phase
+can be retried independently; local products never substitute for those
+shared authorities. Callers own clients, cancellation scopes and reviewer
+interaction.
 """
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ from typing import Literal, Protocol
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from yizkr.claims import ArtifactRef, ClaimBatch
-from yizkr.core.corpus import ExclusionList, read_exclusions
+from yizkr.core.corpus import is_excluded, read_exclusions
 from yizkr.core.instance import require_retained_code
 from yizkr.core.mutation_guard import protected_mutation
 from yizkr.core.wiki import WikiClient
@@ -50,7 +52,11 @@ from yizkr.pipeline.document_products import (
     UnsupportedKind,
     load_document_products,
 )
-from yizkr.pipeline.document_state import TEXT_SUFFIXES, document_kind
+from yizkr.pipeline.document_state import (
+    TEXT_SUFFIXES,
+    directory_names,
+    document_kind,
+)
 from yizkr.pipeline.identity_review import ReviewRefused, ReviewStore
 from yizkr.pipeline.registrar import Registrar, RegistrationResult
 from yizkr.pipeline.review_stages import (
@@ -59,13 +65,11 @@ from yizkr.pipeline.review_stages import (
     ReviewSource,
     prepare_review,
 )
+from yizkr.pipeline.rundir import RunDir, RunSettingsConflict
+from yizkr.pipeline.scratch import ScratchDriver
 from yizkr.pipeline.source_bindings import unique_source_qids
+from yizkr.pipeline.stage_planning import PHASES
 from yizkr.pipeline.stages import atomic_write_text, content_hash
-from yizkr.pipeline.text_products import (
-    TextSettings,
-    load_text_products,
-    prepare_text_products,
-)
 from yizkr.pipeline.text_stages import validate_paths
 from yizkr.pipeline.transcribe import Transcription
 from yizkr.pipeline.writer import artifact_kinds
@@ -113,16 +117,6 @@ class ReviewedProducts(Protocol):
     def critique(self) -> CritiqueWarnings: ...
 
 
-class ProductsLoader(Protocol):
-    """Admit complete products from `directory` after rechecking the source's
-    current bytes and exclusions, refusing with a ValueError otherwise.
-    `load_text_products` and `load_document_products` implement this."""
-
-    def __call__(
-        self, source: Path, directory: Path, *, exclusions: ExclusionList
-    ) -> ReviewedProducts: ...
-
-
 class _Record(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     format: Literal[1] = 1
@@ -163,38 +157,53 @@ class _Registration(_Record):
     complete: bool = False
 
 
-def _checkpoint_source(source: Path) -> None:
-    """Refuse a source that the text checkpoint would not read as its own
-    text. The kind is the one a run gives the file type: a container or
-    GEDCOM file refuses with its reason (UnsupportedKind), and any other
-    non-text file refuses too; of those, only a standalone image can enter,
-    as a run's saved views."""
+# the last per-document stage, which the workspace's run stops after
+_LAST_DOCUMENT_STAGE = max(PHASES, key=PHASES.__getitem__)
+
+
+def _prepared_source(source: Path) -> None:
+    """Refuse a source whose stages `prepare` does not run. The kind is
+    the one a run gives the file type: a container or GEDCOM file refuses
+    with its reason (UnsupportedKind), and any other non-text file refuses
+    too; of those, only a standalone image can enter, as a run's saved
+    views. A hidden file, whose name starts with ".", refuses as well,
+    since a run reads none."""
+    if source.name.startswith("."):
+        raise ProductsRefused(
+            "a run reads no hidden file: give the source a name that does "
+            "not start with '.'"
+        )
     kind = document_kind(source)
     if kind in UNSUPPORTED_KINDS:
         raise UnsupportedKind(kind)
     if kind != "text":
         suffixes = " or ".join(sorted(TEXT_SUFFIXES))
         raise ProductsRefused(
-            f"the text checkpoint reads only {suffixes} sources; a run's "
+            f"prepare runs the stages only for {suffixes} sources; a run's "
             "saved views of a standalone image can be given as document_dir"
         )
+
+
+def _quiet(*_args, **_kwargs) -> None:
+    """The driver's progress lines, which this workflow does not show: the
+    events of the workspace's run record what it did."""
 
 
 class SourceIngestion:
     """Add one immutable source, stopping at each review boundary.
 
-    Products come from one of two places. Without `document_dir`, the
-    workspace keeps a text source's checkpoint, which `prepare` makes with
-    the shared text stages; any other kind of source refuses. With
-    `document_dir`, products are one document's complete saved views, such
-    as those a run made for a plain-text source or a standalone image; this
-    workflow runs no stage for them.
+    Products are one document's complete saved views. Without
+    `document_dir`, `prepare` makes them for a text source with the shared
+    document stages, in a run in the workspace; any other kind of source
+    refuses. With `document_dir`, they are the views a run saved for a
+    plain-text source or a standalone image, and this workflow runs no
+    stage for them.
 
     Reopen with the same workspace, products, source bytes, review store and
     deployment. Completed products do not require model clients or a
-    response cache. Different source bytes/settings need a new workspace.
-    This interface never marks an instance retained, resets it, or changes
-    established assignments.
+    response cache. Different settings need a new workspace, and products
+    that change after registration refuse. This interface never marks an
+    instance retained, resets it, or changes established assignments.
     """
 
     def __init__(
@@ -225,13 +234,13 @@ class SourceIngestion:
             workspaces=(self.directory,),
         )
         if self.document_dir is None:
-            _checkpoint_source(self.source)
-        self._load: ProductsLoader = (
-            load_text_products
-            if self.document_dir is None
-            else load_document_products
-        )
-        self._products_dir = self.document_dir or self.directory / "products"
+            _prepared_source(self.source)
+        # the run `prepare` makes, over a folder that holds only a link to
+        # the source under its own name, so that the run reads no other file
+        # and the never-ingest list is asked by that name
+        workspace = self.directory.absolute()
+        self._run = workspace / "run"
+        self._link = workspace / "source" / self.source.name
         self.registry = CreationRegistry(client)
 
     @contextmanager
@@ -255,40 +264,118 @@ class SourceIngestion:
     def prepare(
         self,
         *,
-        settings: TextSettings | None = None,
+        language: str | None = None,
         extractor_client=None,
         critic_client=None,
     ) -> ReviewedProducts:
         """Make or admit complete products without accessing the graph.
 
-        The text checkpoint reads, extracts and critiques what is not yet
-        complete. Saved document products are admitted as saved: a setting
+        Without `document_dir`, the products are the views of the
+        workspace's run of the shared document stages. Complete views are
+        admitted as they are, without starting the driver, unless
+        `language` differs from the one the run recorded. Otherwise the
+        scratch driver takes the source through the stages to the last, in
+        that run, borrowing `extractor_client` and `critic_client`, with no
+        response cache: it reuses each view that its freshness decision lets
+        stand and makes the others, and a stage whose client is not given
+        fails; a source the never-ingest list names refuses before the
+        driver starts. `language` is a setting the run keeps, by default the
+        one it recorded, else detected: another refuses. The run also keeps
+        the never-ingest list's entries, its file's path and the
+        workspace's path, and its code while a stage is left: while a stage
+        is left, a change to any of these refuses (with other code the run
+        makes no view again), and the preparation needs the run's own
+        settings and code or a new workspace; complete views are still
+        admitted. Once the source is registered no view is made again:
+        products that cannot be admitted refuse, and so does another
+        language. Saved document products are admitted as saved: a setting
         or client for a stage refuses, since this workflow runs none.
         """
         with self._workspace():
-            if self.document_dir is None:
-                return prepare_text_products(
-                    self.source,
-                    self._products_dir,
-                    exclusions=read_exclusions(self.exclusions_file),
-                    settings=settings,
-                    extractor_client=extractor_client,
-                    critic_client=critic_client,
-                )
-            if any(
-                value is not None
-                for value in (settings, extractor_client, critic_client)
-            ):
+            if self.document_dir is not None:
+                if any(
+                    value is not None
+                    for value in (language, extractor_client, critic_client)
+                ):
+                    raise ReviewRefused(
+                        "saved document products run no stage here; "
+                        "a run makes them"
+                    )
+                return self._products()
+            recorded = (RunDir(self._run).manifest().get("config") or {}).get(
+                "language"
+            )
+            if (self.directory / "registration.json").exists():
+                # a registration names its products: none is made again
+                if language is not None and language != recorded:
+                    raise ReviewRefused(
+                        "the source is registered, so its products are not "
+                        "made again: give no other language"
+                    )
+                return self._products()
+            if language is None or language == recorded:
+                try:
+                    return self._products()
+                except ProductsRefused:
+                    pass
+            exclusions = read_exclusions(self.exclusions_file)
+            try:
+                excluded = is_excluded(exclusions, self.source)
+            except OSError as exc:
+                raise ProductsRefused("the source is unavailable") from exc
+            if excluded:
+                raise ProductsRefused("the source is on the never-ingest list")
+            self._link.parent.mkdir(mode=0o700, exist_ok=True)
+            for entry in self._link.parent.iterdir():
+                entry.unlink()
+            self._link.symlink_to(self.source.absolute())
+            engines = {"extract": extractor_client, "critique": critic_client}
+            driver = ScratchDriver(
+                self._link.parent,
+                self._run,
+                until=_LAST_DOCUMENT_STAGE,
+                borrowed_engines={
+                    role: client
+                    for role, client in engines.items()
+                    if client is not None
+                },
+                cache_dir=None,
+                exclusions=exclusions,
+                language=language or recorded or "auto",
+                log=_quiet,
+            )
+            try:
+                driver.run()
+            except RunSettingsConflict as exc:
                 raise ReviewRefused(
-                    "saved document products run no stage here; "
-                    "a run makes them"
-                )
-            return self._products()
+                    "the workspace's run keeps other settings or code: "
+                    "prepare the source in a new workspace"
+                ) from exc
+            check_cancelled()
+            try:
+                return self._products()
+            except ProductsRefused as exc:
+                # with other code, a run whose stages have all ended, one
+                # failed say, goes only past its barrier and makes no view
+                scratch = RunDir(self._run).manifest().get("scratch") or {}
+                if scratch.get("past_barrier_only"):
+                    raise ReviewRefused(
+                        "the code differs from the code of the workspace's "
+                        "run, which makes no view again with other code: "
+                        "finish the preparation with the run's code, or "
+                        "prepare the source in a new workspace"
+                    ) from exc
+                raise
 
     def _products(self) -> ReviewedProducts:
-        return self._load(
+        if self.document_dir is not None:
+            directory = self.document_dir
+        else:
+            name = directory_names([self._link], self._run)[self._link]
+            directory = self._run / name
+        return load_document_products(
             self.source,
-            self._products_dir,
+            directory,
             exclusions=read_exclusions(self.exclusions_file),
         )
 
