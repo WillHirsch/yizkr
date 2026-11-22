@@ -19,10 +19,13 @@ import pytest
 from wikibaseintegrator.datatypes import String
 
 from tests.fixtures.saved_products import (
+    CONTEXT_GAP,
     GRAVESTONE_FILE,
+    AuthoredAnswers,
     gravestone_answers,
     gravestone_claim,
     gravestone_image,
+    note_attention,
     saved_document,
 )
 from tests.fixtures.semantic_acceptance import birth_batch, source_case
@@ -38,6 +41,7 @@ from yizkr.pipeline.claim_review import (
 )
 from yizkr.pipeline.document_products import (
     ProductsRefused,
+    UnsupportedKind,
     load_document_products,
 )
 from yizkr.pipeline.identity_review import ReviewRefused, ReviewStore
@@ -154,7 +158,7 @@ def lifecycle_case(tmp_path, monkeypatch, products, kind="text"):
     monkeypatch.setattr(source_ingestion, "Registrar", Registrar)
     scratch = tmp_path / "scratch"
     if products == "checkpoint":
-        source, document_dir = tmp_path / name, None
+        source, document_dir, doc = tmp_path / name, None, None
         source.write_bytes(data)
     else:
         status, doc = saved_document(scratch, name, data, answers)
@@ -198,6 +202,7 @@ def lifecycle_case(tmp_path, monkeypatch, products, kind="text"):
             store=store,
             target=target,
             mention=mention,
+            document=doc,
             reopen=reopen,
             rerun=rerun,
         )
@@ -464,7 +469,7 @@ def test_both_products_give_claim_review_the_same_warnings(
 def test_saved_document_products_run_no_stage(lifecycle):
     case = lifecycle
     with pytest.raises(ReviewRefused):
-        case.workflow.prepare(critic_client=ScriptedClient('{"done":true}'))
+        case.workflow.prepare(critic_client=AuthoredAnswers(['{"done":true}']))
     assert case.workflow.prepare() == case.products
 
 
@@ -516,3 +521,88 @@ def test_image_review_locates_mentions_and_excerpts_in_its_reading(
         with pytest.raises(ReviewRefused):
             case.workflow.prepare_claims((1,))
         assert snapshot(case) == before
+
+
+@pytest.mark.parametrize("lifecycle", ["document"], indirect=True)
+def test_products_changed_after_the_registration_proposal_refuse(lifecycle):
+    case = lifecycle
+    proposal = case.workflow.prepare_registration(
+        "certificate", "Fictional source"
+    )
+    case.rerun({"critique": ['{"done":true}']}, refresh=("critique",))
+    before = snapshot(case)
+    with pytest.raises(ReviewRefused):
+        case.workflow.register_source(
+            proposal,
+            expected_digest=proposal.digest,
+            actor="fictional curator",
+        )
+    assert snapshot(case) == before
+
+
+def test_saved_critique_attention_is_shown_at_claim_review(
+    tmp_path, monkeypatch
+):
+    # A complete critique notes attention for a gap in an image's
+    # interpretation context; the text checkpoint has no such context.
+    with lifecycle_case(tmp_path, monkeypatch, "document", "image") as case:
+        note_attention(case.document, "critique", [CONTEXT_GAP])
+        register(case, "photograph")
+        assign(case)
+        (claim,) = case.workflow.prepare_claims((0,)).claims
+        assert CONTEXT_GAP in claim.selection.warnings
+
+
+GEDCOM = "0 HEAD\n1 CHAR UTF-8\n0 @I1@ INDI\n1 NAME Eugen /Löbig/\n0 TRLR\n"
+
+
+@pytest.mark.parametrize(
+    ("name", "kind"),
+    [
+        ("fictional-loebig-family.ged", "gedcom"),
+        ("fictional-family-booklet.pdf", "pdf"),
+        ("fictional-family-slides.pptx", "presentation"),
+    ],
+)
+@pytest.mark.parametrize("lifecycle", ["checkpoint"], indirect=True)
+def test_the_text_checkpoint_refuses_containers_and_gedcom_with_a_reason(
+    lifecycle, tmp_path, name, kind
+):
+    case = lifecycle
+    # The file type gives the kind, as it does in a run, whatever the bytes.
+    source = tmp_path / "sources" / name
+    source.parent.mkdir()
+    source.write_text(GEDCOM)
+    workspace = tmp_path / "other-addition"
+    with pytest.raises(UnsupportedKind) as refused:
+        SourceIngestion(
+            source,
+            workspace,
+            client=case.wiki,
+            review_store=case.store,
+            exclusions_file=case.policy,
+        )
+    assert refused.value.kind == kind
+    assert str(refused.value)
+    assert not workspace.exists()
+
+
+@pytest.mark.parametrize("lifecycle", ["checkpoint"], indirect=True)
+def test_the_text_checkpoint_sends_an_image_to_its_saved_views(
+    lifecycle, tmp_path
+):
+    case = lifecycle
+    source = tmp_path / "sources" / GRAVESTONE_FILE
+    source.parent.mkdir()
+    source.write_bytes(gravestone_image())
+    workspace = tmp_path / "other-addition"
+    with pytest.raises(ProductsRefused) as refused:
+        SourceIngestion(
+            source,
+            workspace,
+            client=case.wiki,
+            review_store=case.store,
+            exclusions_file=case.policy,
+        )
+    assert "document_dir" in str(refused.value)
+    assert not workspace.exists()

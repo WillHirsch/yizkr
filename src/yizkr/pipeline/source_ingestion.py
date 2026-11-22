@@ -44,7 +44,13 @@ from yizkr.pipeline.cohort_additions import (
     prepare_cohort_additions,
 )
 from yizkr.pipeline.critique import Finding, Invalid, sheet_notes
-from yizkr.pipeline.document_products import load_document_products
+from yizkr.pipeline.document_products import (
+    UNSUPPORTED_KINDS,
+    ProductsRefused,
+    UnsupportedKind,
+    load_document_products,
+)
+from yizkr.pipeline.document_state import document_kind
 from yizkr.pipeline.identity_review import ReviewRefused, ReviewStore
 from yizkr.pipeline.registrar import Registrar, RegistrationResult
 from yizkr.pipeline.review_stages import (
@@ -157,14 +163,30 @@ class _Registration(_Record):
     complete: bool = False
 
 
+def _checkpoint_source(source: Path) -> None:
+    """Refuse a source that the text checkpoint would not read as its own
+    text. The kind is the one a run gives the file type: a container or
+    GEDCOM file refuses with its reason (UnsupportedKind), and any other
+    non-text source, such as an image, enters only as a run's saved views."""
+    kind = document_kind(source)
+    if kind in UNSUPPORTED_KINDS:
+        raise UnsupportedKind(kind)
+    if kind != "text":
+        raise ProductsRefused(
+            "the text checkpoint reads only plain-text sources; give an "
+            "image's saved views as document_dir"
+        )
+
+
 class SourceIngestion:
     """Add one immutable source, stopping at each review boundary.
 
     Products come from one of two places. Without `document_dir`, the
     workspace keeps a text source's checkpoint, which `prepare` makes with
-    the shared text stages. With `document_dir`, products are one document's
-    complete saved views, such as those a run made for a plain-text source
-    or a standalone image; this workflow runs no stage for them.
+    the shared text stages; any other kind of source refuses. With
+    `document_dir`, products are one document's complete saved views, such
+    as those a run made for a plain-text source or a standalone image; this
+    workflow runs no stage for them.
 
     Reopen with the same workspace, products, source bytes, review store and
     deployment. Completed products do not require model clients or a
@@ -200,6 +222,8 @@ class SourceIngestion:
             ),
             workspaces=(self.directory,),
         )
+        if self.document_dir is None:
+            _checkpoint_source(self.source)
         self._load: ProductsLoader = (
             load_text_products
             if self.document_dir is None

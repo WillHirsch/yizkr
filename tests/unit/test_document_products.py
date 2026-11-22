@@ -14,11 +14,13 @@ import pytest
 
 from tests.fixtures.document_processing import contents
 from tests.fixtures.saved_products import (
+    CONTEXT_GAP,
     GRAVESTONE_FILE,
     claim_answer,
     gravestone_answers,
     gravestone_claim,
     gravestone_image,
+    note_attention,
     saved_document,
 )
 from yizkr.claims import ArtifactRef, ClaimBatch
@@ -30,6 +32,7 @@ from yizkr.pipeline.document_products import (
     load_document_products,
 )
 from yizkr.pipeline.document_state import (
+    BATCH_VOLATILE,
     EXCERPTS_DIR,
     PAUSED,
     TRANSCRIPTION_VOLATILE,
@@ -175,6 +178,48 @@ def test_an_incomplete_refresh_refuses_the_earlier_batch_it_leaves(
     )
     with pytest.raises(ProductsRefused):
         admit(doc)
+
+
+@pytest.mark.parametrize("named_by", ["reading", "claim"])
+def test_a_saved_product_naming_another_source_refuses(image, named_by):
+    # The product is rewritten and its record made again, so the views stay
+    # consistent with each other; only the source each names differs.
+    other = ArtifactRef.from_bytes(b"another fictional source")
+    if named_by == "reading":
+        reading = Transcription.model_validate_json(
+            image.transcription.read_text()
+        )
+        moved = reading.model_copy(update={"artifact": other})
+        image.transcription.write_text(moved.model_dump_json(indent=2))
+        image.derivations.set_content(
+            image.transcription.name,
+            content_hash(
+                moved.model_dump(mode="json"),
+                volatile=TRANSCRIPTION_VOLATILE,
+            ),
+        )
+        image.derivations.record(image.batch)
+    else:
+        batch = ClaimBatch.model_validate_json(image.batch.read_text())
+        batch.claims[0].source.artifact = other
+        image.batch.write_text(batch.model_dump_json(indent=2))
+        image.derivations.set_content(
+            image.batch.name,
+            content_hash(
+                batch.model_dump(mode="json"), volatile=BATCH_VOLATILE
+            ),
+        )
+    image.derivations.record(image.critique)
+    with pytest.raises(ProductsRefused):
+        admit(image)
+
+
+def test_saved_critique_attention_is_admitted_as_the_run_noted_it(image):
+    note_attention(image, "critique", [CONTEXT_GAP])
+    assert admit(image).critique.attention == (CONTEXT_GAP,)
+    note_attention(image, "critique", CONTEXT_GAP)
+    with pytest.raises(ProductsRefused):
+        admit(image)
 
 
 def test_a_document_the_run_left_unbatched_refuses(image):

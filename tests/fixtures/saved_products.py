@@ -18,7 +18,7 @@ from tests.fixtures import example_universe as u
 from tests.fixtures.document_processing import IsolatedDriver, quiet
 from tests.fixtures.records import record_answer
 
-from yizkr.pipeline.document_state import DocumentRun
+from yizkr.pipeline.document_state import DocumentRun, DocumentState
 
 GRAVESTONE = next(
     source for source in u.SOURCES if source.key == "gravestone-photo-1956"
@@ -30,6 +30,11 @@ EUGEN_BIRTH = next(
     for assertion in u.ASSERTIONS
     if (assertion.source, assertion.subject, assertion.property)
     == (GRAVESTONE.key, "eugen-loebig", "date_of_birth")
+)
+# The reason a complete critique notes when the interpretation context of an
+# image that a container also places has a gap.
+CONTEXT_GAP = (
+    "interpretation context is incomplete: container preparation unavailable"
 )
 
 
@@ -159,3 +164,13 @@ def saved_document(
     status = driver.run()
     (doc,) = (doc for doc in driver.documents() if doc.source == source)
     return status, doc
+
+
+def note_attention(doc: DocumentRun, stage: str, reasons) -> None:
+    """Keep `reasons` as the attention the run noted for `stage` of `doc`,
+    in its saved state, where a run keeps them when the stage completes."""
+    state = DocumentState.load(doc.state_path)
+    detail = dict(state.detail or {})
+    noted = dict(detail.get("attention") or {})
+    state.detail = detail | {"attention": noted | {stage: reasons}}
+    state.save(doc.state_path)
