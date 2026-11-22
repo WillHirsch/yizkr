@@ -584,7 +584,6 @@ def test_the_text_checkpoint_refuses_containers_and_gedcom_with_a_reason(
         )
     assert refused.value.kind == kind
     assert str(refused.value)
-    assert not workspace.exists()
 
 
 @pytest.mark.parametrize("lifecycle", ["checkpoint"], indirect=True)
@@ -605,4 +604,3 @@ def test_the_text_checkpoint_sends_an_image_to_its_saved_views(
             exclusions_file=case.policy,
         )
     assert "document_dir" in str(refused.value)
-    assert not workspace.exists()

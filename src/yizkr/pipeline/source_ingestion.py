@@ -50,7 +50,7 @@ from yizkr.pipeline.document_products import (
     UnsupportedKind,
     load_document_products,
 )
-from yizkr.pipeline.document_state import document_kind
+from yizkr.pipeline.document_state import TEXT_SUFFIXES, document_kind
 from yizkr.pipeline.identity_review import ReviewRefused, ReviewStore
 from yizkr.pipeline.registrar import Registrar, RegistrationResult
 from yizkr.pipeline.review_stages import (
@@ -167,14 +167,16 @@ def _checkpoint_source(source: Path) -> None:
     """Refuse a source that the text checkpoint would not read as its own
     text. The kind is the one a run gives the file type: a container or
     GEDCOM file refuses with its reason (UnsupportedKind), and any other
-    non-text source, such as an image, enters only as a run's saved views."""
+    non-text file refuses too; of those, only a standalone image can enter,
+    as a run's saved views."""
     kind = document_kind(source)
     if kind in UNSUPPORTED_KINDS:
         raise UnsupportedKind(kind)
     if kind != "text":
+        suffixes = " or ".join(sorted(TEXT_SUFFIXES))
         raise ProductsRefused(
-            "the text checkpoint reads only plain-text sources; give an "
-            "image's saved views as document_dir"
+            f"the text checkpoint reads only {suffixes} sources; a run's "
+            "saved views of a standalone image can be given as document_dir"
         )
 
 
