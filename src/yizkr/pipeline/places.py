@@ -53,16 +53,18 @@ graph puts more places inside first, then by their text, so the prompt
 is the same for the same graph whatever QIDs an instance gave its items
 (ADR-0032).
 
-The command (`yizkr reconcile-places`) exports the answers as a CSV a
-curator reviews, and its `--apply` writes the approved rows' links, cited
-as above. A development-stage scratch run writes every answer unattended
+The command (`yizkr reconcile-places`) takes the links from the run
+directories of scratch runs, as the write stage recorded the documents
+it wrote (record_links), exports the answers as a CSV a curator
+reviews, and its `--apply` writes the approved rows' links, cited as
+above. A development-stage scratch run writes every answer unattended
 instead, in its `places` stage (yizkr.pipeline.scratchwrite, ADR-0025
-§1).
+§1). Both read the links through one derivation from the write
+stage's record and the documents' batches (written_links).
 """
 
 from __future__ import annotations
 
-import contextlib
 import csv
 import hashlib
 import json
@@ -368,84 +370,113 @@ def fetch_places(client: WikiClient, config: Config) -> list[PlaceRecord]:
     return records
 
 
-# a run directory's document views, newest first: the batch the writer
-# wrote, the one reconcile resolved, and the extraction's own
-_BATCH_VIEWS = ("batch.approved.json", "batch.resolved.json", "batch.json")
+@dataclass(frozen=True)
+class DocumentFiles:
+    """What written_links reads of a document, as a scratch run's
+    DocumentRun gives it too: the SHA-1 of its bytes, and the paths of
+    its batch and of its transcription view in its directory of the
+    run."""
+
+    sha1: str
+    batch: Path
+    transcription: Path
 
 
-def _document_dirs(run_dir: Path) -> list[Path]:
-    """Each directory of a run directory, an excerpt's too; one that
-    holds no write.json is passed over by the caller."""
-    from yizkr.pipeline.document_state import EXCERPTS_DIR
+class NoWriteRecord(ValueError):
+    """A run directory holds no write record that names the documents its
+    write wrote, so the links they state cannot be read (record_links)."""
 
-    try:
-        entries = sorted(run_dir.iterdir())
-    except OSError:
-        return []
-    with contextlib.suppress(OSError):
-        entries += sorted((run_dir / EXCERPTS_DIR).iterdir())
-    return [
-        entry
-        for entry in entries
-        if entry.is_dir()
-        and not entry.name.startswith(".")
-        and entry.name != EXCERPTS_DIR
-    ]
+
+def written_links(written: dict, documents: Iterable[Any]) -> list[StatedLink]:
+    """The links the mention records of the documents a write wrote state
+    (stated_links), each document stating its own, each container's
+    evidence on its page of the document's transcription. `written` is
+    the scratch write stage's record (yizkr.pipeline.scratchwrite), which
+    names each document it wrote by its SHA-1, with the items its write
+    used for the batch's local ids (`created_items`). Each of `documents`
+    (a DocumentFiles, or a scratch run's DocumentRun) that the record
+    names gives the links of its batch, the one the write wrote from; one
+    the record does not name, or one with no batch, gives none."""
+    wrote = written.get("documents")
+    if not isinstance(wrote, dict):
+        wrote = {}
+    links: list[StatedLink] = []
+    for doc in documents:
+        done = wrote.get(doc.sha1)
+        if not isinstance(done, dict) or not doc.batch.exists():
+            continue
+        created = done.get("created_items")
+        links += stated_links(
+            ClaimBatch.model_validate_json(doc.batch.read_text()),
+            created if isinstance(created, dict) else {},
+            doc.sha1,
+            read_transcription(doc.transcription),
+        )
+    return links
 
 
 def record_links(run_dir: Path) -> list[StatedLink]:
-    """The links the mention records of the places a run directory wrote
-    state (stated_links), each document's from the batch it was written
-    from and the items its write used (`write.json`'s `created_items`).
-    The stating document is the one whose state the directory holds
-    (its state.json's content SHA-1), else each artifact the place's
-    claims cite (batch_artifacts); its transcription view, where it holds
-    one, gives each container's evidence its page. A directory set aside
-    (a dot name), or one whose write.json is missing or no object, is
-    passed over."""
-    found: list[StatedLink] = []
-    for directory in _document_dirs(run_dir):
-        try:
-            written = json.loads((directory / "write.json").read_text())
-        except (OSError, ValueError, RecursionError):
-            continue
-        if not isinstance(written, dict):
-            continue
-        created = written.get("created_items")
-        if not isinstance(created, dict):
-            created = {}
-        batch = None
-        for name in _BATCH_VIEWS:
-            try:
-                batch = ClaimBatch.model_validate_json(
-                    (directory / name).read_text()
-                )
-            except (OSError, ValueError):
-                continue
-            break
-        if batch is None:
-            continue
-        for link in stated_links(
-            batch,
-            created,
-            _content_sha1(directory),
-            read_transcription(directory / "transcription.json"),
-        ):
-            if link not in found:
-                found.append(link)
-    return found
+    """The links the mention records of the documents a scratch run
+    directory's write wrote state (written_links), from the write
+    stage's record in the run directory (corpus/write/record.json) and
+    the directory of each document it names, an excerpt's too, found by
+    the content SHA-1 its state.json records (gaps.document_directories,
+    which passes over a directory set aside, with a dot name, and a
+    duplicate's). Raises NoWriteRecord when the run directory holds no
+    write record that can be read, when the record is no JSON object or
+    holds no `documents` object, or when it is of a write that wrote
+    nothing as it found the instance holding another run's write. A
+    record whose `documents` is empty, of a write that wrote no document,
+    gives no link. The record is read as it stands: an incomplete write's
+    gives the links of the documents it has recorded so far."""
+    from yizkr.pipeline.gaps import document_directories
+    from yizkr.pipeline.scratch import CORPUS_DIR
+    from yizkr.pipeline.scratchwrite import RECORD, WRITE
 
-
-def _content_sha1(directory: Path) -> str | None:
-    """The SHA-1 of the document a run directory's document directory
-    holds the state of, as its state.json records it; None when it
-    records none or cannot be read."""
-    from yizkr.pipeline.document_state import DocumentState
-
+    path = run_dir / CORPUS_DIR / WRITE / RECORD
     try:
-        return DocumentState.load(directory / "state.json").content_sha1
-    except (OSError, ValueError, TypeError):
-        return None
+        written = json.loads(path.read_text())
+    except FileNotFoundError:
+        raise NoWriteRecord(
+            f"{run_dir} holds no write record ({path} is missing), so no "
+            "link its documents state can be read: give the directory of "
+            "a scratch run whose write stage ran"
+        ) from None
+    except (OSError, ValueError, RecursionError) as exc:
+        raise NoWriteRecord(
+            f"the write record {path} cannot be read "
+            f"({type(exc).__name__}), so no link its documents state can "
+            "be read"
+        ) from None
+    if not isinstance(written, dict):
+        raise NoWriteRecord(
+            f"the write record {path} is no JSON object, so no link its "
+            "documents state can be read"
+        )
+    if not isinstance(written.get("documents"), dict):
+        if written.get("skipped"):
+            raise NoWriteRecord(
+                f"the write record {path} records a write that wrote "
+                "nothing: it found the instance holding what scratch run "
+                f"{written.get('run_id')} wrote; give that run's directory"
+            )
+        raise NoWriteRecord(
+            f"the write record {path} holds no documents object, so no "
+            "link its documents state can be read"
+        )
+    return written_links(
+        written,
+        (
+            # each kind's batch stage makes batch.json
+            # (stage_planning.batch_stage)
+            DocumentFiles(
+                sha1=sha1,
+                batch=directory / "batch.json",
+                transcription=directory / "transcription.json",
+            )
+            for sha1, directory in document_directories(run_dir)
+        ),
+    )
 
 
 def read_transcription(path: Path):
@@ -522,32 +553,6 @@ def excerpt_language(batch: ClaimBatch, transcription=None) -> str:
     return given.most_common(1)[0][0] if given else UNDETERMINED
 
 
-def batch_artifacts(batch: ClaimBatch, local_id: str) -> list[str]:
-    """The SHA-1s of the artifacts that the claims mentioning the entity
-    `local_id` cite, else those every claim of the batch cites: the
-    document whose record the entity's is."""
-
-    def mentions(claim) -> bool:
-        refs = [claim.subject]
-        if isinstance(claim.value, ItemValue):
-            refs.append(claim.value.value)
-        return any(
-            isinstance(ref, LocalRef) and ref.local_id == local_id
-            for ref in refs
-        )
-
-    cited = sorted(
-        {
-            claim.source.artifact.sha1
-            for claim in batch.claims
-            if mentions(claim)
-        }
-    )
-    return cited or sorted(
-        {claim.source.artifact.sha1 for claim in batch.claims}
-    )
-
-
 def _canonical(qualifier: Qualifier) -> str:
     return json.dumps(qualifier.model_dump(mode="json"), sort_keys=True)
 
@@ -555,15 +560,14 @@ def _canonical(qualifier: Qualifier) -> str:
 def stated_links(
     batch: ClaimBatch,
     created: dict,
-    sha1: str | None = None,
+    sha1: str,
     transcription=None,
 ) -> list[StatedLink]:
     """The links the mention records of `batch`'s places state, each
     container of a chain within the next, and the place within the
     first, for each place with a QID: the one reconcile resolved it to,
     else the item the writer used for its local id (`created`, local id
-    -> QID). `sha1` names the stating document; without it, each artifact
-    the place's claims cite does (batch_artifacts).
+    -> QID). `sha1` names the stating document.
 
     A claim of the batch gives a link when it states `part_of` from the
     link's inner end to its container: from the place itself at the
@@ -617,7 +621,6 @@ def stated_links(
         if not isinstance(qid, str) or not qid:
             continue
         chain = tuple(record.containers())
-        documents = [sha1] if sha1 else batch_artifacts(batch, entity.id)
         for index, container in enumerate(chain):
             evidence = record.within[index].evidence
             page, printed = pages(evidence) if evidence else (None, None)
@@ -639,22 +642,21 @@ def stated_links(
                     for claim in giving
                 }
             )
-            for document in documents:
-                for time in times or [()]:
-                    link = StatedLink(
-                        sha1=document,
-                        place=qid,
-                        chain=chain,
-                        index=index,
-                        qualifiers=time,
-                        claimed=bool(times),
-                        evidence=evidence,
-                        language=language if evidence else None,
-                        page=page,
-                        printed_page=printed,
-                    )
-                    if link not in found:
-                        found.append(link)
+            for time in times or [()]:
+                link = StatedLink(
+                    sha1=sha1,
+                    place=qid,
+                    chain=chain,
+                    index=index,
+                    qualifiers=time,
+                    claimed=bool(times),
+                    evidence=evidence,
+                    language=language if evidence else None,
+                    page=page,
+                    printed_page=printed,
+                )
+                if link not in found:
+                    found.append(link)
     return found
 
 

@@ -1066,6 +1066,47 @@ class TestKeys:
         assert recorded_contents(run.wiki).key == run.record("write")["key"]
 
 
+# -- the run directory the standalone command reads ---------------------------
+
+
+class TestTheRunDirectory:
+    """`yizkr reconcile-places --run` reads the run directory the write
+    left (places.record_links), through the stage's own derivation."""
+
+    def test_the_command_reads_the_links_the_write_recorded(self, run):
+        run.past_the_barrier(until="write")
+        for doc in run.documents:
+            # each document's state names its bytes, as the driver
+            # records before the document's first stage
+            doc.state.content_sha1 = doc.sha1
+            doc.state.save(doc.state_path)
+        florburg, flackfeld = run.qid("Flörburg"), run.qid("Fläckfeld")
+        # the documents in the order of their directories' names
+        assert [
+            (link.sha1, link.place, link.container, link.claimed)
+            for link in places.record_links(run.run_dir)
+        ] == [
+            (sha1(LETTER), flackfeld, "Kreis Peiltal", False),
+            (sha1(EXTRACT), florburg, "Kreis Peiltal", True),
+            (sha1(EXTRACT), florburg, "Hesse", False),
+            (sha1(EXTRACT), florburg, "Germany", False),
+        ]
+
+    def test_a_run_that_kept_another_run_s_write_names_that_run(
+        self, run, tmp_path, monkeypatch
+    ):
+        run.past_the_barrier()
+        (tmp_path / "again").mkdir()
+        second = PlaceRun(
+            tmp_path / "again", monkeypatch, wiki=run.wiki, run_id="run-2"
+        )
+        second.past_the_barrier(until="write")
+        assert second.record("reset")["action"] == scratchwrite.SKIPPED
+        with pytest.raises(places.NoWriteRecord) as refused:
+            places.record_links(second.run_dir)
+        assert "run-1" in str(refused.value)
+
+
 # -- the whole write --------------------------------------------------------
 
 

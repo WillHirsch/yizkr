@@ -48,6 +48,7 @@ from yizkr.pipeline.places import (
     WRITTEN,
     Adjudication,
     Answer,
+    NoWriteRecord,
     PlaceRecord,
     Question,
     StatedLink,
@@ -240,85 +241,7 @@ class TestStatedLinks:
         (link,) = stated_links(batch, {}, MARRIAGE)
         assert link.place == "Q20"
 
-    def test_without_a_document_the_place_s_claims_name_it(self):
-        batch = _batch(
-            [
-                _entity("f", "Fläckfeld", ["Kreis Mockburg"]),
-                _entity("k", "Kreis Mockburg"),
-            ],
-            [_part_of(("f", "Fläckfeld"), ("k", "Kreis Mockburg"), MARRIAGE)],
-        )
-        (link,) = stated_links(batch, {"f": "Q20"})
-        assert link.sha1 == MARRIAGE
-
-    def test_a_link_round_trips_through_json(self):
-        batch = koshnovka_batch(
-            _part_of(*IN_1941, DEATH, [_year("point_in_time", 1941)])
-        )
-        for link in stated_links(batch, CREATED, DEATH):
-            assert StatedLink.from_json(link.as_json()) == link
-
-
-def _written(directory, entities, created, sha1=None, view="batch.json"):
-    directory.mkdir(parents=True)
-    (directory / view).write_text(_batch(entities).model_dump_json())
-    (directory / "write.json").write_text(
-        json.dumps({"created_items": created})
-    )
-    if sha1:
-        (directory / "state.json").write_text(
-            json.dumps({"file": "x.png", "title": "x", "content_sha1": sha1})
-        )
-
-
-class TestRecordLinks:
-    def test_a_run_directory_s_documents_state_their_links(self, tmp_path):
-        _written(
-            tmp_path / "marriage",
-            [_entity("e1", "Fläckfeld", ["Kreis Mockburg", "Hesse"])],
-            {"e1": "Q20"},
-            MARRIAGE,
-        )
-        _written(
-            tmp_path / "excerpts" / "tree",
-            [_entity("e1", "Fläckfeld", ["Kreis Peiltal"])],
-            {"e1": "Q20"},
-            TREE,
-            view="batch.approved.json",
-        )
-        # set aside, and a directory no write reached
-        _written(
-            tmp_path / ".marriage.superseded-1",
-            [_entity("e1", "Fläckfeld", ["Kreis Rekau"])],
-            {"e1": "Q20"},
-            MARRIAGE,
-        )
-        (tmp_path / "letter").mkdir()
-        (tmp_path / "letter" / "batch.json").write_text("{}")
-        assert [
-            (link.sha1, link.container) for link in record_links(tmp_path)
-        ] == [
-            (MARRIAGE, "Kreis Mockburg"),
-            (MARRIAGE, "Hesse"),
-            (TREE, "Kreis Peiltal"),
-        ]
-
-    @pytest.mark.parametrize(
-        "written", ["[]", "null", "not json", "[" * 100_000]
-    )
-    def test_a_write_json_of_another_shape_is_passed_over(
-        self, tmp_path, written
-    ):
-        _written(
-            tmp_path / "marriage",
-            [_entity("e1", "Fläckfeld", ["Kreis Mockburg"])],
-            {"e1": "Q20"},
-            MARRIAGE,
-        )
-        (tmp_path / "marriage" / "write.json").write_text(written)
-        assert record_links(tmp_path) == []
-
-    def test_an_approved_equivalence_keeps_each_claim_s_link(self, tmp_path):
+    def test_an_approved_equivalence_keeps_each_claim_s_link(self):
         """reconcile resolved Kaldovsky District to its item, so the
         approved batch names it by QID, as the value of link 0 and the
         subject of link 1: each link is still the claim's, with its
@@ -334,23 +257,193 @@ class TestRecordLinks:
         )
         assert approved.claims[0].value.value.kind == "qid"
         assert approved.claims[1].subject.kind == "qid"
-        directory = tmp_path / "death"
-        directory.mkdir()
-        (directory / "batch.approved.json").write_text(
-            approved.model_dump_json()
+        first, second = stated_links(
+            approved, {"kosh": "Q30", "chadsk": "Q32"}, DEATH
         )
-        (directory / "write.json").write_text(
-            json.dumps({"created_items": {"kosh": "Q30", "chadsk": "Q32"}})
-        )
-        (directory / "state.json").write_text(
-            json.dumps({"file": "x.png", "title": "x", "content_sha1": DEATH})
-        )
-        first, second = record_links(tmp_path)
         assert first.claimed and times(first) == [("point_in_time", 1941)]
         assert second.claimed and times(second) == [("start_time", 1937)]
 
-    def test_a_missing_run_directory_holds_nothing(self, tmp_path):
-        assert record_links(tmp_path / "absent") == []
+    def test_a_link_round_trips_through_json(self):
+        batch = koshnovka_batch(
+            _part_of(*IN_1941, DEATH, [_year("point_in_time", 1941)])
+        )
+        for link in stated_links(batch, CREATED, DEATH):
+            assert StatedLink.from_json(link.as_json()) == link
+
+
+# where a scratch run directory keeps its write stage's record
+WRITE_RECORD = Path("corpus", "write", "record.json")
+
+
+def _written(run_dir, name, entities, created, sha1) -> Path:
+    """A document the write of the scratch run directory `run_dir` wrote,
+    in its directory `name` there: its batch, its state.json, which
+    records its content SHA-1, and its entry in the write stage's record,
+    with the items its write used for the batch's local ids. Returns the
+    document's directory."""
+    directory = run_dir / name
+    directory.mkdir(parents=True)
+    (directory / "batch.json").write_text(_batch(entities).model_dump_json())
+    (directory / "state.json").write_text(
+        json.dumps({"file": "x.png", "title": "x", "content_sha1": sha1})
+    )
+    record = run_dir / WRITE_RECORD
+    written = (
+        json.loads(record.read_text())
+        if record.exists()
+        else {"key": "fictional", "run_id": "run-1", "documents": {}}
+    )
+    written["documents"][sha1] = {"written": 1, "created_items": created}
+    record.parent.mkdir(parents=True, exist_ok=True)
+    record.write_text(json.dumps(written))
+    return directory
+
+
+class TestRecordLinks:
+    def test_a_run_directory_s_documents_state_their_links(self, tmp_path):
+        _written(
+            tmp_path,
+            "marriage",
+            [_entity("e1", "Fläckfeld", ["Kreis Mockburg", "Hesse"])],
+            {"e1": "Q20"},
+            MARRIAGE,
+        )
+        _written(
+            tmp_path,
+            f"excerpts/{TREE}",
+            [_entity("e1", "Fläckfeld", ["Kreis Peiltal"])],
+            {"e1": "Q21"},
+            TREE,
+        )
+        assert [
+            (link.sha1, link.place, link.container)
+            for link in record_links(tmp_path)
+        ] == [
+            (MARRIAGE, "Q20", "Kreis Mockburg"),
+            (MARRIAGE, "Q20", "Hesse"),
+            (TREE, "Q21", "Kreis Peiltal"),
+        ]
+
+    def test_only_the_documents_the_write_record_names_state_links(
+        self, tmp_path
+    ):
+        _written(
+            tmp_path,
+            "marriage",
+            [_entity("e1", "Fläckfeld", ["Kreis Mockburg"])],
+            {"e1": "Q20"},
+            MARRIAGE,
+        )
+        # set aside, with the same document's state and another batch
+        aside = tmp_path / ".marriage.superseded-1"
+        aside.mkdir()
+        (aside / "batch.json").write_text(
+            _batch(
+                [_entity("e1", "Fläckfeld", ["Kreis Rekau"])]
+            ).model_dump_json()
+        )
+        (aside / "state.json").write_text(
+            (tmp_path / "marriage" / "state.json").read_text()
+        )
+        # extracted, with its place reconciled, and never written: the
+        # record does not name it, so its reconciled place states nothing
+        letter = tmp_path / "letter"
+        letter.mkdir()
+        (letter / "batch.json").write_text(
+            _batch(
+                [_entity("e1", "Fläckfeld", ["Kreis Peiltal"], qid="Q22")]
+            ).model_dump_json()
+        )
+        (letter / "state.json").write_text(
+            json.dumps({"file": "y.png", "title": "y", "content_sha1": TREE})
+        )
+        # written, and its batch is gone from its directory
+        death = _written(
+            tmp_path,
+            "death",
+            koshnovka_batch().model_dump(mode="json")["entities"],
+            CREATED,
+            DEATH,
+        )
+        (death / "batch.json").unlink()
+        assert [
+            (link.sha1, link.container) for link in record_links(tmp_path)
+        ] == [(MARRIAGE, "Kreis Mockburg")]
+
+    def test_the_write_record_and_the_batch_give_the_links(self, tmp_path):
+        directory = _written(
+            tmp_path,
+            "marriage",
+            [_entity("e1", "Fläckfeld", ["Kreis Mockburg"])],
+            {"e1": "Q20"},
+            MARRIAGE,
+        )
+        # files no current stage writes, with other items and another chain
+        (directory / "write.json").write_text(
+            json.dumps({"created_items": {"e1": "Q99"}})
+        )
+        for name in ("batch.approved.json", "batch.resolved.json"):
+            (directory / name).write_text(
+                _batch(
+                    [_entity("e1", "Fläckfeld", ["Kreis Rekau"])]
+                ).model_dump_json()
+            )
+        (link,) = record_links(tmp_path)
+        assert (link.place, link.container) == ("Q20", "Kreis Mockburg")
+
+    def test_a_run_directory_with_no_write_record_is_refused(self, tmp_path):
+        _written(
+            tmp_path,
+            "marriage",
+            [_entity("e1", "Fläckfeld", ["Kreis Mockburg"])],
+            {"e1": "Q20"},
+            MARRIAGE,
+        )
+        (tmp_path / WRITE_RECORD).unlink()
+        with pytest.raises(NoWriteRecord):
+            record_links(tmp_path)
+        with pytest.raises(NoWriteRecord):
+            record_links(tmp_path / "absent")
+
+    @pytest.mark.parametrize(
+        "written",
+        ["[]", "null", "not json", "[" * 100_000, '{"documents": []}'],
+    )
+    def test_a_write_record_of_another_shape_is_refused(
+        self, tmp_path, written
+    ):
+        _written(
+            tmp_path,
+            "marriage",
+            [_entity("e1", "Fläckfeld", ["Kreis Mockburg"])],
+            {"e1": "Q20"},
+            MARRIAGE,
+        )
+        (tmp_path / WRITE_RECORD).write_text(written)
+        with pytest.raises(NoWriteRecord):
+            record_links(tmp_path)
+
+    def test_a_skipped_write_names_the_run_whose_write_it_kept(self, tmp_path):
+        _written(
+            tmp_path,
+            "marriage",
+            [_entity("e1", "Fläckfeld", ["Kreis Mockburg"])],
+            {"e1": "Q20"},
+            MARRIAGE,
+        )
+        (tmp_path / WRITE_RECORD).write_text(
+            json.dumps(
+                {"key": "fictional", "skipped": True, "run_id": "run-0"}
+            )
+        )
+        with pytest.raises(NoWriteRecord) as refused:
+            record_links(tmp_path)
+        assert "run-0" in str(refused.value)
+
+    def test_a_write_that_wrote_no_document_states_no_links(self, tmp_path):
+        (tmp_path / WRITE_RECORD).parent.mkdir(parents=True)
+        (tmp_path / WRITE_RECORD).write_text(json.dumps({"documents": {}}))
+        assert record_links(tmp_path) == []
 
 
 def link(place, chain, index, sha1=MARRIAGE, claimed=False, qualifiers=()):
@@ -1268,13 +1361,15 @@ class TestCommand:
         from yizkr.pipeline import llm
 
         _written(
-            tmp_path / "run1" / "prison",
+            tmp_path / "run1",
+            "prison",
             [_entity("e1", "Gerichtsgefängnis Peiltal", list(PRISON))],
             {"e1": "Q40"},
             MARRIAGE,
         )
         _written(
-            tmp_path / "run2" / "prison",
+            tmp_path / "run2",
+            "prison",
             [_entity("e1", "Gerichtsgefängnis Peiltal", ["Kreis Rekau"])],
             {"e1": "Q40"},
             TREE,
@@ -1305,7 +1400,8 @@ class TestCommand:
         from yizkr import cli
 
         _written(
-            tmp_path / "run" / "prison",
+            tmp_path / "run",
+            "prison",
             [_entity("e1", "Gerichtsgefängnis Peiltal", ["Kreis Rekau"])],
             {"e1": "Q40"},
             MARRIAGE,
@@ -1336,7 +1432,8 @@ class TestCommand:
         from yizkr import cli
 
         _written(
-            tmp_path / "run" / "prison",
+            tmp_path / "run",
+            "prison",
             [_entity("e1", "Gerichtsgefängnis Peiltal", list(PRISON))],
             {"e1": "Q40"},
             MARRIAGE,
@@ -1370,6 +1467,47 @@ class TestCommand:
             "present: 3; refused as cycles: 1, unresolved: 0; approved rows "
             "passed over, deciding no question asked: 4; run item Q7" in out
         )
+
+    @pytest.mark.parametrize("apply", [False, True])
+    def test_a_run_directory_with_no_write_record_asks_nothing(
+        self, tmp_path, capsys, apply
+    ):
+        """The second run directory was extracted, and no write stage ran
+        in it: the command stops, naming its missing write record, before
+        it reads the graph, asks or writes anything, and reports no
+        count."""
+        from yizkr import cli
+
+        _written(
+            tmp_path / "run1",
+            "prison",
+            [_entity("e1", "Gerichtsgefängnis Peiltal", list(PRISON))],
+            {"e1": "Q40"},
+            MARRIAGE,
+        )
+        bare = tmp_path / "run2"
+        (bare / "prison").mkdir(parents=True)
+        (bare / "prison" / "batch.json").write_text(
+            (tmp_path / "run1" / "prison" / "batch.json").read_text()
+        )
+        reviewed = ["--apply", str(tmp_path / "reviewed.csv")]
+        args = cli.build_parser().parse_args(
+            [
+                "reconcile-places",
+                "--run",
+                str(tmp_path / "run1"),
+                "--run",
+                str(bare),
+                "--out",
+                str(tmp_path / "places.csv"),
+                *(reviewed if apply else []),
+            ]
+        )
+        with pytest.raises(SystemExit) as stopped:
+            cli.cmd_reconcile_places(args)
+        assert str(bare / WRITE_RECORD) in str(stopped.value.code)
+        assert capsys.readouterr().out == ""
+        assert not (tmp_path / "places.csv").exists()
 
     def test_apply_without_a_run_says_no_row_decides(
         self, tmp_path, monkeypatch, capsys
@@ -1529,6 +1667,50 @@ class TestApply:
         )
         assert summary["cycles"] == 1 and summary["written"] == 1
         assert any("would close a cycle" in note for note in summary["notes"])
+
+    def test_the_command_writes_a_run_directory_s_links_once(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """`--run` with `--apply`: the links the document the run's write
+        record names states, with the item its write used for the prison,
+        are the links the reviewed rows decide, written on the instance;
+        the same command again writes nothing more."""
+        from yizkr import cli
+
+        wiki, qids, _, path = self._setup(tmp_path, monkeypatch)
+        prison, town = qids["Gerichtsgefängnis Peiltal"], qids["Peiltal"]
+        _written(
+            tmp_path / "run",
+            "prison",
+            [_entity("e1", "Gerichtsgefängnis Peiltal", list(PRISON))],
+            {"e1": prison},
+            MARRIAGE,
+        )
+        # the command's instance is the fake one, as TestCommand gives it
+        monkeypatch.setattr(cli.Config, "load", lambda env_file: None)
+        monkeypatch.setattr(cli, "WikiClient", lambda config: wiki)
+        args = cli.build_parser().parse_args(
+            [
+                "reconcile-places",
+                "--run",
+                str(tmp_path / "run"),
+                "--apply",
+                str(path),
+            ]
+        )
+        assert cli.cmd_reconcile_places(args) == 0
+        (statement,) = statements(wiki, prison)
+        assert statement.mainsnak.datavalue["value"]["id"] == town
+        assert cited(statement, "stated_in")[0] == [
+            qids["marriage certificate"]
+        ]
+        (statement,) = statements(wiki, town)
+        assert statement.mainsnak.datavalue["value"]["id"] == qids["Hesse"]
+        assert "links written: 2," in capsys.readouterr().out
+        # the fake instance merges an equal claim into the statement it
+        # has, so the command's own count is what shows a second write
+        assert cli.cmd_reconcile_places(args) == 0
+        assert "links written: 0," in capsys.readouterr().out
 
 
 # -- the pass's run item (#368) -----------------------------------------------

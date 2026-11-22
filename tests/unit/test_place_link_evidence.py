@@ -314,9 +314,9 @@ class TestExcerptLanguage:
 
 class TestRecordLinksPages:
     def test_a_run_directory_s_transcription_gives_the_page(self, tmp_path):
-        directory = tmp_path / "death"
-        _written(
-            directory,
+        directory = _written(
+            tmp_path,
+            "death",
             death_batch().model_dump(mode="json")["entities"],
             CREATED,
             DEATH,
@@ -332,9 +332,9 @@ class TestRecordLinksPages:
         )
 
     def test_an_unreadable_transcription_gives_no_page(self, tmp_path):
-        directory = tmp_path / "death"
-        _written(
-            directory,
+        directory = _written(
+            tmp_path,
+            "death",
             death_batch().model_dump(mode="json")["entities"],
             CREATED,
             DEATH,
