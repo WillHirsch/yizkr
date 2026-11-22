@@ -224,9 +224,14 @@ def test_slide_readings_preserve_attribution_through_write_and_query(
             for statement in caption_statements
         }
         for claim in case.parent_batch.claims:
+            caption = by_caption[claim.value.value.text]
+            assert caption["mainsnak"]["datavalue"]["value"] == (
+                claim.value.value.model_dump()
+            )
+            assert caption["rank"] == "normal"
             assert_reference(
                 client,
-                by_caption[claim.value.value.text],
+                caption,
                 claim,
                 parent.artifact_qid,
                 parent_write.run_qid,

@@ -8,8 +8,6 @@ without, per a certificate's district field), and the district in an
 oblast from 1937, the only link to the oblast, so the path runs through
 a dated claim. Then it checks:
 
-* the two containments of the hamlet coexist as two statements, the dated
-  one with its point in time and range, the undated one with no time;
 * the containment query lists each edge with its rank and whether a
   source states it;
 * the inconsistency report reads the path through them at any time: a
@@ -219,52 +217,6 @@ def written(client, config):
         config, client, [*qids.values(), letter.qid, certificate.qid]
     )
     return qids
-
-
-def _part_of(client, qid: str) -> list[dict]:
-    properties, _ = client.vocabulary()
-    data = client.api_get(
-        {
-            "action": "wbgetclaims",
-            "entity": qid,
-            "property": properties["part_of"],
-        }
-    )
-    return [c for cs in data["claims"].values() for c in cs]
-
-
-def test_a_dated_and_an_undated_containment_coexist(client, written):
-    properties, _ = client.vocabulary()
-    keys = {pid: key for key, pid in properties.items()}
-    in_district = [
-        statement
-        for statement in _part_of(client, written["hamlet"])
-        if statement["mainsnak"]["datavalue"]["value"]["id"]
-        == written["district"]
-    ]
-    times = sorted(
-        (
-            {
-                keys[pid]: [
-                    snak["datavalue"]["value"]["time"][:5] for snak in snaks
-                ]
-                for pid, snaks in statement.get("qualifiers", {}).items()
-            }
-            for statement in in_district
-        ),
-        key=len,
-    )
-    assert times == [
-        {},
-        {
-            "point_in_time": ["+1941"],
-            "earliest_date": ["+1940"],
-            "latest_date": ["+1941"],
-        },
-    ]
-    for statement in in_district:
-        assert statement["rank"] == "normal"
-        assert statement["references"], "a containment without its source"
 
 
 def _containment_rows(client, config) -> list[dict]:

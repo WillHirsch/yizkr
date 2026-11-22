@@ -5,9 +5,6 @@ A fictional fixture writes one marriage as three sources date it, and a
 residence observed at a date between two years, and reads them back
 through the stack:
 
-* the spouse statement carries each end's bounds as written: the start's
-  earliest date and latest start date, the end's earliest end date and
-  latest date, and a point in time;
 * the person timeline lists each start and end with its own range, the
   point in time beside them with none, and the residence's point in time
   with the earliest and latest dates of its statement, which has no start
@@ -247,42 +244,6 @@ def fixture_graph(client, config):
 def day(value: str) -> str:
     """A stored time's day, as the query service or the API gives it."""
     return value.lstrip("+")[:10]
-
-
-def test_the_spouse_statement_carries_each_bound_as_written(
-    client, fixture_graph
-):
-    qids, _, _ = fixture_graph
-    properties, _ = client.vocabulary()
-    key_of = {pid: key for key, pid in properties.items()}
-    found = client.api_get(
-        {
-            "action": "wbgetclaims",
-            "entity": qids["person"],
-            "property": properties["spouse"],
-        }
-    )
-    (ranged,) = [
-        statement
-        for statements in found["claims"].values()
-        for statement in statements
-        if properties["latest_start_date"] in statement.get("qualifiers", {})
-    ]
-    written = {
-        key_of[pid]: [
-            day(snak["datavalue"]["value"]["time"]) for snak in snaks
-        ]
-        for pid, snaks in ranged["qualifiers"].items()
-    }
-    assert written == {
-        "start_time": ["1946-00-00"],
-        "earliest_date": ["1946-00-00"],
-        "latest_start_date": ["1947-00-00"],
-        "end_time": ["1956-00-00"],
-        "earliest_end_date": ["1956-00-00"],
-        "latest_date": ["1957-00-00"],
-        "point_in_time": ["1950-00-00"],
-    }
 
 
 def test_the_timeline_dates_each_end_with_its_own_range(

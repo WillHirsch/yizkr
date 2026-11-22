@@ -9,8 +9,7 @@ correction path, the writer, and each reader of the graph: the
 disagreement report, the site (format_time and its build), the
 possibly-living check and reconcile's roster. Each case beside a refusal
 shows that the same input with a supported date passes, so no refusal is
-vacuous. tests/integration/test_live_unsupported_dates.py checks the
-writer's refusal on the running stack.
+vacuous.
 
 The examples are Eugen Löbig's birth, 1836 in the example universe, given
 (here) as a Julian date or moved before the common era.
