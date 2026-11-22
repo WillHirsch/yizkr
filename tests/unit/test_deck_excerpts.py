@@ -24,6 +24,7 @@ from pathlib import Path
 import pytest
 
 from tests.fixtures import pdfs
+from tests.fixtures.decks import deck_text
 from tests.fixtures.document_processing import this_run
 from tests.unit.test_pdf_pages import (
     CAPTION,
@@ -71,7 +72,7 @@ from yizkr.core.corpus import (
     ExclusionList,
     gather_embedded,
 )
-from yizkr.pipeline import presentation, report
+from yizkr.pipeline import report
 from yizkr.pipeline.containers import (
     SLIDE_XML,
     image_size,
@@ -87,8 +88,7 @@ from yizkr.pipeline.document_state import EXCERPT as EXCERPT_KIND
 from yizkr.pipeline.monitor import reason_label
 from yizkr.pipeline.presentation import (
     derived_transcription,
-    read_slides,
-    slide_transcript,
+    slide_pages,
     unpack_pptx,
 )
 from yizkr.pipeline.report import build
@@ -641,20 +641,18 @@ class TestReadSlides:
         text and notes; the letter's top is read on its own, written once
         into the folder."""
         path = library_talk(tmp_path / "talk.pptx")
-        read = read_slides(path, tmp_path)
+        read = slide_pages(unpack_pptx(path), tmp_path)
         assert [(p.number, p.method) for p in read.pages] == [
             (1, SLIDE_XML),
             (2, SLIDE_XML),
             (3, SLIDE_XML),
         ]
-        content = unpack_pptx(path)
         assert [p.text for p in read.pages] == [
-            presentation.slide_text(slide) for slide in content.slides
-        ]
-        assert read.pages[1].text == (
+            f"{TITLE}\nNicholas Lobig, library talk, 2018",
             "\n".join(LETTER_SLIDE)
-            + "\n[Slide 2 notes]\nFrom the family album"
-        )
+            + "\n[Slide 2 notes]\nFrom the family album",
+            "Stupfield\nTheir son: Nicholas 1950",
+        ]
         assert [p.images for p in read.pages] == [[], [(1, LETTER_SHA1)], []]
         (image,) = read.images.values()
         assert image.places == [(2, 1)]
@@ -679,7 +677,7 @@ class TestReadSlides:
             painted={1: ["b.png", "a.png", "b.png", "c.png"]},
         )
         (tmp_path / "out").mkdir()
-        read = read_slides(path, tmp_path / "out")
+        read = slide_pages(unpack_pptx(path), tmp_path / "out")
         assert read.pages[0].images == [
             (1, sha1(second)),
             (2, sha1(first)),
@@ -704,8 +702,8 @@ class TestReadSlides:
             {"scan.tif": tiff, "odd.png": unsized, "letter.png": LETTER_PNG},
         )
         (tmp_path / "out").mkdir()
-        read = read_slides(
-            path,
+        read = slide_pages(
+            unpack_pptx(path),
             tmp_path / "out",
             excluded=lambda s, names=(): s == LETTER_SHA1,
         )
@@ -737,7 +735,7 @@ class TestReadSlides:
             painted={1: []},
         )
         (tmp_path / "out").mkdir()
-        read = read_slides(path, tmp_path / "out")
+        read = slide_pages(unpack_pptx(path), tmp_path / "out")
         assert read.images == {}
         (note,) = read.notes
         assert ".tif image, a format the vision engine does not read" in note
@@ -764,7 +762,7 @@ class TestReadSlides:
             {"a/pic.png": first, "b/pic.png": second},
         )
         (tmp_path / "out").mkdir()
-        read = read_slides(path, tmp_path / "out")
+        read = slide_pages(unpack_pptx(path), tmp_path / "out")
         assert [page.images for page in read.pages] == [
             [(1, sha1(first))],
             [(1, sha1(second))],
@@ -781,7 +779,7 @@ class TestReadSlides:
             painted={2: []},
         )
         (tmp_path / "out").mkdir()
-        read = read_slides(path, tmp_path / "out")
+        read = slide_pages(unpack_pptx(path), tmp_path / "out")
         assert read.pages[1].images == []
         assert set(read.images) == {LETTER_SHA1}
         assert read.images[LETTER_SHA1].places == []
@@ -806,18 +804,15 @@ class TestReadSlides:
             images,
         )
         (tmp_path / "out").mkdir()
-        read = read_slides(path, tmp_path / "out")
+        read = slide_pages(unpack_pptx(path), tmp_path / "out")
         assert read.notes == []
         assert [s for _place, s in read.pages[0].images] == [
             sha1(data) for data in images.values()
         ]
 
-    def test_the_same_bytes_under_two_names_take_the_record_s_suffix(
-        self, tmp_path
-    ):
+    def test_the_same_bytes_under_two_names_are_one_image(self, tmp_path):
         """One JPEG held as A.JPEG and as b.jpg is one image, its file
-        named with the suffix the record of the deck's derived media takes:
-        the first name's, lowercased."""
+        named with a lowercased suffix."""
         data = jpeg_of(300, 120, "the shop front")
         path = deck(
             tmp_path / "talk.pptx",
@@ -825,15 +820,10 @@ class TestReadSlides:
             {"A.JPEG": data, "b.jpg": data},
         )
         (tmp_path / "out").mkdir()
-        (image,) = read_slides(path, tmp_path / "out").images.values()
+        (image,) = slide_pages(
+            unpack_pptx(path), tmp_path / "out"
+        ).images.values()
         assert image.suffix == ".jpeg"
-        record = presentation.record_derived_media(
-            unpack_pptx(path),
-            source_sha1=sha1(path.read_bytes()),
-            title="Hutmacherei",
-            directory=tmp_path / "doc",
-        )
-        assert record.media[sha1(data)].file.endswith(".jpeg")
 
 
 class TestTheRoute:
@@ -925,9 +915,7 @@ class TestADeckSImages:
         path = library_talk(corpus / "talk.pptx", letter=None)
         orchestrator = run(tmp_path, corpus, RefusingReader({}))
         doc = document(orchestrator, "talk.pptx")
-        assert transcription_of(doc).text == slide_transcript(
-            unpack_pptx(path)
-        )
+        assert transcription_of(doc).text == deck_text(path)
         assert orchestrator._excerpts == {}
 
     def test_a_reused_view_stands_without_a_call(self, tmp_path):
@@ -953,7 +941,7 @@ class TestADeckSImages:
         )
         old = Transcription(
             artifact=transcription_of(doc).artifact,
-            text=slide_transcript(unpack_pptx(doc.source)),
+            text=deck_text(doc.source),
             engine="pptx-adapter",
         )
         doc.transcription.write_text(old.model_dump_json())
@@ -1082,7 +1070,7 @@ class TestADeckSImages:
         doc = document(run(tmp_path, corpus, RefusingReader({})), "talk.pptx")
         old = Transcription(
             artifact=transcription_of(doc).artifact,
-            text=slide_transcript(unpack_pptx(path)),
+            text=deck_text(path),
             engine="pptx-adapter",
         )
         doc.transcription.write_text(old.model_dump_json())
@@ -1394,7 +1382,7 @@ class TestAGlobFollowsTheBytes:
                 library_talk(path)
             else:
                 deck(path, [(LETTER_SLIDE, [media], "")], {media: LETTER_PNG})
-            corpus.texts[name] = slide_transcript(unpack_pptx(path))
+            corpus.texts[name] = deck_text(path)
         corpus.texts[f"{LETTER_SHA1}.png"] = EXCERPT
         excerpts = estimate_of(
             tmp_path, corpus, engine, exclusions=self.LISTED
@@ -1413,9 +1401,7 @@ class TestTheRunReport:
         the PDFs', and the excerpt among the documents of its own."""
         corpus = Corpus(tmp_path / "corpus")
         path = library_talk(corpus.folder / "library-talk-2018.pptx")
-        corpus.texts["library-talk-2018.pptx"] = slide_transcript(
-            unpack_pptx(path)
-        )
+        corpus.texts["library-talk-2018.pptx"] = deck_text(path)
         corpus.texts[f"{LETTER_SHA1}.png"] = EXCERPT
         driver = a_run(tmp_path, corpus, fakes)
         assert driver.run() == EXIT_OK
@@ -1444,9 +1430,7 @@ class TestTheRunReport:
             letter=SHARED_LETTER_IMAGE.data,
             letter_name="image2.jpg",
         )
-        corpus.texts["library-talk-2018.pptx"] = slide_transcript(
-            unpack_pptx(path)
-        )
+        corpus.texts["library-talk-2018.pptx"] = deck_text(path)
         corpus.texts[f"{SHARED_LETTER_SHA1}.jpg"] = EXCERPT
         (corpus.folder / "booklet.pdf").write_bytes(
             booklet(SHARED_LETTER_IMAGE)
@@ -1494,7 +1478,7 @@ class TestTheRunReport:
             [(LETTER_SLIDE, ["scan.tif"], "")],
             {"scan.tif": b"II*\x00 the album page as a tiff"},
         )
-        corpus.texts["talk.pptx"] = slide_transcript(unpack_pptx(path))
+        corpus.texts["talk.pptx"] = deck_text(path)
         driver = a_run(tmp_path, corpus, fakes)
         assert driver.run() == EXIT_OK
         stages = build(driver.state_dir)["aggregate"]["stages"]
@@ -1527,9 +1511,7 @@ class TestTheCallEstimate:
         letter as an image that may become an excerpt."""
         corpus = Corpus(tmp_path / "corpus")
         path = library_talk(corpus.folder / "library-talk-2018.pptx")
-        corpus.texts["library-talk-2018.pptx"] = slide_transcript(
-            unpack_pptx(path)
-        )
+        corpus.texts["library-talk-2018.pptx"] = deck_text(path)
         corpus.texts[f"{LETTER_SHA1}.png"] = EXCERPT
         excerpts = estimate_of(tmp_path, corpus, engine).excerpts
         assert (excerpts.images, excerpts.containers) == (1, 1)
@@ -1547,7 +1529,7 @@ class TestTheCallEstimate:
             [(LETTER_SLIDE, ["letter.gif"], "")],
             {"letter.gif": gif},
         )
-        corpus.texts["talk.pptx"] = slide_transcript(unpack_pptx(path))
+        corpus.texts["talk.pptx"] = deck_text(path)
         corpus.texts[f"{sha1(gif)}.gif"] = EXCERPT
         excerpts = estimate_of(tmp_path, corpus, engine).excerpts
         assert (excerpts.images, excerpts.containers) == (1, 1)
@@ -1562,9 +1544,7 @@ class TestTheCallEstimate:
         it is not counted as reused, and its letter is counted."""
         corpus = Corpus(tmp_path / "corpus")
         path = library_talk(corpus.folder / "library-talk-2018.pptx")
-        corpus.texts["library-talk-2018.pptx"] = slide_transcript(
-            unpack_pptx(path)
-        )
+        corpus.texts["library-talk-2018.pptx"] = deck_text(path)
         corpus.texts[f"{LETTER_SHA1}.png"] = EXCERPT
         run_scratch(tmp_path, corpus, engine, until="transcription")
         (view,) = runs_dir(tmp_path).glob(
@@ -1574,7 +1554,7 @@ class TestTheCallEstimate:
         view.write_text(
             Transcription(
                 artifact=held.artifact,
-                text=slide_transcript(unpack_pptx(path)),
+                text=deck_text(path),
                 engine="pptx-adapter",
             ).model_dump_json()
         )

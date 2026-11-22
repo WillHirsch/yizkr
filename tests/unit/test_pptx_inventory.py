@@ -1,4 +1,5 @@
-"""PPTX source occurrences survive reading filters and legacy projection."""
+"""PPTX source parts and occurrences survive reading filters, preparation
+and projection."""
 
 from __future__ import annotations
 
@@ -10,16 +11,9 @@ from xml.sax.saxutils import escape
 import pytest
 
 from yizkr.claims import ArtifactRef
-from yizkr.pipeline.container_inventory import read_inventory
-from yizkr.pipeline.presentation import (
-    inventory_current,
-    read_derived_media,
-    read_on_their_own,
-    record_derived_media,
-    slide_pages,
-    slide_transcript,
-    unpack_pptx,
-)
+from yizkr.pipeline.container_inventory import keep_inventory, read_inventory
+from yizkr.pipeline.container_sources import prepare_sources, project_sources
+from yizkr.pipeline.presentation import slide_pages, unpack_pptx
 
 P = "http://schemas.openxmlformats.org/presentationml/2006/main"
 A = "http://schemas.openxmlformats.org/drawingml/2006/main"
@@ -172,19 +166,27 @@ def by_package(inventory):
     return {part.locator.package_part: part for part in inventory.parts}
 
 
+def keep(content, directory, excluded=lambda sha1, names: False):
+    """Prepare the deck's sources under the exclusions and keep its
+    inventory in `directory`, as preparation does: the kept inventory."""
+    previous = read_inventory(directory, verify_bytes=False)
+    inventory = prepare_sources(
+        content.inventory,
+        content.inventory_bytes,
+        directory,
+        previous=previous,
+        excluded=excluded,
+    )
+    keep_inventory(inventory, content.inventory_bytes, directory)
+    return read_inventory(directory)
+
+
 def persisted(tmp_path, excluded=lambda sha1, names: False):
     source = tmp_path / "library-talk-2018.pptx"
     members = source_deck(source)
     content = unpack_pptx(source)
     directory = tmp_path / "document"
-    record_derived_media(
-        content,
-        source_sha1=content.inventory.source.sha1,
-        title="Library talk",
-        directory=directory,
-        excluded=excluded,
-    )
-    return content, read_inventory(directory), directory, members
+    return content, keep(content, directory, excluded), directory, members
 
 
 def test_native_body_and_notes_have_distinct_located_readings(tmp_path):
@@ -285,29 +287,21 @@ def test_original_bytes_and_explicit_limits_round_trip(tmp_path):
     )
 
 
+@pytest.mark.parametrize("by", ["sha1", "name"])
 def test_filtering_changes_eligibility_without_renumbering_occurrences(
-    tmp_path,
+    tmp_path, by
 ):
     content, original, directory, _members = persisted(tmp_path)
+    photo = hashlib.sha1(PHOTO).hexdigest()
 
     def denied(sha1, names):
-        return "copy.png" in names
+        return sha1 == photo if by == "sha1" else "copy.png" in names
 
-    assert inventory_current(directory, original.source.sha1)
-    assert not inventory_current(directory, original.source.sha1, denied)
-    record_derived_media(
-        content,
-        source_sha1=original.source.sha1,
-        title="Library talk",
-        directory=directory,
-        excluded=denied,
-    )
-    changed = read_inventory(directory)
+    changed = keep(content, directory, denied)
     assert [part.id for part in changed.parts] == [
         part.id for part in original.parts
     ]
     assert changed.placements == original.placements
-    photo = hashlib.sha1(PHOTO).hexdigest()
     photo_parts = [
         part
         for part in changed.parts
@@ -316,21 +310,20 @@ def test_filtering_changes_eligibility_without_renumbering_occurrences(
     assert len(photo_parts) == 2
     assert {part.eligibility.state for part in photo_parts} == {"excluded"}
     assert {part.reading.state for part in photo_parts} == {"unattempted"}
-    assert inventory_current(directory, original.source.sha1, denied)
-    assert not inventory_current(directory, "0" * 40, denied)
+    assert photo not in project_sources(changed, directory).sources
 
 
-def test_legacy_projection_stays_available_without_defining_placements(
+def test_a_relationship_only_medium_is_a_source_without_a_placement(
     tmp_path,
 ):
-    content, inventory, directory, _members = persisted(tmp_path)
-    legacy = read_derived_media(directory)
+    _content, inventory, directory, _members = persisted(tmp_path)
     relationship = by_package(inventory)["ppt/media/relationship.png"]
-    assert relationship.byte_object.sha1 in legacy.media
-    assert "ppt/media/relationship.png" in content.slides[0].media
+    sources = project_sources(inventory, directory).sources
+    source = sources[relationship.byte_object.sha1]
+    assert source.part_ids == [relationship.id]
+    assert source.placements == []
     assert all(p.child != relationship.id for p in inventory.placements)
-    assert legacy.source_sha1 == inventory.source.sha1
-    assert hashlib.sha1(PHOTO).hexdigest() in legacy.media
+    assert hashlib.sha1(PHOTO).hexdigest() in sources
 
 
 def test_a_missing_slide_is_an_unsupported_part_not_a_successful_empty_read(
@@ -346,8 +339,8 @@ def test_a_missing_slide_is_an_unsupported_part_not_a_successful_empty_read(
     assert missing.reading.empty is None
     assert parts["ppt/slides/slide2.xml"].locator.position == 2
     assert not content.inventory.complete
-    with pytest.raises(ValueError, match="cannot read slide 1.*missing"):
-        slide_transcript(content)
+    # still counted, as a page of the deck
+    assert content.slide_count == 2
     output = tmp_path / "reading"
     output.mkdir()
     with pytest.raises(ValueError, match="cannot read slide 1.*missing"):
@@ -509,36 +502,29 @@ def test_an_unresolved_slide_relationship_does_not_renumber_later_slides(
     content = unpack_pptx(source)
     slide = by_package(content.inventory)["ppt/slides/slide2.xml"]
     assert slide.locator.position == 2
-    assert content.slides[0].number == 2
     assert any("position 1" in note for note in content.inventory.limitations)
     assert not content.inventory.complete
 
 
-def test_an_unreferenced_alias_excludes_the_same_bytes_from_both_reader_views(
-    tmp_path,
+@pytest.mark.parametrize("by", ["sha1", "name"])
+def test_an_unreferenced_alias_excludes_the_same_bytes_from_the_reading(
+    tmp_path, by
 ):
+    photo = hashlib.sha1(PHOTO).hexdigest()
+
     def same_photo(members):
         members["ppt/media/orphan.png"] = PHOTO
 
     def denied(sha1, names):
-        return "orphan.png" in names
+        return sha1 == photo if by == "sha1" else "orphan.png" in names
 
     source = tmp_path / "library-talk-2018.pptx"
     source_deck(source, same_photo)
     content = unpack_pptx(source)
     directory = tmp_path / "document"
-    record = record_derived_media(
-        content,
-        source_sha1=content.inventory.source.sha1,
-        title="Library talk",
-        directory=directory,
-        excluded=denied,
-    )
-    photo = hashlib.sha1(PHOTO).hexdigest()
-    assert "orphan.png" not in record.media[photo].names
+    inventory = keep(content, directory, denied)
+    assert photo not in project_sources(inventory, directory).sources
     assert photo not in slide_pages(content, directory, excluded=denied).images
-    assert photo not in read_on_their_own(record, directory, excluded=denied)
-    inventory = read_inventory(directory)
     assert {
         part.eligibility.state
         for part in inventory.parts

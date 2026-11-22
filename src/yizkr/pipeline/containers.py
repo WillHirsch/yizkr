@@ -17,8 +17,9 @@ The readers:
 - a PDF's, `yizkr.pipeline.textlayer.read_pages`: a page from its text
   layer where it has a usable one, by vision otherwise, and its
   independently bound image sources on any page;
-- a deck's, `yizkr.pipeline.presentation.read_slides`: each slide's text
-  and speaker notes from the PPTX XML (`SLIDE_XML`), with no model call,
+- a deck's, `yizkr.pipeline.presentation.slide_pages` of the deck
+  `unpack_pptx` unpacks: each slide's text and speaker notes from the
+  PPTX XML (`SLIDE_XML`), with no model call,
   and its independently bound original image sources. Explicit selected-slide
   vision (`yizkr.pipeline.slide_reading`) replaces admitted container-owned
   visual bodies with rendered inputs, retaining separate native notes.

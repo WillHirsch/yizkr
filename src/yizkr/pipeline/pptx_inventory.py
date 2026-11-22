@@ -130,7 +130,7 @@ class Relationship:
 
 
 class PptxPackage:
-    """One cached parse supplies both inventory and compatibility views."""
+    """One cached parse of a package, which the inventory records."""
 
     def __init__(self, archive: zipfile.ZipFile, source: ArtifactRef):
         self.archive = archive

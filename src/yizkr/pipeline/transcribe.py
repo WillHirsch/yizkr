@@ -1263,7 +1263,7 @@ class DeckTranscriber(PagedTranscriber):
     An optional selection replaces only admitted container-owned visual
     bodies with checked vision readings, keeping native notes separate.
     Images retain their independent readings. Native slides are joined by
-    one line break, as presentation.slide_transcript does.
+    one line break.
     """
 
     unit = "Slide"
