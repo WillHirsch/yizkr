@@ -853,8 +853,9 @@ def prepare_claim_review(
     selection's products run before the checks against current authority,
     and each phase takes the selections in order, so the claim the refusal
     names is not necessarily the first selection that fails. An empty or
-    repeated selection, or one absent from current products, raises a plain
-    ReviewRefused.
+    repeated selection raises a plain ReviewRefused before any check, and so
+    does a selection absent from current products unless an earlier
+    selection has already failed its product checks.
     """
     if not selections or len(
         {(s.artifact_sha1, s.index) for s in selections}
