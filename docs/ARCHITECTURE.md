@@ -398,7 +398,7 @@ Implementation: [query library](../src/yizkr/queries/README.md), [query publishe
 
 ## Package layering
 
-Packages import in one direction. The lower layer is `yizkr.core`, `yizkr.model` and every module they reach through imports outside the pipeline and the CLI, such as the claim schema, the query publisher and the static site builder; it imports neither `yizkr.pipeline` nor `yizkr.cli`. The pipeline builds on the lower layer and does not import the CLI, which may import any package. This keeps shared configuration and the Wikibase client independent of the ingestion pipeline. Modules the lower layer does not reach, such as `reset.py`, `backup.py` and `smoke.py`, have no layering rule, and neither do imports within one package.
+Packages import in one direction. The lower layer is `yizkr.core`, `yizkr.model` and every module they reach through imports outside the pipeline and the CLI, such as the claim schema, the query publisher and the static site builder; it imports neither `yizkr.pipeline` nor `yizkr.cli`. The pipeline builds on the lower layer and does not import the CLI, which may import any package. This keeps shared configuration and the Wikibase client independent of the ingestion pipeline. Top-level modules the lower layer does not reach, such as `reset.py`, `backup.py` and `smoke.py`, have no layering rule, and neither do imports within one package.
 
 ```mermaid
 flowchart LR
