@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Run required writer/query checks on an isolated, disposable fictional stack.
+"""Run required writer/query checks on isolated, disposable fictional stacks.
 
 No archive configuration or existing deployment is loaded. Only allowlisted
 repository files enter the image; runtime containers have an internal network,
-no published ports and project-specific volumes. Every run tears down its own
-stack, including on failure. `down` recovers resources after a hard kill.
+no published ports and project-specific volumes. Each group of required cases
+runs on its own fresh stack, and every run tears down its own stacks, including
+on failure. `down` recovers resources after a hard kill; `list` prints the
+declared groups and cases.
 """
 
 from __future__ import annotations
@@ -23,87 +25,160 @@ import time
 import xml.etree.ElementTree as ET
 from contextlib import contextmanager, suppress
 from pathlib import Path
+from typing import NamedTuple
 
 REPO = Path(__file__).resolve().parents[1]
+PACKAGE = "tests.fictional_integration"
+
+
+class LaneError(Exception):
+    """The required lane could not establish its boundary checks."""
+
+
+class Case(NamedTuple):
+    """One required case and the group whose fresh stack runs it."""
+
+    group: str
+    module: str
+    name: str
+
+    @property
+    def result(self) -> tuple[str, str]:
+        """The JUnit class name and case name pytest reports."""
+        return (f"{PACKAGE}.{self.module}", self.name)
+
+    @property
+    def selector(self) -> str:
+        return f"{PACKAGE.replace('.', '/')}/{self.module}.py::{self.name}"
+
+
+# Every required case, declared once with the group whose fresh stack runs
+# it. Groups start in the order of their first case, so the longest group
+# comes first, and each runs its cases in the order listed. The pytest
+# selectors, result checks, evidence, cleanup and the `list` command all
+# derive from this tuple: a new case is one entry and a new group is a new
+# name. To keep the lane within its time budget in docs/TESTING.md, a new
+# case joins the group with the most room, and a case that resets or
+# restarts its stack takes a group of its own.
 REQUIRED_CASES = (
-    (
-        "tests.fictional_integration.test_cohort_additions",
+    Case(
+        "cohort",
+        "test_cohort_additions",
         "test_protected_cohort_choices_claims_and_creation_recovery",
     ),
-    # Before the cases below, which leave untyped legacy items.
-    (
-        "tests.fictional_integration.test_cohort_additions",
+    # Before any case in its stack that leaves untyped legacy items.
+    Case(
+        "cohort",
+        "test_cohort_additions",
         "test_saved_image_reading_reaches_reviewed_claim_application",
     ),
-    (
-        "tests.fictional_integration.test_assignment_authority",
-        "test_reviewed_assignments_are_atomic_recoverable_and_graph_preserving",
-    ),
-    (
-        "tests.fictional_integration.test_assignment_writes",
+    Case(
+        "assignments",
+        "test_assignment_writes",
         "test_reviewed_writes_keep_exact_shared_support_and_assignment_roles",
     ),
-    (
-        "tests.fictional_integration.test_assignment_writes",
+    Case(
+        "assignments",
+        "test_assignment_writes",
         "test_partial_writes_recover_and_ambiguous_support_refuses",
     ),
-    (
-        "tests.fictional_integration.test_assignment_writes",
-        "test_competing_reviewed_plans_dispatch_one_historical_write",
+    Case(
+        "identity",
+        "test_assignment_authority",
+        "test_reviewed_assignments_are_atomic_recoverable_and_graph_preserving",
     ),
-    (
-        "tests.fictional_integration.test_container_sources",
-        "test_common_sources_preserve_owners_placements_and_citations",
-    ),
-    (
-        "tests.fictional_integration.test_slide_attribution",
-        "test_slide_readings_preserve_attribution_through_write_and_query",
-    ),
-    (
-        "tests.fictional_integration.test_identity_migration",
+    Case(
+        "identity",
+        "test_identity_migration",
         "test_verified_migration_preserves_evidence_and_publishes_graph_origins",
     ),
-    (
-        "tests.fictional_integration.test_owner_override_provenance",
+    Case(
+        "identity",
+        "test_owner_override_provenance",
         "test_verified_owner_override_preserves_evidence_and_has_graph_provenance",
     ),
-    (
-        "tests.fictional_integration.test_run_provenance",
+    Case(
+        "identity",
+        "test_assignment_writes",
+        "test_competing_reviewed_plans_dispatch_one_historical_write",
+    ),
+    Case(
+        "write-query",
+        "test_container_sources",
+        "test_common_sources_preserve_owners_placements_and_citations",
+    ),
+    Case(
+        "write-query",
+        "test_slide_attribution",
+        "test_slide_readings_preserve_attribution_through_write_and_query",
+    ),
+    Case(
+        "write-query",
+        "test_run_provenance",
         "test_structured_run_records_roundtrip_without_rewriting",
     ),
-    (
-        "tests.fictional_integration.test_write_query",
+    Case(
+        "write-query",
+        "test_write_query",
         "test_fictional_write_query_roundtrip",
     ),
-    (
-        "tests.fictional_integration.test_write_recovery",
+    Case(
+        "write-query",
+        "test_write_recovery",
         "test_interrupted_writer_recovers_after_curator_term_changes",
     ),
-    (
-        "tests.fictional_integration.test_write_recovery",
+    Case(
+        "write-query",
+        "test_write_recovery",
         "test_interrupted_source_registration_recovers_without_orphan",
     ),
-    (
-        "tests.fictional_integration.test_write_recovery",
+    Case(
+        "write-query",
+        "test_write_recovery",
         "test_concurrent_creation_reserves_one_dispatch",
     ),
-    (
-        "tests.fictional_integration.test_graph_projection",
+    Case(
+        "write-query",
+        "test_graph_projection",
         "test_recorded_graph_projection_replays_and_refuses_stale_capture",
     ),
 )
-GROUPS = {
-    "assignments": tuple(
-        case
-        for case in REQUIRED_CASES
-        if case[0].endswith(".test_assignment_writes")
-    ),
-    "other": tuple(
-        case
-        for case in REQUIRED_CASES
-        if not case[0].endswith(".test_assignment_writes")
-    ),
-}
+# Group names become Compose project suffixes and evidence folder names.
+GROUP_NAME = re.compile(r"[a-z][a-z0-9-]*")
+# At most this many group stacks exist at once unless --stacks says
+# otherwise. Of the limits measured on CI's four-CPU runner, four gave the
+# shortest lane, although cases on the whole run slower than with two at
+# once.
+DEFAULT_STACKS = 4
+
+
+def case_groups(cases) -> dict[str, tuple[Case, ...]]:
+    """The declared groups, in the order of each group's first case."""
+    grouped: dict[str, list[Case]] = {}
+    for case in cases:
+        grouped.setdefault(case.group, []).append(case)
+    return {name: tuple(members) for name, members in grouped.items()}
+
+
+GROUPS = case_groups(REQUIRED_CASES)
+
+
+def check_declaration(cases) -> None:
+    """Refuse a declaration the launcher cannot run exactly as stated."""
+    if not cases:
+        raise LaneError("no required integration cases are declared")
+    results = [case.result for case in cases]
+    if len(set(results)) != len(results):
+        raise LaneError("a required integration case is declared twice")
+    for case in cases:
+        if not GROUP_NAME.fullmatch(case.group):
+            raise LaneError(
+                f"invalid required integration group name: {case.group!r}"
+            )
+
+
+# The timing report lists this many of the slowest completed cases.
+SLOWEST = 10
 SOURCES = (
     "pyproject.toml",
     "uv.lock",
@@ -154,10 +229,6 @@ print(json.dumps({
     'dirty_code_refused': True,
 }))
 """
-
-
-class LaneError(Exception):
-    """The required lane could not establish its boundary checks."""
 
 
 def kill_process(process) -> None:
@@ -282,6 +353,14 @@ def runtime_code_evidence(output: str) -> dict:
     return value
 
 
+def case_seconds(case: ET.Element) -> float | None:
+    """pytest's recorded time: setup, call and teardown of one case."""
+    try:
+        return round(float(case.get("time")), 3)
+    except (TypeError, ValueError):
+        return None
+
+
 def verify_results(path: Path, required=None) -> dict:
     """A zero pytest exit alone does not prove the intended checks ran."""
     try:
@@ -300,13 +379,21 @@ def verify_results(path: Path, required=None) -> dict:
     observed = [(case.get("classname"), case.get("name")) for case in cases]
     required = REQUIRED_CASES if required is None else required
     for case in required:
-        if observed.count(case) != 1:
+        if observed.count(case.result) != 1:
             raise LaneError(
-                f"required integration case {case[1]} did not run exactly once"
+                f"required integration case {case.name} "
+                "did not run exactly once"
             )
     if len(observed) != len(required):
         raise LaneError("unexpected integration case ran")
-    return {"passed": len(cases), "skipped": 0, "cases": observed}
+    return {
+        "passed": len(cases),
+        "skipped": 0,
+        "cases": [
+            {"module": module, "name": name, "seconds": case_seconds(case)}
+            for (module, name), case in zip(observed, cases, strict=True)
+        ],
+    }
 
 
 @contextmanager
@@ -349,7 +436,7 @@ def remaining_resources(docker, env, project: str) -> dict[str, int]:
     }
 
 
-def combine_results(paths: list[Path], destination: Path) -> dict:
+def combine_results(paths: list[Path], destination: Path, cases) -> dict:
     """Retain pytest's suites and require the complete, exact case union."""
     combined = ET.Element("testsuites")
     for path in paths:
@@ -361,7 +448,7 @@ def combine_results(paths: list[Path], destination: Path) -> dict:
             ) from exc
         combined.extend([root] if root.tag == "testsuite" else list(root))
     ET.ElementTree(combined).write(destination, encoding="unicode")
-    return verify_results(destination)
+    return verify_results(destination, cases)
 
 
 class Group:
@@ -370,7 +457,7 @@ class Group:
         self.state, self.compose = state, compose
         self.process = None
         self.started = None
-        self.finished = False
+        self.checks_started = None
         self.cleaned = False
         self.evidence = {
             "project": project,
@@ -379,11 +466,55 @@ class Group:
         }
 
 
+def start_stack(group: Group, env: dict) -> None:
+    """Start a group's fresh stack and probe its server mutation guard."""
+    group.cleaned = False
+    group.started = time.monotonic()
+    group.evidence["teardown"] = "pending"
+    run(
+        [
+            *group.compose,
+            "up",
+            "--detach",
+            "--wait",
+            "--wait-timeout",
+            "600",
+        ],
+        env=env,
+    )
+    probe = run(
+        [
+            *group.compose,
+            "exec",
+            "-T",
+            "wikibase",
+            "php",
+            "/yizkr-fictional-mutation-guard-probe.php",
+        ],
+        env=env,
+        capture=True,
+        timeout=90,
+    )
+    guard_evidence = json.loads(probe.stdout)
+    if guard_evidence != {
+        "protocol": "yizkr-mutation-guard-v1",
+        "request_drain": True,
+        "shutdown_drain": True,
+        "restart": True,
+        "stale_capability": True,
+        "invalid_state": True,
+        "database_drain": True,
+    }:
+        raise LaneError("mutation guard subprocess probe failed")
+    group.evidence["mutation_guard_probe"] = guard_evidence
+    group.evidence["stack_seconds"] = round(
+        time.monotonic() - group.started, 3
+    )
+
+
 def start_checks(group: Group, env: dict) -> None:
-    selectors = [
-        module.replace(".", "/") + ".py::" + name
-        for module, name in group.cases
-    ]
+    selectors = [case.selector for case in group.cases]
+    group.checks_started = time.monotonic()
     with (group.state / "tests.log").open("w") as log:
         group.process = subprocess.Popen(
             [
@@ -429,47 +560,78 @@ def copy_results(group: Group, docker, env, *, check=True):
     )
 
 
-def wait_checks(groups: list[Group], docker, env) -> None:
-    while any(not group.finished for group in groups):
-        for group in groups:
-            if group.finished:
-                continue
-            code = group.process.poll()
-            if code is None:
-                continue
-            group.process.wait(timeout=10)
-            group.finished = True
-            group.evidence["pytest_exit_code"] = code
-            print(f"Fictional integration group: {group.name}", flush=True)
-            print((group.state / "tests.log").read_text(), end="", flush=True)
-            if code:
-                raise LaneError(
-                    f"required integration pytest ({group.name}) exited {code}"
-                )
-            copy_results(group, docker, env)
-            group.evidence["checks"] = verify_results(
-                group.state / "results.xml", group.cases
+def finished_checks(groups: list[Group], docker, env) -> list[Group]:
+    """Verify each group whose checks have exited; the first failure raises."""
+    finished = []
+    for group in groups:
+        code = group.process.poll()
+        if code is None:
+            continue
+        group.process.wait(timeout=10)
+        group.evidence["pytest_exit_code"] = code
+        group.evidence["checks_seconds"] = round(
+            time.monotonic() - group.checks_started, 3
+        )
+        print(f"Fictional integration group: {group.name}", flush=True)
+        print((group.state / "tests.log").read_text(), end="", flush=True)
+        if code:
+            raise LaneError(
+                f"required integration pytest ({group.name}) exited {code}"
             )
-            ids = run(
-                [*group.compose, "ps", "--all", "--quiet"],
-                env=env,
-                capture=True,
-                timeout=30,
-            ).stdout.split()
-            group.evidence["images"] = run(
-                [
-                    *docker,
-                    "inspect",
-                    "--format",
-                    "{{.Config.Image}} {{.Image}}",
-                    *ids,
-                ],
-                env=env,
-                capture=True,
-                timeout=30,
-            ).stdout.splitlines()
-            group.evidence["status"] = "passed"
-        if any(not group.finished for group in groups):
+        copy_results(group, docker, env)
+        group.evidence["checks"] = verify_results(
+            group.state / "results.xml", group.cases
+        )
+        ids = run(
+            [*group.compose, "ps", "--all", "--quiet"],
+            env=env,
+            capture=True,
+            timeout=30,
+        ).stdout.split()
+        group.evidence["images"] = run(
+            [
+                *docker,
+                "inspect",
+                "--format",
+                "{{.Config.Image}} {{.Image}}",
+                *ids,
+            ],
+            env=env,
+            capture=True,
+            timeout=30,
+        ).stdout.splitlines()
+        group.evidence["status"] = "passed"
+        finished.append(group)
+    return finished
+
+
+def run_groups(groups: list[Group], stacks: int, docker, env) -> None:
+    """Run each group on its own fresh stack, at most `stacks` at once.
+
+    Groups start in declaration order. A waiting group starts only after a
+    finished group's stack is removed, so no more than `stacks` stacks exist
+    at a time. The running groups are checked again before every start, so
+    a failure that has happened, even during another group's start or
+    teardown, stops the lane before another group starts.
+    """
+    if stacks < 1:
+        raise LaneError("the lane needs at least one stack at a time")
+    pending, running = list(groups), []
+    while pending or running:
+        finished = finished_checks(running, docker, env)
+        for group in finished:
+            running.remove(group)
+            cleanup_groups([group], docker, env)
+            if group.evidence["teardown"] != "passed":
+                raise LaneError("teardown failed; run make integration-down")
+        if finished:
+            continue
+        if pending and len(running) < stacks:
+            group = pending.pop(0)
+            start_stack(group, env)
+            start_checks(group, env)
+            running.append(group)
+        else:
             time.sleep(0.1)
 
 
@@ -529,6 +691,7 @@ def cleanup_groups(
             except (OSError, subprocess.SubprocessError) as reap_error:
                 group.evidence["process_cleanup_error"] += f"; {reap_error}"
     for group in pending:
+        teardown_started = time.monotonic()
         if diagnostics and group.cases:
             try:
                 if (
@@ -581,9 +744,11 @@ def cleanup_groups(
         if not clean:
             group.evidence["status"] = "failed"
         if group.started is not None:
-            group.evidence["elapsed_seconds"] = round(
-                time.monotonic() - group.started, 3
+            now = time.monotonic()
+            group.evidence["teardown_seconds"] = round(
+                now - teardown_started, 3
             )
+            group.evidence["elapsed_seconds"] = round(now - group.started, 3)
         group.cleaned = True
 
 
@@ -591,48 +756,123 @@ def write_evidence(path: Path, evidence: dict) -> None:
     path.write_text(json.dumps(evidence, indent=2) + "\n")
 
 
-def execute(command: str, state: Path, *, sequential=False) -> None:
+def seconds_text(value) -> str:
+    return "-" if value is None else f"{value:.0f}"
+
+
+def timing_report(evidence: dict) -> str:
+    """Markdown summary of the phase and case durations a run recorded."""
+    lines = [
+        "### Fictional lane timings",
+        "",
+        f"Wall time {seconds_text(evidence.get('elapsed_seconds'))} s; "
+        "staging, image build and code admission before the first stack "
+        f"{seconds_text(evidence.get('setup_seconds'))} s.",
+        "",
+        "| Group | Stack start | Checks | Teardown | Total |",
+        "| --- | ---: | ---: | ---: | ---: |",
+    ]
+    cases = []
+    for name, group in evidence["groups"].items():
+        lines.append(
+            f"| {name} | "
+            + " | ".join(
+                seconds_text(group.get(key))
+                for key in (
+                    "stack_seconds",
+                    "checks_seconds",
+                    "teardown_seconds",
+                    "elapsed_seconds",
+                )
+            )
+            + " |"
+        )
+        checks = group.get("checks", {})
+        cases.extend((name, case) for case in checks.get("cases", ()))
+    cases.sort(key=lambda item: -(item[1]["seconds"] or 0))
+    lines += [
+        "",
+        f"The {min(SLOWEST, len(cases))} slowest of {len(cases)} completed "
+        "cases, in seconds. A group's first case includes its bootstrap.",
+        "",
+        "| Seconds | Group | Case |",
+        "| ---: | --- | --- |",
+    ]
+    for name, case in cases[:SLOWEST]:
+        module = case["module"].rpartition(".")[2]
+        lines.append(
+            f"| {seconds_text(case['seconds'])} | {name} | "
+            f"{module}::{case['name']} |"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def report_timings(evidence: dict) -> None:
+    """Print the timings; a GitHub job summary receives them as well."""
+    report = timing_report(evidence)
+    print(report, end="", flush=True)
+    if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
+        with suppress(OSError), Path(summary).open("a") as stream:
+            stream.write(report)
+
+
+def execute(
+    command: str,
+    state: Path,
+    *,
+    stacks: int = DEFAULT_STACKS,
+    cases=REQUIRED_CASES,
+) -> None:
+    check_declaration(cases)
+    if stacks < 1:
+        raise LaneError("the lane needs at least one stack at a time")
     key = hashlib.sha256(f"{REPO}\0{state}".encode()).hexdigest()[:16]
     project = f"yizkr-fictional-{key}"
     image = f"{project}:test"
     env = docker_environment(image)
     docker = ["docker", "--host=unix:///var/run/docker.sock"]
     started = time.monotonic()
+
+    def compose(name_project: str) -> list[str]:
+        return [
+            *docker,
+            "compose",
+            "--project-name",
+            name_project,
+            "--env-file",
+            "/dev/null",
+            "--file",
+            str(REPO / "deploy/fictional-integration/compose.yml"),
+        ]
+
     with (
         locked(state),
         tempfile.TemporaryDirectory(prefix=f"{project}-") as tmp,
     ):
-        groups = []
-        # Unsuffixed project is cleanup-only recovery for older launchers.
-        for name, cases in [*GROUPS.items(), ("legacy", ())]:
-            name_project = project if name == "legacy" else f"{project}-{name}"
-            folder = state if name == "legacy" else state / name
-            folder.mkdir(parents=True, exist_ok=True)
-            groups.append(
-                Group(
-                    name,
-                    cases,
-                    name_project,
-                    folder,
-                    [
-                        *docker,
-                        "compose",
-                        "--project-name",
-                        name_project,
-                        "--env-file",
-                        "/dev/null",
-                        "--file",
-                        str(REPO / "deploy/fictional-integration/compose.yml"),
-                    ],
-                )
+        active = [
+            Group(
+                name,
+                members,
+                f"{project}-{name}",
+                state / name,
+                compose(f"{project}-{name}"),
             )
-        active = groups[:-1]
+            for name, members in case_groups(cases).items()
+        ]
+        # The unsuffixed project is cleanup-only recovery for older
+        # launchers; its folder is the state directory itself.
+        groups = [
+            *active,
+            Group("legacy", (), project, state, compose(project)),
+        ]
+        for group in groups:
+            group.state.mkdir(parents=True, exist_ok=True)
         evidence = {
             "project": project,
             "command": "make test-integration",
             "status": "failed",
             "teardown": "pending",
-            "mode": "sequential" if sequential else "concurrent",
+            "stacks": stacks,
             "groups": {group.name: group.evidence for group in active},
         }
         # Cleanup-only preserves the verification record of an earlier run.
@@ -682,17 +922,6 @@ def execute(command: str, state: Path, *, sequential=False) -> None:
                         group.state / "evidence.json", group.evidence
                     )
                 write_evidence(state / "evidence.json", evidence)
-                partition = [case for group in active for case in group.cases]
-                if (
-                    set(GROUPS) != {"assignments", "other"}
-                    or not all(group.cases for group in active)
-                    or len(partition) != len(REQUIRED_CASES)
-                    or len(set(partition)) != len(partition)
-                    or set(partition) != set(REQUIRED_CASES)
-                ):
-                    raise LaneError(
-                        "invalid required integration group partition"
-                    )
                 context = Path(tmp)
                 source_hash = stage_context(REPO, context)
                 evidence["source_sha256"] = source_hash
@@ -753,63 +982,14 @@ def execute(command: str, state: Path, *, sequential=False) -> None:
                 evidence.update(runtime_code)
                 for group in active:
                     group.evidence.update(runtime_code)
-                for group in active:
-                    group.cleaned = False
-                    group.started = time.monotonic()
-                    group.evidence["teardown"] = "pending"
-                    run(
-                        [
-                            *group.compose,
-                            "up",
-                            "--detach",
-                            "--wait",
-                            "--wait-timeout",
-                            "600",
-                        ],
-                        env=env,
-                    )
-                    probe = run(
-                        [
-                            *group.compose,
-                            "exec",
-                            "-T",
-                            "wikibase",
-                            "php",
-                            "/yizkr-fictional-mutation-guard-probe.php",
-                        ],
-                        env=env,
-                        capture=True,
-                        timeout=90,
-                    )
-                    guard_evidence = json.loads(probe.stdout)
-                    if guard_evidence != {
-                        "protocol": "yizkr-mutation-guard-v1",
-                        "request_drain": True,
-                        "shutdown_drain": True,
-                        "restart": True,
-                        "stale_capability": True,
-                        "invalid_state": True,
-                        "database_drain": True,
-                    }:
-                        raise LaneError(
-                            "mutation guard subprocess probe failed"
-                        )
-                    group.evidence["mutation_guard_probe"] = guard_evidence
-                    if sequential:
-                        start_checks(group, env)
-                        wait_checks([group], docker, env)
-                        cleanup_groups([group], docker, env)
-                        if group.evidence["teardown"] != "passed":
-                            raise LaneError(
-                                "teardown failed; run make integration-down"
-                            )
-                if not sequential:
-                    for group in active:
-                        start_checks(group, env)
-                    wait_checks(active, docker, env)
+                evidence["setup_seconds"] = round(
+                    time.monotonic() - started, 3
+                )
+                run_groups(active, stacks, docker, env)
                 evidence["checks"] = combine_results(
                     [group.state / "results.xml" for group in active],
                     state / "results.xml",
+                    cases,
                 )
                 evidence["status"] = "passed"
         except BaseException as exc:
@@ -863,6 +1043,8 @@ def execute(command: str, state: Path, *, sequential=False) -> None:
                     f"{state / 'evidence.json'}",
                     flush=True,
                 )
+                if command == "run":
+                    report_timings(evidence)
             finally:
                 for sig, handler in previous.items():
                     signal.signal(sig, handler)
@@ -870,13 +1052,37 @@ def execute(command: str, state: Path, *, sequential=False) -> None:
             raise failure
 
 
+def stack_limit(value: str) -> int:
+    limit = int(value)
+    if limit < 1:
+        raise argparse.ArgumentTypeError("at least one stack is needed")
+    return limit
+
+
+def describe(cases) -> str:
+    """The declared groups and their cases, in the order they run."""
+    grouped = case_groups(cases)
+    lines = []
+    for name, members in grouped.items():
+        count = f"{len(members)} case{'' if len(members) == 1 else 's'}"
+        lines.append(f"{name} ({count})")
+        lines.extend(f"  {case.selector}" for case in members)
+    lines.append(
+        f"{len(cases)} required cases in {len(grouped)} groups; "
+        f"at most {DEFAULT_STACKS} stacks at once unless --stacks is given"
+    )
+    return "\n".join(lines) + "\n"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("run", "down"))
+    parser.add_argument("command", choices=("run", "down", "list"))
     parser.add_argument(
-        "--sequential",
-        action="store_true",
-        help="run and tear down each fixture group before starting the next",
+        "--stacks",
+        type=stack_limit,
+        default=DEFAULT_STACKS,
+        help="most group stacks at once (default %(default)s); 1 runs and "
+        "tears down each group before starting the next",
     )
     key = hashlib.sha256(str(REPO).encode()).hexdigest()[:16]
     parser.add_argument(
@@ -885,9 +1091,17 @@ def main() -> int:
         default=Path(tempfile.gettempdir()) / f"yizkr-fictional-{key}",
     )
     args = parser.parse_args()
+    if args.command == "list":
+        try:
+            check_declaration(REQUIRED_CASES)
+        except LaneError as exc:
+            print(f"Required fictional integration failed: {exc}", flush=True)
+            return 1
+        print(describe(REQUIRED_CASES), end="", flush=True)
+        return 0
     signal.signal(signal.SIGTERM, stopped)
     try:
-        execute(args.command, args.state.resolve(), sequential=args.sequential)
+        execute(args.command, args.state.resolve(), stacks=args.stacks)
     except (
         LaneError,
         OSError,
