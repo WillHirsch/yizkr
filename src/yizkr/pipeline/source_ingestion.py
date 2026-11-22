@@ -24,7 +24,7 @@ from typing import Literal, Protocol
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from yizkr.claims import ArtifactRef, ClaimBatch
-from yizkr.core.corpus import read_exclusions
+from yizkr.core.corpus import is_excluded, read_exclusions
 from yizkr.core.instance import require_retained_code
 from yizkr.core.mutation_guard import protected_mutation
 from yizkr.core.wiki import WikiClient
@@ -166,7 +166,13 @@ def _prepared_source(source: Path) -> None:
     the one a run gives the file type: a container or GEDCOM file refuses
     with its reason (UnsupportedKind), and any other non-text file refuses
     too; of those, only a standalone image can enter, as a run's saved
-    views."""
+    views. A hidden file, whose name starts with ".", refuses as well,
+    since a run reads none."""
+    if source.name.startswith("."):
+        raise ProductsRefused(
+            "a run reads no hidden file: give the source a name that does "
+            "not start with '.'"
+        )
     kind = document_kind(source)
     if kind in UNSUPPORTED_KINDS:
         raise UnsupportedKind(kind)
@@ -272,12 +278,18 @@ class SourceIngestion:
         that run, borrowing `extractor_client` and `critic_client`, with no
         response cache: it reuses each view that its freshness decision lets
         stand and makes the others, and a stage whose client is not given
-        fails. `language` is a setting the run keeps, by default the one it
-        recorded, else detected: another refuses. Once the source is
-        registered no view is made again, and products that cannot be
-        admitted refuse. Saved document products are admitted as saved: a
-        setting or client for a stage refuses, since this workflow runs
-        none.
+        fails; a source the never-ingest list names refuses before the
+        driver starts. `language` is a setting the run keeps, by default the
+        one it recorded, else detected: another refuses. The run also keeps
+        the never-ingest list's entries, its file's path and the
+        workspace's path, and its code while a stage is left: while a stage
+        is left, a change to any of these refuses (with other code the run
+        makes no view again), and the preparation needs the run's own
+        settings and code or a new workspace; complete views are still
+        admitted. Once the source is registered no view is made again:
+        products that cannot be admitted refuse, and so does another
+        language. Saved document products are admitted as saved: a setting
+        or client for a stage refuses, since this workflow runs none.
         """
         with self._workspace():
             if self.document_dir is not None:
@@ -293,13 +305,26 @@ class SourceIngestion:
             recorded = (RunDir(self._run).manifest().get("config") or {}).get(
                 "language"
             )
+            if (self.directory / "registration.json").exists():
+                # a registration names its products: none is made again
+                if language is not None and language != recorded:
+                    raise ReviewRefused(
+                        "the source is registered, so its products are not "
+                        "made again: give no other language"
+                    )
+                return self._products()
             if language is None or language == recorded:
                 try:
                     return self._products()
                 except ProductsRefused:
-                    # a registration names its products: none is made again
-                    if (self.directory / "registration.json").exists():
-                        raise
+                    pass
+            exclusions = read_exclusions(self.exclusions_file)
+            try:
+                excluded = is_excluded(exclusions, self.source)
+            except OSError as exc:
+                raise ProductsRefused("the source is unavailable") from exc
+            if excluded:
+                raise ProductsRefused("the source is on the never-ingest list")
             self._link.parent.mkdir(mode=0o700, exist_ok=True)
             for entry in self._link.parent.iterdir():
                 entry.unlink()
@@ -315,7 +340,7 @@ class SourceIngestion:
                     if client is not None
                 },
                 cache_dir=None,
-                exclusions=read_exclusions(self.exclusions_file),
+                exclusions=exclusions,
                 language=language or recorded or "auto",
                 log=_quiet,
             )
@@ -327,7 +352,20 @@ class SourceIngestion:
                     "prepare the source in a new workspace"
                 ) from exc
             check_cancelled()
-            return self._products()
+            try:
+                return self._products()
+            except ProductsRefused as exc:
+                # with other code, a run whose stages have all ended, one
+                # failed say, goes only past its barrier and makes no view
+                scratch = RunDir(self._run).manifest().get("scratch") or {}
+                if scratch.get("past_barrier_only"):
+                    raise ReviewRefused(
+                        "the code differs from the code of the workspace's "
+                        "run, which makes no view again with other code: "
+                        "finish the preparation with the run's code, or "
+                        "prepare the source in a new workspace"
+                    ) from exc
+                raise
 
     def _products(self) -> ReviewedProducts:
         if self.document_dir is not None:

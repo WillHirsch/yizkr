@@ -12,6 +12,7 @@ import copy
 import fcntl
 import hashlib
 import json
+import shutil
 from contextlib import contextmanager
 from dataclasses import replace
 from types import SimpleNamespace
@@ -34,7 +35,7 @@ from tests.fixtures.semantic_acceptance import birth_batch, source_case
 from tests.unit.test_identity_provenance import Wiki
 from yizkr.core.corpus import ExclusionList, is_excluded
 from yizkr.core.write_recovery import CreationRegistry
-from yizkr.pipeline import source_ingestion
+from yizkr.pipeline import scratch, source_ingestion
 from yizkr.pipeline.assignment_stages import accept_reviewed_assignments
 from yizkr.pipeline.claim_review import (
     ClaimDecisionInput,
@@ -52,6 +53,8 @@ from yizkr.pipeline.review_stages import (
     ReviewProposal,
     prepare_review,
 )
+from yizkr.pipeline.run_resources import MODEL_VARIABLE
+from yizkr.pipeline.rundir import RunDir
 from yizkr.pipeline.source_ingestion import SourceIngestion
 
 WHEN = "2026-01-01T12:00:00Z"
@@ -84,6 +87,23 @@ def text_answers():
         "extract": [manifest, claim.model_dump_json() + '\n{"done":true}'],
         "critique": [json.dumps(FINDING) + '\n{"done":true}'],
     }
+
+
+class LentAnswers(AuthoredAnswers):
+    """A lent client's authored answers, counting its calls and noting
+    whether it was closed."""
+
+    def __init__(self, answers):
+        super().__init__(answers)
+        self.calls = 0
+        self.closed = False
+
+    def complete(self, prompt, image_paths=()):
+        self.calls += 1
+        return super().complete(prompt, image_paths)
+
+    def close(self):
+        self.closed = True
 
 
 def source_and_answers(kind):
@@ -326,6 +346,9 @@ def test_critique_is_visible_in_claim_consent_and_identity_is_insufficient(
     assert any(
         "Check the fictional name" in note for note in claim.selection.warnings
     )
+    attention = case.products.extraction_attention
+    assert attention
+    assert set(attention) <= set(claim.selection.warnings)
     assert claim.basis["warnings"] == sorted(set(claim.selection.warnings))
     before = snapshot(case)
     with pytest.raises(ReviewRefused, match="explicit approval"):
@@ -460,37 +483,148 @@ def test_preparation_with_another_language_refuses(lifecycle):
     assert case.workflow.prepare() == case.products
 
 
+def another_addition(case, workspace, source=None, exclusions_file=None):
+    return SourceIngestion(
+        case.source if source is None else source,
+        workspace,
+        client=case.wiki,
+        review_store=case.store,
+        exclusions_file=case.policy
+        if exclusions_file is None
+        else exclusions_file,
+    )
+
+
 @pytest.mark.parametrize("lifecycle", ["prepared"], indirect=True)
 def test_completed_stages_survive_an_unfinished_preparation(
-    lifecycle, tmp_path
+    lifecycle, tmp_path, monkeypatch
 ):
     case = lifecycle
     _name, _data, answers, _label, _mention = source_and_answers("text")
-    workflow = SourceIngestion(
-        case.source,
-        tmp_path / "another-addition",
-        client=case.wiki,
-        review_store=case.store,
-        exclusions_file=case.policy,
-    )
+    workflow = another_addition(case, tmp_path / "another-addition")
+    extractor = LentAnswers(answers["extract"])
+    # The clients are the caller's, so the model its environment names is
+    # no setting of the run.
+    monkeypatch.setenv(MODEL_VARIABLE, "fictional-model-one")
     # No critic is given, so the critique cannot be made.
     with pytest.raises(ProductsRefused):
-        workflow.prepare(
-            language="de",
-            extractor_client=AuthoredAnswers(answers["extract"]),
-        )
+        workflow.prepare(language="de", extractor_client=extractor)
     with pytest.raises(ProductsRefused):
         workflow.prepare_registration("certificate", "Fictional source")
+    monkeypatch.setenv(MODEL_VARIABLE, "fictional-model-two")
     # The reading and batch stand, so no extractor is needed now.
-    resumed = workflow.prepare(
-        critic_client=AuthoredAnswers(answers["critique"])
-    )
+    critic = LentAnswers(answers["critique"])
+    resumed = workflow.prepare(critic_client=critic)
     # The same answers make the same products, but for when they were made.
     assert (resumed.reading, resumed.batch.claims, resumed.critique) == (
         case.products.reading,
         case.products.batch.claims,
         case.products.critique,
     )
+    assert not extractor.closed and not critic.closed
+
+
+@pytest.mark.parametrize("change", ["code", "exclusions"])
+@pytest.mark.parametrize("lifecycle", ["prepared"], indirect=True)
+def test_an_unfinished_preparation_keeps_its_code_and_exclusions(
+    lifecycle, tmp_path, monkeypatch, change
+):
+    case = lifecycle
+    _name, _data, answers, _label, _mention = source_and_answers("text")
+    workspace = tmp_path / "another-addition"
+    workflow = another_addition(case, workspace)
+    # No critic is given, so the critique fails.
+    with pytest.raises(ProductsRefused):
+        workflow.prepare(
+            language="de",
+            extractor_client=AuthoredAnswers(answers["extract"]),
+        )
+    critic = LentAnswers(answers["critique"])
+    with monkeypatch.context() as patch:
+        if change == "code":
+            other = dict(
+                RunDir(workspace / "run").manifest()["code"], commit="f" * 40
+            )
+            patch.setattr(scratch, "code_version", lambda: dict(other))
+        else:
+            # an entry for another file changes the list the run keeps
+            case.policy.write_text("unrelated-fictional-file.txt\n")
+        with pytest.raises(ReviewRefused, match="new workspace"):
+            workflow.prepare(critic_client=critic)
+    assert critic.calls == 0
+    # The run's own code and list finish the preparation.
+    case.policy.write_text("")
+    resumed = workflow.prepare(critic_client=critic)
+    assert resumed.critique == case.products.critique
+
+
+@pytest.mark.parametrize("lifecycle", ["prepared"], indirect=True)
+def test_a_source_on_the_never_ingest_list_reaches_no_model(
+    lifecycle, tmp_path
+):
+    case = lifecycle
+    _name, _data, answers, _label, _mention = source_and_answers("text")
+    case.policy.write_text(case.source.name)
+    workflow = another_addition(case, tmp_path / "another-addition")
+    extractor = LentAnswers(answers["extract"])
+    critic = LentAnswers(answers["critique"])
+    with pytest.raises(ProductsRefused, match="never-ingest"):
+        workflow.prepare(
+            language="de", extractor_client=extractor, critic_client=critic
+        )
+    assert (extractor.calls, critic.calls) == (0, 0)
+
+
+@pytest.mark.parametrize("inside", ["source", "exclusions"])
+@pytest.mark.parametrize("lifecycle", ["prepared"], indirect=True)
+def test_source_and_policy_must_stay_outside_the_workspace(
+    lifecycle, tmp_path, inside
+):
+    case = lifecycle
+    workspace = tmp_path / "another-addition"
+    if inside == "source":
+        held = workspace / "source" / case.source.name
+        held.parent.mkdir(parents=True)
+        held.write_bytes(case.source.read_bytes())
+        options = {"source": held}
+    else:
+        held = workspace / "exclusions.txt"
+        held.parent.mkdir(parents=True)
+        held.write_text("")
+        options = {"exclusions_file": held}
+    kept = held.read_bytes()
+    with pytest.raises(ValueError):
+        another_addition(case, workspace, **options)
+    assert held.read_bytes() == kept
+
+
+@pytest.mark.parametrize("lifecycle", ["prepared"], indirect=True)
+def test_a_hidden_source_refuses(lifecycle, tmp_path):
+    case = lifecycle
+    hidden = tmp_path / "sources" / f".{case.source.name}"
+    hidden.parent.mkdir()
+    hidden.write_bytes(case.source.read_bytes())
+    with pytest.raises(ProductsRefused):
+        another_addition(case, tmp_path / "another-addition", source=hidden)
+
+
+@pytest.mark.parametrize("lifecycle", ["prepared"], indirect=True)
+def test_a_registered_source_without_its_run_makes_no_view(lifecycle):
+    case = lifecycle
+    register(case)
+    run = case.workflow.directory / "run"
+    shutil.rmtree(run)
+    _name, _data, answers, _label, _mention = source_and_answers("text")
+    extractor = LentAnswers(answers["extract"])
+    critic = LentAnswers(answers["critique"])
+    with pytest.raises(ReviewRefused):
+        case.workflow.prepare(
+            language="de", extractor_client=extractor, critic_client=critic
+        )
+    with pytest.raises(ProductsRefused):
+        case.workflow.prepare(extractor_client=extractor, critic_client=critic)
+    assert (extractor.calls, critic.calls) == (0, 0)
+    assert not run.exists()
 
 
 @pytest.mark.parametrize("lifecycle", ["prepared"], indirect=True)
