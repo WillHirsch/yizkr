@@ -1269,31 +1269,6 @@ def _place_record(context: Any, key: str, epoch: str) -> dict:
     return {"key": key, "epoch": epoch, "outcomes": {}}
 
 
-def _stated_links(context: Any, written: dict) -> list:
-    """The links the mention records of the documents the write wrote
-    state (places.stated_links), each document stating its own, each
-    container's evidence on its page of the document's transcription."""
-    from yizkr.pipeline.places import read_transcription, stated_links
-
-    documents = written.get("documents") or {}
-    links = []
-    for doc in context.documents:
-        done = documents.get(doc.sha1)
-        if not isinstance(done, dict):
-            continue
-        extracted = extracted_batch(doc)
-        if extracted is None:
-            continue
-        created = done.get("created_items")
-        links += stated_links(
-            extracted,
-            created if isinstance(created, dict) else {},
-            doc.sha1,
-            read_transcription(doc.transcription),
-        )
-    return links
-
-
 def _propose(
     context: Any, key: str, epoch: str, written: dict, record: dict
 ) -> None:
@@ -1318,7 +1293,9 @@ def _propose(
         )
         progress(context, PLACES, READING)
         places = place_graph(client)
-        links = _stated_links(context, written)
+        # the links the documents the write wrote state, as the
+        # standalone command reads them from a run directory too
+        links = hierarchy.written_links(written, context.documents)
         hierarchy.attach_chains(places, links)
         work = hierarchy.build_worklist(places, links)
         if work.questions:

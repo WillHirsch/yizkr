@@ -262,6 +262,7 @@ def cmd_publish_queries(args) -> int:
 
 def cmd_reconcile_places(args) -> int:
     from yizkr.pipeline.places import (
+        NoWriteRecord,
         adjudicate,
         apply_answers,
         attach_chains,
@@ -271,11 +272,18 @@ def cmd_reconcile_places(args) -> int:
         record_links,
     )
 
+    try:
+        links = [
+            link
+            for run_dir in args.run or ()
+            for link in record_links(run_dir)
+        ]
+    except NoWriteRecord as exc:
+        # nothing is asked or written: the links of a run with no write
+        # record are unknown, not none
+        sys.exit(str(exc))
     config = Config.load(args.env_file)
     client = WikiClient(config)
-    links = [
-        link for run_dir in args.run or () for link in record_links(run_dir)
-    ]
     if args.apply:
         if not links:
             print(
@@ -1643,9 +1651,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--run",
         type=Path,
         action="append",
-        help="a run directory that wrote the graph: the chains of "
-        "containers its places' mention records state are the links asked "
-        "of (repeatable; needed by --apply too)",
+        help="a scratch run directory that wrote the graph: the links "
+        "asked of are the chains of containers the mention records of the "
+        "documents its write wrote state, read from its write record "
+        "(corpus/write/record.json) and their batches (repeatable; needed "
+        "by --apply too)",
     )
     p.add_argument(
         "--apply",
