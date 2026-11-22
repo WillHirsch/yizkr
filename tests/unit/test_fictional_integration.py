@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import select
 import shutil
 import signal
@@ -28,6 +29,9 @@ _spec.loader.exec_module(lane)
 
 # Only bounds a missed readiness/exit cue; never a delay under test.
 HANG_GUARD = 60
+# The declared groups, first to last; nothing below depends on their names.
+NAMES = list(lane.GROUPS)
+FIRST, LAST = NAMES[0], NAMES[-1]
 
 
 def put(root: Path, name: str, content: str) -> Path:
@@ -255,26 +259,25 @@ def ran(observed: dict) -> list[tuple[str, str]]:
     return [(case["module"], case["name"]) for case in observed["cases"]]
 
 
+def passing(cases) -> list[tuple[str, str, None]]:
+    return [(*case.result, None) for case in cases]
+
+
 def test_required_results_accept_completed_boundary_case(tmp_path):
-    path = results(
-        tmp_path / "results.xml",
-        [(*case, None) for case in lane.REQUIRED_CASES],
-    )
+    path = results(tmp_path / "results.xml", passing(lane.REQUIRED_CASES))
     observed = lane.verify_results(path)
     assert observed["passed"] == len(lane.REQUIRED_CASES)
     assert observed["skipped"] == 0
-    assert ran(observed) == list(lane.REQUIRED_CASES)
+    assert ran(observed) == [case.result for case in lane.REQUIRED_CASES]
 
 
 def test_required_results_record_each_case_duration(tmp_path):
     seconds = {
-        name: 10.25 + index
-        for index, (_, name) in enumerate(lane.REQUIRED_CASES)
+        case.name: 10.25 + index
+        for index, case in enumerate(lane.REQUIRED_CASES)
     }
     path = results(
-        tmp_path / "results.xml",
-        [(*case, None) for case in lane.REQUIRED_CASES],
-        seconds,
+        tmp_path / "results.xml", passing(lane.REQUIRED_CASES), seconds
     )
     observed = lane.verify_results(path)["cases"]
     assert {case["name"]: case["seconds"] for case in observed} == seconds
@@ -284,7 +287,7 @@ def test_required_results_record_each_case_duration(tmp_path):
 def test_required_results_refuse_unexecuted_or_failed_check(tmp_path, outcome):
     # In particular, pytest can exit zero with a skipped required case.
     path = results(
-        tmp_path / "results.xml", [(*lane.REQUIRED_CASES[0], outcome)]
+        tmp_path / "results.xml", [(*lane.REQUIRED_CASES[0].result, outcome)]
     )
     with pytest.raises(lane.LaneError, match="failed or skipped"):
         lane.verify_results(path)
@@ -298,7 +301,7 @@ def test_required_results_refuse_missing_boundary_case(tmp_path, cases):
 
 
 def test_required_results_refuse_duplicate_boundary_case(tmp_path):
-    case = (*lane.REQUIRED_CASES[0], None)
+    case = (*lane.REQUIRED_CASES[0].result, None)
     path = results(tmp_path / "results.xml", [case, case])
     with pytest.raises(lane.LaneError, match="did not run exactly once"):
         lane.verify_results(path)
@@ -310,7 +313,7 @@ def test_required_results_refuse_extra_cases_even_when_all_required_pass(
     path = results(
         tmp_path / "results.xml",
         [
-            *((*case, None) for case in lane.REQUIRED_CASES),
+            *passing(lane.REQUIRED_CASES),
             ("fictional.extra", "test_not_in_the_required_lane", None),
         ],
     )
@@ -318,51 +321,44 @@ def test_required_results_refuse_extra_cases_even_when_all_required_pass(
         lane.verify_results(path)
 
 
-def test_group_results_cannot_borrow_a_case_from_the_other_group(tmp_path):
-    own = lane.GROUPS["assignments"]
-    other = lane.GROUPS["other"]
-    path = results(
-        tmp_path / "results.xml",
-        [(*case, None) for case in (*own[:-1], other[0])],
-    )
+def test_group_results_cannot_borrow_a_case_from_another_group(tmp_path):
+    own = lane.GROUPS[FIRST]
+    other = lane.GROUPS[LAST]
+    path = results(tmp_path / "results.xml", passing((*own[:-1], other[0])))
     with pytest.raises(lane.LaneError):
         lane.verify_results(path, own)
 
 
 def test_group_reports_combine_into_complete_required_results(tmp_path):
     paths = [
-        results(
-            tmp_path / name / "results.xml",
-            [(*case, None) for case in cases],
-        )
+        results(tmp_path / name / "results.xml", passing(cases))
         for name, cases in lane.GROUPS.items()
     ]
     combined = tmp_path / "results.xml"
-    lane.combine_results(paths, combined)
+    lane.combine_results(paths, combined, lane.REQUIRED_CASES)
 
     observed = lane.verify_results(combined)
     assert observed["passed"] == len(lane.REQUIRED_CASES)
-    assert set(ran(observed)) == set(lane.REQUIRED_CASES)
+    assert set(ran(observed)) == {case.result for case in lane.REQUIRED_CASES}
 
 
 def test_combining_reports_cannot_hide_duplicate_or_missing_groups(tmp_path):
-    only = results(
-        tmp_path / "assignments.xml",
-        [(*case, None) for case in lane.GROUPS["assignments"]],
-    )
+    only = results(tmp_path / "first.xml", passing(lane.GROUPS[FIRST]))
     with pytest.raises(lane.LaneError):
-        lane.combine_results([only, only], tmp_path / "results.xml")
+        lane.combine_results(
+            [only, only], tmp_path / "results.xml", lane.REQUIRED_CASES
+        )
 
 
 @pytest.mark.parametrize("omitted", range(len(lane.REQUIRED_CASES)))
 def test_required_results_refuse_any_omitted_boundary_case(tmp_path, omitted):
     path = results(
         tmp_path / "results.xml",
-        [
-            (*case, None)
+        passing(
+            case
             for index, case in enumerate(lane.REQUIRED_CASES)
             if index != omitted
-        ],
+        ),
     )
     with pytest.raises(lane.LaneError, match="did not run exactly once"):
         lane.verify_results(path)
@@ -480,18 +476,13 @@ class CheckProcess:
         self.name = args[args.index("--name") + 1]
         self.pid = 10000 + len(docker.processes)
         self.group = docker.group(self.project)
+        # pytest reports exactly the selected cases, in selection order.
         self.cases = []
         for arg in args:
-            if not arg.startswith("tests/fictional_integration"):
-                continue
-            path, _, selected_name = arg.partition("::")
-            for module, name in lane.REQUIRED_CASES:
-                module_path = module.replace(".", "/") + ".py"
-                if (
-                    path == "tests/fictional_integration"
-                    or path == module_path
-                ) and (not selected_name or name == selected_name):
-                    self.cases.append((module, name))
+            if arg.startswith("tests/fictional_integration/"):
+                path, _, name = arg.partition("::")
+                module = path.removesuffix(".py").replace("/", ".")
+                self.cases.append((module, name))
         self.returncode = None
         self.created = docker.ticks
         self.container_running = True
@@ -559,6 +550,7 @@ class Docker:
         self.stubborn = set()
         self.ticks = 0
         self.maximum_running = 0
+        self.maximum_stacks = 0
         self.builds = 0
         self.stages = 0
         self.interrupt = None
@@ -580,17 +572,19 @@ class Docker:
 
     @staticmethod
     def group(project):
-        return next(
-            (name for name in lane.GROUPS if project.endswith("-" + name)),
-            "legacy",
+        """A group project's suffix; the unsuffixed project is "legacy"."""
+        match = re.fullmatch(
+            r"yizkr-fictional-[0-9a-f]{16}(?:-(.+))?", project
         )
+        assert match, project
+        return match.group(1) or "legacy"
 
     def stage(self, repo, context):
         self.stages += 1
         assert self.evidence()["status"] == "failed"
         assert self.evidence()["revision"] == "fixture-revision"
         assert not (self.state / "results.xml").exists()
-        for name in lane.GROUPS:
+        for name in self.evidence()["groups"]:
             assert not (self.state / name / "results.xml").exists()
             assert self.evidence(name)["status"] == "failed"
         if self.stage_failure:
@@ -643,6 +637,7 @@ class Docker:
         elif "up" in args:
             self.up.append(project)
             self.active.add(project)
+            self.maximum_stacks = max(self.maximum_stacks, len(self.active))
             if group == self.setup_failure:
                 raise subprocess.CalledProcessError(1, args)
         elif "run" in args and "-c" in args:
@@ -766,17 +761,17 @@ def assert_cleanup_covers_all_volumes(args):
     assert "--volumes" in args
 
 
-def test_success_runs_both_groups_and_requires_complete_combined_evidence(
+def test_success_runs_every_group_once_and_requires_complete_evidence(
     docker,
 ):
     lane.execute("run", docker.state)
 
     assert docker.stages == docker.builds == 1
     assert docker.runtime_code_probes == 1
-    assert docker.maximum_running == 2
-    assert docker.guard_probes == ["assignments", "other"]
-    assert len(set(docker.up)) == 2
-    assert set(docker.finished) == {"assignments", "other"}
+    assert docker.maximum_running == min(len(NAMES), lane.DEFAULT_STACKS)
+    assert docker.guard_probes == NAMES
+    assert [docker.group(project) for project in docker.up] == NAMES
+    assert sorted(docker.finished) == sorted(NAMES)
     assert docker.evidence()["status"] == "passed"
     assert docker.evidence()["revision"] == "fixture-revision"
     assert docker.evidence()["source_sha256"] == "fixture-source-hash"
@@ -787,7 +782,7 @@ def test_success_runs_both_groups_and_requires_complete_combined_evidence(
     )
     assert docker.evidence()["dirty_code_refused"] is True
     observed = lane.verify_results(docker.state / "results.xml")
-    assert set(ran(observed)) == set(lane.REQUIRED_CASES)
+    assert set(ran(observed)) == {case.result for case in lane.REQUIRED_CASES}
     for name, expected in lane.GROUPS.items():
         assert docker.evidence(name)["status"] == "passed"
         assert docker.evidence(name)["runtime_snapshot_commit"] == "f" * 40
@@ -795,19 +790,46 @@ def test_success_runs_both_groups_and_requires_complete_combined_evidence(
         observed = lane.verify_results(
             docker.state / name / "results.xml", expected
         )
-        assert set(ran(observed)) == set(expected)
-        if name == "assignments":
-            assert len(observed["cases"]) == 3
-            assert all(
-                module.endswith(".test_assignment_writes")
-                for module, _ in ran(observed)
-            )
-        else:
-            assert len(observed["cases"]) == len(lane.REQUIRED_CASES) - 3
-            assert all(
-                not module.endswith(".test_assignment_writes")
-                for module, _ in ran(observed)
-            )
+        assert ran(observed) == [case.result for case in expected]
+    docker.assert_clean()
+
+
+@pytest.mark.parametrize("stacks", [1, 2, 3])
+def test_groups_beyond_the_stack_limit_wait_for_a_removed_stack(
+    docker, stacks
+):
+    # Five groups, none of them declared ones: a new group needs no change
+    # to the launcher or to any other group.
+    cases = tuple(
+        lane.Case(f"part-{index % 5}", case.module, case.name)
+        for index, case in enumerate(lane.REQUIRED_CASES)
+    )
+    groups = lane.case_groups(cases)
+
+    lane.execute("run", docker.state, stacks=stacks, cases=cases)
+
+    assert docker.maximum_stacks == docker.maximum_running == stacks
+    assert [docker.group(project) for project in docker.up] == list(groups)
+    assert docker.evidence()["stacks"] == stacks
+    for name, members in groups.items():
+        observed = lane.verify_results(
+            docker.state / name / "results.xml", members
+        )
+        assert ran(observed) == [case.result for case in members]
+    combined = lane.verify_results(docker.state / "results.xml", cases)
+    assert combined["passed"] == len(cases)
+    docker.assert_clean()
+
+
+def test_a_failure_stops_the_lane_before_a_waiting_group_starts(docker):
+    docker.returncodes[FIRST] = 1
+
+    with pytest.raises(lane.LaneError):
+        lane.execute("run", docker.state, stacks=1)
+
+    assert [docker.group(project) for project in docker.up] == [FIRST]
+    assert docker.evidence()["status"] == "failed"
+    assert not (docker.state / "results.xml").exists()
     docker.assert_clean()
 
 
@@ -817,8 +839,8 @@ def test_run_records_case_and_group_durations_and_reports_slowest_first(
     summary = tmp_path / "job-summary.md"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
     docker.seconds = {
-        name: 5.0 * index
-        for index, (_, name) in enumerate(lane.REQUIRED_CASES)
+        case.name: 5.0 * index
+        for index, case in enumerate(lane.REQUIRED_CASES)
     }
 
     lane.execute("run", docker.state)
@@ -829,7 +851,7 @@ def test_run_records_case_and_group_durations_and_reports_slowest_first(
         assert {
             case["name"]: case["seconds"]
             for case in recorded["checks"]["cases"]
-        } == {name: docker.seconds[name] for _, name in cases}
+        } == {case.name: docker.seconds[case.name] for case in cases}
         for phase in ("stack_seconds", "checks_seconds", "teardown_seconds"):
             assert 0 <= recorded[phase] <= recorded["elapsed_seconds"]
     printed = capsys.readouterr().out
@@ -846,30 +868,14 @@ def test_failed_run_still_reports_the_durations_it_recorded(
 ):
     summary = tmp_path / "job-summary.md"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
-    completed, failed = list(lane.GROUPS)[0], list(lane.GROUPS)[-1]
-    docker.returncodes[failed] = 1
+    docker.returncodes[LAST] = 1
 
     with pytest.raises(lane.LaneError):
         lane.execute("run", docker.state)
 
     report = summary.read_text()
-    assert all(name in report for _, name in lane.GROUPS[completed])
-    assert not any(name in report for _, name in lane.GROUPS[failed])
-
-
-def test_sequential_mode_keeps_both_fresh_groups_and_all_required_cases(
-    docker,
-):
-    lane.execute("run", docker.state, sequential=True)
-
-    assert docker.maximum_running == 1
-    assert docker.stages == docker.builds == 1
-    assert docker.runtime_code_probes == 1
-    assert len(set(docker.up)) == 2
-    assert lane.verify_results(docker.state / "results.xml")["passed"] == len(
-        lane.REQUIRED_CASES
-    )
-    docker.assert_clean()
+    assert all(case.name in report for case in lane.GROUPS[FIRST])
+    assert not any(case.name in report for case in lane.GROUPS[LAST])
 
 
 def test_runtime_code_admission_failure_prevents_service_startup(docker):
@@ -883,23 +889,73 @@ def test_runtime_code_admission_failure_prevents_service_startup(docker):
     docker.assert_clean()
 
 
-@pytest.mark.parametrize("invalid_partition", ["missing", "duplicate"])
-def test_invalid_group_partition_cannot_start_a_partial_lane(
-    docker, monkeypatch, invalid_partition
+@pytest.mark.parametrize("declaration", ["duplicate", "group name", "empty"])
+@pytest.mark.parametrize("command", ["run", "down"])
+def test_an_invalid_declaration_touches_no_stack_or_state(
+    docker, command, declaration
 ):
-    groups = dict(lane.GROUPS)
-    if invalid_partition == "missing":
-        groups["assignments"] = groups["assignments"][:-1]
+    cases = list(lane.REQUIRED_CASES)
+    if declaration == "duplicate":
+        # The same case in a second group would run twice.
+        cases.append(lane.Case(LAST, cases[0].module, cases[0].name))
+    elif declaration == "group name":
+        cases[0] = lane.Case("../outside", cases[0].module, cases[0].name)
     else:
-        groups["other"] = (*groups["other"], groups["assignments"][0])
-    monkeypatch.setattr(lane, "GROUPS", groups)
+        cases = []
 
     with pytest.raises(lane.LaneError):
-        lane.execute("run", docker.state)
+        lane.execute(command, docker.state, cases=tuple(cases))
+
+    assert docker.up == docker.down == []
+    assert docker.stages == docker.builds == 0
+    assert not docker.state.exists()
+
+
+def test_list_prints_each_group_with_its_cases_in_run_order(
+    monkeypatch, capsys
+):
+    monkeypatch.setattr(sys, "argv", [str(SCRIPT), "list"])
+
+    assert lane.main() == 0
+
+    lines = capsys.readouterr().out.splitlines()
+    for name, members in lane.GROUPS.items():
+        heading = next(
+            index
+            for index, line in enumerate(lines)
+            if line.split(" ", 1)[0] == name
+        )
+        listed = lines[heading + 1 : heading + 1 + len(members)]
+        assert [line.strip() for line in listed] == [
+            case.selector for case in members
+        ]
+    selectors = [line.strip() for line in lines if "::" in line]
+    assert len(selectors) == len(lane.REQUIRED_CASES)
+
+
+def test_execute_refuses_a_stack_limit_below_one(docker):
+    with pytest.raises(lane.LaneError):
+        lane.execute("run", docker.state, stacks=0)
 
     assert docker.up == []
-    assert docker.builds == 0
-    assert docker.processes == {}
+    assert docker.stages == docker.builds == 0
+    assert not docker.state.exists()
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "two"])
+def test_a_stack_limit_below_one_is_refused_before_any_command(
+    docker, monkeypatch, value
+):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [str(SCRIPT), "run", "--stacks", value, "--state", str(docker.state)],
+    )
+    with pytest.raises(SystemExit) as refused:
+        lane.main()
+    assert refused.value.code == 2
+    assert docker.up == []
+    assert docker.stages == 0
 
 
 def test_group_children_do_not_inherit_archive_or_compose_settings(
@@ -925,48 +981,48 @@ def test_group_children_do_not_inherit_archive_or_compose_settings(
 
 
 @pytest.mark.parametrize("failure", ["exit", "missing", "skipped", "wrong"])
-def test_first_failed_or_invalid_group_stops_its_running_sibling(
+def test_first_failed_or_invalid_group_stops_its_running_siblings(
     docker, failure
 ):
-    docker.returncodes["other"] = None
+    for name in NAMES[1:]:
+        docker.returncodes[name] = None
     if failure == "exit":
-        docker.returncodes["assignments"] = 1
+        docker.returncodes[FIRST] = 1
     elif failure == "missing":
-        docker.reports["assignments"] = None
+        docker.reports[FIRST] = None
     elif failure == "skipped":
-        docker.reports["assignments"] = [
-            (*case, "skipped" if index == 0 else None)
-            for index, case in enumerate(lane.GROUPS["assignments"])
+        docker.reports[FIRST] = [
+            (*case.result, "skipped" if index == 0 else None)
+            for index, case in enumerate(lane.GROUPS[FIRST])
         ]
     else:
-        docker.reports["assignments"] = [
-            (*case, None) for case in lane.GROUPS["other"]
-        ]
+        docker.reports[FIRST] = passing(lane.GROUPS[LAST])
 
     with pytest.raises((lane.LaneError, subprocess.CalledProcessError)):
         lane.execute("run", docker.state)
 
-    sibling = next(p for p in docker.processes.values() if p.group == "other")
-    assert sibling.name in docker.stopped
-    assert not sibling.completed
+    siblings = [p for p in docker.processes.values() if p.group != FIRST]
+    assert len(siblings) == min(len(NAMES), lane.DEFAULT_STACKS) - 1
+    assert all(p.name in docker.stopped for p in siblings)
+    assert not any(p.completed for p in siblings)
     assert docker.evidence()["status"] == "failed"
-    assert (docker.state / "assignments" / "tests.log").exists()
+    assert (docker.state / FIRST / "tests.log").exists()
     docker.assert_clean()
 
 
 def test_cleanup_kills_a_compose_child_that_ignores_termination(docker):
-    docker.returncodes.update(assignments=1, other=None)
-    docker.stubborn.add("other")
+    docker.returncodes.update({FIRST: 1, LAST: None})
+    docker.stubborn.add(LAST)
     with pytest.raises(lane.LaneError):
         lane.execute("run", docker.state)
 
-    sibling = next(p for p in docker.processes.values() if p.group == "other")
+    sibling = next(p for p in docker.processes.values() if p.group == LAST)
     assert sibling.terminated and sibling.killed
     docker.assert_clean()
 
 
 @pytest.mark.parametrize("interruption", ["keyboard", "term"])
-def test_interruption_stops_children_and_cleans_both_projects(
+def test_interruption_stops_children_and_cleans_every_project(
     docker, monkeypatch, interruption
 ):
     docker.interrupt = interruption
@@ -979,15 +1035,16 @@ def test_interruption_stops_children_and_cleans_both_projects(
     finally:
         signal.signal(signal.SIGTERM, previous_handler)
 
-    assert len(docker.processes) == 2
-    assert len(set(docker.stopped)) == 2
+    running = min(len(NAMES), lane.DEFAULT_STACKS)
+    assert len(docker.processes) == running
+    assert len(set(docker.stopped)) == running
     assert docker.evidence()["status"] == "failed"
     docker.assert_clean()
 
 
-@pytest.mark.parametrize("setup_failure", ["stage", "other"])
+@pytest.mark.parametrize("setup_failure", ["stage", LAST])
 @pytest.mark.parametrize("diagnostic_failure", ["open", "timeout"])
-def test_failed_setup_cleans_both_projects_even_when_diagnostics_fail(
+def test_failed_setup_cleans_every_project_even_when_diagnostics_fail(
     docker, monkeypatch, diagnostic_failure, setup_failure
 ):
     for folder in [docker.state, *(docker.state / n for n in lane.GROUPS)]:
@@ -995,13 +1052,11 @@ def test_failed_setup_cleans_both_projects_even_when_diagnostics_fail(
         put(folder, "results.xml", "old successful result")
     docker.stage_failure = setup_failure == "stage"
     docker.setup_failure = setup_failure
-    docker.log_failure = (
-        "assignments" if diagnostic_failure == "timeout" else None
-    )
+    docker.log_failure = FIRST if diagnostic_failure == "timeout" else None
     original_open = Path.open
 
     def fail_log_open(path, *args, **kwargs):
-        if path == docker.state / "assignments" / "services.log":
+        if path == docker.state / FIRST / "services.log":
             raise PermissionError("fictional log unavailable")
         return original_open(path, *args, **kwargs)
 
@@ -1010,10 +1065,10 @@ def test_failed_setup_cleans_both_projects_even_when_diagnostics_fail(
     with pytest.raises((lane.LaneError, subprocess.CalledProcessError)):
         lane.execute("run", docker.state)
 
-    assert {docker.group(p) for p in docker.down} >= {"assignments", "other"}
+    assert {docker.group(p) for p in docker.down} >= set(NAMES)
     assert docker.evidence()["status"] == "failed"
     assert docker.evidence()["revision"] == "fixture-revision"
-    assert docker.evidence("assignments")["diagnostics_error"]
+    assert docker.evidence(FIRST)["diagnostics_error"]
     assert not (docker.state / "results.xml").exists()
     assert not any(
         (docker.state / n / "results.xml").exists() for n in lane.GROUPS
@@ -1021,35 +1076,36 @@ def test_failed_setup_cleans_both_projects_even_when_diagnostics_fail(
     docker.assert_clean()
 
 
-@pytest.mark.parametrize("group", ["assignments", "other"])
-def test_guard_probe_failure_prevents_checks_and_cleans_projects(
+@pytest.mark.parametrize("group", [FIRST, LAST])
+def test_guard_probe_failure_prevents_that_groups_checks_and_cleans_projects(
     docker, group
 ):
     docker.guard_probe_failure = group
     with pytest.raises(lane.LaneError, match="mutation guard"):
         lane.execute("run", docker.state)
     assert docker.evidence()["status"] == "failed"
-    assert not docker.processes
+    assert group not in {p.group for p in docker.processes.values()}
+    assert all(p.name in docker.stopped for p in docker.processes.values())
     assert not (docker.state / "results.xml").exists()
     docker.assert_clean()
 
 
-def test_one_group_cleanup_error_does_not_leave_its_sibling_running(docker):
-    docker.cleanup_failure = "assignments"
+def test_one_group_cleanup_error_does_not_leave_its_siblings_running(docker):
+    docker.cleanup_failure = FIRST
     with pytest.raises(lane.LaneError, match="teardown"):
         lane.execute("run", docker.state)
 
-    assert {docker.group(p) for p in docker.active} == {"assignments"}
+    assert {docker.group(p) for p in docker.active} == {FIRST}
     assert docker.evidence()["status"] == "failed"
     assert docker.evidence()["teardown"] == "failed"
-    assert docker.evidence("other")["teardown"] == "passed"
+    assert all(docker.evidence(n)["teardown"] == "passed" for n in NAMES[1:])
     assert (docker.state / "instance.json").exists()
 
-    failed = docker.evidence("assignments")
+    failed = docker.evidence(FIRST)
     assert failed["cleanup_error"]
     # A previous attempt can also have failed to reap its Compose child.
     failed["process_cleanup_error"] = "fictional previous reap failure"
-    put(docker.state / "assignments", "evidence.json", json.dumps(failed))
+    put(docker.state / FIRST, "evidence.json", json.dumps(failed))
     docker.cleanup_failure = None
     lane.execute("down", docker.state)
 
@@ -1068,18 +1124,18 @@ def test_leftover_group_volume_fails_lane_and_keeps_recovery_marker(
     docker, command
 ):
     put(docker.state, "instance.json", '{"status": "interrupted"}')
-    docker.leftovers["assignments", "volume"] = 1
+    docker.leftovers[FIRST, "volume"] = 1
     with pytest.raises(lane.LaneError, match="teardown|resources remain"):
         lane.execute(command, docker.state)
 
     assert (docker.state / "instance.json").exists()
-    assert {docker.group(p) for p in docker.down} >= {"assignments", "other"}
+    assert {docker.group(p) for p in docker.down} >= set(NAMES)
     if command == "run":
         assert docker.evidence()["status"] == "failed"
         assert docker.evidence()["teardown"] == "failed"
 
 
-def test_down_recovers_both_groups_and_legacy_without_staging_sources(
+def test_down_recovers_every_group_and_legacy_without_staging_sources(
     docker, monkeypatch
 ):
     def invalid_source(*args):
@@ -1092,11 +1148,7 @@ def test_down_recovers_both_groups_and_legacy_without_staging_sources(
     docker.down.clear()
     put(docker.state, "instance.json", '{"status": "interrupted"}')
     lane.execute("down", docker.state)
-    assert {docker.group(p) for p in docker.down} == {
-        "assignments",
-        "other",
-        "legacy",
-    }
+    assert {docker.group(p) for p in docker.down} == {*NAMES, "legacy"}
     assert docker.active == set()
     assert not (docker.state / "instance.json").exists()
 
@@ -1104,12 +1156,9 @@ def test_down_recovers_both_groups_and_legacy_without_staging_sources(
 def test_down_removes_projects_even_when_evidence_is_not_an_object(docker):
     lane.execute("down", docker.state)
     docker.active.update(docker.down)
-    for folder, content in (
-        (docker.state, "[]"),
-        (docker.state / "assignments", "null"),
-        (docker.state / "other", "false"),
-    ):
-        put(folder, "evidence.json", content)
+    put(docker.state, "evidence.json", "[]")
+    for index, name in enumerate(NAMES):
+        put(docker.state / name, "evidence.json", ("null", "false")[index % 2])
     put(docker.state, "instance.json", '{"status": "interrupted"}')
 
     lane.execute("down", docker.state)
