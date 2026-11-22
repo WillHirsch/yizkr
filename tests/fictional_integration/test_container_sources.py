@@ -271,6 +271,7 @@ def subject_policy_boundary(client, batch, placed, image_qid, container_qid):
     assert result.written == 1
     (written,) = statements(client, image_qid, "author")
     assert written["mainsnak"]["datavalue"]["value"]["id"] == wastl
+    assert written["rank"] == "normal"
     (source,) = [
         reference["snaks"]
         for reference in written["references"]
@@ -295,6 +296,10 @@ def subject_policy_boundary(client, batch, placed, image_qid, container_qid):
     assert source[properties["transcription_excerpt"]][0]["datavalue"][
         "value"
     ] == {"text": CAPTION, "language": "en"}
+    assert [
+        snak["datavalue"]["value"]
+        for snak in source[properties["page_number"]]
+    ] == [author.source.page_number]
     assert locators(client, [written]) == [
         {
             "container": author.source.artifact.sha1,

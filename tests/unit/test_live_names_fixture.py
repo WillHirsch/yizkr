@@ -1,6 +1,5 @@
-"""The live names test's LLM-path fixture (tests/fixtures/live_names.py),
-run offline through the real extractor wiring, so that the live test's
-expectations cannot drift from the code without a unit test failing.
+"""The LLM-path names fixture (tests/fixtures/live_names.py), run
+offline through the real extractor wiring.
 
 Each document's manifest gives the person the mention record extraction
 hands over (ADR-0035 §2); the record stands (§5), and the alias cleanup
@@ -72,9 +71,8 @@ def test_each_record_stands(aliases, record):
 
 
 def test_the_extractor_cleans_the_aliases_by_the_record(tmp_path):
-    """What the live test checks before it writes: the first document's
-    person keeps the forms that add a part, and the second's adds only
-    'Ida Testerhof' to them."""
+    """The first document's person keeps the forms that add a part, and
+    the second's adds only 'Ida Testerhof' to them."""
     first = extract(
         tmp_path / "first",
         FIRST_DOCUMENT,

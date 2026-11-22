@@ -14,7 +14,7 @@ in 1900 and in 1800, and reads them back through the stack:
   counts: 1900, its last year, lies inside it, and 1800 does not.
 
 A date before the common era is unsupported (ADR-0034, #338):
-test_live_unsupported_dates.py checks that the writer refuses one.
+tests/unit/test_unsupported_dates.py checks that the writer refuses one.
 
 Each source is registered with a fictional PNG of its own
 (register_fictional), which its claims cite by SHA-1 (#102). Like every

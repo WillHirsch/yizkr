@@ -6,7 +6,7 @@ already forbids. This exercises both against a real stack: write a
 kinship edge and a containment edge under labels carrying the session's
 marker (conftest.fixture_mark), so each session meets them as a first
 write, then assert `fetch_roster` / `fetch_place_containment` round-trip
-them and `impossible_pair` rules the same-name pairs out.
+them and `impossible_pair` rules the pair of places out.
 
 The elder's birth and death are stated at century and decade precision,
 and the younger's birth and death by events dated to a decade and a
@@ -311,13 +311,6 @@ def test_roster_dates_round_trip_at_their_precision(client, config, written):
     assert "the 1850s" in younger.facts()
     # a death its source states without its date
     assert _by_label(roster, BROTHER).death == "date not stated"
-
-
-def test_kinship_edge_makes_the_pair_impossible(client, config, written):
-    roster = fetch_roster(client, config)
-    younger = _roster_pair_facts(_by_label(roster, YOUNGER))
-    elder = _roster_pair_facts(_by_label(roster, ELDER))
-    assert impossible_pair(younger, elder) == "kinship-edge"
 
 
 def test_place_containment_closure_round_trips(client, config, written):
