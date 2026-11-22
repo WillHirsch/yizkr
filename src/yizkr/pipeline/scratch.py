@@ -288,6 +288,8 @@ MIN_FREE_BYTES = 2 * 1024**3
 RESUME_MARGIN = 60.0
 # `--resume` with no run named: the latest run
 LATEST = "latest"
+# the engine a run records whose engines its caller lends it
+BORROWED = "borrowed"
 
 
 # what a stage of a document came to in the dispatch loop: it ended (done
@@ -854,11 +856,18 @@ class ScratchDriver:
     `until` names the stage the run stops after: a per-document
     stage (`gedcom` stops with `extraction`, the rank they share) or a
     corpus stage. `corpus_stages` defaults to CORPUS_STAGES and
-    `kept_state` to KEPT_STATE. `cache_dir` is required: every model call
-    of a scratch run goes through the LLM cache. `min_free` is the free
-    space, in bytes, the preflight asks for. `clock`, `sleep` and `poll`
-    serve the waits (for a resume, and for the subscription); the remaining
-    options configure document processing. A scratch run keeps its settings."""
+    `kept_state` to KEPT_STATE. `cache_dir` is required unless the engines
+    are borrowed: every model call of a scratch run goes through the LLM
+    cache. `borrowed_engines` lends the run a client for each model role it
+    names, which the caller owns, in place of the engines the driver makes:
+    the run then makes no engine, its preflight checks no engine, model,
+    pacing or cache and makes no call, a stage whose role has no client lent
+    fails, and the run records its engine as BORROWED, with no model of its
+    own; without a `cache_dir`, their calls go through no cache. `min_free`
+    is the free space, in bytes, the preflight asks for. `clock`, `sleep` and
+    `poll` serve the waits (for a resume, and for the subscription); the
+    remaining options configure document processing. A scratch run keeps its
+    settings."""
 
     # the command an artifact's description says ingested it
     command = "yizkr scratch run"
@@ -891,11 +900,20 @@ class ScratchDriver:
         refresh: Collection[str] = (),
         epochs: Mapping[str, int] | None = None,
         cancellation: Cancellation | None = None,
+        borrowed_engines: Mapping[str, Any] | None = None,
         log=print,
     ) -> None:
-        if cache_dir is None:
+        if cache_dir is None and borrowed_engines is None:
             raise ValueError(
                 "a scratch run takes every model call through the LLM cache"
+            )
+        self.borrowed_engines = (
+            None if borrowed_engines is None else dict(borrowed_engines)
+        )
+        unknown = sorted(set(self.borrowed_engines or ()) - set(MODEL_ROLES))
+        if unknown:
+            raise ValueError(
+                f"no model role {', '.join(unknown)} to lend an engine to"
             )
         self.folder = folder
         # the never-ingest list. run() refuses to start without one:
@@ -913,7 +931,7 @@ class ScratchDriver:
         self.cache_dir = cache_dir
         self.refresh = tuple(sorted(set(refresh)))
         self.epochs = dict(epochs or {})
-        self.llm = llm
+        self.llm = llm if self.borrowed_engines is None else BORROWED
         self.artifact_type = artifact_type
         self.language = language
         self.fallback_language = fallback_language
@@ -1084,7 +1102,10 @@ class ScratchDriver:
             )
 
     def _preflight_roles(self, past: bool = False) -> tuple[str, ...]:
-        """Model roles in the declared document and corpus stages in range."""
+        """Model roles in the declared document and corpus stages in range:
+        none when the engines are borrowed, since the run makes none."""
+        if self.borrowed_engines is not None:
+            return ()
         kinds = (
             DOCUMENT_STAGES
             if self._planned_kinds is None
@@ -1422,7 +1443,9 @@ class ScratchDriver:
             "project_stage": DEVELOPMENT_STAGE,
             "engine": {"name": self.llm, "cli_version": None},
             "roles": self._roles(),
-            "cache": os.path.abspath(self.cache_dir),
+            "cache": None
+            if self.cache_dir is None
+            else os.path.abspath(self.cache_dir),
             "corpus": {
                 "folder": os.path.abspath(self.folder),
                 "exclusions": exclusions_record(self.exclusions),
@@ -2322,6 +2345,10 @@ class ScratchDriver:
         return self._client
 
     def _engine(self, role: str) -> Any:
+        if self.borrowed_engines is not None:
+            if role not in self.borrowed_engines:
+                raise ScratchRefused(f"no {role} engine is lent to this run")
+            return self.borrowed_engines[role]
         effort, model = self._engine_settings(role)
         return self.resources.engine(
             role,
@@ -2354,7 +2381,10 @@ class ScratchDriver:
     def _configured_model(self, role: str) -> tuple[str | None, str]:
         """(model, where it is configured) for a role: its own model (the
         extraction model), else $YIZKR_LLM_MODEL; None when neither names
-        one and the engine runs a default of its own."""
+        one and the engine runs a default of its own, and None for a
+        borrowed engine, whose model is its caller's."""
+        if self.borrowed_engines is not None:
+            return None, "the borrowed engine"
         _effort, model = self._engine_settings(role)
         if model:
             return model, "the extraction model (--extract-model)"
