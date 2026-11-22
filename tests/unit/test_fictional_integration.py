@@ -233,13 +233,17 @@ def test_docker_transport_does_not_inherit_archive_or_compose_settings(
     assert env["YIZKR_FICTIONAL_IMAGE"] == "fictional-runner:test"
 
 
-def results(path: Path, cases) -> Path:
+def results(path: Path, cases, seconds=None) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     root = ET.Element("testsuites")
     suite = ET.SubElement(root, "testsuite")
     for class_name, name, outcome in cases:
         case = ET.SubElement(
-            suite, "testcase", classname=class_name, name=name
+            suite,
+            "testcase",
+            classname=class_name,
+            name=name,
+            time=str((seconds or {}).get(name, 1.5)),
         )
         if outcome:
             ET.SubElement(case, outcome)
@@ -247,16 +251,33 @@ def results(path: Path, cases) -> Path:
     return path
 
 
+def ran(observed: dict) -> list[tuple[str, str]]:
+    return [(case["module"], case["name"]) for case in observed["cases"]]
+
+
 def test_required_results_accept_completed_boundary_case(tmp_path):
     path = results(
         tmp_path / "results.xml",
         [(*case, None) for case in lane.REQUIRED_CASES],
     )
-    assert lane.verify_results(path) == {
-        "passed": len(lane.REQUIRED_CASES),
-        "skipped": 0,
-        "cases": list(lane.REQUIRED_CASES),
+    observed = lane.verify_results(path)
+    assert observed["passed"] == len(lane.REQUIRED_CASES)
+    assert observed["skipped"] == 0
+    assert ran(observed) == list(lane.REQUIRED_CASES)
+
+
+def test_required_results_record_each_case_duration(tmp_path):
+    seconds = {
+        name: 10.25 + index
+        for index, (_, name) in enumerate(lane.REQUIRED_CASES)
     }
+    path = results(
+        tmp_path / "results.xml",
+        [(*case, None) for case in lane.REQUIRED_CASES],
+        seconds,
+    )
+    observed = lane.verify_results(path)["cases"]
+    assert {case["name"]: case["seconds"] for case in observed} == seconds
 
 
 @pytest.mark.parametrize("outcome", ["skipped", "failure", "error"])
@@ -321,7 +342,7 @@ def test_group_reports_combine_into_complete_required_results(tmp_path):
 
     observed = lane.verify_results(combined)
     assert observed["passed"] == len(lane.REQUIRED_CASES)
-    assert set(observed["cases"]) == set(lane.REQUIRED_CASES)
+    assert set(ran(observed)) == set(lane.REQUIRED_CASES)
 
 
 def test_combining_reports_cannot_hide_duplicate_or_missing_groups(tmp_path):
@@ -533,6 +554,7 @@ class Docker:
         self.stopped = []
         self.returncodes = {}
         self.reports = {}
+        self.seconds = {}
         self.leftovers = {}
         self.stubborn = set()
         self.ticks = 0
@@ -681,7 +703,7 @@ class Docker:
                 if cases is None:
                     code = 1
                 else:
-                    results(Path(args[-1]), cases)
+                    results(Path(args[-1]), cases, self.seconds)
         elif "ps" in args:
             output = f"{project}-checks\n"
         elif "inspect" in args:
@@ -765,7 +787,7 @@ def test_success_runs_both_groups_and_requires_complete_combined_evidence(
     )
     assert docker.evidence()["dirty_code_refused"] is True
     observed = lane.verify_results(docker.state / "results.xml")
-    assert set(observed["cases"]) == set(lane.REQUIRED_CASES)
+    assert set(ran(observed)) == set(lane.REQUIRED_CASES)
     for name, expected in lane.GROUPS.items():
         assert docker.evidence(name)["status"] == "passed"
         assert docker.evidence(name)["runtime_snapshot_commit"] == "f" * 40
@@ -773,20 +795,66 @@ def test_success_runs_both_groups_and_requires_complete_combined_evidence(
         observed = lane.verify_results(
             docker.state / name / "results.xml", expected
         )
-        assert set(observed["cases"]) == set(expected)
+        assert set(ran(observed)) == set(expected)
         if name == "assignments":
             assert len(observed["cases"]) == 3
             assert all(
                 module.endswith(".test_assignment_writes")
-                for module, _ in observed["cases"]
+                for module, _ in ran(observed)
             )
         else:
             assert len(observed["cases"]) == len(lane.REQUIRED_CASES) - 3
             assert all(
                 not module.endswith(".test_assignment_writes")
-                for module, _ in observed["cases"]
+                for module, _ in ran(observed)
             )
     docker.assert_clean()
+
+
+def test_run_records_case_and_group_durations_and_reports_slowest_first(
+    docker, monkeypatch, capsys, tmp_path
+):
+    summary = tmp_path / "job-summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    docker.seconds = {
+        name: 5.0 * index
+        for index, (_, name) in enumerate(lane.REQUIRED_CASES)
+    }
+
+    lane.execute("run", docker.state)
+
+    assert docker.evidence()["setup_seconds"] >= 0
+    for group, cases in lane.GROUPS.items():
+        recorded = docker.evidence(group)
+        assert {
+            case["name"]: case["seconds"]
+            for case in recorded["checks"]["cases"]
+        } == {name: docker.seconds[name] for _, name in cases}
+        for phase in ("stack_seconds", "checks_seconds", "teardown_seconds"):
+            assert 0 <= recorded[phase] <= recorded["elapsed_seconds"]
+    printed = capsys.readouterr().out
+    slowest = sorted(docker.seconds, key=docker.seconds.get, reverse=True)
+    shown = [printed.index(name) for name in slowest[: lane.SLOWEST]]
+    assert shown == sorted(shown)
+    assert not any(name in printed for name in slowest[lane.SLOWEST :])
+    assert summary.read_text()
+    assert summary.read_text() in printed
+
+
+def test_failed_run_still_reports_the_durations_it_recorded(
+    docker, monkeypatch, tmp_path
+):
+    summary = tmp_path / "job-summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    completed, failed = list(lane.GROUPS)[0], list(lane.GROUPS)[-1]
+    docker.returncodes[failed] = 1
+
+    with pytest.raises(lane.LaneError):
+        lane.execute("run", docker.state)
+
+    report = summary.read_text()
+    assert all(name in report for _, name in lane.GROUPS[completed])
+    assert not any(name in report for _, name in lane.GROUPS[failed])
 
 
 def test_sequential_mode_keeps_both_fresh_groups_and_all_required_cases(

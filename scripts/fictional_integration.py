@@ -104,6 +104,8 @@ GROUPS = {
         if not case[0].endswith(".test_assignment_writes")
     ),
 }
+# The timing report lists this many of the slowest completed cases.
+SLOWEST = 10
 SOURCES = (
     "pyproject.toml",
     "uv.lock",
@@ -282,6 +284,14 @@ def runtime_code_evidence(output: str) -> dict:
     return value
 
 
+def case_seconds(case: ET.Element) -> float | None:
+    """pytest's recorded time: setup, call and teardown of one case."""
+    try:
+        return round(float(case.get("time")), 3)
+    except (TypeError, ValueError):
+        return None
+
+
 def verify_results(path: Path, required=None) -> dict:
     """A zero pytest exit alone does not prove the intended checks ran."""
     try:
@@ -306,7 +316,14 @@ def verify_results(path: Path, required=None) -> dict:
             )
     if len(observed) != len(required):
         raise LaneError("unexpected integration case ran")
-    return {"passed": len(cases), "skipped": 0, "cases": observed}
+    return {
+        "passed": len(cases),
+        "skipped": 0,
+        "cases": [
+            {"module": module, "name": name, "seconds": case_seconds(case)}
+            for (module, name), case in zip(observed, cases, strict=True)
+        ],
+    }
 
 
 @contextmanager
@@ -370,6 +387,7 @@ class Group:
         self.state, self.compose = state, compose
         self.process = None
         self.started = None
+        self.checks_started = None
         self.finished = False
         self.cleaned = False
         self.evidence = {
@@ -384,6 +402,7 @@ def start_checks(group: Group, env: dict) -> None:
         module.replace(".", "/") + ".py::" + name
         for module, name in group.cases
     ]
+    group.checks_started = time.monotonic()
     with (group.state / "tests.log").open("w") as log:
         group.process = subprocess.Popen(
             [
@@ -440,6 +459,9 @@ def wait_checks(groups: list[Group], docker, env) -> None:
             group.process.wait(timeout=10)
             group.finished = True
             group.evidence["pytest_exit_code"] = code
+            group.evidence["checks_seconds"] = round(
+                time.monotonic() - group.checks_started, 3
+            )
             print(f"Fictional integration group: {group.name}", flush=True)
             print((group.state / "tests.log").read_text(), end="", flush=True)
             if code:
@@ -529,6 +551,7 @@ def cleanup_groups(
             except (OSError, subprocess.SubprocessError) as reap_error:
                 group.evidence["process_cleanup_error"] += f"; {reap_error}"
     for group in pending:
+        teardown_started = time.monotonic()
         if diagnostics and group.cases:
             try:
                 if (
@@ -581,14 +604,76 @@ def cleanup_groups(
         if not clean:
             group.evidence["status"] = "failed"
         if group.started is not None:
-            group.evidence["elapsed_seconds"] = round(
-                time.monotonic() - group.started, 3
+            now = time.monotonic()
+            group.evidence["teardown_seconds"] = round(
+                now - teardown_started, 3
             )
+            group.evidence["elapsed_seconds"] = round(now - group.started, 3)
         group.cleaned = True
 
 
 def write_evidence(path: Path, evidence: dict) -> None:
     path.write_text(json.dumps(evidence, indent=2) + "\n")
+
+
+def seconds_text(value) -> str:
+    return "-" if value is None else f"{value:.0f}"
+
+
+def timing_report(evidence: dict) -> str:
+    """Markdown summary of the phase and case durations a run recorded."""
+    lines = [
+        "### Fictional lane timings",
+        "",
+        f"Wall time {seconds_text(evidence.get('elapsed_seconds'))} s; "
+        "staging, image build and code admission before the first stack "
+        f"{seconds_text(evidence.get('setup_seconds'))} s.",
+        "",
+        "| Group | Stack start | Checks | Teardown | Total |",
+        "| --- | ---: | ---: | ---: | ---: |",
+    ]
+    cases = []
+    for name, group in evidence["groups"].items():
+        lines.append(
+            f"| {name} | "
+            + " | ".join(
+                seconds_text(group.get(key))
+                for key in (
+                    "stack_seconds",
+                    "checks_seconds",
+                    "teardown_seconds",
+                    "elapsed_seconds",
+                )
+            )
+            + " |"
+        )
+        checks = group.get("checks", {})
+        cases.extend((name, case) for case in checks.get("cases", ()))
+    cases.sort(key=lambda item: -(item[1]["seconds"] or 0))
+    lines += [
+        "",
+        f"The {min(SLOWEST, len(cases))} slowest of {len(cases)} completed "
+        "cases, in seconds. A group's first case includes its bootstrap.",
+        "",
+        "| Seconds | Group | Case |",
+        "| ---: | --- | --- |",
+    ]
+    for name, case in cases[:SLOWEST]:
+        module = case["module"].rpartition(".")[2]
+        lines.append(
+            f"| {seconds_text(case['seconds'])} | {name} | "
+            f"{module}::{case['name']} |"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def report_timings(evidence: dict) -> None:
+    """Print the timings; a GitHub job summary receives them as well."""
+    report = timing_report(evidence)
+    print(report, end="", flush=True)
+    if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
+        with suppress(OSError), Path(summary).open("a") as stream:
+            stream.write(report)
 
 
 def execute(command: str, state: Path, *, sequential=False) -> None:
@@ -756,6 +841,9 @@ def execute(command: str, state: Path, *, sequential=False) -> None:
                 for group in active:
                     group.cleaned = False
                     group.started = time.monotonic()
+                    evidence.setdefault(
+                        "setup_seconds", round(group.started - started, 3)
+                    )
                     group.evidence["teardown"] = "pending"
                     run(
                         [
@@ -795,6 +883,9 @@ def execute(command: str, state: Path, *, sequential=False) -> None:
                             "mutation guard subprocess probe failed"
                         )
                     group.evidence["mutation_guard_probe"] = guard_evidence
+                    group.evidence["stack_seconds"] = round(
+                        time.monotonic() - group.started, 3
+                    )
                     if sequential:
                         start_checks(group, env)
                         wait_checks([group], docker, env)
@@ -863,6 +954,8 @@ def execute(command: str, state: Path, *, sequential=False) -> None:
                     f"{state / 'evidence.json'}",
                     flush=True,
                 )
+                if command == "run":
+                    report_timings(evidence)
             finally:
                 for sig, handler in previous.items():
                     signal.signal(sig, handler)
