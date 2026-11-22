@@ -14,6 +14,7 @@ from yizkr.pipeline.claim_review import (
     ClaimSelection,
     pin_claim_review,
     prepare_claim_review,
+    prepare_source_claims,
     record_claim_decisions,
 )
 from yizkr.pipeline.identity_review import ReviewRefused, ReviewStore
@@ -194,3 +195,37 @@ def test_approved_review_reopens_without_duplicating_generated_concerns(
         assert tuple(c.decision for c in repeated.claims) == decisions
         with pin_claim_review(reopened, repeated):
             pass
+
+
+def test_whole_source_preparation_carries_the_generated_concerns(history):
+    warnings = {(s.artifact_sha1, s.index): s.warnings for s in ends(history)}
+    prepared = prepare_source_claims(
+        history.store,
+        history.request,
+        history.registry,
+        sources=(history.source.sha1,),
+        warnings=warnings,
+    )
+    assert prepared.refusals == ()
+    assert len(prepared.claims) == len(history.batch.claims)
+    # Each returned selection carries the concern the explicit call adds, so
+    # it gives the same proposal there.
+    explicit = prepare_claim_review(
+        history.store,
+        history.request,
+        history.registry,
+        selections=prepared.selections,
+    )
+    assert [c.proposal for c in explicit.claims] == [
+        c.proposal for c in prepared.claims
+    ]
+    selected = prepare_claim_review(
+        history.store,
+        history.request,
+        history.registry,
+        selections=ends(history),
+    )
+    proposals = {c.selection.index: c.proposal for c in prepared.claims}
+    assert all(
+        proposals[c.selection.index] == c.proposal for c in selected.claims
+    )

@@ -5,7 +5,12 @@ from dataclasses import replace
 
 import pytest
 
-from tests.unit.test_claim_review import approve, prepare
+from tests.unit.test_claim_review import (
+    approve,
+    prepare,
+    three_claims,
+    whole,
+)
 from tests.unit.test_claim_review import case as case
 from yizkr.core.claim_applications import SupportReceipt
 from yizkr.core.identity_assignments import RegistryBinding
@@ -110,6 +115,20 @@ def test_exact_receipt_reuses_completed_effect_after_reopen(case, tmp_path):
         SupportReceipt.model_validate_json(receipt.model_dump_json())
         == receipt
     )
+
+
+def test_whole_source_preparation_applies_only_its_prepared_claims(
+    case, tmp_path
+):
+    request = three_claims(case)
+    approve(case, whole(case, request))
+    prepared = whole(case, request)
+    assert len(prepared.claims) == 1 and len(prepared.refusals) == 2
+    result = apply(case, prepared, tmp_path)
+    assert len(result.receipts) == len(prepared.claims)
+    before = snapshot(case)
+    assert apply(case, whole(case, request), tmp_path) == result
+    assert snapshot(case) == before
 
 
 def test_lost_receipt_ack_recovers_exact_publication(

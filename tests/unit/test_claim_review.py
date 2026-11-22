@@ -1019,12 +1019,55 @@ def test_whole_source_prepares_admitted_claims_and_reports_the_rest(case):
     assert selected.claims[0].proposal == prepared.claims[0].proposal
 
 
+def test_whole_source_reports_an_excerpt_the_reading_repeats(case):
+    request = three_claims(case)
+    source = request.sources[0]
+    batch = source.batch.model_copy(deep=True)
+    repeated = batch.claims[0].model_copy(deep=True)
+    repeated.source.transcription_excerpt.text = "Löbig"
+    batch.claims.append(repeated)
+    prepared = whole(case, replace_batch(request, batch))
+    assert [c.selection.index for c in prepared.claims] == [0]
+    assert refused(prepared)[source.artifact_sha1, 3] == (
+        "excerpt_repeated",
+        "support",
+    )
+
+
+@pytest.mark.parametrize(
+    "fault", ["empty", "repeated", "outside", "index", "unnamed"]
+)
+def test_malformed_whole_source_arguments_refuse_the_call(case, fault):
+    sha1 = case.request.sources[0].artifact_sha1
+    absent = ArtifactRef.from_bytes(b"fictional absent source").sha1
+    sources = {
+        "empty": (),
+        "repeated": (sha1, sha1),
+        "outside": (sha1, absent),
+    }.get(fault, (sha1,))
+    warnings = {
+        "index": {(sha1, 1): ("caller note",)},
+        "unnamed": {(absent, 0): ("caller note",)},
+    }.get(fault)
+    with pytest.raises(ReviewRefused) as refusal:
+        prepare_source_claims(
+            case.store,
+            case.request,
+            case.registry,
+            sources=sources,
+            warnings=warnings,
+        )
+    assert type(refusal.value) is ReviewRefused
+    assert stored_claim_proposals(case) == 0
+
+
 @pytest.mark.parametrize(
     ("problem", "code"),
     [
         ("unregistered", "source_not_unique"),
         ("registered_twice", "source_not_unique"),
         ("unbound", "source_unbound"),
+        ("unverifiable", "source_unbound"),
         ("no_reading", "no_reading"),
         ("resolved", "resolved_entities"),
     ],
@@ -1032,6 +1075,20 @@ def test_whole_source_prepares_admitted_claims_and_reports_the_rest(case):
 def test_source_problem_refuses_only_that_source(case, problem, code):
     other = ArtifactRef.from_bytes(b"fictional Stupfield residence note")
     text = "Gustav Löbig lived in Stupfield."
+    first = case.request.sources[0].artifact_sha1
+    residence = {
+        "subject": local("gustav"),
+        "property": "residence",
+        "value": item("stupfield"),
+        "source": {
+            "artifact": other.model_dump(),
+            "transcription_excerpt": {"text": text, "language": "en"},
+        },
+    }
+    # The second claim also fails a check of its own: it cites the first
+    # source. The problem of its source is still the one reported for it.
+    cites_first = copy.deepcopy(residence)
+    cites_first["source"]["artifact"]["sha1"] = first
     batch = ClaimBatch.model_validate(
         {
             "extraction_run": {
@@ -1054,20 +1111,7 @@ def test_source_problem_refuses_only_that_source(case, problem, code):
                     "mention_lines": [1],
                 },
             ],
-            "claims": [
-                {
-                    "subject": local("gustav"),
-                    "property": "residence",
-                    "value": item("stupfield"),
-                    "source": {
-                        "artifact": other.model_dump(),
-                        "transcription_excerpt": {
-                            "text": text,
-                            "language": "en",
-                        },
-                    },
-                }
-            ],
+            "claims": [residence, cites_first],
         }
     )
     reading = Transcription(
@@ -1085,15 +1129,23 @@ def test_source_problem_refuses_only_that_source(case, problem, code):
         )
         return new
 
-    if problem == "registered_twice":
-        case.registry.create(
+    if problem in ("registered_twice", "unverifiable"):
+        binding = case.registry.create(
             {"kind": "source", "sha1": other.sha1},
             source_item(),
             summary="fixture source",
         )
     if problem in ("registered_twice", "unbound"):
         source_item().write()
-    first = case.request.sources[0].artifact_sha1
+    if problem == "unverifiable":
+        # The creation receipt survives without its dispatch record, so the
+        # registry cannot verify the source's binding.
+        (dispatch,) = [
+            title
+            for title in case.wiki._recovery_pages
+            if title.endswith(f"/{binding.intent_key}/dispatch")
+        ]
+        del case.wiki._recovery_pages[dispatch]
     request = replace(
         case.request,
         sources=(
@@ -1106,8 +1158,10 @@ def test_source_problem_refuses_only_that_source(case, problem, code):
     prepared = whole(case, request, sources=(first, other.sha1))
     assert [c.selection.artifact_sha1 for c in prepared.claims] == [first]
     assert [(r.artifact_sha1, r.index, r.code) for r in prepared.refusals] == [
-        (other.sha1, 0, code)
+        (other.sha1, 0, code),
+        (other.sha1, 1, code),
     ]
+    assert stored_claim_proposals(case) == len(prepared.claims)
     context = whole(case, request, sources=(first,))
     assert context.refusals == ()
     assert [c.proposal for c in context.claims] == [

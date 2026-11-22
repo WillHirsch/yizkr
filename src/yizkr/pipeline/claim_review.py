@@ -437,12 +437,8 @@ def _cited(source: ReviewSource, claim: Claim) -> set[str]:
     return cited
 
 
-def _admit_product(source: ReviewSource, claim: Claim) -> None:
-    """Refuse a claim its current products cannot carry, before any effect.
-
-    The checks of the source come first, so they refuse each of its claims
-    alike.
-    """
+def _admit_source(source: ReviewSource) -> None:
+    """Refuse a source whose current products no claim of it can rest on."""
     if source.reading is None:
         raise ClaimRefused("no_reading", "claim source has no current reading")
     if any(e.qid for e in source.batch.entities):
@@ -451,6 +447,10 @@ def _admit_product(source: ReviewSource, claim: Claim) -> None:
             "claim review requires original unresolved local references; "
             "the source's entity records already carry QIDs",
         )
+
+
+def _admit_product(source: ReviewSource, claim: Claim) -> None:
+    """Refuse a claim its source's current products cannot carry."""
     if claim.source.artifact.sha1 != source.artifact_sha1:
         raise ClaimRefused(
             "other_artifact", "claim support cites another artifact"
@@ -539,6 +539,12 @@ def _registered(
         raise ClaimRefused(unbound, authority.unbound[sha1])
 
 
+def _registered_source(authority: _Authority, source: ReviewSource) -> None:
+    _registered(
+        authority, source.artifact_sha1, "source_not_unique", "source_unbound"
+    )
+
+
 def _admit_claim(
     store: ReviewStore,
     registry: CreationRegistry,
@@ -547,10 +553,10 @@ def _admit_claim(
     source: ReviewSource,
     claim: Claim,
 ) -> tuple:
-    """Check one claim against current authority; nothing is stored here."""
-    _registered(
-        authority, source.artifact_sha1, "source_not_unique", "source_unbound"
-    )
+    """Check one claim of a registered source against current authority.
+
+    Nothing is stored here.
+    """
     if isinstance(claim.subject, ArtifactRef):
         _registered(
             authority,
@@ -842,8 +848,13 @@ def prepare_claim_review(
 ) -> PreparedClaimReview:
     """Prepare explicit claims; identity consent is not claim approval.
 
-    The first selected claim that cannot be prepared refuses the whole call
-    with its ClaimRefused, and no claim proposal is stored.
+    Any selected claim that cannot be prepared refuses the whole call with its
+    ClaimRefused, and no claim proposal is stored. The checks of every
+    selection's products run before the checks against current authority,
+    and each phase takes the selections in order, so the claim the refusal
+    names is not necessarily the first selection that fails. An empty or
+    repeated selection, or one absent from current products, raises a plain
+    ReviewRefused.
     """
     if not selections or len(
         {(s.artifact_sha1, s.index) for s in selections}
@@ -865,6 +876,7 @@ def prepare_claim_review(
         selection = _with_concern(
             selection, concerns[selection.artifact_sha1].get(selection.index)
         )
+        _admit_source(source)
         _admit_product(source, claim)
         selected.append((selection, source, claim))
     authority = _authority(
@@ -873,9 +885,12 @@ def prepare_claim_review(
         registry,
         set().union(*(_cited(source, claim) for _, source, claim in selected)),
     )
-    pending = [
-        _admitted(store, registry, authority, *item) for item in selected
-    ]
+    pending = []
+    for selection, source, claim in selected:
+        _registered_source(authority, source)
+        pending.append(
+            _admitted(store, registry, authority, selection, source, claim)
+        )
     # No proposal mutation until every selected claim has passed admission.
     return _proposed(store, request, authority, pending, selections, ())
 
@@ -895,10 +910,13 @@ def prepare_source_claims(
     warnings for a claim, keyed by its source's SHA-1 and its index. Each
     claim is prepared or listed in `refusals` with its reason code, and a
     refused claim stores no proposal and stops no other claim. A problem of
-    one source refuses each of its claims and no other source's. A request
-    that prepare_review refuses, or no established deployment generation,
-    refuses the whole call. The result's selections are its prepared claims',
-    and an explicit preparation of one gives the same proposal.
+    one source (its reading, its entity records, its registration or its
+    creation binding) is checked before any check of a single claim, so it
+    refuses each of that source's claims under its own code and no other
+    source's. A request that prepare_review refuses, or no established
+    deployment generation, refuses the whole call. The result's selections are
+    its prepared claims', and an explicit preparation of one gives the same
+    proposal.
     """
     named = tuple(sources)
     products = {source.artifact_sha1: source for source in request.sources}
@@ -918,9 +936,30 @@ def prepare_source_claims(
         raise ReviewRefused(
             "claim warnings name a claim absent from the named sources"
         )
-    refusals, selected = [], []
+    authority = _authority(
+        store,
+        request,
+        registry,
+        set().union(
+            *(
+                _cited(products[sha1], claim)
+                for sha1 in named
+                for claim in products[sha1].batch.claims
+            )
+        ),
+    )
+    refusals, pending = [], []
     for sha1 in named:
         source = products[sha1]
+        try:
+            _admit_source(source)
+            _registered_source(authority, source)
+        except ClaimRefused as refused:
+            refusals += [
+                ClaimRefusal(sha1, index, refused.code, str(refused))
+                for index in range(len(source.batch.claims))
+            ]
+            continue
         concerns = widowhood_review_notes(source.batch)
         for index, claim in enumerate(source.batch.claims):
             selection = _with_concern(
@@ -933,35 +972,15 @@ def prepare_source_claims(
             )
             try:
                 _admit_product(source, claim)
+                pending.append(
+                    _admitted(
+                        store, registry, authority, selection, source, claim
+                    )
+                )
             except ClaimRefused as refused:
                 refusals.append(
                     ClaimRefusal(sha1, index, refused.code, str(refused))
                 )
-            else:
-                selected.append((selection, source, claim))
-    authority = _authority(
-        store,
-        request,
-        registry,
-        set().union(*(_cited(source, claim) for _, source, claim in selected)),
-    )
-    pending = []
-    for selection, source, claim in selected:
-        try:
-            pending.append(
-                _admitted(store, registry, authority, selection, source, claim)
-            )
-        except ClaimRefused as refused:
-            refusals.append(
-                ClaimRefusal(
-                    selection.artifact_sha1,
-                    selection.index,
-                    refused.code,
-                    str(refused),
-                )
-            )
-    order = {sha1: n for n, sha1 in enumerate(named)}
-    refusals.sort(key=lambda r: (order[r.artifact_sha1], r.index))
     return _proposed(
         store,
         request,
