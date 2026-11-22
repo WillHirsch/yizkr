@@ -289,6 +289,9 @@ SOURCES = {
     "B": ("Query fixture certificate B", "certificate"),
     "C": ("Query fixture certificate C", "certificate"),
     "D": ("Query fixture letter D", "letter"),
+    # a letter with no date of making, which would bound the deaths it
+    # states (yizkr.died_by)
+    "R": ("Query fixture letter R", "letter"),
 }
 UNIVERSE_SOURCES = {
     "card": "registration-card-1945",
@@ -1042,29 +1045,29 @@ RECONCILE = {
 
 def write_reconcile(f: Fixture) -> None:
     for key, (label, kind, aliases) in RECONCILE.items():
-        f.entity(key, label, "reconcile", kind, "D", aliases=aliases)
+        f.entity(key, label, "reconcile", kind, "R", aliases=aliases)
     read = f.reading
-    read("younger", "father", f.item("elder"), "D", excerpt="son of the elder")
-    read("reconcile town", "part_of", f.item("reconcile country"), "D")
+    read("younger", "father", f.item("elder"), "R", excerpt="son of the elder")
+    read("reconcile town", "part_of", f.item("reconcile country"), "R")
     read(
         "elder",
         "date_of_birth",
         time_value(1801, precision="century"),
-        "D",
+        "R",
         excerpt="born last century",
     )
     read(
         "elder",
         "date_of_death",
         time_value(1890, precision="decade"),
-        "D",
+        "R",
         excerpt="died in the nineties",
     )
     read(
         "brother",
         "date_of_death",
         unknown_time,
-        "D",
+        "R",
         excerpt="his late brother",
     )
     for key in ("grandmother a", "grandmother b"):
@@ -1072,7 +1075,7 @@ def write_reconcile(f: Fixture) -> None:
             key,
             "referred_to_as",
             text(APPELLATION, "de"),
-            "D",
+            "R",
             excerpt=f"{APPELLATION} schreibt",
         )
     for key, kind, label, when in (
@@ -1090,15 +1093,15 @@ def write_reconcile(f: Fixture) -> None:
         ),
     ):
         f.make(key, label, "reconcile")
-        f.curated(key, "instance_of", f.vocab(kind), "D")
+        f.curated(key, "instance_of", f.vocab(kind), "R")
         f.curated(
             key,
             "participant",
             f.item("younger"),
-            "D",
+            "R",
             qualifiers=(("object_has_role", f.vocab("principal")),),
         )
-        f.curated(key, "point_in_time", when, "D")
+        f.curated(key, "point_in_time", when, "R")
 
 
 # -- the gallery and the map (R6) -----------------------------------------
@@ -1650,11 +1653,12 @@ def test_the_person_timeline_dates_events_and_periods(fictional_client, graph):
 def test_the_kinship_rows_follow_the_stated_steps_at_their_ranks(
     fictional_client, graph
 ):
-    # the fixture holds the curator's ranks the rows depend on
+    # the fixture holds each step on one side only, as ADR-0018 records an
+    # asserted term, and the curator's ranks the rows depend on
     properties, _ = fictional_client.vocabulary()
     subjects = [graph.qids[kin(key)] for key in KIN]
     claims = fictional_client.fetch_claims(subjects)
-    for subject, prop, value, *_, rank in KINSHIP:
+    for subject, prop, value, term, *_, rank in KINSHIP:
         (statement,) = [
             statement
             for statement in claims[graph.qids[kin(subject)]][properties[prop]]
@@ -1662,6 +1666,14 @@ def test_the_kinship_rows_follow_the_stated_steps_at_their_ranks(
             == graph.qids[kin(value)]
         ]
         assert statement["rank"] == (rank or WikibaseRank.NORMAL).value
+        terms = statement.get("qualifiers", {}).get(
+            properties["kinship_type"], []
+        )
+        assert [snak["datavalue"]["value"] for snak in terms] == (
+            [term] if term else []
+        )
+    nicholas = claims[graph.qids[kin("nicholas-lobig")]]
+    assert properties["relative"] not in nicholas
 
     people = {graph.iri(kin(key)): key.split("-")[0] for key in KIN}
     rows = {
@@ -1870,7 +1882,7 @@ def test_the_reconcile_roster_reads_kinship_dates_and_appellations(
     assert event.event == graph.qids["birth"]
     for reading in (direct, event):
         assert reading.rank == "normal"
-        assert graph.qids["D"] in {
+        assert graph.qids["R"] in {
             source.source
             for reference in reading.references
             for source in reference.sources
