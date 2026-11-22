@@ -457,7 +457,6 @@ class Group:
         self.process = None
         self.started = None
         self.checks_started = None
-        self.finished = False
         self.cleaned = False
         self.evidence = {
             "project": project,
@@ -568,7 +567,6 @@ def finished_checks(groups: list[Group], docker, env) -> list[Group]:
         if code is None:
             continue
         group.process.wait(timeout=10)
-        group.finished = True
         group.evidence["pytest_exit_code"] = code
         group.evidence["checks_seconds"] = round(
             time.monotonic() - group.checks_started, 3
