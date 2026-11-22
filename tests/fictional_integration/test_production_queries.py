@@ -18,16 +18,25 @@ Legacy `spouse` statements and the curator-made birth and death events the
 readers still read are written in the same way.
 
 Every case but the last asserts about the fixture's own items alone, so
-they share a stack with other required cases. The last asserts over its
-whole stack, which holds the vocabulary and this fixture only, and runs in
-a group of its own (scripts/fictional_integration.py).
+they share a stack with other required cases. The unclassified-entities
+rows are the exception: they count every entity on the stack under its
+hint, so their one row a hint and their order hold over any data, the
+counts of the fixture's own hints assume that no other case on the stack
+states them, and the empty hint's count is a lower bound. The last case
+asserts over its whole stack, which holds the vocabulary and this fixture
+only, and runs in a group of its own (scripts/fictional_integration.py).
+
+An exclusion is checked against the statements the API holds, read back
+first, so that none passes by being absent, and rows are compared as
+multisets, or as sets where the query's own DISTINCT or a check that each
+row is one statement or hint makes them one.
 """
 
 from __future__ import annotations
 
 import time
 import urllib.parse
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Callable
 
 import pytest
@@ -1108,15 +1117,16 @@ def write_reconcile(f: Fixture) -> None:
 #
 # A photograph the family booklet embeds and a studio portrait held on its
 # own, each with its media file; Flörburg, with coordinates, where Klara
-# was born and lived and whence she emigrated, and Moshausen, with
-# coordinates and nothing connected to it.
+# was born and lived, whence she emigrated and where Eugen died, and
+# Moshausen, with coordinates and nothing connected to it. The
+# coordinates are arbitrary round values: the universe gives none.
 
 BOOKLET_IMAGE = UNIVERSE["letter-excerpt-1939"].title
 MEDIA = {
     "booklet image": "Our Family from Germany page 6 image 1.png",
     "studio": "Studio portrait of the Löbig family.png",
 }
-COORDINATES = {"floerburg": (50.3311, 9.2631), "moshausen": (50.7017, 8.4122)}
+COORDINATES = {"floerburg": (50.0, 9.0), "moshausen": (51.0, 8.0)}
 
 
 def write_gallery_and_map(f: Fixture) -> None:
@@ -1140,6 +1150,15 @@ def write_gallery_and_map(f: Fixture) -> None:
     f.reading("klara", "place_of_birth", f.item("floerburg"), "A")
     f.reading("klara", "residence", f.item("floerburg"), "A")
     f.reading("klara emigrates", "location", f.item("floerburg"), "A")
+    died = says("eugen-loebig", "burial-register-1909", "place_of_death")
+    f.reading(
+        "eugen",
+        "place_of_death",
+        f.item("floerburg"),
+        "burial",
+        excerpt=died.excerpt,
+        language="de",
+    )
 
 
 def write_fixture(client) -> Fixture:
@@ -1218,6 +1237,23 @@ def rows_of(client, name: str) -> list[dict]:
 
 def cell(row: dict, name: str) -> str | None:
     return row[name]["value"] if name in row else None
+
+
+def statements_of(client, graph: Fixture, key: str) -> dict[str, list[dict]]:
+    """The statements the API holds on fixture item `key`, by property
+    key."""
+    properties, _ = client.vocabulary()
+    key_of = {pid: name for name, pid in properties.items()}
+    qid = graph.qids[key]
+    return {
+        key_of[pid]: held
+        for pid, held in client.fetch_claims([qid])[qid].items()
+    }
+
+
+def item_of(snak: dict) -> str:
+    """The QID an item value names, on a statement or a qualifier snak."""
+    return snak.get("mainsnak", snak)["datavalue"]["value"]["id"]
 
 
 def report(client) -> list:
@@ -1370,7 +1406,6 @@ def test_the_disagreement_report_pairs_what_different_artifacts_state(
     fictional_client, graph
 ):
     client = fictional_client
-    properties, _ = client.vocabulary()
     found = report(client)
     subjects = {graph.qids[key] for key in REPORT_SUBJECTS}
     rows = [row for row in found if row.entity_qid in subjects]
@@ -1385,7 +1420,7 @@ def test_the_disagreement_report_pairs_what_different_artifacts_state(
         )
 
     # each disagreement listed once, and nothing else about the subjects
-    assert sorted(map(key, rows), key=repr) == sorted(REPORTED, key=repr)
+    assert Counter(map(key, rows)) == Counter(REPORTED)
     for row in rows:
         for side in (row.a, row.b):
             assert sources(graph, side) == STATED_BY[shown(graph, side)]
@@ -1402,7 +1437,7 @@ def test_the_disagreement_report_pairs_what_different_artifacts_state(
     # what the report leaves out is in the graph: the correction from the
     # same artifact, the page beside its own artifact, the deprecated
     # place, one birth name in two spellings, and the nicknames
-    claims = client.fetch_claims([graph.qids["person"]])[graph.qids["person"]]
+    person = statements_of(client, graph, "person")
     for prop in (
         "date_of_death",
         "place_of_death",
@@ -1410,35 +1445,61 @@ def test_the_disagreement_report_pairs_what_different_artifacts_state(
         "birth_name",
         "nickname",
     ):
-        assert len(claims[properties[prop]]) == 2, prop
+        assert len(person[prop]) == 2, prop
         assert not [
             row
             for row in rows
             if graph.key_of(row.entity) == "person" and row.property == prop
         ], prop
-    assert len(claims[properties["residence"]]) == 4
-    # refinements: a span never faces a date inside it
+    assert len(person["residence"]) == 4
+    # a curator's rank is an overlay: the preferred day is listed beside
+    # the day it outranks, and the deprecated place of birth is left out
+    assert len(person["date_of_birth"]) == 3
+    assert [
+        statement["mainsnak"]["datavalue"]["value"]["time"][1:11]
+        for statement in person["date_of_birth"]
+        if statement["rank"] == PREFERRED.value
+    ] == ["1919-01-07"]
+    assert [
+        item_of(statement)
+        for statement in person["place_of_birth"]
+        if statement["rank"] == DEPRECATED.value
+    ] == [graph.qids["other town"]]
+    # refinements: a span never faces a date inside it, though the second
+    # emigration holds two of each
+    second = statements_of(client, graph, "second emigration")
+    assert {
+        prop: len(second[prop]) for prop in ("point_in_time", "start_time")
+    } == {
+        "point_in_time": 2,
+        "start_time": 2,
+    }
     assert not [
         row for row in rows if graph.key_of(row.entity) == "second emigration"
     ]
     assert not {
         shown(graph, side) for row in rows for side in (row.a, row.b)
     } & {"1919", "1938", "19th century", "1863"}
+    # the letter holds its dateline and the curators' two dates of making:
+    # July 1939 holds 28 July 1939, so each is listed beside 1940 alone
+    assert len(statements_of(client, graph, "D")["inception"]) == 3
 
     # a century spans the years Wikibase counts in it: 1900 lies inside
     # the 19th, and 1800 does not
-    assert {
+    assert Counter(
         frozenset({dated(graph, row.a), dated(graph, row.b)})
         for row in found
         if row.entity_qid == graph.qids["century person"]
-    } == {
-        frozenset({"1801-01-01 per A", "1800-01-01 per C"}),
-        frozenset({"1900-01-01 per B", "1800-01-01 per C"}),
-    }
+    ) == Counter(
+        {
+            frozenset({"1801-01-01 per A", "1800-01-01 per C"}),
+            frozenset({"1900-01-01 per B", "1800-01-01 per C"}),
+        }
+    )
 
     # each end of a period is compared through its own range: A's ranges
     # hold C's days, which differ from them only in resolution
-    assert {
+    assert Counter(
         (
             row.property,
             row.qualifier,
@@ -1446,54 +1507,65 @@ def test_the_disagreement_report_pairs_what_different_artifacts_state(
         )
         for row in found
         if row.entity_qid == graph.qids["period person"]
-    } == {
-        (
-            "spouse",
-            "start_time",
-            frozenset(
-                {
-                    "1946-01-01 [1946-01-01..1947-01-01] per A",
-                    "1948-01-01 per B",
-                }
+    ) == Counter(
+        {
+            (
+                "spouse",
+                "start_time",
+                frozenset(
+                    {
+                        "1946-01-01 [1946-01-01..1947-01-01] per A",
+                        "1948-01-01 per B",
+                    }
+                ),
             ),
-        ),
-        (
-            "spouse",
-            "start_time",
-            frozenset({"1947-02-08 per C", "1948-01-01 per B"}),
-        ),
-        (
-            "spouse",
-            "end_time",
-            frozenset(
-                {
-                    "1956-01-01 [1956-01-01..1957-01-01] per A",
-                    "1955-01-01 per B",
-                }
+            (
+                "spouse",
+                "start_time",
+                frozenset({"1947-02-08 per C", "1948-01-01 per B"}),
             ),
-        ),
-        (
-            "spouse",
-            "end_time",
-            frozenset({"1955-01-01 per B", "1957-01-02 per C"}),
-        ),
-    }
+            (
+                "spouse",
+                "end_time",
+                frozenset(
+                    {
+                        "1956-01-01 [1956-01-01..1957-01-01] per A",
+                        "1955-01-01 per B",
+                    }
+                ),
+            ),
+            (
+                "spouse",
+                "end_time",
+                frozenset({"1955-01-01 per B", "1957-01-02 per C"}),
+            ),
+        }
+    )
 
     # the place of birth is compared through containment at any time,
-    # never through a deprecated edge or one no source states
-    born = {
-        row.entity_qid: frozenset(
-            graph.key_of(side.value.term.value) for side in (row.a, row.b)
+    # never through a deprecated edge or one no source states; each of the
+    # three holds two
+    for key in ("refined", "listed", "run only"):
+        held = statements_of(client, graph, key)["place_of_birth"]
+        assert len(held) == 2, key
+    born = Counter(
+        (
+            graph.key_of(row.entity),
+            frozenset(
+                graph.key_of(side.value.term.value) for side in (row.a, row.b)
+            ),
         )
         for row in found
         if row.property == "place_of_birth"
         and row.entity_qid
         in {graph.qids[key] for key in ("refined", "listed", "run only")}
-    }
-    assert born == {
-        graph.qids["listed"]: frozenset({"hamlet", "decoy"}),
-        graph.qids["run only"]: frozenset({"hamlet", "unstated"}),
-    }
+    )
+    assert born == Counter(
+        {
+            ("listed", frozenset({"hamlet", "decoy"})),
+            ("run only", frozenset({"hamlet", "unstated"})),
+        }
+    )
 
 
 def test_the_containment_edges_carry_their_rank_and_source(
@@ -1545,13 +1617,34 @@ def event_types(row: dict) -> tuple[str, ...]:
 
 
 def test_the_person_timeline_dates_events_and_periods(fictional_client, graph):
-    rows = rows_of(fictional_client, "person-timeline")
+    client = fictional_client
+    properties, items = client.vocabulary()
+    rows = rows_of(client, "person-timeline")
 
     def of(key: str) -> list[dict]:
         return [
             row for row in rows if row["person"]["value"] == graph.iri(key)
         ]
 
+    # the event holds each of its types and participants at its rank, the
+    # deprecated ones among them
+    event = statements_of(client, graph, "held")
+    assert Counter(
+        (item_of(statement), statement["rank"])
+        for statement in event["instance_of"]
+    ) == Counter(
+        {
+            (items["imprisonment"], "normal"),
+            (items["event"], "preferred"),
+            (items["military_service"], "deprecated"),
+        }
+    )
+    assert Counter(
+        (graph.key_of(item_of(statement)), statement["rank"])
+        for statement in event["participant"]
+    ) == Counter(
+        {("leopold", "preferred"), ("ida", "normal"), ("felix", "deprecated")}
+    )
     # each participant but a deprecated one gets each of the event's rows
     # once: a preferred participant or type hides no other, a second type
     # adds no row, and a deprecated type is not named
@@ -1582,7 +1675,21 @@ def test_the_person_timeline_dates_events_and_periods(fictional_client, graph):
     )
 
     # a death event dates its principal's death, and no other
-    # participant's timeline
+    # participant's timeline: it names Eugen its principal and Sebastian a
+    # witness
+    role = properties["object_has_role"]
+    assert Counter(
+        (
+            graph.key_of(item_of(statement)),
+            tuple(map(item_of, statement["qualifiers"][role])),
+        )
+        for statement in statements_of(client, graph, "death")["participant"]
+    ) == Counter(
+        {
+            ("eugen", (items["principal"],)),
+            ("sebastian", (items["witness"],)),
+        }
+    )
     assert [
         (
             event_types(row),
@@ -1596,7 +1703,6 @@ def test_the_person_timeline_dates_events_and_periods(fictional_client, graph):
     # each end of a period with its own range, a point in time beside them
     # with none, and a residence's point in time with its statement's
     # range; each date names the qualifiers that bound it
-    properties, _ = fictional_client.vocabulary()
     key_of = {pid: key for key, pid in properties.items()}
 
     def bound(name: str, row: dict) -> str:
@@ -1615,7 +1721,7 @@ def test_the_person_timeline_dates_events_and_periods(fictional_client, graph):
     def day(name: str, row: dict) -> str | None:
         return row[name]["value"][:10] if name in row else None
 
-    assert {
+    assert Counter(
         (
             cell(row, "what"),
             day("date", row),
@@ -1625,16 +1731,20 @@ def test_the_person_timeline_dates_events_and_periods(fictional_client, graph):
             graph.key_of(row["source"]["value"]),
         )
         for row in period
-    } == {
-        (start, "1946-01-01", "9", "1946-01-01", "1947-01-01", "A"),
-        (end, "1956-01-01", "9", "1956-01-01", "1957-01-01", "A"),
-        (observed, "1950-01-01", "9", None, None, "A"),
-        (start, "1948-01-01", "9", None, None, "B"),
-        (end, "1955-01-01", "9", None, None, "B"),
-        (start, "1947-02-08", "11", None, None, "C"),
-        (end, "1957-01-02", "11", None, None, "C"),
-        (lived, "1938-01-01", "9", "1938-01-01", "1939-01-01", "A"),
-    }
+    ) == Counter(
+        {
+            (start, "1946-01-01", "9", "1946-01-01", "1947-01-01", "A"),
+            (end, "1956-01-01", "9", "1956-01-01", "1957-01-01", "A"),
+            (observed, "1950-01-01", "9", None, None, "A"),
+            (start, "1948-01-01", "9", None, None, "B"),
+            (end, "1955-01-01", "9", None, None, "B"),
+            (start, "1947-02-08", "11", None, None, "C"),
+            (end, "1957-01-02", "11", None, None, "C"),
+            (lived, "1938-01-01", "9", "1938-01-01", "1939-01-01", "A"),
+        }
+    )
+    # the qualifiers that bound each kind of date, alike on every source's
+    # row
     assert {
         (
             cell(row, "what"),
@@ -1696,10 +1806,10 @@ def statement_iri(client, guid: str) -> str:
 
 def test_the_review_queues_list_what_needs_a_reviewer(fictional_client, graph):
     client = fictional_client
-    properties, _ = client.vocabulary()
-    key_of = {pid: key for key, pid in properties.items()}
+    properties, items = client.vocabulary()
 
     def queue(*keys: str, scope=()) -> dict[str, dict]:
+        """The queue's rows about `keys`, by statement: one row each."""
         template = load_templates()["under-witnessed-statements"]
         if scope:
             # the header's documented scope by property
@@ -1708,18 +1818,17 @@ def test_the_review_queues_list_what_needs_a_reviewer(fictional_client, graph):
                 "WHERE {", f"WHERE {{\n  VALUES ?prop {{ {values} }}", 1
             )
         wanted = {graph.iri(key) for key in keys}
-        return {
-            row["statement"]["value"]: row
+        rows = [
+            row
             for row in select(client, template)
             if row["subject"]["value"] in wanted
-        }
+        ]
+        by_statement = {row["statement"]["value"]: row for row in rows}
+        assert len(by_statement) == len(rows)
+        return by_statement
 
     def statements(key: str) -> dict[str, list[dict]]:
-        qid = graph.qids[key]
-        return {
-            key_of[pid]: held
-            for pid, held in client.fetch_claims([qid])[qid].items()
-        }
+        return statements_of(client, graph, key)
 
     def value(statement: dict) -> object:
         held = statement["mainsnak"]["datavalue"]["value"]
@@ -1800,6 +1909,13 @@ def test_the_review_queues_list_what_needs_a_reviewer(fictional_client, graph):
         if statement["id"] != witnessed["id"]
     }
     # an artifact's or a run's own kind is no machine reading
+    own = [graph.qids[key] for key in (*graph.sources, *graph.run_keys)]
+    kinds = client.fetch_claims(own)
+    assert [
+        qid
+        for qid in own
+        if len(kinds[qid].get(properties["instance_of"], [])) != 1
+    ] == []
     assert queue(*graph.sources, *graph.run_keys) == {}
     # and no statement of the fixture is unreferenced
     everything = {graph.iri(key) for key in graph.qids}
@@ -1829,9 +1945,25 @@ def test_the_review_queues_list_what_needs_a_reviewer(fictional_client, graph):
     assert airship["example"] == graph.iri("airship")
     assert airship["exampleLabel"] == graph.labels["airship"]
     # a deprecated hint and a deprecated kind are not read
+    craft, liner = statements("craft"), statements("liner")
+    assert [
+        (statement["mainsnak"]["datavalue"]["value"], statement["rank"])
+        for statement in craft["type_hint"]
+    ] == [("aircraft", "deprecated")]
+    assert [
+        (item_of(statement), statement["rank"])
+        for statement in liner["instance_of"]
+    ] == [(items["unclassified_entity"], "deprecated")]
+    assert [
+        statement["mainsnak"]["datavalue"]["value"]
+        for statement in liner["type_hint"]
+    ] == ["ocean liner"]
     assert "aircraft" not in unclassified
     assert "ocean liner" not in unclassified
-    # the unhinted entity and the craft, under the empty hint
+    # the unhinted entity and the craft, under the empty hint: a lower
+    # bound, since the empty hint counts every unclassified entity on the
+    # stack held without a hint, and the writer the other cases use can
+    # hold one (a source's mention of an enclosure)
     assert int(unclassified[""]["entities"]) >= 2
     # ordered by how many entities carry the hint
     counts = [int(row["entities"]["value"]) for row in found]
@@ -1919,35 +2051,43 @@ def test_the_gallery_and_the_map_name_media_and_connections(
     fictional_client, graph
 ):
     concept = fictional_client.config.concept_uri
-    photos = {
-        graph.key_of(row["photo"]["value"]): (
+    photos = Counter(
+        (
+            graph.key_of(row["photo"]["value"]),
             cell(row, "photoLabel"),
             cell(row, "image"),
             cell(row, "containerLabel"),
         )
         for row in rows_of(fictional_client, "photo-gallery")
         if graph.key_of(row["photo"]["value"]) in MEDIA
-    }
+    )
     file_path = f"{concept}/wiki/Special:FilePath/"
-    assert photos == {
-        "booklet image": (
-            BOOKLET_IMAGE,
-            file_path + urllib.parse.quote(MEDIA["booklet image"], safe=""),
-            graph.labels["booklet"],
-        ),
-        "studio": (
-            graph.labels["studio"],
-            file_path + urllib.parse.quote(MEDIA["studio"], safe=""),
-            None,
-        ),
-    }
+    assert photos == Counter(
+        {
+            (
+                "booklet image",
+                BOOKLET_IMAGE,
+                file_path
+                + urllib.parse.quote(MEDIA["booklet image"], safe=""),
+                graph.labels["booklet"],
+            ),
+            (
+                "studio",
+                graph.labels["studio"],
+                file_path + urllib.parse.quote(MEDIA["studio"], safe=""),
+                None,
+            ),
+        }
+    )
 
     places = [
         row
         for row in rows_of(fictional_client, "places-map")
         if graph.key_of(row["place"]["value"]) in COORDINATES
     ]
-    assert {
+    # a row for each connecting statement: Klara's birth and her residence
+    # are two
+    assert Counter(
         (
             graph.key_of(row["place"]["value"]),
             graph.key_of(row["connection"]["value"])
@@ -1955,11 +2095,14 @@ def test_the_gallery_and_the_map_name_media_and_connections(
             else None,
         )
         for row in places
-    } == {
-        ("floerburg", "klara"),
-        ("floerburg", "klara emigrates"),
-        ("moshausen", None),
-    }
+    ) == Counter(
+        {
+            ("floerburg", "klara"): 2,
+            ("floerburg", "klara emigrates"): 1,
+            ("floerburg", "eugen"): 1,
+            ("moshausen", None): 1,
+        }
+    )
     for row in places:
         point = row["coords"]["value"]
         assert point.startswith("Point(") and point.endswith(")")
@@ -1974,12 +2117,33 @@ def test_every_production_query_runs_and_no_statement_is_unreferenced(
     """Over the whole stack: every production query runs, and every query
     but two gives rows for the fixture. The identity-provenance query lists
     accepted and overridden identity origins, which the fixture holds none
-    of (the write/query case checks its rows), and no statement on the
-    stack, the vocabulary's and the fixture's, lacks a reference."""
+    of (the write/query case checks its rows), and the
+    unreferenced-statements query finds no statement on the stack, the
+    vocabulary's and the fixture's, without a reference; written without
+    one, a further statement is then its one row."""
+    client = fictional_client
     templates = load_templates()
     for name in templates:
-        rows = rows_of(fictional_client, name)
+        rows = rows_of(client, name)
         if name == "unreferenced-statements":
             assert rows == []
         elif name != "identity-provenance":
             assert rows, name
+
+    properties, _ = client.vocabulary()
+    item = client.wbi.item.new()
+    item.labels.set("en", "Unreferenced Fixture Item")
+    item.descriptions.set("en", "fictional unreferenced-statements fixture")
+    item.claims.add(text("Unreferenced Fixture Nick")(properties["nickname"]))
+    written = item.write(summary="fictional production-query fixture")
+    (statement,) = written.claims.get(properties["nickname"])
+    synchronize(client)
+    assert [
+        (row["entity"]["value"], row["statement"]["value"])
+        for row in rows_of(client, "unreferenced-statements")
+    ] == [
+        (
+            f"{client.config.concept_uri}/entity/{written.id}",
+            statement_iri(client, statement.id),
+        )
+    ]
