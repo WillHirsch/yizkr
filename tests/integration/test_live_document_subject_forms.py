@@ -203,8 +203,8 @@ def merged(client, tmp_path_factory):
 
 @pytest.fixture(scope="module")
 def exported(client, tmp_path_factory):
-    """The export, registered by its hash and written through BatchWriter:
-    (the export's item, the write's result)."""
+    """The write's result for the export, registered by its hash and
+    written through BatchWriter."""
     path = tmp_path_factory.mktemp("export") / f"integration-{MARK}.ged"
     path.write_bytes(EXPORT.encode())
     registered = Registrar(client).register_artifact(
@@ -220,7 +220,7 @@ def exported(client, tmp_path_factory):
         BatchWriter(client, artifact_qids={ref.sha1: registered.artifact_qid}),
         batch,
     )
-    return registered.artifact_qid, result
+    return result
 
 
 def statements(client, qid: str, key: str) -> list[dict]:
@@ -250,7 +250,7 @@ def test_the_nonprivileged_export_leaves_the_container_s_claim_out(
     if not (DEPLOY / "docker-compose.yml").is_file():
         pytest.skip("run from the repo root")
     booklet, image, image_qid = placed
-    _export_qid, result = exported
+    result = exported
     media_item = result.created_items["md1"]
     where = {booklet.ref.sha1: {image.sha1}}
     write_mapped(
