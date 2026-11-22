@@ -106,9 +106,8 @@ def claim(artifact: ArtifactRef, page: str) -> dict:
 def fixture_batch(artifact: ArtifactRef, started_at: str) -> ClaimBatch:
     """The fixture's batch as the run started at `started_at` gives it,
     under a person label that carries a marker: six hex digits of a hash
-    over the claims, the cited SHA-1 replaced by "A", as
-    test_live_period_dates.py's write_fixture marks its labels, and over
-    the module's marker (conftest.fixture_mark: the writer's source and the
+    over the claims, the cited SHA-1 replaced by "A", and over the
+    module's marker (conftest.fixture_mark: the writer's source and the
     session's random bytes). The writer finds a local item by its label,
     so a version of the fixture with other claims would otherwise write
     onto an earlier version's person and see its statements beside its

@@ -115,10 +115,9 @@ TEMPLATE = """\
 
 def _marker() -> str:
     """Six hex digits of a hash over the export's text and the batch the
-    adapter makes of it, as test_live_period_dates.py's write_fixture
-    marks its labels. The writer finds an item by its label, so a version
-    of the fixture, or of the adapter, that gives other statements for
-    the export would otherwise write onto the items an earlier version
+    adapter makes of it. The writer finds an item by its label, so a
+    version of the fixture, or of the adapter, that gives other statements
+    for the export would otherwise write onto the items an earlier version
     wrote, and see their statements beside its own. With the marker each
     version writes items of its own. The hash also covers the module's
     marker (conftest.fixture_mark: the writer's and the adapter's source

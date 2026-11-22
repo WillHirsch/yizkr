@@ -139,19 +139,19 @@ def born(role: str, value: dict, artifact: ArtifactRef, *qualifiers) -> dict:
 def write_fixture(client, artifacts: dict[str, str], claims: list[dict]):
     """Write the fixture's claims under item labels that carry a marker: six
     hex digits of a hash over the claims, each cited SHA-1 replaced by its
-    artifact's letter in `artifacts`, as test_live_period_dates.py's
-    write_fixture marks its own. The writer finds a local item by its label, so
-    a version of the fixture with other claims would otherwise write onto an
-    earlier version's items and see their statements beside its own. With the
-    marker each version writes items of its own, and a re-run of one version
-    finds its own items again. The hash also covers the module's marker
-    (conftest.fixture_mark: the writer's source and the session's random
-    bytes), so each session writes items of its own: what an earlier session
-    wrote, a live mutant's run included, never meets it, and a re-run within
-    the session finds its own items again. The curator ranks set afterwards are
-    not in the marker. Its spouse claims go through legacy_spouse_writes,
-    as the statements an instance holds from before ADR-0036, which the
-    readers read until #520. Returns the write's result."""
+    artifact's letter in `artifacts`. The writer finds a local item by its
+    label, so a version of the fixture with other claims would otherwise write
+    onto an earlier version's items and see their statements beside its own.
+    With the marker each version writes items of its own, and a re-run of one
+    version finds its own items again. The hash also covers the module's
+    marker (conftest.fixture_mark: the writer's source and the session's
+    random bytes), so each session writes items of its own: what an earlier
+    session wrote, a live mutant's run included, never meets it, and a re-run
+    within the session finds its own items again. The curator ranks set
+    afterwards are not in the marker. Its spouse claims go through
+    legacy_spouse_writes, as the statements an instance holds from before
+    ADR-0036, which the readers read until #520. Returns the write's
+    result."""
     content = [
         {
             **claim,

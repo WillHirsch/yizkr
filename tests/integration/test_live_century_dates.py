@@ -95,21 +95,20 @@ def claim(subject: dict, prop: str, value: dict, artifact: ArtifactRef):
 def write_fixture(client, artifacts: dict[str, str], claims: list[dict]):
     """Write the fixture's claims under item labels that carry a marker:
     six hex digits of a hash over the claims, each cited SHA-1 replaced by
-    its artifact's letter in `artifacts`, as test_live_period_dates.py's
-    write_fixture marks its own. The writer finds a local item by its
-    label, so a version of the fixture with other claims would otherwise
-    write onto an earlier version's items and see their statements beside
-    its own. With the marker each version writes items of its own, and a
-    re-run of one version finds its own items again. The hash also covers
-    each claim's time as TimeValue.to_wikibase gives it, the datavalue the
-    writer's time conversion starts from, so a to_wikibase that gives
-    another time (a mutant of the harness, say) writes items of its own
-    too, and never leaves a second value on these. A change inside
-    BatchWriter._to_wbi_claim is not hashed, but the writer's source is,
-    through the module's marker (conftest.fixture_mark), with the session's
-    random bytes: each session writes items of its own, so what an earlier
-    session wrote, a live mutant's run included, never meets it. Returns
-    the write's result and the marker."""
+    its artifact's letter in `artifacts`. The writer finds a local item by
+    its label, so a version of the fixture with other claims would
+    otherwise write onto an earlier version's items and see their
+    statements beside its own. With the marker each version writes items
+    of its own, and a re-run of one version finds its own items again. The
+    hash also covers each claim's time as TimeValue.to_wikibase gives it,
+    the datavalue the writer's time conversion starts from, so a
+    to_wikibase that gives another time (a mutant of the harness, say)
+    writes items of its own too, and never leaves a second value on these.
+    A change inside BatchWriter._to_wbi_claim is not hashed, but the
+    writer's source is, through the module's marker (conftest.fixture_mark),
+    with the session's random bytes: each session writes items of its own,
+    so what an earlier session wrote, a live mutant's run included, never
+    meets it. Returns the write's result and the marker."""
     stored = [
         TimeValue.model_validate(claim["value"]).to_wikibase()
         for claim in claims
