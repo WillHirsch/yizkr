@@ -1,16 +1,16 @@
 # Ingestion pipeline (`yizkr.pipeline`)
 
-The pipeline turns supplied sources into inspectable readings, attributed claim proposals and graph evidence. The [current contract](../../../docs/CONTRACT.md) governs evidence, privacy and human authority. Two supported workflows use the shared document stages: disposable whole-corpus rebuilds and reviewed additions of one plain-text source to an established graph.
+The pipeline turns supplied sources into inspectable readings, attributed claim proposals and graph evidence. The [current contract](../../../docs/CONTRACT.md) governs evidence, privacy and human authority. Two supported workflows use the shared document stages: disposable whole-corpus rebuilds and reviewed additions of one plain-text source or standalone image to an established graph.
 
 ## Supported workflows
 
 | Workflow | Entry point | Review and destination |
 | --- | --- | --- |
 | Whole-corpus development | `yizkr scratch run` | Unattended, unratified proposals on an explicitly disposable instance; never writes face associations or authorizes retention. |
-| One retained text source | `pipeline.text_ingestion.TextIngestion` | Explicit source registration, identity decisions and separate historical-claim approval; preserves established identities, evidence and curator work. |
+| One retained source | `pipeline.source_ingestion.SourceIngestion` | A text source's checkpoint, or the complete saved views of one text or standalone-image document; explicit source registration, identity decisions and separate historical-claim approval; preserves established identities, evidence and curator work. |
 | Individual operations | `yizkr ingest <step>` | Explicit adapters for preparing and inspecting products, review sheets and guarded writes. Each command retains its own preconditions. |
 
-The [text-source guide](../../../docs/TEXT_INGESTION.md) documents the retained Python API, durable products and recovery. It supports one text source and bounded additions; a general multi-format retained workflow and curation interface remain separate work. CSV claim approval does not establish durable identity correspondence or make a map-bound writer an incremental writer.
+The [one-source guide](../../../docs/SOURCE_INGESTION.md) documents the retained Python API, durable products, admission of saved views and recovery. It supports one text source or standalone image and bounded additions; retained orchestration of containers and GEDCOM and a curation interface remain separate work. CSV claim approval does not establish durable identity correspondence or make a map-bound writer an incremental writer.
 
 ## Whole-corpus execution
 
@@ -61,7 +61,9 @@ flowchart LR
 | `critique.json` | Advisory findings grounded in the source reading and proposed claims; never supplies human approval. |
 | `run.json`, `events.jsonl`, `alerts.jsonl` | Invocation configuration, stage outcomes, controls, attention and diagnostics. |
 
-The retained text API uses its own atomic `products/text-products.json` checkpoint containing the same shared-stage results. Its [workspace and authority table](../../../docs/TEXT_INGESTION.md#preconditions-and-data-products) distinguishes checkpoints from durable decisions and graph receipts.
+The retained one-source API takes a text source's products from its own atomic `products/text-products.json` checkpoint, containing the same shared-stage results, or admits a document's saved views above through [document products](document_products.py). Its [workspace and authority table](../../../docs/SOURCE_INGESTION.md#preconditions-and-data-products) distinguishes products from durable decisions and graph receipts.
+
+For that path a new stage needs no change to the lifecycle or its loader, but the run must save what admission checks. Declare the stage in [stage planning](stage_planning.py) (its view and document kinds). Its step in the [scratch driver](scratch.py) must publish its view and record it in `derivations.json`, record a typed result (status and dependencies) under `detail.stage_results` in `state.json` and give its attention reasons, as the transcription, extraction and critique steps do; the driver's per-stage dispatch and its set of stages with typed results must name it too, since the shared per-document execution records none of these by itself. Admission requires every stage of the document's kind to be recorded complete and each view to be made from the views it names, and does not compare processing fingerprints with current code. What review must show reaches it only through the lifecycle's products interface (`source_ingestion.ReviewedProducts`).
 
 Text files are read deterministically; images and scanned material may use a model. PDF and PPTX readers preserve original embedded-image ownership and placement locators. Rendered/prepared images are representations of existing sources. Each admitted image source can produce its own extraction; compiler context does not become independent evidence. GEDCOM uses the deterministic adapter and emits explicit diagnostics for unsupported material.
 
@@ -95,7 +97,7 @@ The map writer checks complete mention coverage, verifies durable bindings and p
 
 `yizkr ingest --help` lists the supported adapters. `register`, `transcribe`, `extract`, `gedcom`, `reconcile`, `resolve`, `export-review`, `apply-review` and `write` are useful for explicit operations and inspection. The Python [shared stages](../../../docs/ARCHITECTURE.md#shared-document-stage-operations) serve callers that already own execution resources.
 
-Claim review sheets identify rows by content-derived `claim_id`, so sorting cannot transfer decisions to another claim. Explicit per-row approval and supported corrections are checked against the supplied batch. Source locations are evidence to inspect, not editable authority. `apply-review` emits the approved or corrected subset for standalone writing. The writer retains registration, identity-map and retained-state guards. Durable retained applications use the shared review store and support receipts through the text-source API.
+Claim review sheets identify rows by content-derived `claim_id`, so sorting cannot transfer decisions to another claim. Explicit per-row approval and supported corrections are checked against the supplied batch. Source locations are evidence to inspect, not editable authority. `apply-review` emits the approved or corrected subset for standalone writing. The writer retains registration, identity-map and retained-state guards. Durable retained applications use the shared review store and support receipts through the one-source API.
 
 Every `depicts` association needs affirmative confirmation of that exact proposed association. General document/run approval cannot supply it. Face detection and matching produce proposals for review; enrollment and confirmed writes remain separate operations. Scratch runs exclude this workflow. See [face-region architecture](../../../docs/ARCHITECTURE.md#human-confirmed-face-links) and the [claim contract](../claims.py).
 

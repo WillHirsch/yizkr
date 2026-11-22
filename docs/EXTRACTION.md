@@ -1,6 +1,6 @@
 # Extraction, critique and identity proposals
 
-Extraction turns a located source reading into proposed claims. It does not establish historical truth, persistent identity or human approval. The [contract](CONTRACT.md) governs those boundaries; [modeling conventions](MODELING.md) define vocabulary and evidence semantics. [Shared document operations](ARCHITECTURE.md#shared-document-stage-operations) serve both the whole-corpus driver and the [reviewed text-source workflow](TEXT_INGESTION.md).
+Extraction turns a located source reading into proposed claims. It does not establish historical truth, persistent identity or human approval. The [contract](CONTRACT.md) governs those boundaries; [modeling conventions](MODELING.md) define vocabulary and evidence semantics. [Shared document operations](ARCHITECTURE.md#shared-document-stage-operations) serve both the whole-corpus driver and the [reviewed one-source workflow](SOURCE_INGESTION.md).
 
 ## Entity-first and chunked extraction (ADR-0006, ADR-0007)
 
@@ -63,7 +63,7 @@ Chunked extraction also accepts gap objects containing `subject`, free-text `pre
 
 The critic reads the manifest, claims, whole numbered transcription and located citations. It flags kind/alias mistakes, misapplied properties and unsupported readings without rewriting the batch. Findings identify an entity and optionally a claim, alias or container, with an axis (`subject`, `predicate`, `value`, `existence`) and validated category. Invalid findings remain verbatim with validation reasons. Findings appear in review notes and reports; they supply neither corrections nor approval.
 
-An unfinished critic retains available findings and an explicit incomplete status. The reviewed text-source workflow requires completion before registration/review, while a completed critic's warnings remain advisory. Critic silence is not evidence that all claims are correct, and an empty batch needs no critic model call.
+An unfinished critic retains available findings and an explicit incomplete status. The reviewed one-source workflow requires completion before registration/review, while a completed critic's warnings remain advisory. Critic silence is not evidence that all claims are correct, and an empty batch needs no critic model call.
 
 ## Machine uncertainty and judgment (ADR-0023)
 

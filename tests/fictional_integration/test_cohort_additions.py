@@ -1,12 +1,14 @@
 """Protected cohort choices use real review, exclusion and creation receipts.
 
-This case runs before other fixtures intentionally leave untyped legacy items.
-Its readings are authored fiction; no provider call or simulated server guard
+These cases run before other fixtures intentionally leave untyped legacy
+items, which make cohort candidate coverage incomplete for every mention.
+Readings are authored fiction; no provider call or simulated server guard
 substitutes for the configured Wikibase persistence boundary.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 
 import pytest
@@ -15,6 +17,13 @@ from wikibaseintegrator import wbi_helpers
 from wikibaseintegrator.datatypes import Item
 from wikibaseintegrator.wbi_enums import WikibaseRank
 
+from tests.fixtures.saved_products import (
+    EUGEN_BIRTH,
+    GRAVESTONE_FILE,
+    gravestone_answers,
+    gravestone_image,
+    saved_document,
+)
 from tests.fixtures.semantic_acceptance import birth_batch, source_case
 from yizkr.claims import ArtifactRef, GivenName, PersonStructure, Surname
 from yizkr.core.instance import (
@@ -52,7 +61,7 @@ from yizkr.pipeline.review_stages import (
     ReviewSource,
 )
 from yizkr.pipeline.run_provenance import read_record
-from yizkr.pipeline.text_ingestion import TextIngestion
+from yizkr.pipeline.source_ingestion import SourceIngestion
 from yizkr.pipeline.text_products import TextSettings
 from yizkr.pipeline.transcribe import TranscribedPage, Transcription
 
@@ -311,7 +320,7 @@ def _retained_text_source(client, directory, target, old_support, monkeypatch):
         mark_kept(client, "fictional retained-ingestion curator")
         assert marker.exists() and carries_kept_marker(client)
         with ReviewStore(database) as store:
-            workflow = TextIngestion(
+            workflow = SourceIngestion(
                 source,
                 products_dir,
                 client=client,
@@ -392,7 +401,7 @@ def _retained_text_source(client, directory, target, old_support, monkeypatch):
         # Resume with fresh graph/review clients and no model-response cache.
         client = WikiClient(client.config)
         with ReviewStore(database) as store:
-            workflow = TextIngestion(
+            workflow = SourceIngestion(
                 source,
                 products_dir,
                 client=client,
@@ -793,3 +802,128 @@ def test_protected_cohort_choices_claims_and_creation_recovery(
         assert store.get_decision(confirmed.proposal.id) == confirmed
 
     _retained_text_source(client, tmp_path, target, support, monkeypatch)
+
+
+def test_saved_image_reading_reaches_reviewed_claim_application(
+    fictional_client, tmp_path
+):
+    """A standalone image's saved views enter the reviewed lifecycle: a
+    real upload and source binding, an assigned identity and an applied,
+    separately approved claim. The scheduler saved the views from authored
+    answers; the lifecycle runs no stage and is given no model client."""
+    client = WikiClient(fictional_client.config)
+    registry = CreationRegistry(client)
+    properties, _ = client.vocabulary()
+    target = _seed(registry, "Eugen Löbig", "saved-image", ["EUGEN LÖBIG"])
+    data = gravestone_image()
+    sha1 = hashlib.sha1(data).hexdigest()
+    status, doc = saved_document(
+        tmp_path, GRAVESTONE_FILE, data, gravestone_answers(sha1)
+    )
+    assert status == 0
+    exclusions = tmp_path / "fictional-exclusions.txt"
+    exclusions.write_text("# Explicitly empty for repository fiction.\n")
+    with ReviewStore(tmp_path / "saved-image-review.sqlite") as store:
+        workflow = SourceIngestion(
+            doc.source,
+            tmp_path / "saved-image",
+            client=client,
+            review_store=store,
+            exclusions_file=exclusions,
+            document_dir=doc.dir,
+        )
+        products = workflow.prepare()
+        assert products.kind == "media"
+        assert products.artifact == ArtifactRef(sha1=sha1)
+        registration = workflow.prepare_registration(
+            "photograph", "Fictional photograph of the Löbig gravestone"
+        )
+        registered = workflow.register_source(
+            registration,
+            expected_digest=registration.digest,
+            actor="fictional source curator",
+        )
+        statements = client.fetch_claims([registered.artifact_qid])[
+            registered.artifact_qid
+        ]
+        ((media_sha1,), (media_file,)) = (
+            [s["mainsnak"]["datavalue"]["value"] for s in statements[key]]
+            for key in (properties["media_sha1"], properties["media_file"])
+        )
+        assert media_sha1 == sha1
+        uploaded = client.api_get(
+            {
+                "action": "query",
+                "titles": media_file,
+                "prop": "imageinfo",
+                "iiprop": "sha1|mime",
+            }
+        )
+        ((info,),) = (
+            page["imageinfo"] for page in uploaded["query"]["pages"].values()
+        )
+        assert (info["sha1"], info["mime"]) == (sha1, "image/png")
+
+        _synchronize(client)
+        prepared = workflow.prepare_identities(
+            (
+                ReviewProposal(
+                    operation="assign",
+                    mentions=(
+                        MentionKey(artifact_sha1=sha1, local_id="eugen"),
+                    ),
+                    target=target,
+                ),
+            )
+        )
+        (review_source,) = prepared.request.sources
+        assert review_source.reading == products.reading
+        _approve(store, prepared)
+        accepted = workflow.apply_identities(("eugen",))
+        mention = prepared.review.mentions[sha1, "eugen"].id
+        assert (
+            accepted.acceptance.snapshot.assignments[mention].entity_id
+            == target.entity_id
+        )
+
+        historical = workflow.prepare_claims((0,))
+        (claim,) = historical.claims
+        assert claim.decision is None
+        assert claim.selection.warnings == products.extraction_attention
+        record_claim_decisions(
+            store,
+            historical,
+            [
+                ClaimDecisionInput(
+                    proposal_id=claim.proposal.id,
+                    expected_digest=claim.proposal.digest,
+                    outcome="approve",
+                    actor="fictional saved-image claim curator",
+                    time=WHEN,
+                )
+            ],
+        )
+        written = workflow.apply_claims((0,))
+        (receipt,) = written.receipts
+        assert receipt.qid == target.qid
+        (birth,) = client.fetch_claims([target.qid])[target.qid][
+            properties["date_of_birth"]
+        ]
+        assert birth["id"] == receipt.statement_guid
+        (support,) = (
+            reference["snaks"]
+            for reference in birth["references"]
+            if reference["hash"] == receipt.primary_hash
+        )
+
+        def single(key):
+            (snak,) = support[properties[key]]
+            return snak["datavalue"]["value"]
+
+        assert single("stated_in")["id"] == registered.artifact_qid
+        assert single("transcription_excerpt")["text"] == EUGEN_BIRTH.excerpt
+
+        _synchronize(client)
+        frozen = watermark(client)
+        assert workflow.apply_claims((0,)) == written
+        assert watermark(client) == frozen

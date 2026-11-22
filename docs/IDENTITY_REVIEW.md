@@ -148,7 +148,7 @@ Keep both JSON products with the inputs needed for replay, outside Git: their fa
 
 ## Apply later-cohort identity additions
 
-`pipeline.cohort_additions` connects explicit `assign` and `new_entity` choices to the shared authority. It uses the existing roster blocker, durable review store, creation registry, assignment acceptance and identity-provenance publisher. It is a Python API for bounded additions. The [one-source text workflow](TEXT_INGESTION.md) connects it to document preparation, registration and historical review; folder discovery and other adapters are outside that narrow lifecycle.
+`pipeline.cohort_additions` connects explicit `assign` and `new_entity` choices to the shared authority. It uses the existing roster blocker, durable review store, creation registry, assignment acceptance and identity-provenance publisher. It is a Python API for bounded additions. The [one-source workflow](SOURCE_INGESTION.md) connects it to document products, registration and historical review; folder discovery and other adapters are outside that narrow lifecycle.
 
 ```mermaid
 flowchart TD
@@ -297,4 +297,4 @@ An explicit owner override replaces a rejected proposed target before the mentio
 
 ## Integration boundary
 
-The existing scratch clustering map remains a proposal snapshot, and the one-batch `reconcile`/`resolve --equivalences` CSV path has no automatic migration into these decisions. Its local IDs and QIDs cannot prove historical consent or source correspondence. The assignment-aware claim route writes reviewed claims to verified entities. Recorded matching supplies replayable advice; protected cohort application separately establishes reviewed additions under server exclusion. The [incremental text workflow](TEXT_INGESTION.md) supplies the narrow document lifecycle; correction/split remains under [#142](https://github.com/WillHirsch/yizkr/issues/142). Legacy one-map and retained-state guards remain in force; these bounded operations do not establish a complete keeper workflow.
+The existing scratch clustering map remains a proposal snapshot, and the one-batch `reconcile`/`resolve --equivalences` CSV path has no automatic migration into these decisions. Its local IDs and QIDs cannot prove historical consent or source correspondence. The assignment-aware claim route writes reviewed claims to verified entities. Recorded matching supplies replayable advice; protected cohort application separately establishes reviewed additions under server exclusion. The [incremental one-source workflow](SOURCE_INGESTION.md) supplies the narrow document lifecycle; correction/split remains under [#142](https://github.com/WillHirsch/yizkr/issues/142). Legacy one-map and retained-state guards remain in force; these bounded operations do not establish a complete keeper workflow.
