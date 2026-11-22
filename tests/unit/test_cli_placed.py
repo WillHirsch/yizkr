@@ -2,10 +2,10 @@
 
 Validation and the writer take a `caption` only on an artifact its source
 places, so each needs the source's placed media. `yizkr claims
---validate`, `claims.py --validate` and `yizkr ingest write` take them with
-`--placed`: a container's record of derived media (`derived-media.json`,
-or the directory that keeps it) or a source's SHA-1 and theirs. Without
-it a caption is refused as before, and the command says how to give them.
+--validate` and `yizkr ingest write` take them with `--placed`: a
+container's record of derived media (`derived-media.json`, or the
+directory that keeps it) or a source's SHA-1 and theirs. Without it a
+caption is refused as before, and the command says how to give them.
 
 The fixture is the fictional universe's (docs/EXAMPLES.md): *Our Family
 from Germany* (`family-booklet-2011`) places the top of Sebastian's letter
@@ -16,9 +16,9 @@ to Klara, July 1939."
 from __future__ import annotations
 
 import json
-import sys
 
 import pytest
+import yaml
 
 from tests.unit.test_container_claims import (
     BOOKLET_REF,
@@ -33,15 +33,11 @@ from tests.unit.test_container_claims import (
     caption,
     itself,
 )
-from yizkr import claims as claims_module
 from yizkr import cli
-from yizkr.claims import (
-    PLACED_OPTION,
-    read_placed,
-    unplaced_claims,
-    unplaced_hint,
-)
+from yizkr.claims import PLACED_OPTION, unplaced_claims, unplaced_hint
+from yizkr.cli import read_placed
 from yizkr.core.exits import EXIT_OK
+from yizkr.model.schema import DEFAULT_MANIFEST, read_manifest_data
 from yizkr.pipeline.presentation import (
     DERIVED_MEDIA,
     DERIVED_MEDIA_DIR,
@@ -79,6 +75,16 @@ def record(directory, source=BOOKLET_REF, *placed):
 def batch_file(tmp_path, *claims):
     path = tmp_path / "batch.json"
     path.write_text(batch_of(*(claims or (caption(),))).model_dump_json())
+    return path
+
+
+def manifest_file(tmp_path, name, change=lambda caption: None):
+    """A copy of the package's model manifest, its `caption` property
+    changed by `change`."""
+    raw = yaml.safe_load(read_manifest_data(DEFAULT_MANIFEST))
+    change(raw["properties"]["caption"])
+    path = tmp_path / name
+    path.write_text(yaml.safe_dump(raw, sort_keys=False))
     return path
 
 
@@ -245,44 +251,35 @@ class TestValidate:
         assert status != EXIT_OK
         assert capsys.readouterr().err.startswith("--placed: ")
 
-
-class TestClaimsScript:
-    def main(self, monkeypatch, *argv):
-        monkeypatch.setattr(sys, "argv", ["claims.py", *argv])
-        return claims_module.main()
-
-    def test_with_the_placed_media_the_caption_passes(
-        self, tmp_path, monkeypatch, capsys
+    def test_it_checks_against_the_manifest_it_is_given(
+        self, tmp_path, capsys
     ):
-        placed = record(tmp_path / "booklet")
-        batch = batch_file(tmp_path)
-        assert (
-            self.main(
-                monkeypatch, "--validate", str(batch), "--placed", str(placed)
-            )
-            == 0
+        """`--manifest` names the manifest the batch is checked against in
+        place of the package's. A copy of it passes the booklet's caption
+        given its placed media; one that makes `caption` a plain string
+        refuses it; and under one that marks `caption` no placed subject,
+        it is not counted among the claims that want placed media."""
+        validate = ("claims", "--validate", str(batch_file(tmp_path)))
+        placed = ("--placed", str(record(tmp_path / "booklet")))
+
+        same = manifest_file(tmp_path, "same.yaml")
+        status = cli.main([*validate, *placed, "--manifest", str(same)])
+        assert status == EXIT_OK
+        assert capsys.readouterr().err == ""
+
+        string = manifest_file(
+            tmp_path, "string.yaml", lambda p: p.update(datatype="string")
         )
-        captured = capsys.readouterr()
-        assert "valid (1 claims" in captured.out
-        assert captured.err == ""
+        status = cli.main([*validate, *placed, "--manifest", str(string)])
+        assert status != EXIT_OK
+        assert "caption" in capsys.readouterr().err
 
-    def test_without_them_the_caption_is_refused(
-        self, tmp_path, monkeypatch, capsys
-    ):
-        batch = batch_file(tmp_path)
-        assert self.main(monkeypatch, "--validate", str(batch)) == 1
-        err = capsys.readouterr().err
-        assert "[placed_subject]" in err
-        assert unplaced_hint(1) in err
-
-    def test_a_bad_placed_is_refused(self, tmp_path, monkeypatch, capsys):
-        batch = batch_file(tmp_path)
-        argv = ("--validate", str(batch), "--placed", str(batch))
-        assert self.main(monkeypatch, *argv) == 1
-        err = capsys.readouterr().err
-        assert err.startswith("--placed: ")
-        # refused before the batch is checked
-        assert "manifest check" not in err
+        unmarked = manifest_file(
+            tmp_path, "unmarked.yaml", lambda p: p.pop("placed_subject")
+        )
+        status = cli.main([*validate, "--manifest", str(unmarked)])
+        assert status != EXIT_OK
+        assert unplaced_hint(1) not in capsys.readouterr().err
 
 
 class TestWrite:
