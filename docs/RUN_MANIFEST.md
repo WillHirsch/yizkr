@@ -78,7 +78,7 @@ A reader checks `format`. A later format may add fields; a reader that meets fie
 | `run_id` | Set at the first invocation and kept: `<UTC time>-<6 hex digits>`. A scratch run's is its directory's name, and its hex digits give the microsecond it started; when the clock reads at or before the latest run id already in the runs directory (a clock set back), the id is the first after that one instead, so that runs always sort as they were started. A run refuses to start, naming the entry, when an entry in the runs directory is named like a run id that no id sorts after (the last microsecond of the year 9999, or past it) |
 | `mode` | What wrote the manifest: `scratch run` |
 | `project_stage` | `development`, or `kept` from keeper mode on (ADR-0024 §7, ADR-0025 §6) |
-| `engine` | `{name, cli_version}`: `claude-code` or `anthropic`; the claude CLI version the pass is pinned to, once a claude-code client started in the invocation (`null` otherwise, and for the API engine) |
+| `engine` | `{name, cli_version}`: `claude-code` or `anthropic`, or `borrowed` for a run whose caller lends it its engine clients, as `SourceIngestion.prepare` does, so that it makes no engine; the claude CLI version the pass is pinned to, once a claude-code client started in the invocation (`null` otherwise, and for the API engine) |
 | `roles` | Per role (`transcribe`, `extract`, `critique`), see below |
 | `cache` | The configured LLM cache's absolute path; deterministic-only invocations need not open it |
 | `corpus` | `{folder, exclusions}`: the corpus folder's absolute path; the never-ingest list as `{file, sha256}`, see below |
@@ -95,7 +95,7 @@ A reader checks `format`. A later format may add fields; a reader that meets fie
 
 | Field | What it holds |
 | --- | --- |
-| `model` | The model the run configures for the role, the key's `model` component in docs/LLM_CACHE.md: the role's own (`--extract-model` for `extract`), else `$YIZKR_LLM_MODEL`; `null` when neither names one and the engine picks its default |
+| `model` | The model the run configures for the role, the key's `model` component in docs/LLM_CACHE.md: the role's own (`--extract-model` for `extract`), else `$YIZKR_LLM_MODEL`; `null` when neither names one and the engine picks its default, and for a borrowed engine, whose model is its caller's |
 | `effort` | The reasoning effort the run asks for (`--extract-effort` for `transcribe` and `extract`, `--review-effort` for `critique`). The API engine takes none; `client.effort` says what was applied |
 | `epoch` | The role's programmatically configured cache epoch, 0 by default |
 | `refresh` | Whether the invocation makes the role's views again (`--refresh`) |

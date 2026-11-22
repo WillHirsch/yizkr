@@ -1,10 +1,11 @@
 """Document admission and review remain distinct through local resume.
 
-Stages and review/registry records are real. Each case runs with the text
-checkpoint's products and with a document's saved views, which the production
-scheduler makes from the same fixed fictional answers. The unit wiki/guard
-isolates the workflow's admission checks; the required integration cases
-exercise registration and guarded HTTP writes against actual services.
+Stages and review/registry records are real. Each case runs with the views
+the workflow's own preparation saves and with a document's saved views from a
+separate run, both made by the production scheduler from the same fixed
+fictional answers. The unit wiki/guard isolates the workflow's admission
+checks; the required integration cases exercise registration and guarded HTTP
+writes against actual services.
 """
 
 import copy
@@ -18,6 +19,7 @@ from types import SimpleNamespace
 import pytest
 from wikibaseintegrator.datatypes import String
 
+from tests.fixtures.document_processing import contents
 from tests.fixtures.saved_products import (
     CONTEXT_GAP,
     GRAVESTONE_FILE,
@@ -30,7 +32,6 @@ from tests.fixtures.saved_products import (
 )
 from tests.fixtures.semantic_acceptance import birth_batch, source_case
 from tests.unit.test_identity_provenance import Wiki
-from tests.unit.test_text_stages import ScriptedClient
 from yizkr.core.corpus import ExclusionList, is_excluded
 from yizkr.core.write_recovery import CreationRegistry
 from yizkr.pipeline import source_ingestion
@@ -52,11 +53,8 @@ from yizkr.pipeline.review_stages import (
     prepare_review,
 )
 from yizkr.pipeline.source_ingestion import SourceIngestion
-from yizkr.pipeline.text_products import TextProductsError, TextSettings
 
 WHEN = "2026-01-01T12:00:00Z"
-# Either implementation's refusal of its saved products or current inputs
-PRODUCTS_REFUSED = (TextProductsError, ProductsRefused)
 FINDING = {
     "entity": "missing-fictional-mention",
     "axis": "subject",
@@ -104,8 +102,9 @@ def source_and_answers(kind):
 
 @contextmanager
 def lifecycle_case(tmp_path, monkeypatch, products, kind="text"):
-    """A workflow over one fictional source's complete products: the text
-    checkpoint, or the saved views of a scheduler run (`document`)."""
+    """A workflow over one fictional source's complete products: those its
+    own preparation saves (`prepared`), or the saved views of a separate
+    scheduler run (`document`)."""
     monkeypatch.setattr("yizkr.pipeline.run_provenance.now", lambda: WHEN)
     name, data, answers, label, mention = source_and_answers(kind)
     tmp_path.mkdir(parents=True, exist_ok=True)
@@ -157,7 +156,7 @@ def lifecycle_case(tmp_path, monkeypatch, products, kind="text"):
     monkeypatch.setattr(source_ingestion, "protected_mutation", guard)
     monkeypatch.setattr(source_ingestion, "Registrar", Registrar)
     scratch = tmp_path / "scratch"
-    if products == "checkpoint":
+    if products == "prepared":
         source, document_dir, doc = tmp_path / name, None, None
         source.write_bytes(data)
     else:
@@ -184,11 +183,11 @@ def lifecycle_case(tmp_path, monkeypatch, products, kind="text"):
             )
 
         workflow = reopen()
-        if products == "checkpoint":
+        if products == "prepared":
             prepared = workflow.prepare(
-                settings=TextSettings(strategy="chunked", language="de"),
-                extractor_client=ScriptedClient(*answers["extract"]),
-                critic_client=ScriptedClient(*answers["critique"]),
+                language="de",
+                extractor_client=AuthoredAnswers(answers["extract"]),
+                critic_client=AuthoredAnswers(answers["critique"]),
             )
         else:
             prepared = workflow.prepare()
@@ -208,7 +207,7 @@ def lifecycle_case(tmp_path, monkeypatch, products, kind="text"):
         )
 
 
-@pytest.fixture(params=["checkpoint", "document"])
+@pytest.fixture(params=["prepared", "document"])
 def lifecycle(request, tmp_path, monkeypatch):
     with lifecycle_case(tmp_path, monkeypatch, request.param) as case:
         yield case
@@ -245,7 +244,7 @@ def test_changed_registration_material_has_no_graph_effect(lifecycle, change):
     else:
         case.wiki.config.wikibase_url = "https://another-fictional.invalid"
     before = snapshot(case)
-    with pytest.raises((ReviewRefused, *PRODUCTS_REFUSED)):
+    with pytest.raises((ReviewRefused, ProductsRefused)):
         case.workflow.register_source(
             proposal, expected_digest=expected, actor="fictional curator"
         )
@@ -368,7 +367,7 @@ def test_updated_exclusions_block_an_already_registered_source(lifecycle):
     register(case)
     case.policy.write_text(case.products.artifact.sha1)
     before = snapshot(case)
-    with pytest.raises(PRODUCTS_REFUSED, match="never-ingest"):
+    with pytest.raises(ProductsRefused, match="never-ingest"):
         case.workflow.prepare_identities()
     assert snapshot(case) == before
 
@@ -432,7 +431,7 @@ def test_claim_application_rechecks_exclusions_after_guarded_preparation(
         assignment_writes, "prepare_claim_review", edited_policy
     )
     before = snapshot(case)
-    with pytest.raises(PRODUCTS_REFUSED, match="never-ingest"):
+    with pytest.raises(ProductsRefused, match="never-ingest"):
         case.workflow.apply_claims((0,))
     assert snapshot(case) == before
 
@@ -445,24 +444,71 @@ def test_workspace_cannot_be_used_concurrently(lifecycle):
             case.workflow.prepare()
 
 
-def test_both_products_give_claim_review_the_same_warnings(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize("lifecycle", ["prepared"], indirect=True)
+def test_complete_prepared_products_are_admitted_without_a_run(lifecycle):
+    case = lifecycle
+    before = contents(case.workflow.directory)
+    assert case.reopen().prepare() == case.products
+    assert contents(case.workflow.directory) == before
+
+
+@pytest.mark.parametrize("lifecycle", ["prepared"], indirect=True)
+def test_preparation_with_another_language_refuses(lifecycle):
+    case = lifecycle
+    with pytest.raises(ReviewRefused):
+        case.workflow.prepare(language="en")
+    assert case.workflow.prepare() == case.products
+
+
+@pytest.mark.parametrize("lifecycle", ["prepared"], indirect=True)
+def test_completed_stages_survive_an_unfinished_preparation(
+    lifecycle, tmp_path
 ):
-    reviewed = {}
-    for products in ("checkpoint", "document"):
-        with lifecycle_case(
-            tmp_path / products, monkeypatch, products
-        ) as case:
-            register(case)
-            assign(case)
-            (claim,) = case.workflow.prepare_claims((0,)).claims
-            reviewed[products] = (case.products, claim.selection.warnings)
-    (checkpoint, warnings), (document, same) = reviewed.values()
-    assert same == warnings
-    assert document.extraction_attention == checkpoint.extraction_attention
-    assert set(document.extraction_attention) <= set(warnings)
-    assert document.extraction_attention
-    assert any(FINDING["issue"] in warning for warning in warnings)
+    case = lifecycle
+    _name, _data, answers, _label, _mention = source_and_answers("text")
+    workflow = SourceIngestion(
+        case.source,
+        tmp_path / "another-addition",
+        client=case.wiki,
+        review_store=case.store,
+        exclusions_file=case.policy,
+    )
+    # No critic is given, so the critique cannot be made.
+    with pytest.raises(ProductsRefused):
+        workflow.prepare(
+            language="de",
+            extractor_client=AuthoredAnswers(answers["extract"]),
+        )
+    with pytest.raises(ProductsRefused):
+        workflow.prepare_registration("certificate", "Fictional source")
+    # The reading and batch stand, so no extractor is needed now.
+    resumed = workflow.prepare(
+        critic_client=AuthoredAnswers(answers["critique"])
+    )
+    # The same answers make the same products, but for when they were made.
+    assert (resumed.reading, resumed.batch.claims, resumed.critique) == (
+        case.products.reading,
+        case.products.batch.claims,
+        case.products.critique,
+    )
+
+
+@pytest.mark.parametrize("lifecycle", ["prepared"], indirect=True)
+def test_registered_products_are_not_made_again(lifecycle):
+    case = lifecycle
+    register(case)
+    original = case.source.read_bytes()
+    case.source.write_bytes(original + b"\nChanged bytes.\n")
+    _name, _data, answers, _label, _mention = source_and_answers("text")
+    before = contents(case.workflow.directory)
+    with pytest.raises(ProductsRefused):
+        case.workflow.prepare(
+            extractor_client=AuthoredAnswers(answers["extract"]),
+            critic_client=AuthoredAnswers(answers["critique"]),
+        )
+    assert contents(case.workflow.directory) == before
+    case.source.write_bytes(original)
+    assert case.workflow.prepare() == case.products
 
 
 @pytest.mark.parametrize("lifecycle", ["document"], indirect=True)
@@ -544,7 +590,7 @@ def test_saved_critique_attention_is_shown_at_claim_review(
     tmp_path, monkeypatch
 ):
     # A complete critique notes attention for a gap in an image's
-    # interpretation context; the text checkpoint has no such context.
+    # interpretation context; a text source has no such context.
     with lifecycle_case(tmp_path, monkeypatch, "document", "image") as case:
         note_attention(case.document, "critique", [CONTEXT_GAP])
         register(case, "photograph")
@@ -564,8 +610,8 @@ GEDCOM = "0 HEAD\n1 CHAR UTF-8\n0 @I1@ INDI\n1 NAME Eugen /Löbig/\n0 TRLR\n"
         ("fictional-family-slides.pptx", "presentation"),
     ],
 )
-@pytest.mark.parametrize("lifecycle", ["checkpoint"], indirect=True)
-def test_the_text_checkpoint_refuses_containers_and_gedcom_with_a_reason(
+@pytest.mark.parametrize("lifecycle", ["prepared"], indirect=True)
+def test_preparation_refuses_containers_and_gedcom_with_a_reason(
     lifecycle, tmp_path, name, kind
 ):
     case = lifecycle
@@ -586,10 +632,8 @@ def test_the_text_checkpoint_refuses_containers_and_gedcom_with_a_reason(
     assert str(refused.value)
 
 
-@pytest.mark.parametrize("lifecycle", ["checkpoint"], indirect=True)
-def test_the_text_checkpoint_sends_an_image_to_its_saved_views(
-    lifecycle, tmp_path
-):
+@pytest.mark.parametrize("lifecycle", ["prepared"], indirect=True)
+def test_preparation_sends_an_image_to_its_saved_views(lifecycle, tmp_path):
     case = lifecycle
     source = tmp_path / "sources" / GRAVESTONE_FILE
     source.parent.mkdir()
