@@ -700,12 +700,6 @@ def test_map_derived_choices_mark_whether_clustering_saw_each_candidate(
                 if a.proposal_id == proposal.id
             )
             assert application.status == "applied"
-        additions._approved_scope(
-            additions.prepare_cohort_additions(
-                store, derived.request, registry
-            ),
-            {proposal.mentions[0]},
-        )
 
         # A candidate that appears since is not marked until the choices
         # are derived again; the changed basis needs review either way.
