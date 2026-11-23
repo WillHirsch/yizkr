@@ -2050,7 +2050,8 @@ class TestAStreamThatEndsOnAnApiError:
     ):
         """Nothing is stored, under an attempt's key either (llm.for_attempt
         keeps a give-up at the output limit, never this failure), so the
-        next call under the same key misses and asks the engine again."""
+        next call under the same key misses as `absent` (no entry to reject)
+        and asks the engine again."""
         run = RunDir(tmp_path / "run")
         client = caching(
             ClaudeCodeClient(model=MODEL), open_cache(tmp_path / "cache"), run
@@ -2066,13 +2067,18 @@ class TestAStreamThatEndsOnAnApiError:
         assert client.complete("Extract the claims.") == "answer"
         assert len(cli.calls) == 2
         assert [
-            (event["event"], event.get("outcome"), event.get("error"))
+            (
+                event["event"],
+                event.get("reason"),
+                event.get("outcome"),
+                event.get("error"),
+            )
             for event in run.events()
         ] == [
-            ("cache-miss", None, None),
-            (ENGINE_CALL, "error", "RuntimeError"),
-            ("cache-miss", None, None),
-            (ENGINE_CALL, "ok", None),
+            ("cache-miss", "absent", None, None),
+            (ENGINE_CALL, None, "error", "RuntimeError"),
+            ("cache-miss", "absent", None, None),
+            (ENGINE_CALL, None, "ok", None),
         ]
         (path,) = (tmp_path / "cache").glob("*/*.json")
         assert json.loads(path.read_text())["response"] == "answer"
