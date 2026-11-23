@@ -1,6 +1,6 @@
 """A label the writer cuts to Wikibase's limit keeps whole letters, by
 the rule the registrar cuts file names and descriptions by
-(`writer.extends`, ADR-0010 "File names MediaWiki takes"; #373): no cut
+(`text_storage.extends`, ADR-0010 "File names MediaWiki takes"; #373): no cut
 falls inside an emoji joined by zero-width joiners, halfway through a
 flag, nor inside a stressed Cyrillic vowel, a Devanagari conjunct or an
 old Hangul syllable. Fictional names only (docs/EXAMPLES.md)."""
@@ -9,11 +9,11 @@ from __future__ import annotations
 
 import pytest
 
-from yizkr.pipeline.writer import (
+from yizkr.pipeline.text_storage import (
     CUT_MARK,
     TERM_LIMIT,
-    _term_text,
     extends,
+    term_text,
 )
 
 JOINER = "\N{ZERO WIDTH JOINER}"
@@ -41,7 +41,7 @@ GERMANY = (
 
 def kept(label: str) -> str:
     """What the cut label keeps of `label`, before its mark."""
-    term = _term_text(label)
+    term = term_text(label)
     assert len(term) <= TERM_LIMIT and CUT_MARK in term
     return term.rsplit(f"{CUT_MARK} sha1 ", 1)[0]
 

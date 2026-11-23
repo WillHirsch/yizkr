@@ -1,6 +1,6 @@
 """Offline tests of the characters the writer's Unicode tables do not know
 (#431; `unknown_characters` and INSTANCE_UNICODE in
-yizkr.pipeline.writer).
+yizkr.pipeline.text_storage).
 
 The instance puts text in NFC by the tables of Unicode 15.0 (ICU 72.1 in
 the wikibase/wikibase:7 image, through UtfNormal 4.0.0 and PHP's intl),
@@ -67,15 +67,17 @@ from tests.unit.test_writer_limits import MEDIA, _quotes, _with_properties
 from yizkr.claims import ClaimBatch, RegionPercent
 from yizkr.pipeline.places import ensure_places_run_item
 from yizkr.pipeline.review import claim_id
-from yizkr.pipeline.writer import (
+from yizkr.pipeline.text_storage import (
     INSTANCE_UNICODE,
     TERM_LIMIT,
     TEXT_LIMIT,
-    BatchWriter,
-    _term_text,
-    _unknown_fault,
-    source_descriptor,
+    term_text,
     unknown_characters,
+    unknown_fault,
+)
+from yizkr.pipeline.writer import (
+    BatchWriter,
+    source_descriptor,
 )
 
 # the description an item minted for Nina takes: the writer's own source
@@ -270,7 +272,7 @@ class TestUnknownCharacters:
     def test_a_code_point_is_named_in_four_digits_at_least(self):
         # U+0378, which no version of Unicode assigns yet
         assert unknown_characters("Нина\u0378") == ["\u0378"]
-        assert _unknown_fault(["\u0378"]).startswith(
+        assert unknown_fault(["\u0378"]).startswith(
             "holds U+0378, a character "
         )
 
@@ -966,7 +968,7 @@ class TestPastTheCut:
     def test_the_cuts_hold_no_unknown_character(self):
         assert len(LONG_TERM) > TERM_LIMIT
         assert unknown_characters(LONG_TERM) == [MARK]
-        assert unknown_characters(_term_text(LONG_TERM)) == []
+        assert unknown_characters(term_text(LONG_TERM)) == []
         assert len(LONG_TEXT) > TEXT_LIMIT
 
     def test_a_long_alias_is_left_out_and_a_long_summary_never_sent(self):
@@ -1033,7 +1035,7 @@ class TestPastTheCut:
         # refused
         wiki = FakeWiki(LETTER, detached=True)
         item = wiki.wbi.item.new()
-        item.labels.set("en", _term_text(LONG_TERM))
+        item.labels.set("en", term_text(LONG_TERM))
         nina = item.write().id
         claim = dict(MARRIED, subject={"kind": "qid", "qid": nina})
         batch = _batch_of(

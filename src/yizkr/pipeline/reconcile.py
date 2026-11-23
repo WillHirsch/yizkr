@@ -447,8 +447,8 @@ def _keys(names: Iterable[str]) -> set[str]:
     """Each whole name's keys: its folded words, and its words with any
     umlaut written out (``clustering.part_keys``, ADR-0035 §7). The words
     are read in the form the instance keeps a term in
-    (writer.stored_term), so a control character inside a name keys as
-    the space the instance keeps it as: "Cäcilie\\x08Löbig" meets the
+    (text_storage.stored_term), so a control character inside a name keys
+    as the space the instance keeps it as: "Cäcilie\\x08Löbig" meets the
     graph's "Cäcilie Löbig"."""
     from yizkr.pipeline.clustering import part_keys
 

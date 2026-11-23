@@ -49,6 +49,7 @@ from yizkr.claims import (
     load_vocabulary,
 )
 from yizkr.core.verbatim import Transcript, words
+from yizkr.pipeline.claim_naming import describe_value
 from yizkr.pipeline.extract import scan_json_objects
 from yizkr.pipeline.interpretation_context import InterpretationContext
 from yizkr.pipeline.llm import (
@@ -59,7 +60,6 @@ from yizkr.pipeline.llm import (
     reject_response,
 )
 from yizkr.pipeline.prompts import load_prompt
-from yizkr.pipeline.review import describe_value
 from yizkr.pipeline.transcribe import DECK_ENGINE
 
 logger = logging.getLogger(__name__)
@@ -299,8 +299,8 @@ _LINE_BREAKS = str.maketrans(
 def _value(claim: Claim) -> str:
     """A claim's value as the prompt lists it: an item by its id, which
     the entities block labels; a quantity in full; a text with its
-    language; anything else as `review.describe_value` renders it. A line
-    feed is listed as a backslash and an n, and every other line break as
+    language; anything else as `claim_naming.describe_value` renders it. A
+    line feed is listed as a backslash and an n, and every other line break as
     its escape (_LINE_BREAKS), so each claim is one line."""
     value = claim.value
     if isinstance(value, ItemValue):

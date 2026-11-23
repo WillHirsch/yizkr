@@ -88,12 +88,12 @@ def _reference_key(reference) -> str:
 
 
 def _string(properties, key, value):
-    from yizkr.pipeline.writer import _faults
+    from yizkr.pipeline.text_storage import text_faults
 
     if isinstance(value, str):
         # Wikibase stores NFC; the immutable record retains the authored value.
         value = unicodedata.normalize("NFC", value)
-    if not isinstance(value, str) or not value or _faults(value):
+    if not isinstance(value, str) or not value or text_faults(value):
         raise IdentityProvenanceRefused(
             f"identity metadata cannot represent {key}"
         )

@@ -2231,7 +2231,7 @@ class TestRecordless:
 
 class TestInstanceForm:
     """A mention's aliases leave out each alias the instance would keep
-    as its label (writer.stored_term), and every name and record part
+    as its label (text_storage.stored_term), and every name and record part
     keys in that form (#477). NFD against NFC is a regression guard:
     folding already took the two alike. What the stored form changes is
     a control character, made a space, and the edge characters it
@@ -5625,13 +5625,13 @@ class TestTheStage:
         self, tmp_path, monkeypatch
     ):
         """The digest is of the bytes of clustering.py, fingerprints.py,
-        reconcile.py, writer.py and names.py: a byte changed in any of
-        them changes it."""
+        reconcile.py, text_storage.py and names.py: a byte changed in any
+        of them changes it."""
         assert clustering.CODE == (
             "clustering.py",
             "fingerprints.py",
             "reconcile.py",
-            "writer.py",
+            "text_storage.py",
             "names.py",
         )
         before = code_digest()

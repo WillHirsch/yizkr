@@ -976,7 +976,7 @@ def self_reference_clusters(
     .mapped_clusters, from the extraction's batch `extracted`): ids and
     counts alone, for the `self-reference` anomaly check
     (yizkr.pipeline.anomalies)."""
-    from yizkr.pipeline.review import claim_id
+    from yizkr.pipeline.claim_naming import claim_id
     from yizkr.pipeline.writer import mapped_clusters
 
     if not refused:

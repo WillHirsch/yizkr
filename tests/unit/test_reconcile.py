@@ -625,7 +625,7 @@ class TestBlocking:
 
     def test_names_key_in_the_instances_form(self):
         """A name blocks in the form the instance keeps a term in
-        (writer.stored_term): a control character inside a name keys as
+        (text_storage.stored_term): a control character inside a name keys as
         the space the instance keeps it as, so "Cäcilie\\x08Löbig" meets
         the graph's "Cäcilie Löbig" (#477). The decomposed rows are
         regression guards: folding already took NFD and NFC alike."""

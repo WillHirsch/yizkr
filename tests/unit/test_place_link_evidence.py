@@ -41,13 +41,13 @@ from tests.unit.test_places import (
     statements,
 )
 from yizkr.claims import ArtifactRef
+from yizkr.pipeline.evidence_pages import evidence_page
 from yizkr.pipeline.places import (
     PRESENT,
     REFERENCED,
     UNDETERMINED,
     WRITTEN,
     StatedLink,
-    evidence_page,
     excerpt_language,
     read_transcription,
     record_links,

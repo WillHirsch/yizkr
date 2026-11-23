@@ -389,8 +389,9 @@ def fingerprint(package, **configuration):
         "claims.py",
         "source_structure.py",
         "pipeline/source_context.py",
-        "pipeline/writer.py",
-        "pipeline/places.py",
+        "pipeline/text_storage.py",
+        "pipeline/claim_naming.py",
+        "pipeline/evidence_pages.py",
     ],
 )
 def test_changed_prompt_schema_and_transitive_code_require_reprocessing(
@@ -421,6 +422,54 @@ def test_documentation_and_another_stages_prompt_do_not_refresh_extraction(
         "changed critic prompt"
     )
     assert fingerprint(package) == before
+
+
+# the claim writer, the review sheet and the place writer: the write path,
+# which changes without recomputing the views of the stages before it
+WRITE_PATH = ("pipeline/writer.py", "pipeline/review.py", "pipeline/places.py")
+
+
+def stage_fingerprint(package, stage):
+    return processing_dependencies(
+        stage, package=package, source_sha1="1" * 40, configuration={}
+    )
+
+
+@pytest.mark.parametrize("stage", STAGES)
+def test_write_path_changes_do_not_refresh_a_stage_before_write(
+    package, stage
+):
+    for name in WRITE_PATH:
+        (package / name).write_text(f"fictional write path: {name}\n")
+    before = stage_fingerprint(package, stage)
+    for name in WRITE_PATH:
+        path = package / name
+        path.write_text(path.read_text() + "changed fictional write path\n")
+    assert stage_fingerprint(package, stage) == before
+
+
+@pytest.mark.parametrize(
+    ("stage", "resource"),
+    [
+        ("critique", "pipeline/claim_naming.py"),
+        ("gedcom", "pipeline/text_storage.py"),
+    ],
+)
+def test_shared_helpers_of_critique_and_gedcom_require_reprocessing(
+    package, stage, resource
+):
+    before = stage_fingerprint(package, stage)
+    path = package / resource
+    path.write_text(path.read_text() + "changed fictional helper\n")
+    plan = plan_view(
+        exists=True,
+        recorded_inputs={},
+        current_inputs={},
+        recorded_processing=before,
+        processing=stage_fingerprint(package, stage),
+    )
+    assert plan.action == "recompute"
+    assert plan.changed_dependencies == (f"processing.resources.{resource}",)
 
 
 def test_source_and_declared_configuration_are_independent_dependencies(

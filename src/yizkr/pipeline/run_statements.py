@@ -20,6 +20,7 @@ from wikibaseintegrator.wbi_enums import ActionIfExists
 from yizkr.core.provenance import CodeProvenance, ProcessRecord
 from yizkr.core.write_recovery import CreationRegistry, write_existing
 from yizkr.pipeline.run_provenance import record_digest
+from yizkr.pipeline.text_storage import text_faults
 
 if TYPE_CHECKING:
     from yizkr.core.wiki import WikiClient
@@ -46,13 +47,10 @@ def _at(value: datetime) -> str:
 def _statements(
     properties: dict, items: dict, record: ProcessRecord, record_kind: str
 ):
-    # Reuse the writer's actual Wikibase string constraints. Import at call
-    # time: the writer also calls this projection after its own validation.
-    from yizkr.pipeline.writer import _faults
-
+    # Reuse the Wikibase string constraints the writer checks a text by.
     def string(key: str, value: str, omitted: set[str]):
         text = _text(value)
-        if not text or _faults(text):
+        if not text or text_faults(text):
             omitted.add(key)
             return None
         return String(prop_nr=properties[key], value=text)

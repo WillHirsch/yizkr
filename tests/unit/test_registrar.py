@@ -43,7 +43,7 @@ from tests.unit.test_upload_warnings import FakeMediaWiki, FakeUploadClient
 from yizkr.core.corpus import ExclusionList
 from yizkr.core.wiki import WikiClient
 from yizkr.core.write_recovery import GENERATION_PAGE, CreationRefused
-from yizkr.pipeline import registrar, writer
+from yizkr.pipeline import registrar, text_storage
 from yizkr.pipeline.registrar import (
     ExcludedMedia,
     Registrar,
@@ -1175,8 +1175,8 @@ class TestTermsInTheStoredForm:
 
     def test_titles_and_labels_share_the_writers_rule(self):
         # one rule for the terms both write, and one limit (#369)
-        assert registrar._stored_term is writer.stored_term
-        assert registrar.TERM_LIMIT == writer.TERM_LIMIT
+        assert registrar._stored_term is text_storage.stored_term
+        assert registrar.TERM_LIMIT == text_storage.TERM_LIMIT
 
     @pytest.mark.parametrize(
         ("title", "kept"),

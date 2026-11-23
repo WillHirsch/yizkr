@@ -112,8 +112,8 @@ source that asserts it, and otherwise gains that source's reference, as
 an agreeing source's (ADR-0002); nothing existing is changed or removed
 (CLAUDE.md rule 3). A title, or a derived medium's name, that holds a
 character Python's Unicode tables do not know never becomes an alias
-(writer.unknown_characters): the instance may keep it in another form,
-and it would look missing on every registration. A new item's label
+(text_storage.unknown_characters): the instance may keep it in another
+form, and it would look missing on every registration. A new item's label
 made from such a title always takes the media's content tag, as a label
 another item has does (Registrar._free_label), so that two same-named
 copies never share a label and description the instance refuses. The
@@ -154,15 +154,15 @@ from yizkr.pipeline.presentation import IMAGE_SUFFIXES
 # keep in another form, never looks missing (unknown_characters); a
 # title, and each fragment's label, is compared with a media object's
 # tagged label too (media_object_label)
-from yizkr.pipeline.writer import (
+from yizkr.pipeline.text_storage import (
     TERM_LIMIT,
     TEXT_LIMIT,
     extends,
     half_flag,
-    media_object_label,
     unknown_characters,
 )
-from yizkr.pipeline.writer import stored_term as _stored_term
+from yizkr.pipeline.text_storage import stored_term as _stored_term
+from yizkr.pipeline.writer import media_object_label
 
 if TYPE_CHECKING:
     from yizkr.pipeline.container_sources import ContainerSources
@@ -203,8 +203,8 @@ def _shows(name: str) -> bool:
 def _whole_letters(text: str, cut: str) -> str:
     """`cut`, a start of `text`, backed off until it ends after a whole
     letter: never before a character that extends the letter it ends in
-    (writer.extends), which keeps a zero-width joiner with the letters either
-    side of it, and never halfway through a pair of regional indicators.
+    (text_storage.extends), which keeps a zero-width joiner with the letters
+    either side of it, and never halfway through a pair of regional indicators.
     A cut that would keep a letter without its accents keeps neither,
     and one that keeps no whole letter is empty."""
     while cut and (

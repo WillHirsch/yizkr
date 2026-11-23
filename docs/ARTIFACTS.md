@@ -102,7 +102,7 @@ Labels and filenames are display/location choices, never adoption keys. Alternat
 
 The writer also separates artifact and non-artifact label use. Artifact-kind records may share an unregistered artifact/fragment label; other records may share a non-artifact label. Neither may take a vocabulary or run item's label. An unused label is available, subject to the same side distinction within the batch. Where necessary the writer tries the supported `[media object]` or `[not an artifact]` display tag, then refuses if that also conflicts. These naming safeguards do not merge entities by label.
 
-Registration uses shared stored-term normalization and field-specific Unicode handling. Filename normalization preserves supported letters, replaces illegal sequences, respects extension restrictions and reserves room for the content tag. Display limits are applied without splitting supported combining sequences. The exact rules belong to the [registrar](../src/yizkr/pipeline/registrar.py) and [writer](../src/yizkr/pipeline/writer.py), rather than a second copied specification of MediaWiki internals.
+Registration uses shared stored-term normalization and field-specific Unicode handling. Filename normalization preserves supported letters, replaces illegal sequences, respects extension restrictions and reserves room for the content tag. Display limits are applied without splitting supported combining sequences. The exact rules belong to the [registrar](../src/yizkr/pipeline/registrar.py) and the [text storage rules](../src/yizkr/pipeline/text_storage.py) it shares with the writer, rather than a second copied specification of MediaWiki internals.
 
 ### Unheld records and equivalence limits
 

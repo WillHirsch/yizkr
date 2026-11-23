@@ -1,6 +1,6 @@
 """Offline tests of the one rule by which the writer and the registrar keep
 a term, and of the text Wikibase cleans up (#369, #403; `stored_term`,
-`_cleaned_up` and CLEANED_UP in yizkr.pipeline.writer).
+`cleaned_up` and CLEANED_UP in yizkr.pipeline.text_storage).
 
 Wikibase keeps a label, a description or an alias as its trimToNFC gives
 it: trimmed first, then cleaned up (UtfNormal's cleanUp, which makes each
