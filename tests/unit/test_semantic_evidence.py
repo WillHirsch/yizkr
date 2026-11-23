@@ -258,8 +258,26 @@ def test_conflicting_birth_dates_keep_their_attribution_after_review(tmp_path):
         evidence = _birth_evidence(wiki, target.qid)
         processes = [entry.pop("processes") for entry in evidence.values()]
         assert evidence == expected
-        # Each date has a process item of its own.
-        assert [len(process) for process in processes] == [1, 1]
+        # Each date cites a reviewed-application process item of its own,
+        # not its source document or the person.
+        properties, items = wiki.vocabulary()
+        documents = {target.qid}.union(
+            *(review.artifact_qids.values() for review, _ in applied)
+        )
+        for process in processes:
+            (qid,) = process
+            assert qid not in documents
+            claims = wiki.wbi.item.get(qid).get_json()["claims"]
+            classes = [
+                statement["mainsnak"]["datavalue"]["value"]["id"]
+                for statement in claims.get(properties["instance_of"], [])
+            ]
+            kinds = [
+                statement["mainsnak"]["datavalue"]["value"]
+                for statement in claims.get(properties["process_kind"], [])
+            ]
+            assert classes == [items["extraction_run"]]
+            assert kinds == ["reviewed-claim-application"]
         assert processes[0] != processes[1]
 
         before = _graph(wiki)
