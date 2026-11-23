@@ -1835,19 +1835,17 @@ class TestTheCliGivingUp:
         self, cli, status
     ):
         """The notice with no result after it (a crash): nothing says the
-        CLI gave up, so the call is what its exit makes it, a failure, or
-        at a zero exit an answer holding the notice, for its caller to
-        judge. Its report still names the class of API error (#7)."""
+        CLI gave up, so the call is no give-up, and the notice is no
+        answer: the call fails whatever its exit status, at a zero exit
+        too. Its report still names the class of API error (#7)."""
         cli.edit = reshaped(lambda events: events.pop())
         cli.exits = [status]
         client = ClaudeCodeClient(model=MODEL)
-        if status:
-            with pytest.raises(RuntimeError) as raised:
-                client.complete("Extract the claims.")
-            assert not isinstance(raised.value, OutputLimitReached)
-        else:
-            assert client.complete("Extract the claims.") == LIMIT_NOTICE
+        with pytest.raises(RuntimeError) as raised:
+            client.complete("Extract the claims.")
+        assert not isinstance(raised.value, OutputLimitReached)
         assert client.last_stream()["api_error"] == "max_output_tokens"
+        assert client.last_report() == {}  # nothing was answered
 
     def test_a_result_that_reports_no_error_answers(self, cli):
         """The notice beside a result that reports no error: the call
@@ -1970,6 +1968,113 @@ class TestTheCliGivingUp:
         )
         answer = cached.complete("Extract chunk 1.")
         assert at_output_limit(Wrapper(Wrapper(cached)), answer)
+
+
+def notice_alone(**marks):
+    """An edit that leaves each call's stream gave_up's init event and its
+    notice alone, with `marks` in place of the notice's `error`: a stream
+    that ends on the CLI's notice of an API error, with no result event."""
+
+    def edit(events):
+        init, *_, notice, _ = gave_up(events)
+        del notice["error"]
+        return [init, notice | marks]
+
+    return edit
+
+
+class TestAStreamThatEndsOnAnApiError:
+    """A stream that holds the CLI's notice of an API error, nothing its
+    model said and no result text (no result event, or one whose text is
+    empty) gives no answer: at a zero exit too, the call fails with a
+    RuntimeError that names the error's class and never quotes the
+    notice, and nothing of it is kept, so the next call asks the engine
+    again."""
+
+    @pytest.mark.parametrize(
+        "edit",
+        [
+            notice_alone(error="server_error"),
+            notice_alone(error="server_error", message=None),
+            reshaped(
+                lambda events: events[-1].update(is_error=False, result="")
+            ),
+        ],
+        ids=["the notice alone", "a notice with no text", "an empty result"],
+    )
+    def test_the_call_fails_at_a_zero_exit(self, cli, edit):
+        cli.edit = edit
+        cli.exits = [0]
+        client = ClaudeCodeClient(model=MODEL)
+        with pytest.raises(RuntimeError) as raised:
+            client.complete("Extract the claims.")
+        assert not isinstance(raised.value, OutputLimitReached)
+        assert client.last_report() == {}  # nothing was answered
+
+    def test_the_message_names_the_class_and_never_the_notice(self, cli):
+        """The message is the same whether the notice holds its text or
+        none, so it quotes none of it."""
+        messages = set()
+        for marks in ({}, {"message": None}):
+            cli.edit = notice_alone(error="server_error", **marks)
+            with pytest.raises(RuntimeError) as raised:
+                ClaudeCodeClient(model=MODEL).complete("Extract the claims.")
+            messages.add(str(raised.value))
+        (message,) = messages
+        assert "API error" in message and "server_error" in message
+        assert LIMIT_NOTICE not in message
+
+    def test_a_class_in_no_plain_form_is_not_named(self, cli):
+        """An API-error event marked so alone, or whose class is empty or
+        no plain token, fails the call as one that names its class does,
+        with one message that names none."""
+        messages = set()
+        for marks in (
+            {"is_api_error_message": True},
+            {"error": ""},
+            {"error": "Server Error"},
+        ):
+            cli.edit = notice_alone(**marks)
+            with pytest.raises(RuntimeError) as raised:
+                ClaudeCodeClient(model=MODEL).complete("Extract the claims.")
+            messages.add(str(raised.value))
+        (message,) = messages
+        assert "API error" in message and "Server Error" not in message
+
+    @pytest.mark.parametrize(
+        "attempt", [None, 1], ids=["a call", "an attempt"]
+    )
+    def test_the_cache_keeps_nothing_and_the_next_call_asks_again(
+        self, cli, tmp_path, attempt
+    ):
+        """Nothing is stored, under an attempt's key either (llm.for_attempt
+        keeps a give-up at the output limit, never this failure), so the
+        next call under the same key misses and asks the engine again."""
+        run = RunDir(tmp_path / "run")
+        client = caching(
+            ClaudeCodeClient(model=MODEL), open_cache(tmp_path / "cache"), run
+        )
+        if attempt is not None:
+            client = for_attempt(client, attempt)
+        cli.edit = notice_alone(error="server_error")
+        with pytest.raises(RuntimeError) as raised:
+            client.complete("Extract the claims.")
+        assert not isinstance(raised.value, OutputLimitReached)
+        assert not list((tmp_path / "cache").glob("*/*.json"))
+        cli.edit = None
+        assert client.complete("Extract the claims.") == "answer"
+        assert len(cli.calls) == 2
+        assert [
+            (event["event"], event.get("outcome"), event.get("error"))
+            for event in run.events()
+        ] == [
+            ("cache-miss", None, None),
+            (ENGINE_CALL, "error", "RuntimeError"),
+            ("cache-miss", None, None),
+            (ENGINE_CALL, "ok", None),
+        ]
+        (path,) = (tmp_path / "cache").glob("*/*.json")
+        assert json.loads(path.read_text())["response"] == "answer"
 
 
 class TestCallersOfAnAnswerTheCliGaveUpOn:
