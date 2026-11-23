@@ -1,31 +1,31 @@
 """Small identity acceptance cases over authored fictional evidence.
 
-These exercise current clustering and human-reviewed equivalence operations,
-not model quality or the future durable-assignment workflow. Temporary local
-IDs and input order vary without becoming part of the expected identities.
+The homonym case exercises corpus identity construction. The approved-match
+case exercises durable identity review, assignment acceptance and claim
+review, over the in-memory Wiki of tests/unit/test_identity_provenance.py,
+whose recovery pages hold the assignment authority. Temporary local IDs and
+input order vary without becoming part of the expected identities. None of
+these cases measures model quality.
 """
 
 from __future__ import annotations
 
-import csv
-from pathlib import Path
-
 import pytest
 
-from tests.fixtures.semantic_acceptance import (
-    GUSTAV_QID,
-    birth_batch,
-    homonym_batches,
+from tests.fixtures.semantic_acceptance import birth_review, homonym_batches
+from tests.unit.test_identity_provenance import Wiki
+from yizkr.core.write_recovery import CreationRegistry
+from yizkr.pipeline.assignment_stages import accept_reviewed_assignments
+from yizkr.pipeline.claim_review import (
+    ClaimRefused,
+    ClaimSelection,
+    prepare_claim_review,
 )
-from yizkr.claims import LocalRef, QidRef
 from yizkr.pipeline.clustering import IdentityMap, Manifest
-from yizkr.pipeline.reconcile import (
-    Proposal,
-    RosterEntity,
-    apply_equivalences,
-    export_equivalences_csv,
-    read_approved_equivalences,
-)
+from yizkr.pipeline.identity_review import ReviewRefused, ReviewStore
+from yizkr.pipeline.review_stages import prepare_review
+
+WHEN = "2026-01-01T12:00:00Z"
 
 
 @pytest.mark.parametrize(
@@ -56,96 +56,98 @@ def test_distinct_ursula_homonyms_stay_apart(local_ids, reverse):
     assert clusters[0] != clusters[1]
 
 
-def record_decision(path: Path, decision: str) -> None:
-    """Edit the human decision field of the displayed one-match review."""
-    with path.open(newline="") as handle:
-        reader = csv.DictReader(handle)
-        fields = reader.fieldnames
-        rows = list(reader)
-    assert len(rows) == 1
-    rows[0]["decision"] = decision
-    with path.open("w", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fields)
-        writer.writeheader()
-        writer.writerows(rows)
+def decide(store, request, outcome):
+    """Enter one curator decision on each displayed match proposal."""
+    for proposal in prepare_review(store, request).proposals:
+        store.decide(
+            proposal.id,
+            proposal.revision,
+            expected_digest=proposal.digest,
+            outcome=outcome,
+            actor="fictional curator",
+            time=WHEN,
+        )
 
 
+# A rejection is a retained negative of the authority, so each outcome
+# starts from an authority and a review store of its own.
+@pytest.mark.parametrize("outcome", ["reject", "approve"])
 @pytest.mark.parametrize(
     ("local_ids", "reverse"),
     [(("person-1", "person-1"), False), (("ref-77", "record-4"), True)],
 )
-def test_reviewed_equivalence_preserves_both_sourced_dates(
-    tmp_path, local_ids, reverse
+def test_only_an_approved_match_assigns_both_sourced_dates(
+    tmp_path, local_ids, reverse, outcome
 ):
-    target = QidRef(qid=GUSTAV_QID)
-    roster = [
-        RosterEntity(qid=target.qid, label="Gustave Lobig", kind="human")
-    ]
-    documents = list(
-        zip(
-            ("birth-extract-1938", "naturalisation-1952"),
-            local_ids,
-            strict=True,
-        )
+    registry = CreationRegistry(Wiki(detached=True))
+    target, request = birth_review(registry, local_ids, reverse=reverse)
+    original = [s.batch.model_dump(mode="json") for s in request.sources]
+    selections = tuple(
+        ClaimSelection(artifact_sha1=source.artifact_sha1, index=0)
+        for source in request.sources
     )
-    if reverse:
-        documents.reverse()
-    resolved = []
+    with ReviewStore(tmp_path / "review.sqlite") as store:
+        mentions = {
+            mention.id
+            for mention in prepare_review(store, request).mentions.values()
+        }
+        assert len(mentions) == 2
+        empty = registry.assignment_snapshot()
 
-    for source_key, local_id in documents:
-        batch = birth_batch(source_key, subject=LocalRef(local_id=local_id))
-        original = batch.model_dump(mode="json")
-        sheet = tmp_path / f"{source_key}.csv"
-        export_equivalences_csv(
-            [
-                Proposal(
-                    entity_id=local_id,
-                    qid=target.qid,
-                    verdict="same",
-                    confidence=0.99,
-                    evidence="The curator must confirm this proposed match.",
-                )
-            ],
-            batch.entities,
-            roster,
-            sheet,
-        )
+        # A confident machine verdict alone grants no consent: acceptance
+        # refuses the undecided scope and the authority is unchanged.
+        with pytest.raises(ReviewRefused):
+            accept_reviewed_assignments(store, request, registry)
+        assert registry.assignment_snapshot() == empty
 
-        # Neither a confident machine verdict nor rejection grants consent.
-        for decision in ("", "reject"):
-            if decision:
-                record_decision(sheet, decision)
-            unconfirmed = apply_equivalences(
-                batch, read_approved_equivalences(sheet)
+        decide(store, request, outcome)
+        accepted = accept_reviewed_assignments(store, request, registry)
+        if outcome == "reject":
+            assert accepted.snapshot.assignments == {}
+            assert set(accepted.unassigned) == mentions
+            assert sorted(
+                (constraint.kind, constraint.entity_id, constraint.mentions)
+                for constraint in accepted.snapshot.constraints
+            ) == sorted(
+                ("rejected_target", target.entity_id, (mention,))
+                for mention in mentions
             )
-            assert unconfirmed.model_dump(mode="json") == original
+            with pytest.raises(ClaimRefused) as refused:
+                prepare_claim_review(
+                    store, request, registry, selections=selections
+                )
+            assert refused.value.code == "no_assignment"
+            return
 
-        record_decision(sheet, "approve")
-        confirmed = apply_equivalences(
-            batch, read_approved_equivalences(sheet)
+        assert accepted.unassigned == ()
+        assert {
+            mention: assignment.entity_id
+            for mention, assignment in accepted.snapshot.assignments.items()
+        } == dict.fromkeys(mentions, target.entity_id)
+        prepared = prepare_claim_review(
+            store, request, registry, selections=selections
         )
-        assert all(claim.subject == target for claim in confirmed.claims)
-        assert {entity.qid for entity in confirmed.entities} == {target.qid}
-        assert (
-            confirmed.extraction_run.model_dump(mode="json")
-            == original["extraction_run"]
-        )
-        assert [
-            claim.source.model_dump(mode="json") for claim in confirmed.claims
-        ] == [claim["source"] for claim in original["claims"]]
-        assert [
-            claim.value.model_dump(mode="json") for claim in confirmed.claims
-        ] == [claim["value"] for claim in original["claims"]]
-        assert batch.model_dump(mode="json") == original
-        resolved.extend(confirmed.claims)
 
+    assert [
+        {role.binding.binding.qid for role in claim.roles}
+        for claim in prepared.claims
+    ] == [{target.qid}, {target.qid}]
+    assert [
+        claim.claim.value.model_dump(mode="json") for claim in prepared.claims
+    ] == [batch["claims"][0]["value"] for batch in original]
+    assert [
+        claim.claim.source.model_dump(mode="json") for claim in prepared.claims
+    ] == [batch["claims"][0]["source"] for batch in original]
+    assert [s.batch.model_dump(mode="json") for s in request.sources] == (
+        original
+    )
     assert {
         (
-            claim.property,
-            claim.value.year,
-            claim.value.month,
-            claim.value.day,
+            claim.claim.property,
+            claim.claim.value.year,
+            claim.claim.value.month,
+            claim.claim.value.day,
         )
-        for claim in resolved
+        for claim in prepared.claims
     } == {("date_of_birth", 1919, 1, 7), ("date_of_birth", 1919, 7, 1)}
-    assert len({claim.source.artifact.sha1 for claim in resolved}) == 2
+    assert len(set(prepared.artifact_qids.values())) == 2
