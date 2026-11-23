@@ -6,8 +6,10 @@ without an instance; fixtures are fictional.
 
 from __future__ import annotations
 
+import hashlib
 import html
 import io
+import itertools
 import json
 import re
 import urllib.error
@@ -62,9 +64,9 @@ from yizkr.core.privacy import (
     participants_query,
     people_selection,
 )
-from yizkr.model.schema import read_manifest_data
-from yizkr.queries.publish import load_templates, prefix_block
-from yizkr.staticsite import SiteBuilder, format_time, ordinal
+from yizkr.model.schema import load_manifest, read_manifest_data
+from yizkr.queries.publish import load_templates, prefix_block, render
+from yizkr.staticsite import SiteBuilder, format_time, ordinal, visible
 
 
 @pytest.fixture(scope="module")
@@ -3370,3 +3372,530 @@ class TestWhatOtherSourcesSay:
         page = (site / f"people/{KLARA}.html").read_text()
         assert "<img src=x" not in page
         assert "shown in &lt;img src=x onerror=alert(1)&gt;&quot;&amp;" in page
+
+
+# -- identity origins ---------------------------------------------------------
+
+ITEM_IDS = MappingProxyType(
+    {
+        key: f"Q{n}"
+        for n, key in enumerate(
+            yaml.safe_load(read_manifest_data())["items"], 1
+        )
+    }
+)
+MANIFEST_ITEMS = load_manifest().items
+
+
+def digest(name: str) -> str:
+    """A SHA-256 to stand for a record, a cluster, a map or a revision."""
+    return hashlib.sha256(name.encode()).hexdigest()
+
+
+def decision(name: str, revision: int) -> str:
+    """A decision revision as an origin names it: "<decision id>:<n>"."""
+    return f"{digest(name)[:32]}:{revision}"
+
+
+# the universe's people and the other entities whose identity origins the
+# graph records, in the Q80x and Q81x ranges; the people and the family are
+# on the roster, the rest have no person page
+EUGEN, CAECILIE, GUSTAV, RAHEL, SEBASTIAN = (
+    "Q801",
+    "Q802",
+    "Q803",
+    "Q804",
+    "Q805",
+)
+LOEBIGS = "Q806"
+FLOERBURG, BRUNNENRING_35, REGISTRY, BLUE_HAT = "Q811", "Q812", "Q813", "Q814"
+IDENTIFIED = {
+    EUGEN: UNIVERSE["eugen-loebig"].label,
+    CAECILIE: UNIVERSE["caecilie-loebig"].label,
+    GUSTAV: UNIVERSE["gustav-loebig"].label,
+    RAHEL: UNIVERSE["rahel-loebig"].label,
+    SEBASTIAN: UNIVERSE["sebastian-loebig"].label,
+    LOEBIGS: "Löbig family",
+    FLOERBURG: UNIVERSE["floerburg"].label,
+    BRUNNENRING_35: UNIVERSE["brunnenring-35"].label,
+    REGISTRY: UNIVERSE["floerburg-registry"].label,
+    BLUE_HAT: UNIVERSE["zum-blauen-hut"].label,
+}
+IDENTITY_ROSTER = [
+    {
+        "person": uri(qid),
+        "personLabel": literal(IDENTIFIED[qid]),
+        "deceased": literal("true"),
+        "family": literal("true" if qid == LOEBIGS else "false"),
+        "aliases": literal(""),
+    }
+    for qid in (EUGEN, CAECILIE, GUSTAV, RAHEL, SEBASTIAN, LOEBIGS)
+]
+# the process records' items, in the Q89x range: the identity map's, the
+# assignment writer's unreviewed record, and the records of reviews
+MAP_RECORD, UNREVIEWED_RECORD = "Q890", "Q891"
+RECORD_ITEMS = (MAP_RECORD, UNREVIEWED_RECORD, "Q892", "Q893", "Q894", "Q895")
+MAP = digest("identity map")
+PRODUCER = digest("clustering run record")
+RUN = "20261006-090000"
+CURATOR = "fictional curator"
+# the limitations the publishers state
+MAP_LIMIT = (
+    "map placement is unratified; it does not establish an accepted "
+    "assignment or human confirmation"
+)
+COHORT_LIMIT = (
+    "Original proposal producer metadata is unavailable; recorded origin "
+    "and review evidence are retained without inferred model or prompt."
+)
+OVERRIDE_LIMIT = (
+    "Original identity proposal producer metadata is unavailable; raw "
+    "recorded origin is retained without inferred model or prompt."
+)
+
+
+def origin_rows(
+    entity: str,
+    method: str,
+    record: str,
+    *,
+    kind: str = "",
+    statements: tuple[str, ...] = ("a",),
+    revisions: tuple[str, ...] = (),
+    confirmations: tuple[tuple[str, str, str], ...] = (),
+    stages: tuple[tuple[str, str, str], ...] = (),
+    limitations: tuple[str, ...] = (),
+    **cells: str,
+) -> list[dict]:
+    """The identity-provenance query's rows for one origin of `entity`
+    that `method` (its manifest key without ``identity_``) made, saved in
+    the process record whose item is `record`, as the query multiplies
+    them: a row for each `kind` statement it is on (each of `statements`;
+    with no `kind`, one operational identity record link), each decision
+    revision it names, each confirmation (actor, time, decision revision),
+    each stage of its record (stage, model, prompt hash, "" for none) and
+    each limitation. `cells` are its other cells, by name."""
+    method_key = f"identity_{method}"
+    rows = []
+    for statement, revision, confirmed, stage, limitation in itertools.product(
+        statements if kind else ("link",),
+        revisions or ("",),
+        confirmations or (None,),
+        stages or (None,),
+        limitations or ("",),
+    ):
+        row = {
+            "entity": uri(entity),
+            "entityLabel": literal(IDENTIFIED[entity]),
+            "statement": uri(f"statement/{entity}-{statement}"),
+            "method": uri(ITEM_IDS[method_key]),
+            "methodLabel": literal(MANIFEST_ITEMS[method_key].label),
+            "record": uri(record),
+            "recordSha256": literal(digest(record)),
+            "recordFile": literal(f"{digest(record)}.json"),
+            **{name: literal(value) for name, value in cells.items()},
+        }
+        if kind:
+            row["kind"] = uri(ITEM_IDS[kind])
+        if "originRecordSha256" in cells:
+            row["originRecordFile"] = literal(
+                f"{cells['originRecordSha256']}.json"
+            )
+        if revision:
+            row["originDecisionRevision"] = literal(revision)
+        if confirmed:
+            actor, when, decided = confirmed
+            row["actor"] = literal(actor)
+            row["confirmedAt"] = literal(when)
+            row["decisionRevision"] = literal(decided)
+        if stage:
+            name, model, prompt = stage
+            row["stage"] = literal(name)
+            if model:
+                row["model"] = literal(model)
+            if prompt:
+                row["prompt"] = literal(prompt)
+        if limitation:
+            row["limitation"] = literal(limitation)
+        rows.append(row)
+    return rows
+
+
+def placed(entity: str, method: str, kind: str, **given) -> list[dict]:
+    """An origin the map-bound writer saves: the map's method and cluster
+    on the entity's kind statements, in the map's record, which is
+    unratified, names the map's hash, its original producer's record and
+    run, and a deterministic clustering stage with no model, and states
+    that a placement is unratified. No assignment, no confirmation."""
+    return origin_rows(
+        entity,
+        method,
+        MAP_RECORD,
+        kind=kind,
+        stages=(("cluster", "", ""),),
+        limitations=(MAP_LIMIT,),
+        cluster=digest(f"{entity}'s cluster"),
+        mapHash=MAP,
+        unratified="true",
+        originRecordSha256=PRODUCER,
+        originRun=RUN,
+        **given,
+    )
+
+
+def reviewed(
+    entity: str, method: str, record: str, when: str, **given
+) -> list[dict]:
+    """An origin a review publishes beside its human confirmation, as the
+    cohort route does: its method and assignment revision on an
+    operational identity record link, the decision it names confirmed by
+    the fictional curator at `when`, in a record that does not say whether
+    it is unratified, with the manual confirmation stage and the stated
+    limitation that the proposal's producer is unknown."""
+    named = decision(f"{entity}'s decision", 1)
+    return origin_rows(
+        entity,
+        method,
+        record,
+        **{
+            "revisions": (named,),
+            "confirmations": ((CURATOR, when, named),),
+            "stages": (("cohort-identity-confirmation", "", ""),),
+            "limitations": (COHORT_LIMIT,),
+            "assignmentRevision": digest(f"{entity}'s assignment"),
+            "unratified": "unknown",
+            **given,
+        },
+    )
+
+
+# what the identity-provenance query returns: Eugen's map placement on
+# both of his kind statements, and the assignment a reviewer later
+# accepted from that map's proposal, which keeps the map's method,
+# cluster and hash (#835); Gustav's assignment the assignment writer
+# saved unreviewed (#862, #879), and Rahel's, which a reviewer confirmed
+# later, in a record still marked unratified; Cäcilie's reviewed creation;
+# Sebastian's owner override, which names the rejected and the replacing
+# decision; the family's ambiguous placement; and, with no person page,
+# two places, an organisation and a firm with a reviewed assignment
+ADJUDICATION = ("adjudicate", "example-model", digest("adjudication prompt"))
+UNREVIEWED = {
+    "stages": (("cluster", "", ""), ADJUDICATION),
+    "mapHash": MAP,
+    "unratified": "true",
+}
+ORIGINS = [
+    *placed(EUGEN, "confident", "human", statements=("a", "b")),
+    *reviewed(
+        EUGEN,
+        "confident",
+        "Q892",
+        "2026-10-20T09:30:00Z",
+        cluster=digest(f"{EUGEN}'s cluster"),
+        mapHash=MAP,
+    ),
+    *origin_rows(
+        GUSTAV,
+        "confident",
+        UNREVIEWED_RECORD,
+        kind="human",
+        revisions=(decision("Gustav's proposal", 1),),
+        cluster=digest(f"{GUSTAV}'s cluster"),
+        assignmentRevision=digest(f"{GUSTAV}'s assignment"),
+        **UNREVIEWED,
+    ),
+    *origin_rows(
+        RAHEL,
+        "adjudicated",
+        UNREVIEWED_RECORD,
+        kind="human",
+        revisions=(decision("Rahel's proposal", 1),),
+        confirmations=(
+            (CURATOR, "2026-10-22T08:00:00Z", decision("Rahel's review", 1)),
+        ),
+        cluster=digest(f"{RAHEL}'s cluster"),
+        assignmentRevision=digest(f"{RAHEL}'s assignment"),
+        **UNREVIEWED,
+    ),
+    *reviewed(CAECILIE, "reviewed_creation", "Q893", "2026-10-21T14:05:00Z"),
+    *reviewed(
+        SEBASTIAN,
+        "owner_override",
+        "Q894",
+        "2026-10-23T11:45:00Z",
+        kind="human",
+        revisions=(
+            decision("Sebastian's rejected proposal", 1),
+            decision("Sebastian's replacement", 2),
+        ),
+        confirmations=(
+            (
+                CURATOR,
+                "2026-10-23T11:45:00Z",
+                decision("Sebastian's replacement", 2),
+            ),
+        ),
+        stages=(("owner-override-confirmation", "", ""),),
+        limitations=(OVERRIDE_LIMIT,),
+    ),
+    *placed(LOEBIGS, "ambiguous", "family"),
+    *placed(FLOERBURG, "singleton", "place"),
+    *placed(BRUNNENRING_35, "unclustered", "place"),
+    *placed(REGISTRY, "conflicting", "organization"),
+    *reviewed(BLUE_HAT, "reviewed_assignment", "Q895", "2026-10-24T16:20:00Z"),
+]
+
+
+def origin_entries(page: str) -> list[str]:
+    """What a reader sees of each identity origin entry on `page`."""
+    return [
+        visible(entry.replace("<br>", "\n"))
+        for listed in re.findall(r'<ul class="origins">(.*?)</ul>', page)
+        for entry in re.findall(r"<li>(.*?)</li>", listed)
+    ]
+
+
+def headed(page: str, tag: str) -> dict[str, str]:
+    """The parts of `page` by what a reader sees of the `tag` heading
+    each follows."""
+    parts = re.split(rf"<{tag}>(.*?)</{tag}>", page)
+    return {visible(parts[n]): parts[n + 1] for n in range(1, len(parts), 2)}
+
+
+def shortened(value: str, text: str) -> bool:
+    """Whether `text` shows the start of the identifier `value`, and not
+    the whole of it."""
+    return value[:8] in text and value not in text
+
+
+class TestIdentityOrigins:
+    """Each person page lists the identity origins the graph records for
+    the person, and one identity page those of every other entity, by
+    kind, as the production identity-provenance query reads them: every
+    origin, with the method that made it, what its record states of being
+    unratified and, beside it, each human confirmation (#143)."""
+
+    @staticmethod
+    def site(tmp_path, vocabulary, rows=ORIGINS):
+        site, _ = build(
+            tmp_path,
+            vocabulary,
+            {
+                "GROUP_CONCAT(DISTINCT ?alias": IDENTITY_ROSTER,
+                "?confirmedAt": rows,
+            },
+        )
+        return site
+
+    def entries(self, tmp_path, vocabulary, qid: str) -> list[str]:
+        """The origin entries of `qid`'s person page."""
+        site = self.site(tmp_path, vocabulary)
+        return origin_entries((site / f"people/{qid}.html").read_text())
+
+    def test_the_build_reads_origins_with_the_library_query_once(
+        self, tmp_path, vocabulary
+    ):
+        sent = []
+
+        def run(query: str) -> list[dict]:
+            sent.append(query)
+            return []
+
+        SiteBuilder(
+            config(), tmp_path / "site", run=run, vocabulary=vocabulary
+        ).build()
+        properties, items = vocabulary
+        library = prefix_block(config().concept_uri) + render(
+            load_templates()["identity-provenance"], properties, items
+        )
+        method = rf"pr:{properties['identity_method']}\b"
+        assert [query for query in sent if re.search(method, query)] == [
+            library
+        ]
+
+    def test_each_origin_is_one_entry_however_many_rows_it_has(
+        self, tmp_path, vocabulary
+    ):
+        site = self.site(tmp_path, vocabulary)
+        counted = {
+            qid: len(origin_entries((site / f"people/{qid}.html").read_text()))
+            for qid in (EUGEN, GUSTAV, SEBASTIAN, CAECILIE)
+        }
+        # Eugen's placement is on two statements, Gustav's record has two
+        # stages and Sebastian's override names two decisions; Eugen has
+        # two origins, an earlier one beside a later one
+        assert counted == {EUGEN: 2, GUSTAV: 1, SEBASTIAN: 1, CAECILIE: 1}
+
+    def test_a_map_placement_is_unreviewed_and_unconfirmed(
+        self, tmp_path, vocabulary
+    ):
+        (entry,) = [
+            each
+            for each in self.entries(tmp_path, vocabulary, EUGEN)
+            if "unreviewed machine output" in each
+        ]
+        assert entry.startswith("confident identity origin")
+        assert "not confirmed by a person" in entry
+        assert shortened(digest(f"{EUGEN}'s cluster"), entry)
+        assert shortened(MAP, entry)
+        assert shortened(digest(MAP_RECORD), entry)
+        assert shortened(PRODUCER, entry)
+        assert RUN in entry
+        assert "stage cluster" in entry
+        assert MAP_LIMIT in entry
+        # what the rows do not give, the entry does not state
+        for absent in ("model", "prompt", "revision", f"by {CURATOR}"):
+            assert absent not in entry
+
+    def test_a_confirmation_stands_beside_its_origin(
+        self, tmp_path, vocabulary
+    ):
+        site = self.site(tmp_path, vocabulary)
+        eugen = origin_entries((site / f"people/{EUGEN}.html").read_text())
+        (accepted,) = [each for each in eugen if f"by {CURATOR}" in each]
+        # the method that made the proposal still names the origin
+        assert accepted.startswith("confident identity origin")
+        assert f"confirmed by {CURATOR} at 2026-10-20T09:30:00Z" in accepted
+        assert "does not say whether it is unratified" in accepted
+        assert "unreviewed machine output" not in accepted
+        assert "not confirmed by a person" not in accepted
+        assert shortened(digest(f"{EUGEN}'s cluster"), accepted)
+        assert shortened(digest(f"{EUGEN}'s assignment"), accepted)
+        assert shortened(decision(f"{EUGEN}'s decision", 1), accepted)
+        # an unratified origin a reviewer confirmed later says both
+        (rahel,) = origin_entries((site / f"people/{RAHEL}.html").read_text())
+        assert rahel.startswith("adjudicated identity origin")
+        assert "unreviewed machine output" in rahel
+        assert f"confirmed by {CURATOR} at 2026-10-22T08:00:00Z" in rahel
+        assert "not confirmed by a person" not in rahel
+
+    def test_reviewed_origins_are_shown_by_their_own_methods(
+        self, tmp_path, vocabulary
+    ):
+        site = self.site(tmp_path, vocabulary)
+        (created,) = origin_entries(
+            (site / f"people/{CAECILIE}.html").read_text()
+        )
+        (overridden,) = origin_entries(
+            (site / f"people/{SEBASTIAN}.html").read_text()
+        )
+        assigned = headed((site / "identity.html").read_text(), "h3")
+        (firm,) = origin_entries(
+            assigned[f"{IDENTIFIED[BLUE_HAT]} {BLUE_HAT}"]
+        )
+        for entry, method, when in (
+            (created, "reviewed creation", "2026-10-21T14:05:00Z"),
+            (overridden, "owner override", "2026-10-23T11:45:00Z"),
+            (firm, "reviewed assignment", "2026-10-24T16:20:00Z"),
+        ):
+            assert entry.startswith(f"{method} identity origin")
+            assert f"confirmed by {CURATOR} at {when}" in entry
+            # a record that does not say is never shown as reviewed or not
+            assert "unreviewed machine output" not in entry
+            assert "does not say whether it is unratified" in entry
+        assert COHORT_LIMIT in created
+        assert OVERRIDE_LIMIT in overridden
+        # the override names the rejected and the replacing decision
+        assert "decision revisions" in overridden
+        assert shortened(
+            decision("Sebastian's rejected proposal", 1), overridden
+        )
+        assert shortened(decision("Sebastian's replacement", 2), overridden)
+
+    def test_an_unreviewed_assignment_names_its_stages_and_model(
+        self, tmp_path, vocabulary
+    ):
+        (entry,) = self.entries(tmp_path, vocabulary, GUSTAV)
+        assert entry.startswith("confident identity origin")
+        assert "unreviewed machine output" in entry
+        assert "not confirmed by a person" in entry
+        assert "stage cluster" in entry
+        assert "stage adjudicate, model example-model, prompt" in entry
+        assert shortened(ADJUDICATION[2], entry)
+        assert shortened(digest(f"{GUSTAV}'s assignment"), entry)
+        assert shortened(decision("Gustav's proposal", 1), entry)
+        for absent in ("limitation", "original run", "producer record"):
+            assert absent not in entry
+
+    def test_the_record_is_named_by_its_digest_alone(
+        self, tmp_path, vocabulary
+    ):
+        site = self.site(tmp_path, vocabulary)
+        for page in site.rglob("*.html"):
+            text = page.read_text()
+            assert ".json" not in text
+            for record in RECORD_ITEMS:
+                assert record not in text
+
+    def test_other_entities_are_on_the_identity_page_by_kind(
+        self, tmp_path, vocabulary
+    ):
+        site = self.site(tmp_path, vocabulary)
+        page = (site / "identity.html").read_text()
+        kinds = headed(page, "h2")
+        untyped = "No type stated: an operational identity record link"
+        assert list(kinds) == ["organization", "place", untyped]
+
+        def methods(part: str) -> dict[str, list[str]]:
+            return {
+                heading: [
+                    entry.split(" — ")[0] for entry in origin_entries(text)
+                ]
+                for heading, text in headed(part, "h3").items()
+            }
+
+        assert methods(kinds["place"]) == {
+            f"{IDENTIFIED[BRUNNENRING_35]} {BRUNNENRING_35}": [
+                "unclustered identity origin"
+            ],
+            f"{IDENTIFIED[FLOERBURG]} {FLOERBURG}": [
+                "singleton identity origin"
+            ],
+        }
+        assert methods(kinds["organization"]) == {
+            f"{IDENTIFIED[REGISTRY]} {REGISTRY}": [
+                "conflicting identity origin"
+            ]
+        }
+        assert methods(kinds[untyped]) == {
+            f"{IDENTIFIED[BLUE_HAT]} {BLUE_HAT}": [
+                "reviewed assignment identity origin"
+            ]
+        }
+        # people are on their own pages, and no place or organisation has
+        # a page of its own
+        for qid in (EUGEN, LOEBIGS):
+            assert IDENTIFIED[qid] not in page
+        for qid in (FLOERBURG, BRUNNENRING_35, REGISTRY, BLUE_HAT):
+            assert not list(site.rglob(f"{qid}.html"))
+        for linking in (site / "index.html", site / f"people/{EUGEN}.html"):
+            assert "identity.html" in linking.read_text()
+
+    def test_a_family_page_lists_its_origins(self, tmp_path, vocabulary):
+        (entry,) = self.entries(tmp_path, vocabulary, LOEBIGS)
+        assert entry.startswith("ambiguous identity origin")
+        assert "unreviewed machine output" in entry
+
+    def test_a_graph_with_no_origins_says_so(self, tmp_path, vocabulary):
+        site = self.site(tmp_path, vocabulary, rows=[])
+        person = (site / f"people/{EUGEN}.html").read_text()
+        assert "no identity origin" in person
+        assert not origin_entries(person)
+        assert "no identity origin" in (site / "identity.html").read_text()
+
+    def test_what_the_rows_give_is_escaped(self, tmp_path, vocabulary):
+        hostile = '<script>alert("x")</script> & co'
+        rows = [
+            {**row, "actor": literal(hostile), "limitation": literal(hostile)}
+            for row in reviewed(
+                BLUE_HAT, "reviewed_assignment", "Q895", "2026-10-24"
+            )
+        ]
+        page = (
+            self.site(tmp_path, vocabulary, rows) / "identity.html"
+        ).read_text()
+        assert "<script>" not in page
+        assert (
+            f"confirmed by {hostile} at 2026-10-24" in origin_entries(page)[0]
+        )
+        assert f"stated limitation: {hostile}" in origin_entries(page)[0]

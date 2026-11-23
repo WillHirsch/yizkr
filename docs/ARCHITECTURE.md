@@ -388,7 +388,7 @@ flowchart LR
     builder --> site["Private exploration site"]
 ```
 
-The site presents people, artifacts, timelines, galleries, places and source disagreements. Artifact pages show both what an artifact asserts and what sources say about it. Shared Python derivation computes "died by" bounds and union endings at read time, labels them as derived in the site, and stores no new graph statements.
+The site presents people, artifacts, timelines, galleries, places, source disagreements and identity origins: each person page lists the identity origins the graph records for that person, with each origin's method and any human confirmation beside it, and one identity page lists those of every other entity by kind ([identity provenance](IDENTITY_REVIEW.md#migrate-an-existing-map-and-expose-its-provenance)). Artifact pages show both what an artifact asserts and what sources say about it. Shared Python derivation computes "died by" bounds and union endings at read time, labels them as derived in the site, and stores no new graph statements.
 
 Disagreement comparison accounts for date precision and ranges, derived bounds, source-stated parent sets, place containment and redirects; it does not choose a winning source. Containment follows sourced edges that have not been deprecated. The query library also provides provenance checks, the under-witnessed reappraisal queue and an unclassified-entity view for vocabulary development. The complementary `yizkr gaps rollup` command collects relation gaps from a run into a curator's CSV.
 
