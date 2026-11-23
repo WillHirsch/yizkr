@@ -33,9 +33,9 @@ are proposed for it once it is applied and the proposals are derived
 again. A mention the assignment path cannot admit (a limitation of its
 source observation, such as no unique located occurrence, or a problem in
 its mention record) gets no choice. No target is chosen by label or QID.
-The map's clusters are taken as they are: members of ambiguous and
-conflicting entries are each a cluster of their own, and the cluster that
-names a created entity is the one the map gives.
+The map's clusters are taken as they are: the members of ambiguous and
+conflicting entries, and a mention the map leaves unclustered, are each a
+cluster of their own and are never merged here.
 
 **Origin.** Each choice's origin names ``MAP_PROPOSAL`` and records the
 map's method for the mention, its cluster, the map's hash and inputs key,
@@ -225,9 +225,10 @@ def derive_cluster_choices(
 
     ``sources`` are the current products the map was computed from;
     ``increment`` names, by SHA-1, those that form the increment. Reads
-    the registry's assignment history and verified bindings and observes
-    the sources' mentions in the review store, as preparing review does;
-    proposes nothing, captures no graph and writes nothing to it.
+    the registry's accepted assignments and verified bindings, and
+    prepares review of the corresponding sources (``prepare_review``) for
+    their durable mention IDs; stores none of the choices, captures no
+    graph and writes nothing to it.
     """
     try:
         data = validated_map(identity, for_migration=False)
