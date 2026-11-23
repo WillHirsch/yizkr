@@ -27,17 +27,22 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from tests.fixtures import pdfs
+from tests.fixtures.corpus import build
 from tests.fixtures.identity import write_mapped
+from tests.fixtures.located_readings import located
+from tests.fixtures.records import record_answer
 from tests.unit.test_chunking import ScriptedLlm, ndjson
 from tests.unit.test_pipeline import ITEMS, PROPERTIES, RUN, FakeWiki
+from yizkr import cli
 from yizkr.backup import LEFT_OUT_PROPERTIES, filter_nonprivileged_export
 from yizkr.claims import (
     ArtifactRef,
     ClaimBatch,
-    placed_artifacts,
     reject_reasons,
     validate_against_manifest,
 )
+from yizkr.core.exits import EXIT_REFUSED
 from yizkr.model.schema import Manifest, load_acceptance, load_manifest
 from yizkr.pipeline.chunking import (
     ENTITY_ASSIGNMENT_BLOCK,
@@ -45,6 +50,7 @@ from yizkr.pipeline.chunking import (
     ChunkedClaimExtractor,
     rejected_by_reason,
 )
+from yizkr.pipeline.critique import artifact_places
 from yizkr.pipeline.extract import (
     DOCUMENT_ITSELF,
     ClaimFileExtractor,
@@ -52,15 +58,17 @@ from yizkr.pipeline.extract import (
     LlmClaimExtractor,
     document_block,
     placed_by,
-    placed_lines,
     run_metadata,
     salvage_valid_claims,
     vocabulary_prompt_lines,
 )
 from yizkr.pipeline.review import claim_id
+from yizkr.pipeline.source_context import placement_lines
 from yizkr.pipeline.transcribe import (
     DECK_ENGINE,
+    DeckTranscriber,
     PageProvenance,
+    PdfPageTranscriber,
     TranscribedPage,
     Transcription,
 )
@@ -69,7 +77,6 @@ from yizkr.pipeline.writer import BatchWriter, subject_refusal
 BOOKLET_REF = ArtifactRef.from_bytes(b"%PDF Our Family from Germany")
 LETTER_REF = ArtifactRef.from_bytes(b"\x89PNG the top of the 1939 letter")
 DECK_REF = ArtifactRef.from_bytes(b"PK Where the Lobigs came from")
-ALBUM_REF = ArtifactRef.from_bytes(b"\x89PNG Wastl and Hilde, the album")
 PORTRAIT_REF = ArtifactRef.from_bytes(b"\x89PNG the studio portrait")
 # an image no container here places
 STRAY_REF = ArtifactRef.from_bytes(b"\x89PNG the shop front")
@@ -130,13 +137,16 @@ def paged(
 
 
 def booklet() -> Transcription:
-    return paged(
+    """The booklet as its reader gives it: its pages 1 and 6, page 6
+    placing the letter's image, located (located_readings.located)."""
+    reading = paged(
         BOOKLET_REF,
         [
             (1, [], "Our Family from Germany. Compiled by Nicholas Lobig."),
             (6, [LETTER_REF.sha1], CAPTION + "\nTranslation: Flörburg, ..."),
         ],
     )
+    return located(reading)
 
 
 def letter() -> Transcription:
@@ -434,11 +444,12 @@ class TestValidation:
             "schema": 1,
         }
 
-    def test_the_placed_artifacts_are_the_pages_images(self):
-        assert placed_artifacts(booklet().pages) == {LETTER_REF.sha1}
-        assert placed_artifacts(None) == frozenset()
+    def test_the_placed_artifacts_are_the_source_context_s(self):
         assert placed_by(booklet(), BOOKLET_REF) == PLACED
         assert placed_by(letter(), LETTER_REF) == {LETTER_REF.sha1: set()}
+        # a page's image marker alone places nothing
+        marked = booklet().model_copy(update={"source_context": None})
+        assert placed_by(marked, BOOKLET_REF) == {BOOKLET_REF.sha1: set()}
 
 
 # -- the prompts --------------------------------------------------------------
@@ -448,12 +459,68 @@ def flat(text: str) -> str:
     return " ".join(text.split())
 
 
+class ImageReader:
+    """A vision engine that reads every image it is given as the album
+    photograph's caption."""
+
+    model_identifier = "fictional-vision"
+
+    def complete(self, prompt, image_paths=()):
+        return record_answer("Wastl and Hilde, 1906.")
+
+
+def read_container(directory: Path, container: str) -> Transcription:
+    """A container as its reader reads it: the fictional library talk's
+    deck, whose slide 2 sets the album photograph, or a booklet PDF whose
+    page 2 sets a photograph under its caption."""
+    if container == "deck":
+        path = directory / "library-talk-2018.pptx"
+        path.write_bytes(build.deck())
+        return DeckTranscriber(ImageReader).transcribe(path)
+    path = directory / "family-booklet-2011.pdf"
+    path.write_bytes(
+        pdfs.pdf(
+            [
+                pdfs.Page().text(pdfs.lines("Our Family from Germany.")),
+                pdfs.Page()
+                .text(pdfs.lines(CAPTION))
+                .image(pdfs.jpeg(), 72, 400, 128, 96),
+            ]
+        )
+    )
+    return PdfPageTranscriber(ImageReader).transcribe(path)
+
+
 class TestThePrompts:
-    def test_a_container_lists_the_images_it_places(self):
-        assert placed_lines(booklet()) == [
-            f'  {{"kind": "artifact", "sha1": "{LETTER_REF.sha1}"}}: '
-            "page 6, image 1"
+    @pytest.mark.parametrize("container", ["deck", "pdf"])
+    def test_a_read_container_lists_its_source_context_s_places(
+        self, tmp_path, container
+    ):
+        """The images a read container's extraction prompt lists are its
+        source context's placements, each occurrence once, by its owner
+        and its placement, and the critic names each image by them."""
+        reading = read_container(tmp_path, container)
+        occurrences = [
+            (source.owner.sha1, placement.id)
+            for source in reading.source_context.placements
+            for placement in source.support.placements
         ]
+        marked = {sha1 for page in reading.pages for sha1 in page.images}
+        assert occurrences and {owner for owner, _ in occurrences} == marked
+        lines = placement_lines(reading)
+        assert len(lines) == len(occurrences)
+        for line, (owner, placement) in zip(lines, occurrences, strict=True):
+            assert owner in line and placement in line
+        assert "\n".join(lines) in document_block(reading, reading.artifact)
+        places = artifact_places(reading)
+        assert set(places) == marked
+        for owner, placement in occurrences:
+            assert placement in places[owner]
+
+    def test_a_container_lists_the_images_it_places(self):
+        (line,) = placement_lines(booklet())
+        assert LETTER_REF.sha1 in line
+        assert line in document_block(booklet(), BOOKLET_REF)
         block = flat(document_block(booklet(), BOOKLET_REF))
         assert "as ONE `caption` claim" in block
         assert "its value the passage exactly as written" in block
@@ -461,21 +528,6 @@ class TestThePrompts:
         assert "conveys what a listed image is, give that too" in block
         # named by its bytes, never by a QID
         assert LETTER_REF.sha1 in block and "Q" not in block.split("sha1")[0]
-
-    def test_a_deck_s_slides_place_its_images(self):
-        deck = paged(
-            DECK_REF,
-            [(2, [ALBUM_REF.sha1], "Wastl and Hilde")],
-            engine=DECK_ENGINE,
-        )
-        assert placed_lines(deck) == [
-            f'  {{"kind": "artifact", "sha1": "{ALBUM_REF.sha1}"}}: '
-            "slide 2, image 1"
-        ]
-        # a slide's title over its one image is read with a note
-        assert "a judgement note of category `relation`" in flat(
-            document_block(deck, DECK_REF)
-        )
 
     def test_a_document_that_places_nothing_gives_no_caption(self):
         block = flat(document_block(letter(), LETTER_REF))
@@ -623,6 +675,57 @@ class TestThePrompts:
         assert "places no image read on its own" in prompt
         (dated,) = batch.claims
         assert (dated.property, dated.subject) == ("inception", LETTER_REF)
+
+
+# -- the standalone command ---------------------------------------------------
+
+
+class TestTheCommand:
+    def extract(self, directory: Path, reading: Transcription):
+        """`yizkr ingest extract` of `reading` with a prepared claims file
+        holding the booklet's caption: its exit status, and the batch file
+        it was to write."""
+        directory.mkdir()
+        saved = directory / "booklet-transcription.json"
+        saved.write_text(reading.model_dump_json())
+        claims = directory / "claims.json"
+        claims.write_text(json.dumps({"claims": [caption()]}))
+        out = directory / "batch.json"
+        status = cli.main(
+            [
+                "ingest",
+                "extract",
+                "--engine",
+                "file",
+                "--claims-file",
+                str(claims),
+                "--transcription",
+                str(saved),
+                "--out",
+                str(out),
+            ]
+        )
+        return status, out
+
+    def test_a_marked_reading_without_source_context_is_refused(
+        self, tmp_path, capsys
+    ):
+        """A reading whose pages mark the letter's image but that has no
+        source context to locate it is refused in one line, naming the
+        file, and no batch is written; the same reading with its context
+        is extracted."""
+        unlocated = booklet().model_copy(update={"source_context": None})
+        status, out = self.extract(tmp_path / "unlocated", unlocated)
+        lines = capsys.readouterr().err.splitlines()
+        assert status == EXIT_REFUSED
+        assert len(lines) == 1 and "booklet-transcription.json" in lines[0]
+        assert not out.exists()
+        status, out = self.extract(tmp_path / "located", booklet())
+        assert status == 0
+        batch = ClaimBatch.model_validate_json(out.read_text())
+        assert [(c.property, c.subject) for c in batch.claims] == [
+            ("caption", LETTER_REF)
+        ]
 
 
 # -- the writer ---------------------------------------------------------------

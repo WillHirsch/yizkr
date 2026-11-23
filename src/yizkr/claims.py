@@ -1017,9 +1017,9 @@ def validate_against_manifest(
       places as its subject and no other (ADR-0039 §2.1); and no other
       property takes an artifact as its subject. `placed` gives, by the
       SHA-1 of a source's media, the SHA-1s of the artifacts that source
-      places (`placed_artifacts`); a source it does not name places
-      none, so without it every claim about an artifact it places is
-      refused;
+      places (from a reading's source context, `extract.placed_by`); a
+      source it does not name places none, so without it every claim
+      about an artifact it places is refused;
     * a `name` claim, a name form of no stated type, is a person's or an
       unclassified entity's, never a vocabulary item's, and never
       restates its subject's label (ADR-0011): both are compared by
@@ -1225,21 +1225,11 @@ def validate_against_manifest(
     return errors
 
 
-def placed_artifacts(pages: Iterable[object] | None) -> frozenset[str]:
-    """The SHA-1s of the artifacts a source places: the images a paged
-    container's transcription marks on its pages (ADR-0008), each page's
-    `images`. None, or pages that mark none, place nothing."""
-    return frozenset(
-        sha1 for page in pages or () for sha1 in getattr(page, "images", ())
-    )
-
-
 # How a command line gives the artifacts a source places (read by
 # yizkr.cli.read_placed), which a caption's refusal there names.
 PLACED_OPTION = (
-    "--placed <container-inventory.json> (or its document directory), "
-    "an explicit --placed <derived-media.json> compatibility record, or "
-    "--placed <source sha1>=<artifact sha1>"
+    "--placed <container-inventory.json> (or its document directory) "
+    "or --placed <source sha1>=<artifact sha1>"
     "[,<artifact sha1>...]"
 )
 
