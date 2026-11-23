@@ -23,7 +23,7 @@ body:
     id: acceptance
     attributes:
       label: Acceptance
-      description: Checkable criteria. The PR that closes this issue ticks them off.
+      description: Criteria, each checkable at merge. The PR that closes this issue ticks them off.
       value: |
         - [ ]
     validations:
@@ -87,7 +87,28 @@ body:
     id: evidence-reason
     attributes:
       label: Evidence scope
-      description: If additional evidence is needed, explain why and name the relevant boundary or stages. Stage labels alone do not require a corpus run.
+      description: If additional evidence is needed, explain why and name the relevant boundary or stages. Stage labels alone do not require a corpus run. With needs:scratch-diff, name the run issue that supplies the evidence, which is read after merge (before merge only for a change to the clustering settings).
+  - type: dropdown
+    id: corpus-turn
+    attributes:
+      label: Corpus evidence the issue depends on
+      description: >-
+        Does the issue's scope, design or decision need evidence from a
+        turn of a corpus run, and from which? An issue that needs none
+        merges before the next turn that has not started. One that needs a
+        turn's evidence merges before the next run after that turn and is
+        linked as a blocker of that run's issue. A new capability that
+        serves only review or a retained instance merges before the first
+        increment, whatever the answer. A local check on real data before
+        merge is not a turn's evidence. See
+        [docs/AGENT_PROTOCOL.md §5](https://github.com/WillHirsch/yizkr/blob/main/docs/AGENT_PROTOCOL.md#5-integration-and-corpus-evidence).
+      options:
+        - "none (no corpus evidence)"
+        - "the first turn (extraction and critique)"
+        - "the second turn (clustering)"
+        - "the last turn (the write side) or the owner's walk of the views"
+    validations:
+      required: true
   - type: checkboxes
     id: no-real-data
     attributes:
