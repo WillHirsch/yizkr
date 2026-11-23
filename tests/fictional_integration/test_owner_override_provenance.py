@@ -227,6 +227,8 @@ def test_verified_owner_override_preserves_evidence_and_has_graph_provenance(
     assert published.changed and published.record_qid != right.qid
     after = _entity(client, right.qid)
     assert after["labels"] == before["labels"]
+    assert published.aliases.added == ("Gustav",)
+    assert [a["value"] for a in after["aliases"]["en"]] == ["Gustav"]
     assert (
         after["claims"][properties["date_of_birth"]]
         == before["claims"][properties["date_of_birth"]]

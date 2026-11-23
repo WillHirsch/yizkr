@@ -55,7 +55,7 @@ Supported runs apply the configured exclusion boundary before reading, model dis
 
 Filtering an embedded image does **not** redact the original container file. When the parent is eligible for registration, its held PDF/PPTX bytes are uploaded unchanged, including its embedded resources. Model-input eligibility and storage of the original container are distinct boundaries.
 
-No `derived-media.json` is written by current preparation. Existing files remain supported only as verified compatibility inputs or explicitly supplied `--placed` inputs. `--placed` also accepts the common inventory or its directory, or explicit SHA-1 mappings; an invalid common inventory does not silently fall back to a legacy file. Self-placement is refused. Consumers verify source bytes, bindings and available readings before reuse. [The cache guide](LLM_CACHE.md) owns freshness, recovery and directory conventions.
+Preparation neither writes nor reads `derived-media.json`: a document directory that keeps one from an existing run is prepared as one without it. `--placed` accepts the common inventory, its document directory or explicit SHA-1 mappings. Any other value, including a `derived-media.json` file or a directory without a valid common inventory, is refused with a message that names the accepted forms. Self-placement is refused. Consumers verify source bytes, bindings and available readings before reuse. [The cache guide](LLM_CACHE.md) owns freshness, recovery and directory conventions.
 
 ## Registration and held media (ADR-0010)
 

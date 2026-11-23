@@ -14,6 +14,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
 from tests.fixtures import example_universe as u
+from wikibaseintegrator.datatypes import String
 
 from yizkr.claims import (
     ArtifactRef,
@@ -33,10 +34,16 @@ from yizkr.claims import (
     TimeValue,
     VocabRef,
 )
-from yizkr.pipeline.transcribe import Transcription
+from yizkr.core.write_recovery import CreationRegistry, EntityBinding
+from yizkr.pipeline.review_stages import (
+    MentionKey,
+    ReviewProposal,
+    ReviewRequest,
+    ReviewSource,
+)
+from yizkr.pipeline.transcribe import TranscribedPage, Transcription
 
 # Explicit inputs to simulated instance tests, never expected generated IDs.
-GUSTAV_QID = "Q7001"
 FACE_SOURCE = "album-photo-1906"
 FACE_PEOPLE = ("sebastian-loebig", "hildegard-loebig")
 FACE_PERSON_QIDS = ("Q7002", "Q7003")
@@ -245,6 +252,112 @@ def birth_batch(
                 source=source.source_ref(fact.excerpt),
             )
         ],
+    )
+
+
+# The name each birth source writes for Gustav, as label, given names and
+# surnames, so that durable review finds his mention in that source's text.
+_GUSTAV_MENTIONS = {
+    "birth-extract-1938": ("Gustav", ("Gustav",), ()),
+    "naturalisation-1952": ("Gustave LOBIG", ("Gustave",), ("LOBIG",)),
+}
+
+
+def review_source(source_key: str, local_id: str = "gustav") -> ReviewSource:
+    """One of Gustav's birth sources as durable review reads it.
+
+    The claim is birth_batch's. Gustav's mention carries the name this source
+    writes, on its one text line, and the reading gives that text as the one
+    transcribed page the claim's source reference names.
+    """
+    case = source_case(source_key)
+    batch = birth_batch(source_key, subject=LocalRef(local_id=local_id))
+    label, given, surnames = _GUSTAV_MENTIONS[source_key]
+    mention = _human(local_id, label, given, surnames)
+    mention.mention_lines = [1]
+    batch.entities = [mention]
+    reading = Transcription(
+        artifact=ArtifactRef(sha1=case.sha1),
+        text=case.text,
+        language=case.language or "en",
+        engine="authored-fictional-text",
+        pages=[
+            TranscribedPage(
+                page=1,
+                start=0,
+                end=len(case.text),
+                status="transcribed",
+                provenance={
+                    "method": "text-layer",
+                    "engine": "authored-fictional-text",
+                },
+            )
+        ],
+    )
+    return ReviewSource(case.sha1, batch, reading)
+
+
+def birth_review(
+    registry: CreationRegistry,
+    local_ids: tuple[str, str] = ("gustav", "gustav"),
+    *,
+    reverse: bool = False,
+) -> tuple[EntityBinding, ReviewRequest]:
+    """Register Gustav's birth sources and an existing Gustav item, and
+    propose each source's mention as that item, for durable review.
+
+    `registry` is the assignment authority of an in-memory wiki the test
+    supplies. Each proposal carries a confident machine verdict and no human
+    decision. The local IDs follow the scenario's source order; `reverse`
+    then reverses the order of the sources and proposals.
+    """
+    client = registry.client
+    properties, _ = client.vocabulary()
+    keys = SCENARIOS["contradictory_births"].sources
+    for key in keys:
+        case = source_case(key)
+        item = client.wbi.item.new()
+        item.labels.set("en", case.title)
+        item.claims.add(
+            String(prop_nr=properties["media_sha1"], value=case.sha1)
+        )
+        registry.create(
+            {"kind": "source", "sha1": case.sha1},
+            item,
+            summary="fixture source",
+        )
+    person = client.wbi.item.new()
+    person.labels.set("en", u.by_key()["gustav-loebig"].label)
+    target = registry.create(
+        {"kind": "fictional-person", "key": "gustav-loebig"},
+        person,
+        summary="fixture person",
+    )
+    sources = [
+        review_source(key, local_id)
+        for key, local_id in zip(keys, local_ids, strict=True)
+    ]
+    if reverse:
+        sources.reverse()
+    proposals = tuple(
+        ReviewProposal(
+            operation="assign",
+            mentions=(
+                MentionKey(
+                    artifact_sha1=source.artifact_sha1,
+                    local_id=source.batch.entities[0].id,
+                ),
+            ),
+            target=target,
+            evidence={"verdict": "same", "confidence": 0.99},
+            origin={"method": "authored fictional match"},
+        )
+        for source in sources
+    )
+    return target, ReviewRequest(
+        sources=tuple(sources),
+        proposals=proposals,
+        current_targets=(target,),
     )
 
 

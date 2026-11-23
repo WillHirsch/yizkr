@@ -2,8 +2,10 @@
 
 The immutable assignment history supplies the original human decision and
 source observation. Publication adds an operational identity link, never a
-historical kind or an assignment. Creation decisions additionally require
-their original immutable authorization and verified registry receipt.
+historical kind or an assignment, and then appends the mention's reviewed
+names to the entity's aliases (``assignment_aliases``). Creation decisions
+additionally require their original immutable authorization and verified
+registry receipt.
 """
 
 from __future__ import annotations
@@ -17,10 +19,14 @@ from yizkr.core.identity_assignments import AssignmentRevision
 from yizkr.core.provenance import ProcessRecord, StageProvenance
 from yizkr.core.reviewed_creation import ReviewedCreationAuthorization
 from yizkr.core.write_recovery import CreationRegistry
+from yizkr.pipeline.assignment_aliases import (
+    AssignmentPublication,
+    alias_contribution,
+    append_aliases,
+)
 from yizkr.pipeline.cancellation import check_cancelled
 from yizkr.pipeline.identity_provenance import (
     IdentityProvenanceRefused,
-    IdentityPublication,
     IdentitySource,
     identity_references,
     publish_identity_record,
@@ -141,18 +147,26 @@ def _accepted_cohort(registry, mention_id):
 
 def publish_cohort_assignment(
     client, mention_id: str, *, record_dir: Path
-) -> IdentityPublication:
+) -> AssignmentPublication:
     """Project an accepted direct cohort choice and its human confirmation.
 
     Unknown origins and decisions merely inherited through ``same`` cannot
     acquire a direct manual origin. Only an actual supplied ``ProcessRecord``
     is preserved as producer metadata. The original proposal retains all
     recorded graph, matching and source evidence independently of publication.
+
+    After the origin, the names the confirmed decision's review row showed
+    for the mention are appended to the entity's aliases, once for the
+    assignment revision. Its alias receipt lists the names appended, and
+    those left out because the instance may keep them in another form.
+    Repeating the call completes an interrupted alias update from a fresh
+    read of the item, and after a receipt appends nothing.
     """
     check_cancelled()
     registry = CreationRegistry(client)
     accepted = _accepted_cohort(registry, mention_id)
     decision = accepted.decision
+    contribution = alias_contribution(decision, mention_id)
     origin = decision.proposal.origin
     producer = None
     producer_refs = ()
@@ -224,7 +238,7 @@ def publish_cohort_assignment(
             producer=producer,
         )
 
-    return publish_identity_record(
+    publication = publish_identity_record(
         client,
         registry=registry,
         record=record,
@@ -238,4 +252,14 @@ def publish_cohort_assignment(
         sources=(accepted.source,),
         references=references,
         revalidate=revalidate,
+    )
+    check_cancelled()
+    revalidate()
+    return AssignmentPublication(
+        publication.record_qid,
+        publication.changed,
+        publication.statements,
+        append_aliases(
+            registry, accepted.assignment, accepted.source.qid, contribution
+        ),
     )

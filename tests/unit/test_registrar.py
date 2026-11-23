@@ -3433,44 +3433,6 @@ class TestStepRegister:
         orchestrator._step_register(doc)
         assert wiki.reads == 1
 
-    def test_a_record_made_for_other_bytes_is_made_again(self, tmp_path):
-        """A derived-media record in the deck's directory made for other
-        deck bytes (as in a directory two sources shared) is made again at
-        the write: the deck's own images are registered, as part of it,
-        and nothing is made part of the other deck."""
-        wiki = FakeWiki()
-        orchestrator, _ = self.orchestrator(tmp_path, wiki)
-        build_deck(orchestrator.folder / DECK)
-        (doc,) = orchestrator.documents()
-        other = deck_file(tmp_path, "other")
-        other_qid = (
-            Registrar(wiki)
-            .register_artifact(other, "presentation", "Deck other")
-            .artifact_qid
-        )
-        kept = f"derived-media/{sha1(IMAGE)}.png"
-        (doc.dir / kept).parent.mkdir(parents=True)
-        (doc.dir / kept).write_bytes(IMAGE)
-        (doc.dir / "derived-media.json").write_text(
-            json.dumps(
-                {
-                    "source_sha1": sha1(other.read_bytes()),
-                    "title": "Deck other",
-                    "media": {
-                        sha1(IMAGE): {
-                            "names": ["image1.png"],
-                            "slides": [1],
-                            "file": kept,
-                        }
-                    },
-                }
-            )
-        )
-        deck = orchestrator._step_register(doc)
-        assert deck != other_qid
-        assert parts_of(wiki, other_qid)["medium"] == {}
-        assert sorted(parts_of(wiki, deck)["medium"]) == ["1", "2", "3"]
-
 
 class TestRegisterCommand:
     def test_it_needs_the_media_file(self, capsys):

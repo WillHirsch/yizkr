@@ -1298,13 +1298,6 @@ class TestTheKey:
         )
         assert _key(run, exclusions=ExclusionList()) != key
 
-    def test_legacy_media_record_is_not_registration_authority(self, keyed):
-        from yizkr.pipeline.presentation import DERIVED_MEDIA
-
-        run, key = keyed
-        (run.documents[0].dir / DERIVED_MEDIA).write_text('{"media": []}\n')
-        assert _key(run, exclusions=ExclusionList()) == key
-
     @pytest.mark.parametrize(
         "module",
         [
