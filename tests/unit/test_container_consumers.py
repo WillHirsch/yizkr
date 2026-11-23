@@ -53,14 +53,7 @@ from yizkr.pipeline.extract import (
     placed_lines,
 )
 from yizkr.pipeline.pdf_inventory import inventory_pdf
-from yizkr.pipeline.presentation import (
-    DERIVED_MEDIA,
-    DERIVED_MEDIA_DIR,
-    DerivedMediaRecord,
-    DerivedMedium,
-    read_derived_media,
-    unpack_pptx,
-)
+from yizkr.pipeline.presentation import unpack_pptx
 from yizkr.pipeline.source_context import (
     LocatedReading,
     PlacedSource,
@@ -96,15 +89,12 @@ def container_corpus(tmp_path, kind):
 
 
 @pytest.mark.parametrize("kind", ["pdf", "pptx"])
-def test_inventory_discovers_existing_excerpt_without_legacy_media_record(
-    tmp_path, kind
-):
+def test_inventory_discovers_existing_excerpt(tmp_path, kind):
     corpus, name = container_corpus(tmp_path, kind)
     driver = run(tmp_path, corpus, Reader({LETTER_SHA1: EXCERPT}))
     container = document(driver, name)
     original = excerpt_of(driver, LETTER_SHA1)
     assert read_inventory(container.dir) is not None
-    (container.dir / DERIVED_MEDIA).unlink(missing_ok=True)
     driver._excerpts = {}
     (found,) = driver._excerpts_of(container, ())
     assert found.sha1 == original.sha1
@@ -113,9 +103,8 @@ def test_inventory_discovers_existing_excerpt_without_legacy_media_record(
 
 
 @pytest.mark.parametrize("kind", ["pdf", "pptx"])
-@pytest.mark.parametrize("missing", [DERIVED_MEDIA, CONTAINER_INVENTORY])
 def test_container_metadata_recovery_preserves_approved_products(
-    tmp_path, kind, missing
+    tmp_path, kind
 ):
     corpus, name = container_corpus(tmp_path, kind)
     first = run(tmp_path, corpus, Reader({LETTER_SHA1: EXCERPT}))
@@ -134,7 +123,7 @@ def test_container_metadata_recovery_preserves_approved_products(
             subject.dir.joinpath("review.reviewed.csv"),
         )
     }
-    (container.dir / missing).unlink(missing_ok=True)
+    (container.dir / CONTAINER_INVENTORY).unlink()
     again = run(tmp_path, corpus, RefusingReader({}))
     restored_container = document(again, name)
     restored_excerpt = excerpt_of(again, LETTER_SHA1)
@@ -682,7 +671,6 @@ def test_surviving_reading_context_recovers_owner_after_inventory_loss(
     assert inventory is not None
     assert json.loads(original.transcription.read_text())["source_context"]
     (original.dir / CONTAINER_INVENTORY).unlink()
-    (original.dir / DERIVED_MEDIA).unlink(missing_ok=True)
     if missing_owner:
         # The original PDF still exists, but no retained canonical PNG does.
         for directory in (
@@ -744,21 +732,16 @@ def test_ambiguous_legacy_owner_mapping_stays_unresolved(tmp_path):
     path = tmp_path / "derived-media" / f"{LETTER_SHA1}.png"
     path.parent.mkdir()
     path.write_bytes(plan.data[LETTER_SHA1])
-    legacy = DerivedMediaRecord(
-        source_sha1=plan.inventory.source.sha1,
-        container="pdf",
-        title="Our Family from Germany",
-        media={
-            LETTER_SHA1: DerivedMedium(
-                names=["page 1, image 1", "page 1, image 2"],
-                slides=[1],
-                file=path.relative_to(tmp_path).as_posix(),
-            )
-        },
+    # the saved transcription marks the image both parts are read as
+    (tmp_path / "transcription.json").write_text(
+        json.dumps(
+            {
+                "artifact": plan.inventory.source.model_dump(mode="json"),
+                "pages": [{"images": [LETTER_SHA1]}],
+            }
+        )
     )
-    prepared = prepare_sources(
-        plan.inventory, plan.data, tmp_path, legacy=legacy
-    )
+    prepared = prepare_sources(plan.inventory, plan.data, tmp_path)
     projected = project_sources(prepared, tmp_path, data=plan.data)
     assert projected.sources == {}
     assert len(projected.unresolved) == 2
@@ -768,57 +751,89 @@ def test_ambiguous_legacy_owner_mapping_stays_unresolved(tmp_path):
     )
 
 
-@pytest.mark.parametrize("damage", [None, "missing", "other bytes", "symlink"])
-def test_an_older_record_binds_its_media_only_while_its_files_are_whole(
-    tmp_path, damage
-):
-    """An older derived-media record left in a deck's directory is read,
-    and binds the owner of each medium it names, only while each medium's
-    file is a regular file holding that medium's bytes. Otherwise it is not
-    read, and the owner is bound from the deck's own bytes."""
-    image = png(300, 120, 1, LETTER_IMAGE.data)
-    source = deck(
-        tmp_path / "library-talk-2018.pptx",
-        [((CAPTION,), ["letter.png"], "")],
-        {"letter.png": image},
+@pytest.mark.parametrize("kind", ["pdf", "pptx"])
+@pytest.mark.parametrize("named", ["the image", "another image"])
+def test_an_older_derived_media_record_is_not_read(tmp_path, kind, named):
+    """A document directory that keeps an older run's derived-media.json,
+    and the bytes of the image it names, but whose saved transcription
+    marks no image, is prepared as one without the record: the image the
+    container places is bound from the container's current bytes, and a
+    record naming an image no current input gives blocks nothing."""
+    from yizkr.pipeline.media_stages import (
+        PreparationRequest,
+        prepare_container,
     )
-    content = unpack_pptx(source)
-    directory = tmp_path / "document"
-    kept = directory / DERIVED_MEDIA_DIR / f"{LETTER_SHA1}.png"
-    kept.parent.mkdir(parents=True)
-    record = DerivedMediaRecord(
-        source_sha1=content.inventory.source.sha1,
-        title="Library talk",
-        media={
-            LETTER_SHA1: DerivedMedium(
-                names=["letter.png"],
-                slides=[1],
-                file=kept.relative_to(directory).as_posix(),
+
+    if kind == "pptx":
+        source = deck(
+            tmp_path / "library-talk-2018.pptx",
+            [((CAPTION,), ["letter.png"], "")],
+            {"letter.png": png(300, 120, 1, LETTER_IMAGE.data)},
+        )
+        title, name = "Library Talk 2018", "letter.png"
+    else:
+        source = tmp_path / "family-booklet-2011.pdf"
+        source.write_bytes(
+            pdfs.pdf([typed(CAPTION).image(LETTER_IMAGE, 72, 400, 300, 120)])
+        )
+        title, name = "Our Family from Germany", "page 1, image 1"
+    container = ArtifactRef.from_path(source)
+    kept, without = tmp_path / "kept", tmp_path / "without"
+    for directory in (kept, without):
+        directory.mkdir()
+        (directory / "transcription.json").write_text(
+            json.dumps(
+                {
+                    "artifact": container.model_dump(mode="json"),
+                    "pages": [{"images": []}],
+                }
             )
-        },
+        )
+    # the letter's image, or the bytes STRAY_REF names, which no input of
+    # the container gives
+    medium = (
+        png(300, 120, 1, LETTER_IMAGE.data)
+        if named == "the image"
+        else b"\x89PNG the shop front"
     )
-    (directory / DERIVED_MEDIA).write_text(record.model_dump_json())
-    if damage is None:
-        kept.write_bytes(image)
-    elif damage == "other bytes":
-        kept.write_bytes(pdfs.JPEG)
-    elif damage == "symlink":
-        elsewhere = tmp_path / "letter.png"
-        elsewhere.write_bytes(image)
-        kept.symlink_to(elsewhere)
-    legacy = read_derived_media(directory)
-    assert legacy == (record if damage is None else None)
-    prepared = prepare_sources(
-        content.inventory, content.inventory_bytes, directory, legacy=legacy
+    sha1 = ArtifactRef.from_bytes(medium).sha1
+    (kept / "derived-media").mkdir()
+    (kept / "derived-media" / f"{sha1}.png").write_bytes(medium)
+    (kept / "derived-media.json").write_text(
+        json.dumps(
+            {
+                "source_sha1": container.sha1,
+                "container": "presentation" if kind == "pptx" else "pdf",
+                "title": title,
+                "media": {
+                    sha1: {
+                        "names": [name],
+                        "slides": [1],
+                        "file": f"derived-media/{sha1}.png",
+                    }
+                },
+            }
+        )
     )
-    (binding,) = [
-        part.owner_binding
-        for part in prepared.parts
-        if part.owner_binding is not None
+    prepared = prepare_container(
+        PreparationRequest(source, existing_directory=kept)
+    )
+    assert (
+        prepared.inventory
+        == prepare_container(
+            PreparationRequest(source, existing_directory=without)
+        ).inventory
+    )
+    (part,) = [
+        part
+        for part in prepared.inventory.parts
+        if part.kind == "embedded_resource"
     ]
-    assert binding.artifact.sha1 == LETTER_SHA1
-    assert binding.basis == (
-        "verified-legacy-reading" if damage is None else "original-media"
+    assert part.ownership_issue is None
+    assert part.owner_binding.artifact.sha1 == LETTER_SHA1
+    # a deck's own image bytes, or a PDF image's prepared representation
+    assert part.owner_binding.basis == (
+        "original-media" if kind == "pptx" else "prepared-part"
     )
 
 

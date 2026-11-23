@@ -121,7 +121,7 @@ For a paged container, the additional products are:
 - `D/derived-media/<sha1>.transcription.json`: an independently read image's checked transcription, when available.
 - `D/slide-render-workspace/slide-renders.json`, its inventory and `slide-renders/<sha1>.png`: verified render products for explicitly selected PPTX vision; PNGs remain representations of existing sources.
 
-The pipeline does not write `D/derived-media.json`. One kept from an existing run is read only as a compatibility image record; it is not the placement or discovery authority.
+The pipeline neither writes nor reads `D/derived-media.json`. A directory that keeps one from an existing run is prepared as one without it.
 
 An independently read image can become an excerpt document when it has a transcribed or illegible document page. Images that are wholly blank or not document pages, excluded images and images already represented by corpus files do not become excerpts. Repeated placements share the bound media owner while retaining every occurrence. The container keeps its own text; the image's claims cite its bound owner and source-part support. Excerpt extraction and critique then produce their own `batch.json` and `critique.json`. Ambiguous body/notes or compiler/inner-source support makes extraction incomplete; any supported claims remain diagnostic and are not accepted for writing.
 

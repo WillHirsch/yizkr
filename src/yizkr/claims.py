@@ -1237,9 +1237,8 @@ def placed_artifacts(pages: Iterable[object] | None) -> frozenset[str]:
 # How a command line gives the artifacts a source places (read by
 # yizkr.cli.read_placed), which a caption's refusal there names.
 PLACED_OPTION = (
-    "--placed <container-inventory.json> (or its document directory), "
-    "an explicit --placed <derived-media.json> compatibility record, or "
-    "--placed <source sha1>=<artifact sha1>"
+    "--placed <container-inventory.json> (or its document directory) "
+    "or --placed <source sha1>=<artifact sha1>"
     "[,<artifact sha1>...]"
 )
 

@@ -62,7 +62,6 @@ from yizkr.claims import (
     artifact_kind_problems,
     document_subject_form,
     unplaced_claims,
-    unplaced_hint,
     validate_against_manifest,
 )
 from yizkr.model.schema import load_acceptance
@@ -909,16 +908,6 @@ class TestUnplaced:
         claims = batch(*translation(), *caption_claims())
         assert unplaced_claims(claims, None) == 5
         assert unplaced_claims(claims, PLACED) == 0
-
-    def test_the_hint_is_pinned(self):
-        assert unplaced_hint(5) == (
-            "5 claim(s) about an artifact other than their source cite a "
-            "source whose placed media were not given, so each is refused: "
-            "give them with --placed <container-inventory.json> (or its "
-            "document directory), an explicit --placed <derived-media.json> "
-            "compatibility record, or --placed <source sha1>=<artifact "
-            "sha1>[,<artifact sha1>...]"
-        )
 
 
 # -- the writer ---------------------------------------------------------------
