@@ -86,9 +86,9 @@ def read_placed(values: Iterable[str]) -> dict[str, frozenset[str]]:
     container's common inventory (container-inventory.json), or the
     document directory that keeps it: the inventory's named bytes are
     verified, and its source places the eligible owners its projection
-    binds. Values for one source add up. Raises ValueError, naming the
-    forms it takes, for any other value and for a missing or invalid
-    inventory, and for a source said to place itself."""
+    binds. Values for one source add up. Raises ValueError naming the
+    forms it takes for any other value and for a missing or invalid
+    inventory, and ValueError for a source said to place itself."""
     from yizkr.pipeline.container_inventory import (
         CONTAINER_INVENTORY,
         read_inventory,
