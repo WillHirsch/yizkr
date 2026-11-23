@@ -7,7 +7,7 @@ statements and references of its stored items. A face proposal cannot enter
 claim review: it names its photograph and an enrolled person by QID and
 locates its evidence by image region, with no excerpt (ADR-0005). The face
 refusal case therefore checks only the depicts gates of claim decisions and
-claim application, on a face claim put in place of a prepared birth claim;
+claim application, on a face claim put in place of an approved birth claim;
 it is not a route for face claims. Only
 the face confirmed-write test still drives the review sheet and BatchWriter
 directly, over FakeWiki from test_pipeline, whose detached items retain the
@@ -172,6 +172,26 @@ def _prepared(store, request, registry, source):
     )
 
 
+def _approved(store, request, registry, source):
+    """Approve the source's first claim, then prepare it with that decision."""
+    prepared = _prepared(store, request, registry, source)
+    record_claim_decisions(
+        store,
+        prepared,
+        [
+            ClaimDecisionInput(
+                proposal_id=claim.proposal.id,
+                expected_digest=claim.proposal.digest,
+                outcome="approve",
+                actor=CURATOR,
+                time=WHEN,
+            )
+            for claim in prepared.claims
+        ],
+    )
+    return _prepared(store, request, registry, source)
+
+
 def _birth_evidence(wiki, qid):
     properties, _ = wiki.vocabulary()
     statements = wiki.wbi.item.get(qid).get_json()["claims"][
@@ -212,22 +232,7 @@ def test_conflicting_birth_dates_keep_their_attribution_after_review(tmp_path):
         for key, date in dates.items():
             case = source_case(key)
             source = sources[case.sha1]
-            prepared = _prepared(store, request, registry, source)
-            record_claim_decisions(
-                store,
-                prepared,
-                [
-                    ClaimDecisionInput(
-                        proposal_id=claim.proposal.id,
-                        expected_digest=claim.proposal.digest,
-                        outcome="approve",
-                        actor=CURATOR,
-                        time=WHEN,
-                    )
-                    for claim in prepared.claims
-                ],
-            )
-            approved = _prepared(store, request, registry, source)
+            approved = _approved(store, request, registry, source)
             applied.append(
                 (
                     approved,
@@ -308,7 +313,9 @@ def test_face_depicts_needs_its_confirmed_approval_to_apply(tmp_path):
     records = tmp_path / "records"
     with ReviewStore(tmp_path / "review.sqlite") as store:
         wiki, registry, _, request = _accepted_births(store)
-        prepared = _prepared(store, request, registry, request.sources[0])
+        # The replaced birth claim is approved, so a fresh preparation passes
+        # the gates and each refusal below comes from the face claim.
+        prepared = _approved(store, request, registry, request.sources[0])
         (births,) = prepared.claims
         # The machine's suggestion of Wastl, in place of a reviewable claim.
         face = _face_proposals().claims[0]
