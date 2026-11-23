@@ -3833,8 +3833,10 @@ class TestIdentityOrigins:
         site = self.site(tmp_path, vocabulary)
         page = (site / "identity.html").read_text()
         kinds = headed(page, "h2")
-        untyped = "No type stated: an operational identity record link"
-        assert list(kinds) == ["organization", "place", untyped]
+        # each type by its manifest label, and the origins on an
+        # operational link, which states none, under a last heading
+        *typed, untyped = kinds
+        assert typed == ["organization", "place"]
 
         def methods(part: str) -> dict[str, list[str]]:
             return {
