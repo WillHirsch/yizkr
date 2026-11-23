@@ -325,7 +325,9 @@ def derive_cluster_choices(
         if missing:
             unresolved[cluster_id] = tuple(missing)
             held = "unresolved"
-        elif len(entities) > 1:
+        # Two entities among the supplied members are a conflict whatever
+        # the members not supplied would show.
+        if len(entities) > 1:
             conflicts[cluster_id] = tuple(entities)
             held = "conflict"
         admitted = []

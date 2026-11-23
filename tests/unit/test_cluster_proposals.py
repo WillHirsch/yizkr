@@ -365,6 +365,35 @@ def test_a_cluster_assigned_to_two_entities_proposes_nothing(tmp_path):
     assert derived.report.counts["divided_entities"] == 1
 
 
+def test_a_conflict_is_reported_beside_a_member_not_supplied(tmp_path):
+    birth, naturalisation = gustav(BIRTH), gustav(NATURALISATION)
+    third = copy_of(birth, "Fictional certified copy.")
+    fourth = copy_of(birth, "Fictional second certified copy.")
+    sources = (birth, naturalisation, third)
+    data = map_of(*sources, fourth)
+    with ReviewStore(tmp_path / "review.sqlite") as store:
+        registry = Assignments(
+            {
+                mention_id(store, birth): "a" * 32,
+                mention_id(store, naturalisation): "b" * 32,
+            }
+        )
+        derived = derive(
+            store,
+            data,
+            sources,
+            registry,
+            increment=[third.artifact_sha1],
+        )
+    (cluster,) = {row["cluster"] for row in data["mentions"].values()}
+    # The supplied members already show the cluster's two entities; the
+    # unsupplied copy holds it back as well.
+    assert derived.request.proposals == ()
+    assert derived.report.conflicts == {cluster: ("a" * 32, "b" * 32)}
+    assert derived.report.unresolved == {cluster: (fourth.artifact_sha1,)}
+    assert derived.report.counts["conflicting_clusters"] == 1
+
+
 def test_a_source_the_map_does_not_hold_in_full_is_refused(tmp_path):
     birth, naturalisation = gustav(BIRTH), gustav(NATURALISATION)
     with_father = gustav(NATURALISATION)
