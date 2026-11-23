@@ -7,9 +7,11 @@ from concurrent.futures import ThreadPoolExecutor
 from threading import Event
 
 import pytest
+from wikibaseintegrator.datatypes import Item
 
 from tests.unit.test_pipeline import FakeWiki
 from yizkr.core.config import Config
+from yizkr.core.smoke_marker import SMOKE_DESCRIPTION, SMOKE_LABEL
 from yizkr.core.wiki import (
     EntityCreation,
     RecoveryEvidenceError,
@@ -250,6 +252,80 @@ def test_generation_preflight_refuses_legacy_without_mutating_it():
 
     assert not wiki._recovery_pages
     assert wiki.wbi.item.writes == before
+
+
+def smoke_marker(wiki):
+    """The item `yizkr smoke-test` writes: its label and description, and
+    nothing else."""
+    item = wiki.wbi.item.new()
+    item.labels.set("en", SMOKE_LABEL)
+    item.descriptions.set("en", SMOKE_DESCRIPTION)
+    return item
+
+
+def without_generation():
+    """The in-memory wiki holding the vocabulary alone, with no generation
+    or recovery page, as a scratch reset leaves an instance before its
+    smoke test."""
+    wiki = FakeWiki()
+    wiki._recovery_pages.clear()
+    return wiki
+
+
+def test_a_smoke_test_marker_item_admits_the_generation():
+    wiki = without_generation()
+    smoke_marker(wiki).write()
+    writes = wiki.wbi.item.writes
+    registry = CreationRegistry(wiki)
+
+    assert registry.check_generation() is None
+    assert not wiki._recovery_pages
+    generation = registry.ensure_generation()
+    assert list(wiki._recovery_pages) == [GENERATION_PAGE]
+    assert CreationRegistry(copy.copy(wiki)).ensure_generation() == generation
+    assert list(wiki._recovery_pages) == [GENERATION_PAGE]
+    assert wiki.wbi.item.writes == writes
+
+
+@pytest.mark.parametrize(
+    "change", ["statement", "description", "alias", "German label"]
+)
+def test_an_item_that_is_more_than_the_marker_refuses_the_generation(change):
+    wiki = without_generation()
+    properties, items = wiki.vocabulary()
+    item = smoke_marker(wiki)
+    if change == "statement":
+        item.claims.add(
+            Item(prop_nr=properties["instance_of"], value=items["human"])
+        )
+    elif change == "description":
+        item.descriptions.set("en", "A hatter of Flörburg")
+    elif change == "alias":
+        item.aliases.set("en", "Smoke-test item")
+    else:
+        item.labels.set("de", "Rauchtest-Objekt")
+    item.write()
+    registry = CreationRegistry(wiki)
+
+    with pytest.raises(CreationRefused):
+        registry.ensure_generation()
+    assert not wiki._recovery_pages
+
+
+def test_a_marker_beside_an_ingested_person_refuses_the_generation():
+    wiki = without_generation()
+    properties, items = wiki.vocabulary()
+    smoke_marker(wiki).write()
+    leopold = person(wiki)
+    leopold.claims.add(
+        Item(prop_nr=properties["instance_of"], value=items["human"])
+    )
+    leopold.write(summary="fictional legacy ingestion")
+    registry = CreationRegistry(wiki)
+
+    with pytest.raises(CreationRefused):
+        registry.ensure_generation()
+    assert not wiki._recovery_pages
 
 
 def test_observed_generation_change_stops_existing_registry():
@@ -517,3 +593,157 @@ def test_createonly_api_never_retries_or_overwrites(monkeypatch, outcome):
     assert sent[0]["data"]["createonly"] == "1"
     assert sent[0]["max_retries"] == 1
     assert sent[0]["retry_after"] == 0
+
+
+ALL_PROPS = "info|sitelinks|aliases|labels|descriptions|claims|datatype"
+TERMS = ("labels", "descriptions", "aliases")
+
+
+class EntityClient(ApiClient):
+    """A client of an instance with no generation or recovery page and no
+    vocabulary, which holds `entities`, id -> entity data, None for an
+    entity that is listed but served missing. It answers `wbgetentities`
+    as Wikibase does: only the props asked for, terms only in the
+    languages asked for, and each id under its own key."""
+
+    def __init__(self, entities):
+        super().__init__(self.wbgetentities)
+        self.entities = entities
+
+    def immutable_page(self, title):
+        return None
+
+    def page_titles(self, prefix):
+        return []
+
+    def list_entity_ids(self):
+        return sorted(self.entities)
+
+    def vocabulary(self):
+        return {}, {}
+
+    def wbgetentities(self, params):
+        assert params["action"] == "wbgetentities"
+        props = params.get("props", ALL_PROPS).split("|")
+        languages = params.get("languages")
+        served = {}
+        for entity_id in params["ids"].split("|"):
+            entity = self.entities[entity_id]
+            if entity is None:
+                served[entity_id] = {"id": entity_id, "missing": ""}
+                continue
+            data = {"type": entity["type"], "id": entity_id, "lastrevid": 9}
+            for key in props:
+                if key not in entity:
+                    continue
+                value = copy.deepcopy(entity[key])
+                if languages is not None and key in TERMS:
+                    value = {
+                        language: terms
+                        for language, terms in value.items()
+                        if language in languages.split("|")
+                    }
+                data[key] = value
+            served[entity_id] = data
+        return {"entities": served}
+
+
+def served_marker(**changes):
+    """The smoke-test marker item as an instance serves it."""
+    return {
+        "type": "item",
+        "labels": {"en": {"language": "en", "value": SMOKE_LABEL}},
+        "descriptions": {"en": {"language": "en", "value": SMOKE_DESCRIPTION}},
+        "aliases": {},
+        "claims": {},
+        "sitelinks": {},
+        **changes,
+    }
+
+
+def served_person():
+    """Leopold Löbig as an instance serves an ingested person."""
+    return {
+        "type": "item",
+        "labels": {"en": {"language": "en", "value": "Leopold Löbig"}},
+        "descriptions": {},
+        "aliases": {},
+        "claims": {
+            "P1": [
+                {
+                    "mainsnak": {
+                        "snaktype": "value",
+                        "property": "P1",
+                        "datavalue": {
+                            "value": {"entity-type": "item", "id": "Q1"},
+                            "type": "wikibase-entityid",
+                        },
+                    },
+                    "type": "statement",
+                    "rank": "normal",
+                }
+            ]
+        },
+        "sitelinks": {},
+    }
+
+
+def requested(client):
+    """The ids of each `wbgetentities` request the client made."""
+    return [call["ids"].split("|") for call in client.calls]
+
+
+def test_generation_reads_many_marker_items_fifty_a_request():
+    markers = {f"Q{1000 + n}": served_marker() for n in range(120)}
+    client = EntityClient(markers)
+
+    assert CreationRegistry(client).check_generation() is None
+    batches = requested(client)
+    assert [len(batch) for batch in batches] == [50, 50, 20]
+    assert sorted(qid for batch in batches for qid in batch) == sorted(markers)
+
+
+def test_generation_refuses_at_the_first_item_that_is_not_a_marker():
+    entities = {f"Q{1000 + n}": served_marker() for n in range(120)}
+    entities["Q1000"] = served_person()
+    client = EntityClient(entities)
+
+    with pytest.raises(CreationRefused):
+        CreationRegistry(client).check_generation()
+    assert len(client.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "entity",
+    [
+        served_marker(
+            labels={
+                "en": {"language": "en", "value": SMOKE_LABEL},
+                "de": {"language": "de", "value": "Rauchtest-Objekt"},
+            }
+        ),
+        served_marker(
+            aliases={"de": [{"language": "de", "value": "Rauchtest-Objekt"}]}
+        ),
+        None,
+    ],
+    ids=["German label", "German alias", "missing"],
+)
+def test_generation_refuses_an_item_read_as_more_than_the_marker(entity):
+    client = EntityClient({"Q1000": served_marker(), "Q1001": entity})
+
+    with pytest.raises(CreationRefused):
+        CreationRegistry(client).check_generation()
+
+
+def test_generation_refuses_a_property_outside_the_vocabulary_unread():
+    client = EntityClient(
+        {
+            "Q1000": served_marker(),
+            "P900": served_marker(type="property", datatype="string"),
+        }
+    )
+
+    with pytest.raises(CreationRefused):
+        CreationRegistry(client).check_generation()
+    assert client.calls == []
