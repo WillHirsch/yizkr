@@ -1409,6 +1409,8 @@ class TestAggregateOnly:
         }
         assert run["roles"]["transcribe"]["model"] == OTHER
         assert aggregate["documents"]["by_kind"][OTHER] == 1
+        admitted = aggregate["assignment_admission"]["by_kind"]
+        assert admitted[OTHER]["documents"] == 1
         assert aggregate["documents"]["routes"][OTHER] == 1
         assert aggregate["documents"]["language_resolved"][OTHER] == 1
         assert stage_row(made, OTHER)["attention_labels"] == {OTHER: 1}
@@ -4249,6 +4251,9 @@ class TestAScratchRun:
             "by_category": {},
             "set_aside": 0,
         }
+        # the driver's views are the models the assignment path reads
+        admitted = made["aggregate"]["assignment_admission"]["all"]
+        assert admitted["documents"] == admitted[report.OBSERVED] == 4
         assert made["aggregate"]["run"]["complete"] is True
         assert made["aggregate"]["run"]["barrier"] == {
             "documents": 4,

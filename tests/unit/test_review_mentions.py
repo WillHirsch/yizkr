@@ -17,6 +17,7 @@ from yizkr.claims import (
     SourceSupport,
 )
 from yizkr.pipeline.review_mentions import (
+    OBSERVATION_LIMITATIONS,
     OccurrenceAnchor,
     anchor_scope,
     canonical_basis,
@@ -505,3 +506,83 @@ def test_unknown_local_references_and_duplicate_locators_refuse():
     missing.entities.pop()
     with pytest.raises(ValueError, match="no entity-manifest record"):
         observe_mentions(ARTIFACT.sha1, missing, reading())
+
+
+def page(start, end):
+    return TranscribedPage.model_validate(
+        {
+            "page": 1,
+            "start": start,
+            "end": end,
+            "status": "transcribed",
+            "provenance": {"method": "vision", "engine": "scripted"},
+        }
+    )
+
+
+def limited(limitation):
+    """A batch and a reading in which observe_mentions gives the first
+    mention `limitation`."""
+    batch, transcription = birth_batch(), reading()
+    if limitation == "reading_unavailable":
+        transcription = None
+    elif limitation == "native_mention_location_unavailable":
+        batch.entities = []
+    elif limitation == "missing_or_noncontiguous_mention_lines":
+        batch.entities[0].mention_lines = []
+    elif limitation == "invalid_page_scope":
+        transcription.pages = [page(0, len(TEXT) + 1)]
+    elif limitation == "ambiguous_or_unread_page":
+        transcription.pages = [page(0, 5)]
+    elif limitation == "repeated_source_quote":
+        transcription = reading(TEXT + "\n" + TEXT)
+    elif limitation == "missing_or_ambiguous_literal_mention":
+        batch.entities[0].label, batch.entities[0].aliases = "Ursula", []
+    elif limitation == "multiple_literal_occurrences":
+        batch.entities[0].aliases = ["Gustav", "Hildegard"]
+    elif limitation == "shared_source_occurrence":
+        batch.entities[1] = batch.entities[0].model_copy(update={"id": "e2"})
+    else:
+        transcription = located()
+        spans = transcription.source_context.readings
+        if limitation == "unsupported_source_scope":
+            spans[0].state = "unsupported"
+            spans[0].reason = "unresolved source owner"
+        elif limitation == "ambiguous_or_missing_source_scope":
+            spans.append(spans[0].model_copy(update={"owner": CONTAINER}))
+        elif limitation == "invalid_source_range":
+            spans[0].end = len(TEXT) + 1
+        elif limitation == "reading_support_mismatch":
+            spans[0].support.reading_sha256 = "0" * 64
+    return batch, transcription
+
+
+# the limitations `limited` gives products for
+LIMITED = (
+    "reading_unavailable",
+    "native_mention_location_unavailable",
+    "missing_or_noncontiguous_mention_lines",
+    "unsupported_source_scope",
+    "ambiguous_or_missing_source_scope",
+    "invalid_source_range",
+    "reading_support_mismatch",
+    "invalid_page_scope",
+    "ambiguous_or_unread_page",
+    "repeated_source_quote",
+    "missing_or_ambiguous_literal_mention",
+    "multiple_literal_occurrences",
+    "shared_source_occurrence",
+)
+
+
+@pytest.mark.parametrize(
+    "limitation", sorted(set(LIMITED) | set(OBSERVATION_LIMITATIONS))
+)
+def test_the_vocabulary_is_the_limitations_observed(limitation):
+    """Each limitation observe_mentions records is in its vocabulary, and
+    each the vocabulary names is one it records."""
+    batch, transcription = limited(limitation)
+    first = observe_mentions(ARTIFACT.sha1, batch, transcription)[0]
+    assert first.anchor is None
+    assert first.limitations == [limitation]
+    assert limitation in OBSERVATION_LIMITATIONS

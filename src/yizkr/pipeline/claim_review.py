@@ -59,7 +59,7 @@ from yizkr.pipeline.transcribe import Transcription, reading_digest
 
 COMPARISON_VERSION = 1
 
-# The codes of the source-location check (_located_source), one for each way
+# The codes of the source-location check (locate_support), one for each way
 # a claim's support can fail to lie uniquely, readably and under its own owner
 # in the current reading.
 LOCATION_REFUSALS = (
@@ -214,10 +214,15 @@ def _support_material(value: dict[str, Any]) -> dict[str, Any]:
     return _canonical(value)
 
 
-def _located_source(
+def locate_support(
     source: SourceReference, reading: Transcription
 ) -> dict[str, Any]:
-    """Locate one support in the reading, or refuse with a location code."""
+    """Locate one support in the reading, or refuse with a location code.
+
+    Claim preparation applies it to a claim's source and then to its
+    circumstance source. It reads nothing but its arguments and stores
+    nothing, so a report can count its refusals from saved views alone.
+    """
     if reading.artifact != source.artifact:
         raise ClaimRefused(
             "other_reading", "claim support belongs to another source reading"
@@ -713,9 +718,9 @@ def _admit_claim(
                     "decision_revoked",
                     "accepted assignment decision was revoked or replaced",
                 )
-    located = _located_source(claim.source, source.reading)
+    located = locate_support(claim.source, source.reading)
     circumstance = (
-        _located_source(claim.circumstance_source, source.reading)
+        locate_support(claim.circumstance_source, source.reading)
         if claim.circumstance_source
         else None
     )
