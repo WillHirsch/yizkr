@@ -1373,7 +1373,10 @@ def _read_views(document: Document, directory: Path, state: dict) -> None:
     and judgement notes it counts: None for both unless it counts both);
     the critique's findings by class; and what the assignment path's own
     checks make of the transcription and the batch (`_admission`). A view
-    that is missing or cannot be read counts nothing, and is noted."""
+    that is missing or cannot be read counts nothing in the other figures,
+    and is noted. The admission counts its document as UNREADABLE instead,
+    as it does a view that is not of the model the assignment path reads it
+    as, which is not noted."""
     document.directory = directory.name
     views = document.views
     detail = state.get("detail")
