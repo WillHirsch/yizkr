@@ -3077,7 +3077,7 @@ class ScratchDriver:
         """Current eligible sources, occurrences and readings; no publication.
 
         All consumers observe the same original-source preparation and current
-        policy. A legacy media record is only a verified migration input.
+        policy.
         """
         from yizkr.pipeline.container_sources import project_sources
 
@@ -3708,9 +3708,9 @@ class ScratchDriver:
     def _reading_failure(self, doc: DocumentRun, transcription) -> str | None:
         """Verify marked readings against eligible structural sources.
 
-        Inventory reconstruction and an absent legacy media record do not
-        invalidate a reading. Changed source selection or missing image
-        readings do: no stored marker grants admission by itself.
+        Inventory reconstruction does not invalidate a reading. Changed
+        source selection or missing image readings do: no stored marker
+        grants admission by itself.
         """
         from yizkr.pipeline.presentation import derived_transcription
 
