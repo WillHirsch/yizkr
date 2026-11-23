@@ -15,13 +15,21 @@ aliases. A name holding a character Python's Unicode tables do not know,
 which the instance may keep in another form, is left out and reported in the
 contribution, never altered.
 
-The update is append-only. It reads the item afresh, appends the names the
-item holds neither as its label nor as an alias, and leaves its label,
-descriptions, statements and other aliases, a curator's included, as they
-are. One revision-checked, single-attempt edit sends them; a conflict or an
-uncertain result stops, and a retry reads the item again instead of resending
-an earlier edit. A repeat against an unchanged item adds nothing; one after a
-curator's edit appends whichever of the names the item no longer holds.
+The update is append-only and completes once for each accepted assignment
+revision. It reads the item afresh and appends the names the item holds
+neither as its label nor as an alias, leaving its label, descriptions,
+statements and other aliases, a curator's included, as they are. Immutable
+registry pages keyed to the assignment revision record it: when the item
+lacks any of the names, an intent names the aliases the update appends
+before it is sent, and a receipt, once the item holds them, names the
+aliases it appended, or none. One revision-checked, single-attempt edit sends
+them; a conflict or an uncertain result stops before the receipt. A retry
+without a receipt reads the item again and appends whichever of the intent's
+names it lacks, instead of resending an earlier edit; its receipt names
+every intended alias the item then holds, as the lost edit may have appended
+them. A receipt completes the update: a later repeat reads no item and
+appends nothing, so a curator's later rename, or removal of an appended
+alias, stands.
 
 Each publisher of an accepted assignment's direct origin, a cohort choice's
 (``cohort_provenance``) and an owner override's
@@ -31,19 +39,23 @@ Each publisher of an accepted assignment's direct origin, a cohort choice's
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import ClassVar, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from yizkr.core.identity_assignments import AssignmentRevision
+from yizkr.core.identity_assignments import AssignmentRevision, record_json
 from yizkr.core.instance import require_retained_code
-from yizkr.core.write_recovery import write_existing
+from yizkr.core.write_recovery import (
+    PREFIX,
+    CreationRefused,
+    CreationRegistry,
+    write_existing,
+)
+from yizkr.pipeline.cancellation import check_cancelled
 from yizkr.pipeline.identity_provenance import IdentityPublication
 from yizkr.pipeline.identity_review import Decision
 from yizkr.pipeline.writer import _terms, unknown_characters
-
-_DIRECT = ("assign", "new_entity")
 
 
 class AliasContribution(BaseModel):
@@ -63,13 +75,45 @@ class AliasContribution(BaseModel):
     left_out: tuple[str, ...] = ()
 
 
+class _AliasRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    format: Literal[1] = 1
+    deployment_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    generation: str = Field(pattern=r"^[0-9a-f]{32}$")
+    assignment: str = Field(pattern=r"^[0-9a-f]{64}$")
+    qid: str = Field(pattern=r"^Q[1-9][0-9]*$")
+    contribution: AliasContribution
+
+
+class AliasIntent(_AliasRecord):
+    """The aliases an assignment's update appends to the item ``qid``,
+    recorded before the update is sent; it may or may not have landed
+    until a receipt records it."""
+
+    page: ClassVar[str] = "intent"
+    kind: Literal["assignment-alias-intent"] = "assignment-alias-intent"
+    names: tuple[str, ...] = Field(min_length=1)
+
+
+class AliasReceipt(_AliasRecord):
+    """A completed alias update of an assignment: ``added`` are the
+    aliases it appended to the item ``qid``, in the order sent, which the
+    item held once it completed; empty when the item already held every
+    name."""
+
+    page: ClassVar[str] = "receipt"
+    kind: Literal["assignment-alias-receipt"] = "assignment-alias-receipt"
+    added: tuple[str, ...]
+
+
 @dataclass(frozen=True)
 class AliasAddition:
-    """The aliases one update appended to the item ``qid``, in the order
-    sent; empty when the item already held every name."""
+    """One call's alias update: ``added`` are the aliases this call
+    appended, and ``receipt`` records the assignment's completed update,
+    which an earlier call may have made."""
 
-    contribution: AliasContribution
-    qid: str
+    receipt: AliasReceipt
     added: tuple[str, ...]
 
 
@@ -78,7 +122,7 @@ class AssignmentPublication(IdentityPublication):
     """A published assignment origin and the aliases appended after it.
 
     ``changed`` describes the origin publication alone; ``aliases.added``
-    names what the alias update appended.
+    names what this call's alias update appended.
     """
 
     aliases: AliasAddition
@@ -107,39 +151,115 @@ def alias_contribution(
     )
 
 
-def direct_decision(
-    decisions: Iterable[Decision], assignment: AssignmentRevision
-) -> Decision | None:
-    """The one approved ``assign`` or ``new_entity`` decision of the
-    assignment's own mention among the decisions it references; None when
-    there is no such decision, as for an assignment that only a ``same``
-    decision gave, or more than one."""
-    references = {(r.id, r.revision) for r in assignment.decision_references}
-    direct = {
-        (d.id, d.revision): d
-        for d in decisions
-        if (d.id, d.revision) in references
-        and d.outcome == "approve"
-        and d.proposal.operation in _DIRECT
-        and d.proposal.mentions == (assignment.mention_id,)
-    }
-    return next(iter(direct.values())) if len(direct) == 1 else None
+def _record(registry, generation, assignment, cls, proposed=None):
+    """The assignment's alias record of type ``cls``, publishing
+    ``proposed`` first when there is none; None when there is none."""
+    title = (
+        f"{PREFIX}{generation.generation}/assignment-aliases/"
+        f"{assignment.revision_id}/{cls.page}"
+    )
+    page = registry.client.immutable_page(title)
+    if page is None and proposed is not None:
+        require_retained_code(registry.client)
+        check_cancelled()
+        try:
+            page = registry.client.create_page_once(
+                title,
+                record_json(proposed),
+                f"identity: record an assignment's alias {cls.page}",
+            )
+        except Exception:
+            # A lost response may follow a durable create: read, not resend.
+            page = registry.client.immutable_page(title)
+            if page is None:
+                raise
+        if registry.generation != generation:
+            raise CreationRefused("deployment generation changed")
+    if page is None:
+        return None
+    try:
+        record = cls.model_validate_json(page.text)
+    except (ValueError, ValidationError) as exc:
+        raise CreationRefused("invalid assignment alias record") from exc
+    if (
+        record.deployment_id != generation.deployment_id
+        or record.generation != generation.generation
+        or record.assignment != assignment.revision_id
+        or record.contribution.mention_id != assignment.mention_id
+    ):
+        raise CreationRefused(
+            "alias record belongs to another assignment or generation"
+        )
+    return record
+
+
+def alias_records(
+    registry: CreationRegistry, assignment: AssignmentRevision
+) -> tuple[AliasIntent | None, AliasReceipt | None]:
+    """The recorded intent and receipt of the assignment's alias update;
+    each None when there is none. Read only."""
+    generation = registry.generation
+    if generation is None:
+        return None, None
+    return (
+        _record(registry, generation, assignment, AliasIntent),
+        _record(registry, generation, assignment, AliasReceipt),
+    )
 
 
 def append_aliases(
-    client, qid: str, contribution: AliasContribution
+    registry: CreationRegistry,
+    assignment: AssignmentRevision,
+    qid: str,
+    contribution: AliasContribution,
 ) -> AliasAddition:
-    """Append the contribution's names that the item ``qid`` lacks."""
-    item = client.wbi.item.get(qid)
+    """Append the contribution's names that the item ``qid`` lacks, once
+    for the assignment revision."""
+    generation = registry.generation
+    if generation is None:
+        raise CreationRefused("alias records need a deployment generation")
+    intent, receipt = alias_records(registry, assignment)
+    if any(r is not None and r.qid != qid for r in (intent, receipt)):
+        raise CreationRefused("alias record names another item")
+    if receipt is not None:
+        return AliasAddition(receipt, ())
+    item = registry.client.wbi.item.get(qid)
     label = str(item.labels.get("en") or "")
     held = {str(alias) for alias in item.aliases.get("en") or []}
-    missing = sorted(
-        {name for name in contribution.names if name != label} - held
-    )
-    if missing:
-        require_retained_code(client)
-        item.aliases.set("en", missing)
+    record = {
+        "deployment_id": generation.deployment_id,
+        "generation": generation.generation,
+        "assignment": assignment.revision_id,
+        "qid": qid,
+    }
+    if intent is None:
+        missing = sorted(
+            {name for name in contribution.names if name != label} - held
+        )
+        if missing:
+            intent = _record(
+                registry,
+                generation,
+                assignment,
+                AliasIntent,
+                AliasIntent(
+                    **record, contribution=contribution, names=missing
+                ),
+            )
+    names = () if intent is None else intent.names
+    sent = tuple(name for name in names if name != label and name not in held)
+    if sent:
+        require_retained_code(registry.client)
+        item.aliases.set("en", list(sent))
         write_existing(
             item, summary="identity: aliases of an accepted assignment"
         )
-    return AliasAddition(contribution, qid, tuple(missing))
+    proposed = AliasReceipt(
+        **record,
+        contribution=contribution if intent is None else intent.contribution,
+        added=tuple(name for name in names if name in held or name in sent),
+    )
+    receipt = _record(registry, generation, assignment, AliasReceipt, proposed)
+    if receipt != proposed:
+        raise CreationRefused("another alias receipt records different names")
+    return AliasAddition(receipt, sent)

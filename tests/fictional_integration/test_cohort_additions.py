@@ -657,9 +657,15 @@ def test_protected_cohort_choices_claims_and_creation_recovery(
             repeated.acceptance.snapshot.assignments[mention]
             == applied.acceptance.snapshot.assignments[mention]
         )
-        # The renamed item no longer holds the accepted mention's name.
+        # The accepted mention's alias update is complete, so the repeat
+        # leaves the curator's label and the item's aliases as they are.
         (again,) = repeated.publications
-        assert again.aliases.added == ("Gustav",)
+        assert again.aliases.added == ()
+        curated = _entity(client, target.qid)
+        assert curated["labels"]["en"]["value"] == (
+            "Curator's existing cohort identity"
+        )
+        assert _aliases(curated) == ["Gustave LOBIG"]
         (original_birth,) = client.fetch_claims([target.qid])[target.qid][
             properties["date_of_birth"]
         ]
@@ -695,12 +701,13 @@ def test_protected_cohort_choices_claims_and_creation_recovery(
             tmp_path,
             "corroborating-reading",
         )
+        # The renamed item gains the new mention's label and variant.
         (publication,) = corroborated.publications
-        assert publication.aliases.added == ("Gustav Löbig",)
+        assert publication.aliases.added == ("Gustav", "Gustav Löbig")
         after = _entity(client, target.qid)
         assert after["labels"] == before["labels"]
         assert after["descriptions"] == before["descriptions"]
-        assert _aliases(after) == [*_aliases(before), "Gustav Löbig"]
+        assert _aliases(after) == [*_aliases(before), "Gustav", "Gustav Löbig"]
         link = properties["identity_record"]
         assert {
             key: value for key, value in after["claims"].items() if key != link

@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 from wikibaseintegrator.datatypes import String
+from wikibaseintegrator.wbi_enums import ActionIfExists
 from wikibaseintegrator.wbi_exceptions import MWApiError
 
 from tests.unit.test_identity_assignments import delta
@@ -21,6 +22,7 @@ from yizkr.core.reviewed_creation import creation_review_evidence
 from yizkr.core.wiki import RecoveryEvidenceError
 from yizkr.core.write_recovery import CreationRefused, CreationRegistry
 from yizkr.pipeline import identity_provenance
+from yizkr.pipeline.assignment_aliases import alias_records
 from yizkr.pipeline.cohort_provenance import publish_cohort_assignment
 from yizkr.pipeline.correction_planning import (
     CorrectionRequest,
@@ -341,13 +343,9 @@ def aliases(wiki, qid):
     return [str(a) for a in wiki.wbi.item.get(qid).aliases.get("en") or []]
 
 
-def cohort_record(case):
-    origin = next(
-        r for r in anchor(case).references if values(r, "identity_method")
-    )
-    (digest,) = values(origin, "run_record_sha256")
-    record = read_record(case.directory, RecordRef(sha256=digest))
-    return record.metadata["identity_cohort"]
+def recorded(case):
+    """The assignment's alias intent and receipt as the server keeps them."""
+    return alias_records(case.registry, case.assignment)
 
 
 def shown(case):
@@ -364,9 +362,10 @@ def shown(case):
     ]
 
 
-def curator_alias(case, alias):
+def curator_aliases(case, *aliases):
+    """A curator's edit that leaves the item exactly these aliases."""
     item = case.wiki.wbi.item.get(case.binding.qid)
-    item.aliases.set("en", [alias])
+    item.aliases.set("en", list(aliases), ActionIfExists.REPLACE_ALL)
     item.write()
 
 
@@ -394,6 +393,15 @@ def on_alias_write(wiki, patch, effect):
     patch.setattr(items, "get", read)
 
 
+def lose_reply(committed):
+    def effect(write, options):
+        if committed:
+            write(**options)
+        raise OSError("fictional lost alias update reply")
+
+    return effect
+
+
 @pytest.mark.parametrize("operation", ["assign", "new_entity"])
 def test_accepted_names_are_appended_as_shown_and_only_once(
     tmp_path, operation
@@ -408,7 +416,7 @@ def test_accepted_names_are_appended_as_shown_and_only_once(
             unicodedata.normalize("NFD", label),
         ),
     )
-    curator_alias(case, "Leopold")
+    curator_aliases(case, "Leopold")
     before = case.wiki.wbi.item.get(case.binding.qid).get_json()
     result = publish(case)
     after = case.wiki.wbi.item.get(case.binding.qid).get_json()
@@ -420,17 +428,44 @@ def test_accepted_names_are_appended_as_shown_and_only_once(
     assert aliases(case.wiki, case.binding.qid) == ["Leopold", "Leopold LÖBIG"]
     assert after["labels"] == before["labels"]
     assert after["descriptions"] == before["descriptions"]
-    contribution = cohort_record(case)["aliases"]
-    assert contribution["names"] == names
-    assert contribution["mention_id"] == case.mention.id
+    intent, receipt = recorded(case)
+    assert receipt == result.aliases.receipt
+    assert intent.names == receipt.added == ("Leopold LÖBIG",)
+    assert (receipt.assignment, receipt.qid) == (
+        case.assignment.revision_id,
+        case.binding.qid,
+    )
+    contribution = receipt.contribution
+    assert list(contribution.names) == names
     assert (
-        contribution["decision_id"],
-        contribution["decision_revision"],
-    ) == (case.decision.id, case.decision.revision)
+        contribution.mention_id,
+        contribution.decision_id,
+        contribution.decision_revision,
+    ) == (case.mention.id, case.decision.id, case.decision.revision)
     writes = case.wiki.wbi.item.writes
     repeated = publish(case)
     assert repeated.aliases.added == ()
+    assert repeated.aliases.receipt == receipt
     assert case.wiki.wbi.item.writes == writes
+
+
+@pytest.mark.parametrize("edit", ["remove the alias", "rename the item"])
+def test_a_curators_later_edit_stands_when_the_application_repeats(
+    tmp_path, edit
+):
+    case = fixture(tmp_path, aliases=("Leopold LÖBIG",))
+    assert publish(case).aliases.added == ("Leopold LÖBIG",)
+    if edit == "remove the alias":
+        curator_aliases(case, "Leopold")
+    else:
+        item = case.wiki.wbi.item.get(case.binding.qid)
+        item.labels.set("en", "Curator's Leopold")
+        item.write()
+    curated = case.wiki.wbi.item.get(case.binding.qid).get_json()
+    writes = case.wiki.wbi.item.writes
+    assert publish(case).aliases.added == ()
+    assert case.wiki.wbi.item.writes == writes
+    assert case.wiki.wbi.item.get(case.binding.qid).get_json() == curated
 
 
 @pytest.mark.skipif(
@@ -445,9 +480,9 @@ def test_a_name_the_instance_may_keep_otherwise_is_left_out_and_reported(
     case = fixture(tmp_path, aliases=("Leopold", stray))
     result = publish(case)
     assert result.aliases.added == ("Leopold",)
-    assert result.aliases.contribution.left_out == (stray,)
+    assert result.aliases.receipt.contribution.left_out == (stray,)
     assert aliases(case.wiki, case.binding.qid) == ["Leopold"]
-    assert cohort_record(case)["aliases"]["left_out"] == [stray]
+    assert recorded(case)[1].contribution.left_out == (stray,)
 
 
 def test_a_stale_revision_is_reread_not_overwritten(tmp_path, monkeypatch):
@@ -467,6 +502,7 @@ def test_a_stale_revision_is_reread_not_overwritten(tmp_path, monkeypatch):
         with pytest.raises(MWApiError):
             publish(case)
     assert aliases(case.wiki, qid) == ["Leopold"]
+    assert recorded(case)[1] is None
     snapshot = case.registry.assignment_snapshot()
     result = publish(case)
     assert result.aliases.added == ("Leopold LÖBIG",)
@@ -479,27 +515,29 @@ def test_a_stale_revision_is_reread_not_overwritten(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("committed", [False, True])
-def test_an_interrupted_alias_update_completes_from_a_reread(
+def test_an_interrupted_alias_update_completes_once_from_a_reread(
     tmp_path, monkeypatch, committed
 ):
     case = fixture(tmp_path, aliases=("Leopold LÖBIG",))
-
-    def lose_reply(write, options):
-        if committed:
-            write(**options)
-        raise OSError("fictional lost alias update reply")
-
     with monkeypatch.context() as patch:
-        on_alias_write(case.wiki, patch, lose_reply)
+        on_alias_write(case.wiki, patch, lose_reply(committed))
         with pytest.raises(OSError):
             publish(case)
+    intent, receipt = recorded(case)
+    assert intent.names == ("Leopold LÖBIG",) and receipt is None
     writes = case.wiki.wbi.item.writes
     snapshot = case.registry.assignment_snapshot()
     result = publish(case)
     assert result.aliases.added == (() if committed else ("Leopold LÖBIG",))
+    assert result.aliases.receipt.added == ("Leopold LÖBIG",)
     assert case.wiki.wbi.item.writes == writes + (0 if committed else 1)
     assert aliases(case.wiki, case.binding.qid) == ["Leopold LÖBIG"]
     assert case.registry.assignment_snapshot() == snapshot
+    curator_aliases(case, "Leopold")
+    writes = case.wiki.wbi.item.writes
+    assert publish(case).aliases.added == ()
+    assert case.wiki.wbi.item.writes == writes
+    assert aliases(case.wiki, case.binding.qid) == ["Leopold"]
 
 
 def test_one_record_gains_the_aliases_the_map_bound_writer_adds(tmp_path):
@@ -514,7 +552,7 @@ def test_one_record_gains_the_aliases_the_map_bound_writer_adds(tmp_path):
             "Son: Leopold LÖBIG, arrested " * 10,
         ),
     )
-    curator_alias(case, "Leopold")
+    curator_aliases(case, "Leopold")
     other = Wiki(detached=True)
     item = other.wbi.item.new()
     item.labels.set("en", "Leopold Löbig")
@@ -529,11 +567,10 @@ def test_one_record_gains_the_aliases_the_map_bound_writer_adds(tmp_path):
     assert len(gained) == 3
 
 
-def test_correction_planning_lists_an_assignments_alias_contribution(
-    tmp_path,
+def test_correction_planning_lists_the_names_an_update_appended(
+    tmp_path, monkeypatch
 ):
     case = fixture(tmp_path, aliases=("Leopold LÖBIG",))
-    publish(case)
     other = case.wiki.wbi.item.new()
     other.labels.set("en", "Eugen Löbig")
     target = case.registry.index_binding(
@@ -543,6 +580,51 @@ def test_correction_planning_lists_an_assignments_alias_contribution(
             summary="fictional existing correction target",
         )
     )
+
+    def plan():
+        return plan_correction(
+            case.registry,
+            CorrectionRequest(
+                source=case.registry.binding(case.binding.entity_id),
+                target=target,
+                assignments=(case.assignment,),
+                reason="Review a possible mistaken mention assignment.",
+            ),
+        )
+
+    unpublished = plan()
+    assert unpublished.aliases == unpublished.pending_aliases == ()
+    with monkeypatch.context() as patch:
+        on_alias_write(case.wiki, patch, lose_reply(committed=False))
+        with pytest.raises(OSError):
+            publish(case)
+    interrupted = plan()
+    assert interrupted.aliases == ()
+    (pending,) = interrupted.pending_aliases
+    assert pending.names == ("Leopold LÖBIG",)
+    result = publish(case)
+    completed = plan()
+    assert completed.aliases == (result.aliases.receipt,)
+    assert completed.aliases[0].added == ("Leopold LÖBIG",)
+    assert completed.pending_aliases == ()
+
+
+def test_correction_planning_lists_nothing_where_nothing_was_appended(
+    tmp_path,
+):
+    case = fixture(tmp_path)
+    other = case.wiki.wbi.item.new()
+    other.labels.set("en", "Eugen Löbig")
+    target = case.registry.index_binding(
+        case.registry.create(
+            {"kind": "fictional correction target"},
+            other,
+            summary="fictional existing correction target",
+        )
+    )
+    result = publish(case)
+    assert result.aliases.receipt.contribution.names == ("Leopold Löbig",)
+    assert result.aliases.receipt.added == ()
     plan = plan_correction(
         case.registry,
         CorrectionRequest(
@@ -552,6 +634,4 @@ def test_correction_planning_lists_an_assignments_alias_contribution(
             reason="Review a possible mistaken mention assignment.",
         ),
     )
-    (listed,) = plan.aliases
-    assert listed.model_dump(mode="json") == cohort_record(case)["aliases"]
-    assert listed.names == ("Leopold Löbig", "Leopold LÖBIG")
+    assert plan.aliases == plan.pending_aliases == ()

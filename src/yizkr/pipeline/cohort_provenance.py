@@ -156,10 +156,11 @@ def publish_cohort_assignment(
     recorded graph, matching and source evidence independently of publication.
 
     After the origin, the names the confirmed decision's review row showed
-    for the mention are appended to the entity's aliases. The process record
-    lists them with the assignment that contributes them, and those left out
-    because the instance may keep them in another form. Repeating the call
-    completes an interrupted alias update from a fresh read of the item.
+    for the mention are appended to the entity's aliases, once for the
+    assignment revision. Its alias receipt lists the names appended, and
+    those left out because the instance may keep them in another form.
+    Repeating the call completes an interrupted alias update from a fresh
+    read of the item, and after a receipt appends nothing.
     """
     check_cancelled()
     registry = CreationRegistry(client)
@@ -206,7 +207,6 @@ def publish_cohort_assignment(
                     if accepted.creation is not None
                     else None
                 ),
-                "aliases": contribution.model_dump(mode="json"),
             }
         },
         limitations=limitations + (producer.limitations if producer else ()),
@@ -259,5 +259,7 @@ def publish_cohort_assignment(
         publication.record_qid,
         publication.changed,
         publication.statements,
-        append_aliases(client, accepted.source.qid, contribution),
+        append_aliases(
+            registry, accepted.assignment, accepted.source.qid, contribution
+        ),
     )

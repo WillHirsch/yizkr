@@ -275,10 +275,37 @@ def test_interrupted_projection_recovers_metadata_and_exact_refs(
     )
 
 
+def correction_target(case):
+    other = case.wiki.wbi.item.new()
+    other.labels.set("en", "Eugen Löbig")
+    return case.registry.index_binding(
+        case.registry.create(
+            {"kind": "fictional correction target"},
+            other,
+            summary="fictional existing correction target",
+        )
+    )
+
+
+def correction_plan(case, target):
+    assignment = case.accepted.snapshot.assignments[case.mention]
+    return plan_correction(
+        case.registry,
+        CorrectionRequest(
+            source=case.registry.binding(assignment.entity_id),
+            target=target,
+            assignments=(assignment,),
+            reason="Review a possible mistaken mention assignment.",
+        ),
+    )
+
+
 def test_replacement_names_become_aliases_once_as_correction_planning_lists(
     tmp_path,
 ):
     case = fixture(tmp_path, aliases=("Leopold LÖBIG",))
+    target = correction_target(case)
+    assert correction_plan(case, target).aliases == ()
     before = case.wiki.wbi.item.get(case.target).get_json()
     result = publish(case)
     after = case.wiki.wbi.item.get(case.target).get_json()
@@ -289,39 +316,23 @@ def test_replacement_names_become_aliases_once_as_correction_planning_lists(
     ]
     assert after["labels"] == before["labels"]
     assert after["descriptions"] == before["descriptions"]
-    origin = next(
-        r for r in kind(case).references if values(r, "identity_method")
-    )
-    (digest,) = values(origin, "run_record_sha256")
-    record = read_record(case.directory, RecordRef(sha256=digest))
-    contribution = record.metadata["identity_owner_override"]["aliases"]
-    assert contribution["names"] == ["Leopold Löbig", "Leopold LÖBIG"]
+    receipt = result.aliases.receipt
+    assert receipt.added == result.aliases.added
+    contribution = receipt.contribution
+    assert contribution.names == ("Leopold Löbig", "Leopold LÖBIG")
     assert (
-        contribution["mention_id"],
-        contribution["decision_id"],
-        contribution["decision_revision"],
+        contribution.mention_id,
+        contribution.decision_id,
+        contribution.decision_revision,
     ) == (case.mention, case.confirmed.id, case.confirmed.revision)
     writes = case.wiki.wbi.item.writes
     assert publish(case).aliases.added == ()
     assert case.wiki.wbi.item.writes == writes
-    other = case.wiki.wbi.item.new()
-    other.labels.set("en", "Eugen Löbig")
-    target = case.registry.index_binding(
-        case.registry.create(
-            {"kind": "fictional correction target"},
-            other,
-            summary="fictional existing correction target",
-        )
-    )
-    assignment = case.accepted.snapshot.assignments[case.mention]
-    plan = plan_correction(
-        case.registry,
-        CorrectionRequest(
-            source=case.registry.binding(assignment.entity_id),
-            target=target,
-            assignments=(assignment,),
-            reason="Review a possible mistaken mention assignment.",
-        ),
-    )
-    (listed,) = plan.aliases
-    assert listed.model_dump(mode="json") == contribution
+    assert correction_plan(case, target).aliases == (receipt,)
+
+
+def test_an_unpublished_ordinary_assignment_lists_no_appended_names(tmp_path):
+    case = fixture(tmp_path, ordinary=True, aliases=("Leopold LÖBIG",))
+    plan = correction_plan(case, correction_target(case))
+    assert plan.aliases == plan.pending_aliases == ()
+    assert not case.wiki.wbi.item.get(case.target).aliases.get("en")

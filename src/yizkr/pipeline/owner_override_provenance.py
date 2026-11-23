@@ -114,11 +114,8 @@ def publish_owner_override(
     appends only missing references to the existing source-backed kind.
 
     After the origin, the names the confirmed replacement's review row showed
-    for the mention are appended to the entity's aliases, as for a cohort
-    choice. The process record lists them with the assignment that
-    contributes them, and those left out because the instance may keep them
-    in another form. Repeating the call completes an interrupted alias update
-    from a fresh read of the item.
+    for the mention are appended to the entity's aliases once, with an alias
+    receipt, as for a cohort choice.
     """
     check_cancelled()
     registry = CreationRegistry(client)
@@ -156,7 +153,6 @@ def publish_owner_override(
                 "evidence": evidence.model_dump(mode="json"),
                 "confirmation": decision.model_dump(mode="json"),
                 "original_origin": origin,
-                "aliases": contribution.model_dump(mode="json"),
             }
         },
         limitations=limitations + (producer.limitations if producer else ()),
@@ -209,5 +205,5 @@ def publish_owner_override(
         publication.record_qid,
         publication.changed,
         publication.statements,
-        append_aliases(client, source.qid, contribution),
+        append_aliases(registry, assignment, source.qid, contribution),
     )
