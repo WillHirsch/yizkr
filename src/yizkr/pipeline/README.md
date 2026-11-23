@@ -81,7 +81,7 @@ Run products may contain private source material. Keep them in ignored `var/` or
 
 ## Corpus clustering (`clustering.py`, the scratch run's identity map)
 
-Corpus clustering proposes correspondence between source mentions and emits a reproducible identity-map snapshot. Labels and a map hash are not durable entity identities. Blocking, constraints and adjudication operate on recorded source-derived context; explicit graph matching records its projection separately.
+Corpus clustering proposes correspondence between source mentions and emits a reproducible identity-map snapshot. Labels and a map hash are not durable entity identities. Blocking, constraints and adjudication operate on recorded source-derived context; explicit graph matching records its projection separately. The target is that this clustering is the one identity-proposal mechanism for every increment: it clusters the increment's mentions with those of the sources already applied, accepted assignments are its fixed points, and graph matching only supplies candidate evidence ([statement](../../../docs/MENTIONS_AND_MATCHING.md#one-proposal-mechanism-for-every-increment); [#835](https://github.com/WillHirsch/yizkr/issues/835), [#906](https://github.com/WillHirsch/yizkr/issues/906), [#944](https://github.com/WillHirsch/yizkr/issues/944)).
 
 ```mermaid
 flowchart LR
