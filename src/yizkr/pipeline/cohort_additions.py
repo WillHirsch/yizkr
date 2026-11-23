@@ -15,6 +15,7 @@ from pathlib import Path
 from yizkr.core.mutation_guard import protected_mutation
 from yizkr.core.reviewed_creation import creation_review_evidence
 from yizkr.core.write_recovery import CreationRegistry
+from yizkr.pipeline.assignment_aliases import AssignmentPublication
 from yizkr.pipeline.assignment_stages import (
     AssignmentAcceptance,
     accept_reviewed_assignments,
@@ -26,7 +27,6 @@ from yizkr.pipeline.cohort_context import (
     capture_cohort_context,
     matching_candidates,
 )
-from yizkr.pipeline.identity_provenance import IdentityPublication
 from yizkr.pipeline.identity_review import ReviewRefused, ReviewStore
 from yizkr.pipeline.review_stages import (
     MentionKey,
@@ -52,7 +52,7 @@ class PreparedCohort:
 @dataclass(frozen=True)
 class CohortApplication:
     acceptance: AssignmentAcceptance
-    publications: tuple[IdentityPublication, ...]
+    publications: tuple[AssignmentPublication, ...]
     request: ReviewRequest
     protection: dict
 
@@ -356,7 +356,7 @@ def apply_cohort_additions(
     scope: Collection[str] | None = None,
     admit: Callable[[], None] | None = None,
 ) -> CohortApplication:
-    """Accept identities and publish their origins; do not approve claims.
+    """Accept identities, publish origins and aliases; do not approve claims.
 
     The configured server guard is mandatory. A single creation per call lets
     the next choice inspect its predecessor as a candidate. Retry with the same
