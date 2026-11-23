@@ -456,7 +456,7 @@ def printed_page_number(
     in words ("p. 6"), no page, or a page the record gives no number,
     has none: a printed number is read from the record, never guessed.
     A printed number of whitespace alone is none, as the writer would
-    write none for it (writer._locator_text). The digits are bounded
+    write none for it (text_storage.locator_text). The digits are bounded
     before they become an int, so a runaway `page_number` from the model
     is a page with no number, never an error that would sink the
     document's extraction."""

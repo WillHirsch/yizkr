@@ -1,6 +1,6 @@
 """Offline tests of the shape of the text the writer sends (#384;
-LINE_BREAKS, WHITESPACE, TERM_LIMIT and `_term_text` in
-yizkr.pipeline.writer).
+LINE_BREAKS, WHITESPACE, TERM_LIMIT and `term_text` in
+yizkr.pipeline.text_storage).
 
 Wikibase refuses a text value, a statement's, a qualifier's or a
 reference's, that holds a line break or a tab, or has whitespace at either
@@ -98,11 +98,9 @@ from tests.unit.test_writer_limits import (
 from yizkr.claims import ClaimBatch, RegionPercent
 from yizkr.pipeline.resolve import resolve_batch
 from yizkr.pipeline.review import claim_id
+from yizkr.pipeline.text_storage import TERM_LIMIT, TEXT_LIMIT, term_text
 from yizkr.pipeline.writer import (
-    TERM_LIMIT,
-    TEXT_LIMIT,
     BatchWriter,
-    _term_text,
     batch_fingerprint,
     source_descriptor,
 )
@@ -911,7 +909,7 @@ class TestTerms:
 
         assert len(label) > TERM_LIMIT
         # cut as the writer cuts a term (its cuts are tested above)
-        assert _labelled(wiki, _term_text(label)) == [written.run_qid]
+        assert _labelled(wiki, term_text(label)) == [written.run_qid]
         assert other.run_qid != written.run_qid
         writes = wiki.wbi.item.writes
         again = write_mapped(BatchWriter(wiki), first)

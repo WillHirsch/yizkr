@@ -340,7 +340,7 @@ class TestEveryOccurrence:
         assert found.spans("Fryslân") == [(1, 1)]
 
     def test_a_line_s_page(self):
-        from yizkr.pipeline.places import EvidencePages
+        from yizkr.pipeline.evidence_pages import EvidencePages
         from yizkr.pipeline.transcribe import (
             PageProvenance,
             TranscribedPage,

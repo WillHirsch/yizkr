@@ -1,5 +1,5 @@
 """Offline tests of the text limit the writer keeps to (#366; `TEXT_LIMIT`
-in yizkr.pipeline.writer).
+in yizkr.pipeline.text_storage).
 
 Wikibase holds at most 400 characters in the text of a string,
 external-id or monolingual text value, whether the value is a
@@ -64,7 +64,8 @@ from tests.unit.test_pipeline import (
 )
 from yizkr.claims import RegionPercent
 from yizkr.pipeline.review import claim_id
-from yizkr.pipeline.writer import CUT_MARK, TEXT_LIMIT, BatchWriter
+from yizkr.pipeline.text_storage import CUT_MARK, TEXT_LIMIT
+from yizkr.pipeline.writer import BatchWriter
 
 MEDIA = {MEDIA_SHA1: "Q23", **TEXT_MEDIA}
 

@@ -54,6 +54,7 @@ from yizkr.claims import (
     VocabRef,
 )
 from yizkr.core.verbatim import Transcript
+from yizkr.pipeline.evidence_pages import evidence_page
 from yizkr.pipeline.prompts import load_prompt
 
 # the manifest item the marker names, as the sourcing circumstances
@@ -227,10 +228,8 @@ def statement_source(
     """Where the document makes the statement the reading quoted: the
     document, with the page its first line lies on and the number printed
     there, where the transcription's pages give them
-    (places.evidence_page), and the statement as its excerpt, in the
-    transcription's language. None when the reading quoted none."""
-    from yizkr.pipeline.places import evidence_page
-
+    (evidence_pages.evidence_page), and the statement as its excerpt, in
+    the transcription's language. None when the reading quoted none."""
     if reading is None or reading.statement is None:
         return None
     page, printed = evidence_page(transcription, reading.statement)

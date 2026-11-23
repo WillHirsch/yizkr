@@ -77,15 +77,22 @@ from yizkr.claims import (
     LocalRef,
     MonolingualText,
     MonolingualValue,
-    QidRef,
     QuantityValue,
     StringValue,
     TimeValue,
     UnknownValue,
-    VocabRef,
     widowhood_review_notes,
 )
 from yizkr.core.dates import UnsupportedDate, claim_time_text, year_problem
+
+# re-exported: the adjudication stage imports how a review row shows an
+# unknown value from here, and its code digest reads it here
+from yizkr.pipeline.claim_naming import UNKNOWN_SHOWN as UNKNOWN_SHOWN
+from yizkr.pipeline.claim_naming import (
+    claim_id,
+    describe_ref,
+    describe_value,
+)
 
 APPROVE = {"approve", "approved", "accept", "yes", "y"}
 REJECT = {"reject", "rejected", "no", "n"}
@@ -118,23 +125,6 @@ CSV_COLUMNS = [
 # a leading minus is read, so that a year before the common era is refused
 # as unsupported rather than as a malformed date
 _CORRECTION_DATE = re.compile(r"^(-?\d{1,4})(?:-(\d{1,2}))?(?:-(\d{1,2}))?$")
-
-
-def claim_id(claim: Claim) -> str:
-    """Stable content hash identifying a claim across export/import.
-
-    The row approval `apply_review` records on a claim is not content: an
-    approved claim keeps the id it had on its review sheet."""
-    canonical = json.dumps(
-        claim.model_dump(
-            mode="json",
-            exclude_none=True,
-            exclude_defaults=False,
-            exclude={"row_approval"},
-        ),
-        sort_keys=True,
-    )
-    return hashlib.sha256(canonical.encode()).hexdigest()[:12]
 
 
 def _local_refs(claim: Claim) -> list[LocalRef]:
@@ -231,55 +221,6 @@ def unapproved_depicts(batch: ClaimBatch) -> list[str]:
     return unapproved
 
 
-def _describe_ref(ref) -> str:
-    if isinstance(ref, QidRef):
-        return ref.qid
-    if isinstance(ref, VocabRef):
-        return ref.key
-    if isinstance(ref, LocalRef):
-        label = f" ({ref.label})" if ref.label else ""
-        return f"NEW:{ref.local_id}{label}"
-    return str(ref)
-
-
-def describe_value(value) -> str:
-    """A value as the extraction critic lists it, and as a review row shows
-    any value but a date (which the sheet shows through `sheet_value`):
-    an item by its reference, a date
-    as `YYYY[-MM[-DD]]` with its precision when it is not the plain one, a
-    text by its text and language, an unknown value (ADR-0040 §2.2) as
-    "unknown value". Every date is Gregorian and of 1 CE or later
-    (ADR-0034)."""
-    if isinstance(value, UnknownValue):
-        return UNKNOWN_SHOWN
-    if isinstance(value, ItemValue):
-        return _describe_ref(value.value)
-    if isinstance(value, TimeValue):
-        parts = [str(value.year)]
-        if value.month:
-            parts.append(f"{value.month:02d}")
-        if value.day:
-            parts.append(f"{value.day:02d}")
-        text = "-".join(parts)
-        suffix = (
-            ""
-            if value.precision in ("year", "month", "day")
-            else f" ({value.precision})"
-        )
-        return f"{text}{suffix}"
-    if isinstance(value, MonolingualValue):
-        return f"{value.value.text} [{value.value.language}]"
-    if isinstance(value, QuantityValue):
-        return f"{value.amount:g}"
-    if hasattr(value, "latitude"):
-        return f"{value.latitude}, {value.longitude}"
-    return str(value.value)
-
-
-# how a review row and the critic show an unknown value
-UNKNOWN_SHOWN = "unknown value"
-
-
 def sheet_value(value) -> str:
     """A value as the review sheet shows it: as `describe_value` does, but
     a date at the precision its source states, as the site renders it
@@ -319,14 +260,14 @@ def export_review_csv(
             writer.writerow(
                 {
                     "claim_id": claim_id(claim),
-                    "subject": _describe_ref(claim.subject),
+                    "subject": describe_ref(claim.subject),
                     "property": claim.property,
                     "value": sheet_value(claim.value),
                     "qualifiers": "; ".join(
                         f"{q.property}={sheet_value(q.value)}"
                         for q in claim.qualifiers
                     ),
-                    "source_artifact": _describe_ref(claim.source.artifact),
+                    "source_artifact": describe_ref(claim.source.artifact),
                     "page": claim.source.page_number or "",
                     "printed_page": claim.source.printed_page_number or "",
                     "region": claim.source.region.as_wikibase_string()

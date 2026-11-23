@@ -371,7 +371,7 @@ from yizkr.pipeline.stages import (
     content_hash,
     sha256_text,
 )
-from yizkr.pipeline.writer import stored_term
+from yizkr.pipeline.text_storage import stored_term
 
 # what cluster_corpus makes of a set of manifests: bumped whenever the same
 # manifests and thresholds would give another identity map, so that a
@@ -388,14 +388,14 @@ DEFAULTS = PACKAGE / "clustering.yaml"
 # made is made again, whatever VERSION says. The other yizkr modules that
 # this one and fingerprints.py import reach the key through the batches'
 # hashes: yizkr.claims parses the batches, document_state says what a hash
-# leaves out, and stages makes it. writer.py gives the form the instance
-# keeps a term in (stored_term), which names are compared in, and names.py
-# which forms are appellations (appellations_of).
+# leaves out, and stages makes it. text_storage.py gives the form the
+# instance keeps a term in (stored_term), which names are compared in, and
+# names.py which forms are appellations (appellations_of).
 CODE = (
     "clustering.py",
     "fingerprints.py",
     "reconcile.py",
-    "writer.py",
+    "text_storage.py",
     "names.py",
 )
 # the modules of the yizkr package that make it: the shared "died by"
@@ -645,8 +645,8 @@ def fold(text: str) -> str:
 
 def _words(text: str) -> list[str]:
     """A part's words as the instance would keep the part
-    (writer.stored_term: a run of control characters one space, U+FFFE
-    and U+FFFF made U+FFFD, then NFC), each without its edge
+    (text_storage.stored_term: a run of control characters one space,
+    U+FFFE and U+FFFF made U+FFFD, then NFC), each without its edge
     punctuation. Every key of a part is made from these words, so a
     part keys as the instance keeps it, whatever form a batch gives it
     in."""
@@ -1000,7 +1000,7 @@ def _nodes(manifest: Manifest, circa_years: int) -> list[_Node]:
     relations the manifest states between its local ids lifted into
     mention space. A node's aliases leave out each alias the instance
     would keep as its label: the two are compared in the form the
-    instance keeps a term in (writer.stored_term), so an alias that
+    instance keeps a term in (text_storage.stored_term), so an alias that
     differs from the label only in its Unicode form is the label."""
     batch = manifest.batch
     mentions = mentions_of(manifest.sha1, batch)

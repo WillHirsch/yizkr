@@ -389,8 +389,9 @@ def fingerprint(package, **configuration):
         "claims.py",
         "source_structure.py",
         "pipeline/source_context.py",
-        "pipeline/writer.py",
-        "pipeline/places.py",
+        "pipeline/text_storage.py",
+        "pipeline/claim_naming.py",
+        "pipeline/evidence_pages.py",
     ],
 )
 def test_changed_prompt_schema_and_transitive_code_require_reprocessing(
@@ -421,6 +422,82 @@ def test_documentation_and_another_stages_prompt_do_not_refresh_extraction(
         "changed critic prompt"
     )
     assert fingerprint(package) == before
+
+
+# the claim writer, the review sheet and the place writer: the write path,
+# which changes without recomputing the views of the stages before it
+WRITE_PATH = ("pipeline/writer.py", "pipeline/review.py", "pipeline/places.py")
+
+# each fingerprint a stage takes: a text document's for every stage, and
+# the transcriptions that add the media, PDF, presentation, slide vision
+# and vision reader lists
+FINGERPRINTS = [
+    *(pytest.param(stage, "text", {}, id=stage) for stage in STAGES),
+    pytest.param(
+        "transcription", "media", {"route": "vision"}, id="media-vision"
+    ),
+    pytest.param("transcription", "pdf", {"route": "paged"}, id="pdf-paged"),
+    pytest.param(
+        "transcription",
+        "presentation",
+        {"route": "paged", "slide_vision": {"positions": [2]}},
+        id="presentation-slide-vision",
+    ),
+]
+
+
+def stage_fingerprint(
+    package, stage, document_kind="text", configuration=None
+):
+    return processing_dependencies(
+        stage,
+        package=package,
+        source_sha1="1" * 40,
+        document_kind=document_kind,
+        configuration=configuration or {},
+    )
+
+
+@pytest.mark.parametrize(
+    ("stage", "document_kind", "configuration"), FINGERPRINTS
+)
+def test_write_path_changes_do_not_refresh_a_stage_before_write(
+    package, stage, document_kind, configuration
+):
+    def observed():
+        return stage_fingerprint(package, stage, document_kind, configuration)
+
+    for name in WRITE_PATH:
+        (package / name).write_text(f"fictional write path: {name}\n")
+    before = observed()
+    for name in WRITE_PATH:
+        path = package / name
+        path.write_text(path.read_text() + "changed fictional write path\n")
+    assert observed() == before
+
+
+@pytest.mark.parametrize(
+    ("stage", "resource"),
+    [
+        ("critique", "pipeline/claim_naming.py"),
+        ("gedcom", "pipeline/text_storage.py"),
+    ],
+)
+def test_shared_helpers_of_critique_and_gedcom_require_reprocessing(
+    package, stage, resource
+):
+    before = stage_fingerprint(package, stage)
+    path = package / resource
+    path.write_text(path.read_text() + "changed fictional helper\n")
+    plan = plan_view(
+        exists=True,
+        recorded_inputs={},
+        current_inputs={},
+        recorded_processing=before,
+        processing=stage_fingerprint(package, stage),
+    )
+    assert plan.action == "recompute"
+    assert plan.changed_dependencies == (f"processing.resources.{resource}",)
 
 
 def test_source_and_declared_configuration_are_independent_dependencies(

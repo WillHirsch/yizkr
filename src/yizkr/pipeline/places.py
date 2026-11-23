@@ -30,7 +30,7 @@ the item the link before it resolved to (its answer, or the one place its
 name names), stated in the stating document's artifact with the
 container's evidence as the excerpt, on the page of the document's
 transcription its first line lies on, where the transcription has pages
-(evidence_page), and inferred from the pass's run item. It carries the
+(EvidencePages), and inferred from the pass's run item. It carries the
 time the document's claim gives (the claim's qualifiers), and none where
 the record alone states the link, as a record states no time. A link
 written already, with the same time and stated in the same artifact, is
@@ -89,7 +89,6 @@ from yizkr.claims import (
     Qualifier,
     SourceReference,
 )
-from yizkr.core import verbatim
 from yizkr.core.config import Config
 from yizkr.core.provenance import (
     ProcessRecord,
@@ -102,6 +101,7 @@ from yizkr.core.write_recovery import (
     CreationRegistry,
     write_existing,
 )
+from yizkr.pipeline.evidence_pages import EvidencePages
 from yizkr.pipeline.extract import scan_json_objects
 from yizkr.pipeline.gedcom import UNDETERMINED
 from yizkr.pipeline.llm import (
@@ -191,7 +191,7 @@ class StatedLink:
     the transcription that state the link (ADR-0035 §2.2), in `language`;
     `page` the transcription's page its first line lies on, and
     `printed_page` the number printed on that page, where the
-    transcription gives them (evidence_page); each None where none is
+    transcription gives them (EvidencePages); each None where none is
     given."""
 
     sha1: str
@@ -488,55 +488,6 @@ def read_transcription(path: Path):
         return Transcription.model_validate_json(path.read_text())
     except (OSError, ValueError):
         return None
-
-
-class EvidencePages:
-    """Where a document's container evidence lies: the page of
-    `transcription` the first line of an evidence lies on, found as the
-    extraction checked it (core.verbatim), as its physical number and
-    the number printed on it (extract.printed_page_number: None where the
-    page's record gives none); (None, None) for a transcription with no
-    pages, or one the evidence does not occur in. The transcription is
-    read once, and each evidence looked for once."""
-
-    def __init__(self, transcription) -> None:
-        self.transcription = transcription
-        self._pages = (
-            (transcription.pages or ()) if transcription is not None else ()
-        )
-        self._transcript = (
-            verbatim.Transcript(transcription.text) if self._pages else None
-        )
-        self._printed = transcription.printed_pages() if self._pages else {}
-        self._found: dict[str, tuple[str | None, str | None]] = {}
-
-    def __call__(self, evidence: str) -> tuple[str | None, str | None]:
-        if evidence not in self._found:
-            self._found[evidence] = self._page(evidence)
-        return self._found[evidence]
-
-    def _page(self, evidence: str) -> tuple[str | None, str | None]:
-        from yizkr.pipeline.extract import printed_page_number
-
-        if self._transcript is None:
-            return None, None
-        number = self._transcript.locate(evidence)
-        if number is None:
-            return None, None
-        page = self._transcript.page(number, self._pages)
-        if page is None:
-            return None, None
-        return str(page.page), printed_page_number(
-            str(page.page), self._printed
-        )
-
-
-def evidence_page(
-    transcription, evidence: str
-) -> tuple[str | None, str | None]:
-    """The page of `transcription` the first line of `evidence` lies on
-    (EvidencePages)."""
-    return EvidencePages(transcription)(evidence)
 
 
 def excerpt_language(batch: ClaimBatch, transcription=None) -> str:
@@ -1271,6 +1222,7 @@ def _place_processing() -> dict:
         name: hashlib.sha256((root / name).read_bytes()).hexdigest()
         for name in (
             "pipeline/places.py",
+            "pipeline/evidence_pages.py",
             "pipeline/prompts/place-adjudication.md",
             "model/manifest.yaml",
         )
@@ -1404,11 +1356,11 @@ def ensure_places_run_item(
     writes left without it gets it when the next pass finds it
     (registrar.ensure_self_typed). Raises ValueError, naming the
     characters, before anything is read when the label holds a character
-    Python's Unicode tables do not know (writer.unknown_characters): the
-    instance may keep it in another form. The display label is sent in
-    the form the instance keeps a label in, as the writer
-    sends one (writer._term_text: trimmed, one line, in Unicode NFC, cut
-    to the characters the instance holds). A matching legacy label with
+    Python's Unicode tables do not know (text_storage.unknown_characters):
+    the instance may keep it in another form. The display label is sent
+    in the form the instance keeps a label in, as the writer sends one
+    (text_storage.term_text: trimmed, one line, in Unicode NFC, cut to
+    the characters the instance holds). A matching legacy label with
     no binding requires verified migration rather than term-based adoption.
     `description` is the description a new item takes, and `marks` the
     string statements it states of itself (registrar.ensure_self_typed),
@@ -1423,10 +1375,10 @@ def ensure_places_run_item(
         ensure_run_statements,
         validate_run_statements,
     )
-    from yizkr.pipeline.writer import (
-        _term_text,
-        _unknown_fault,
+    from yizkr.pipeline.text_storage import (
+        term_text,
         unknown_characters,
+        unknown_fault,
     )
 
     producer = validate_place_producer(producer)
@@ -1450,10 +1402,10 @@ def ensure_places_run_item(
     unknown = unknown_characters(label)
     if unknown:
         raise ValueError(
-            f"the place-hierarchy run's label {_unknown_fault(unknown)}: "
+            f"the place-hierarchy run's label {unknown_fault(unknown)}: "
             f"give the model identifier without it. Nothing was written"
         )
-    label = _term_text(label)
+    label = term_text(label)
     require_retained_code(client)
     context = application or place_write_context(
         fingerprint, producer, model=model, marks=marks
@@ -1478,14 +1430,14 @@ def ensure_places_run_item(
     legacy_labels = {label}
     if operation["model"] is not None:
         legacy_labels.add(
-            _term_text(
+            term_text(
                 f"place-hierarchy run {operation['model']} {fingerprint[:10]}"
             )
         )
     if binding_model is None and model is None:
         legacy = dict(operation, model="curator-reviewed")
         legacy_labels.add(
-            _term_text(
+            term_text(
                 f"place-hierarchy run curator-reviewed {fingerprint[:10]}"
             )
         )

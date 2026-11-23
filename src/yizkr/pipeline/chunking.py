@@ -55,6 +55,7 @@ from yizkr.pipeline.cancellation import (
     cancellation_scope,
     check_cancelled,
 )
+from yizkr.pipeline.claim_naming import claim_id
 from yizkr.pipeline.extract import (
     ExtractionFailed,
     _normalize_claim_shape,
@@ -84,7 +85,6 @@ from yizkr.pipeline.llm import (
     reject_response,
 )
 from yizkr.pipeline.prompts import load_prompt
-from yizkr.pipeline.review import claim_id
 from yizkr.pipeline.source_context import bind_source_support, support_failure
 from yizkr.pipeline.stages import atomic_write_text
 from yizkr.pipeline.transcribe import Transcription
@@ -2056,8 +2056,8 @@ def excerpt_audit(claims: Iterable[Claim], transcript: Transcript) -> dict:
     excerpt (or one that holds no word, as a container's evidence that
     holds none is none), and those whose excerpt the transcription
     does not hold, by property. `missing`, for the local audit: each of
-    those last, by its claim id (review.claim_id), with its property, its
-    excerpt, and the number and text of the transcription's line nearest
+    those last, by its claim id (claim_naming.claim_id), with its property,
+    its excerpt, and the number and text of the transcription's line nearest
     to it (Transcript.nearest; none when no line shares a word with it).
     A miss is a flag, never a reject: the claim stays in its batch."""
     checked = without = 0

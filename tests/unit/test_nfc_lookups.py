@@ -17,7 +17,7 @@ import pytest
 from tests.unit.test_places import FINGERPRINT, RunItemWiki
 from yizkr.pipeline.names import normalize_aliases
 from yizkr.pipeline.places import ensure_places_run_item
-from yizkr.pipeline.writer import TERM_LIMIT, _term_text
+from yizkr.pipeline.text_storage import TERM_LIMIT, term_text
 
 
 def nfc(text: str) -> str:
@@ -36,7 +36,7 @@ MARK = "\U0001e08f"
 def test_the_forms_differ():
     """The NFD label is another string than the one the instance keeps."""
     assert nfd(GUSTAV) != GUSTAV
-    assert _term_text(nfd(GUSTAV)) == GUSTAV
+    assert term_text(nfd(GUSTAV)) == GUSTAV
 
 
 class TestPlacesRunItem:
@@ -61,7 +61,7 @@ class TestPlacesRunItem:
         qid = ensure_places_run_item(wiki, FINGERPRINT, model)
 
         stored = wiki.entities[qid]["labels"]["en"]["value"]
-        assert stored == _term_text(
+        assert stored == term_text(
             f"place-hierarchy run {model} {FINGERPRINT}"
         )
         assert len(stored) <= TERM_LIMIT

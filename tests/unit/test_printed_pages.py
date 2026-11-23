@@ -737,7 +737,7 @@ class TestTheWriter:
 
     def test_the_printed_number_goes_on_one_line(self):
         """It is a locator like the page number: cleaned up to one line
-        (writer._locator_text), so a re-run finds its block."""
+        (text_storage.locator_text), so a re-run finds its block."""
         wiki = FakeWiki({BOOKLET_REF.sha1: "Q23"}, detached=True)
         result = write_mapped(
             BatchWriter(wiki),

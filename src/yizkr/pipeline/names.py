@@ -9,7 +9,7 @@ add something, in their order and verbatim spelling:
 
 * every entity: blanks, the label itself and case-insensitive duplicates
   are dropped, each compared in the form the instance keeps a term in
-  (`stored_term` in yizkr.pipeline.writer: each run of control
+  (`stored_term` in yizkr.pipeline.text_storage: each run of control
   characters and line or paragraph separators made one space, trimmed,
   cleaned up as Wikibase cleans a term up, then in Unicode NFC), so an
   alias that differs from the label or another alias only in that form,
@@ -96,6 +96,7 @@ from yizkr.claims import (
     label_container,
     structure_problems,
 )
+from yizkr.pipeline.text_storage import stored_term
 
 # the punctuation a spelled word is taken without, at its edges
 _EDGES = ".,;:()\"'[]"
@@ -193,8 +194,6 @@ def normalize_aliases(
     """One entity's alias bag, cleaned (the module docstring says how)
     by its record, or by none for an entity without one; `appellations`
     are the forms the document gives as appellations of the entity."""
-    from yizkr.pipeline.writer import stored_term
-
     parts = _parts(record, label)
     marked = {stored_term(form).lower() for form in appellations}
     name_words = _name_words(parts)
@@ -425,8 +424,6 @@ def appellation_label(
     of a record's "Hans-Xxx" weighs nothing), then the first. With no
     candidate, as when the record's name is written only fused with a
     bracket ("Hilde(gard)"), the label stays."""
-    from yizkr.pipeline.writer import stored_term
-
     if not isinstance(record, PersonStructure) or record.status != "name":
         return label
     marked = {stored_term(form).lower() for form in appellations}
@@ -479,8 +476,6 @@ def _unlisted(
 ) -> list[str]:
     """The appellations neither the label nor an alias holds, compared as
     the instance keeps a term, each once, in their order."""
-    from yizkr.pipeline.writer import stored_term
-
     held = {stored_term(form).lower() for form in (label, *aliases)}
     found: list[str] = []
     for form in appellations:
@@ -495,8 +490,6 @@ def appellation_parts(entity: dict, appellations: Iterable[str]) -> int:
     """How many name parts of a person's record that stands are, whole,
     one of the document's appellations of the person, including a pet
     name the record rightly holds as a nickname."""
-    from yizkr.pipeline.writer import stored_term
-
     record = _standing(entity)
     if not isinstance(record, PersonStructure):
         return 0
