@@ -46,7 +46,10 @@ Preparation keeps it as ``proposal_origin``, and an applied choice's
 process record keeps it. Map fields are origin, not basis, so a choice
 whose candidate evidence is unchanged is not sent back to review when its
 cluster gains a member or the map is made again; the review store then
-keeps the origin of the derivation that first proposed that basis.
+keeps the origin of the derivation that first proposed that basis. A
+choice a caller already stored explicitly keeps its explicit origin when a
+derivation gives it too, and a derived choice keeps its map origin when a
+caller supplies it explicitly, so neither reopens a decision.
 
 **Report.** What each mention got, the clusters whose members are assigned
 to more than one entity, and the entities whose assigned mentions the map

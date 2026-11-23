@@ -213,7 +213,10 @@ def prepare_cohort_additions(
     is among them. Without it, such a candidate keeps the mark its choice's
     stored basis gives it, so a repeated preparation, including the one
     inside application, leaves an unchanged basis unchanged; a candidate
-    the stored basis lacks is marked null. Other choices are not marked.
+    the stored basis lacks is marked null. Other choices are not marked. A
+    stored choice that the request supplies by the other route, an
+    explicit choice an identity map also gives or the reverse, keeps its
+    stored origin and so its marks.
     """
     if represented is not None:
         represented = frozenset(represented)
@@ -260,7 +263,20 @@ def prepare_cohort_additions(
             )
     for proposal in request.proposals:
         scope = [observed.mentions[key.key].id for key in proposal.mentions]
-        choices[_scope(proposal, scope)] = proposal
+        key = _scope(proposal, scope)
+        stored = old.get(key)
+        if (
+            stored is not None
+            and stored.origin.get("method") in _METHODS.values()
+            and (map_origin(stored.origin) is None)
+            != (map_origin(proposal.origin) is None)
+        ):
+            # A stored choice supplied again by the other route, derived
+            # from an identity map or not, keeps its stored origin and with
+            # it whether its candidates are marked, so an unchanged basis
+            # and its decision stay current.
+            proposal = proposal.model_copy(update={"origin": stored.origin})
+        choices[key] = proposal
         if proposal.target is not None:
             previous.setdefault(proposal.mentions[0].key, set()).add(
                 proposal.target.qid

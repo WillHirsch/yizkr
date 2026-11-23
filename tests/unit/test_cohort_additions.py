@@ -624,19 +624,20 @@ def marks(prepared):
     }
 
 
+def identity(*sources):
+    return IdentityMap(
+        cluster_corpus(
+            [Manifest(s.artifact_sha1, s.batch, DOCUMENT) for s in sources]
+        )
+    )
+
+
 def test_map_derived_choices_mark_whether_clustering_saw_each_candidate(
     graph, tmp_path
 ):
     wiki, registry, target, _, service = graph
     first, second = source(), source("naturalisation-1952")
     qid = target.binding.qid
-
-    def identity(*sources):
-        return IdentityMap(
-            cluster_corpus(
-                [Manifest(s.artifact_sha1, s.batch, DOCUMENT) for s in sources]
-            )
-        )
 
     with ReviewStore(tmp_path / "plain.sqlite") as store:
         plain = additions.prepare_cohort_additions(
@@ -712,3 +713,39 @@ def test_map_derived_choices_mark_whether_clustering_saw_each_candidate(
         )
         assert marks(current) == {qid: True, new.qid: None}
         assert proposal not in current.review.proposals
+
+
+@pytest.mark.parametrize("decided", ["explicit", "derived"])
+def test_a_decided_choice_supplied_by_the_other_route_stays_decided(
+    graph, tmp_path, decided
+):
+    _, registry, target, _, _ = graph
+    first = source()
+    routes = {
+        "explicit": lambda store: additions.prepare_cohort_additions(
+            store, new_request(first), registry
+        ),
+        "derived": lambda store: (
+            prepare_cluster_proposals(
+                store,
+                identity(first),
+                (first,),
+                registry,
+                increment=[first.artifact_sha1],
+            ).prepared
+        ),
+    }
+    (other,) = routes.keys() - {decided}
+    with ReviewStore(tmp_path / "review.sqlite") as store:
+        prepared = routes[decided](store)
+        (proposal,) = prepared.review.proposals
+        # Gustav's existing item is a candidate, which a derived choice
+        # marks and an explicit one does not.
+        assert set(marks(prepared)) == {target.binding.qid}
+        approve(store, prepared)
+        # The same creation, explicit or derived from a map, keeps the
+        # stored choice, its origin and its decision.
+        again = routes[other](store)
+        assert again.review.proposals == (proposal,)
+        (application,) = again.review.projection.applications
+        assert application.status == "applied"
