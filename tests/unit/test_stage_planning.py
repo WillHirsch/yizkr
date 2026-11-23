@@ -428,24 +428,52 @@ def test_documentation_and_another_stages_prompt_do_not_refresh_extraction(
 # which changes without recomputing the views of the stages before it
 WRITE_PATH = ("pipeline/writer.py", "pipeline/review.py", "pipeline/places.py")
 
+# each fingerprint a stage takes: a text document's for every stage, and
+# the transcriptions that add the media, PDF, presentation, slide vision
+# and vision reader lists
+FINGERPRINTS = [
+    *(pytest.param(stage, "text", {}, id=stage) for stage in STAGES),
+    pytest.param(
+        "transcription", "media", {"route": "vision"}, id="media-vision"
+    ),
+    pytest.param("transcription", "pdf", {"route": "paged"}, id="pdf-paged"),
+    pytest.param(
+        "transcription",
+        "presentation",
+        {"route": "paged", "slide_vision": {"positions": [2]}},
+        id="presentation-slide-vision",
+    ),
+]
 
-def stage_fingerprint(package, stage):
+
+def stage_fingerprint(
+    package, stage, document_kind="text", configuration=None
+):
     return processing_dependencies(
-        stage, package=package, source_sha1="1" * 40, configuration={}
+        stage,
+        package=package,
+        source_sha1="1" * 40,
+        document_kind=document_kind,
+        configuration=configuration or {},
     )
 
 
-@pytest.mark.parametrize("stage", STAGES)
+@pytest.mark.parametrize(
+    ("stage", "document_kind", "configuration"), FINGERPRINTS
+)
 def test_write_path_changes_do_not_refresh_a_stage_before_write(
-    package, stage
+    package, stage, document_kind, configuration
 ):
+    def observed():
+        return stage_fingerprint(package, stage, document_kind, configuration)
+
     for name in WRITE_PATH:
         (package / name).write_text(f"fictional write path: {name}\n")
-    before = stage_fingerprint(package, stage)
+    before = observed()
     for name in WRITE_PATH:
         path = package / name
         path.write_text(path.read_text() + "changed fictional write path\n")
-    assert stage_fingerprint(package, stage) == before
+    assert observed() == before
 
 
 @pytest.mark.parametrize(
