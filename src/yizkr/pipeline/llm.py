@@ -3134,8 +3134,9 @@ class ClaudeCodeClient:
         as one does that ends on the CLI's notice of an API error at a
         zero exit with no result event or an empty result, the message
         says that the stream ended on an API error with no answer, and
-        names the error's class when the stream gives it as a plain token
-        (the ``api_error`` of stream_report), never the notice's text;
+        names the error's class only when the stream's last assistant
+        event gives it as a plain token (the ``api_error`` of
+        stream_report), never the notice's text;
         otherwise, that the CLI returned no output. An API-error event's
         notice is never taken for the answer, so the LLM cache keeps
         nothing of such a call, an attempt's included, and the next call
