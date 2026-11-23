@@ -14,6 +14,13 @@ from yizkr.core.write_recovery import CreationRegistry, write_existing
 from yizkr.pipeline import cohort_additions as additions
 from yizkr.pipeline import cohort_context, cohort_provenance, reconcile
 from yizkr.pipeline.assignment_stages import accept_reviewed_assignments
+from yizkr.pipeline.cluster_proposals import prepare_cluster_proposals
+from yizkr.pipeline.clustering import (
+    DOCUMENT,
+    IdentityMap,
+    Manifest,
+    cluster_corpus,
+)
 from yizkr.pipeline.identity_review import ReviewRefused, ReviewStore
 from yizkr.pipeline.review_stages import (
     MentionKey,
@@ -600,3 +607,114 @@ def test_existing_plain_assignment_keeps_its_origin_in_mixed_cohort(
         assert result.acceptance.snapshot.assignments[old_id] == old_assignment
         assert published == [proposal.mentions[0]]
         assert len(result.acceptance.snapshot.assignments) == 2
+
+
+def marks(prepared):
+    """Each candidate of the prepared creation, by QID: whether it says that
+    an assigned clustered mention represents it, or that it carries no such
+    mark (absent)."""
+    (proposal,) = (
+        p for p in prepared.review.proposals if p.operation == "new_entity"
+    )
+    return {
+        candidate["qid"]: candidate.get(additions.REPRESENTED, "absent")
+        for candidate in proposal.basis["evidence"]["cohort_candidates"][
+            "candidates"
+        ]
+    }
+
+
+def test_map_derived_choices_mark_whether_clustering_saw_each_candidate(
+    graph, tmp_path
+):
+    wiki, registry, target, _, service = graph
+    first, second = source(), source("naturalisation-1952")
+    qid = target.binding.qid
+
+    def identity(*sources):
+        return IdentityMap(
+            cluster_corpus(
+                [Manifest(s.artifact_sha1, s.batch, DOCUMENT) for s in sources]
+            )
+        )
+
+    with ReviewStore(tmp_path / "plain.sqlite") as store:
+        plain = additions.prepare_cohort_additions(
+            store, new_request(first), registry
+        )
+        assert marks(plain) == {qid: "absent"}
+    with ReviewStore(tmp_path / "review.sqlite") as store:
+        # The naturalisation certificate's mention is accepted as the
+        # target; a map that holds it represents the target, one made
+        # without that source does not.
+        accepted = additions.prepare_cohort_additions(
+            store, assignment_request(target.binding, (second,)), registry
+        )
+        approve(store, accepted)
+        accept_reviewed_assignments(store, accepted.request, registry)
+        unseen = prepare_cluster_proposals(
+            store,
+            identity(first),
+            (first,),
+            registry,
+            increment=[first.artifact_sha1],
+        )
+        assert marks(unseen.prepared) == {qid: False}
+        derived = prepare_cluster_proposals(
+            store,
+            identity(first, second),
+            (first, second),
+            registry,
+            increment=[first.artifact_sha1],
+        )
+        assert [p.operation for p in derived.request.proposals] == [
+            "new_entity"
+        ]
+        assert marks(derived.prepared) == {qid: True}
+        (proposal,) = (
+            p
+            for p in derived.prepared.review.proposals
+            if p.operation == "new_entity"
+        )
+        approve(store, derived.prepared)
+
+        # Neither preparing the same choices again, as application does,
+        # nor deriving them again from unchanged inputs reopens the
+        # decided choice.
+        for again in (
+            additions.prepare_cohort_additions(
+                store, derived.request, registry
+            ),
+            prepare_cluster_proposals(
+                store,
+                identity(first, second),
+                (first, second),
+                registry,
+                increment=[first.artifact_sha1],
+            ).prepared,
+        ):
+            assert proposal in again.review.proposals
+            (application,) = (
+                a
+                for a in again.review.projection.applications
+                if a.proposal_id == proposal.id
+            )
+            assert application.status == "applied"
+        additions._approved_scope(
+            additions.prepare_cohort_additions(
+                store, derived.request, registry
+            ),
+            {proposal.mentions[0]},
+        )
+
+        # A candidate that appears since is not marked until the choices
+        # are derived again; the changed basis needs review either way.
+        new = _person(registry, "Gustav")
+        registry.index_binding(new)
+        service.people = (*service.people, new)
+        refresh(wiki, service)
+        current = additions.prepare_cohort_additions(
+            store, derived.request, registry
+        )
+        assert marks(current) == {qid: True, new.qid: None}
+        assert proposal not in current.review.proposals
