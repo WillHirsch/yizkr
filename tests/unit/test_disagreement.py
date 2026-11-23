@@ -5,8 +5,9 @@ rule of MODELING.md "Contradictions" is one function there (ADR-0033). Each
 class below pins one rule on the fictional universe (docs/EXAMPLES.md): the
 statements are the universe's own, or plain variations of them with its
 dates, built as the fetch lists them. test_queries.py pins the fetch
-queries' text, and tests/integration/test_live_disagreement.py the report's
-rows on the running stack.
+queries' text, and the required lane's
+tests/fictional_integration/test_production_queries.py
+checks the report's rows on a real query service.
 """
 
 from __future__ import annotations

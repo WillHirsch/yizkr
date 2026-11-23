@@ -8,9 +8,12 @@ to the value Wikibase stores and the one the query service serves, and on
 to what the site shows and the span the report compares. It also pins the
 rule the extraction prompts carry, and the refusal of a century given in
 another count. tests/integration/test_live_century_dates.py checks the
-same on the running stack, Wikibase's own display included. A date before
-the common era is unsupported (ADR-0034, #338), and
-test_unsupported_dates.py pins its refusal.
+value stored and served on the running stack, Wikibase's own display
+included, and the required lane's
+tests/fictional_integration/test_production_queries.py
+the report's span on a real query service. A date before the common era
+is unsupported (ADR-0034, #338), and test_unsupported_dates.py pins its
+refusal.
 
 Two helpers stand in for Wikibase here, each after its source:
 MwTimeIsoFormatter names the century of a stored year ceil(year / 100),

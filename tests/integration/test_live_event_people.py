@@ -14,13 +14,15 @@ stack:
 * the site's people roster holds no row for Eugen's death, so it gets no
   person page, and the check does not assess it; Eugen is in the roster,
   released by his death;
-* Eugen's timeline still shows his death, dated by the event;
 * a death event with a `date of birth` is still a person to the site and
   to the check: an event is set aside on its death evidence alone;
 * a death event whose cause of death is deprecated, so that it has no
   truthy one, is still a person to the site and to the check, which
   excludes it: an event is set aside only on death evidence the check
   would read as such.
+
+That the person timeline dates Eugen's death by such an event is checked in
+the required lane (tests/fictional_integration/test_production_queries.py).
 
 The source is registered with a fictional PNG of its own
 (register_fictional), and every item's label carries the session's marker
@@ -209,20 +211,6 @@ def test_the_check_does_not_assess_a_death_event(config, fixture_graph):
     assert qids["death"] not in report.excluded | report.included
     assert qids["eugen"] in report.included
     assert report.reasons[qids["eugen"]] == "death recorded"
-
-
-def test_the_principals_timeline_still_shows_the_death(
-    config, fixture_graph, tmp_path
-):
-    qids = fixture_graph
-    builder = SiteBuilder(config, tmp_path / "site")
-    rows = builder.run(builder._library_query("person-timeline"))
-    dates = {
-        row["date"]["value"][:4]
-        for row in rows
-        if row["person"]["value"].endswith(f"/{qids['eugen']}")
-    }
-    assert "1909" in dates
 
 
 def test_an_event_with_other_evidence_is_still_a_person(

@@ -13,8 +13,9 @@ The query is a chain of the query service's named subqueries (``WITH {
 ... } AS %name``, ``INCLUDE %name``). These tests read that structure:
 which statements each set reads and at which ranks, how the sets join,
 and which relation each path of steps gives. No offline engine runs the
-query, so tests/integration/test_live_kinship.py checks its rows on a
-universe fixture on the running stack.
+query, so the required lane's
+tests/fictional_integration/test_production_queries.py checks its rows on a
+universe fixture on a real query service.
 """
 
 import itertools

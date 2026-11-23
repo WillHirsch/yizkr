@@ -211,8 +211,7 @@ RAHEL_DEATH = {
     "source": TREE,
     "excerpt": RAHEL_DIED.excerpt,
 }
-# Her label carries six hex digits of a hash over that claim, as
-# write_fixture marks its items in test_live_disagreement.py. The writer
+# Her label carries six hex digits of a hash over that claim. The writer
 # finds her by her label, and keeps a claim with her value but other
 # qualifiers as a statement of its own, so each version of the claim
 # writes a Rahel of its own. The session's marker already does that

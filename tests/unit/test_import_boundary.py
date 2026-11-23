@@ -45,10 +45,6 @@ ALLOWED = {
     ("yizkr.core.claim_applications", "yizkr.pipeline.claim_review"),
     ("yizkr.core.claim_applications", "yizkr.pipeline.identity_review"),
     ("yizkr.core.claim_applications", "yizkr.pipeline.run_provenance"),
-    # the reader of the --placed option, which #830 moves into yizkr.cli
-    ("yizkr.claims", "yizkr.pipeline.container_inventory"),
-    ("yizkr.claims", "yizkr.pipeline.container_sources"),
-    ("yizkr.claims", "yizkr.pipeline.presentation"),
 }
 
 
