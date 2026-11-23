@@ -11,6 +11,7 @@ import json
 from collections.abc import Callable, Collection
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from yizkr.core.mutation_guard import protected_mutation
 from yizkr.core.reviewed_creation import creation_review_evidence
@@ -26,7 +27,6 @@ from yizkr.pipeline.cohort_context import (
     capture_cohort_context,
     matching_candidates,
 )
-from yizkr.pipeline.identity_provenance import IdentityPublication
 from yizkr.pipeline.identity_review import ReviewRefused, ReviewStore
 from yizkr.pipeline.review_stages import (
     MentionKey,
@@ -36,6 +36,9 @@ from yizkr.pipeline.review_stages import (
     prepare_review,
 )
 from yizkr.pipeline.source_bindings import unique_source_qids
+
+if TYPE_CHECKING:
+    from yizkr.pipeline.cohort_provenance import CohortPublication
 
 _EVIDENCE = "cohort_candidates"
 _METHODS = {"assign": "reviewed_assignment", "new_entity": "reviewed_creation"}
@@ -52,7 +55,7 @@ class PreparedCohort:
 @dataclass(frozen=True)
 class CohortApplication:
     acceptance: AssignmentAcceptance
-    publications: tuple[IdentityPublication, ...]
+    publications: tuple[CohortPublication, ...]
     request: ReviewRequest
     protection: dict
 
@@ -356,7 +359,7 @@ def apply_cohort_additions(
     scope: Collection[str] | None = None,
     admit: Callable[[], None] | None = None,
 ) -> CohortApplication:
-    """Accept identities and publish their origins; do not approve claims.
+    """Accept identities, publish origins and aliases; do not approve claims.
 
     The configured server guard is mandatory. A single creation per call lets
     the next choice inspect its predecessor as a candidate. Retry with the same

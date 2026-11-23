@@ -91,7 +91,7 @@ class TextAnswers:
         return False
 
 
-def _source(client, directory, key, suffix):
+def _source(client, directory, key, suffix, name=None):
     case = source_case(key)
     path = directory / f"{suffix}.txt"
     path.write_bytes(
@@ -106,13 +106,15 @@ def _source(client, directory, key, suffix):
         pages=1,
     )
     batch = birth_batch(key)
-    name = "Gustav" if key == "birth-extract-1938" else "Gustave LOBIG"
+    name = name or (
+        "Gustav" if key == "birth-extract-1938" else "Gustave LOBIG"
+    )
     batch.entities[0].label = name
     batch.entities[0].aliases = [name]
     batch.entities[0].mention_lines = [1]
     batch.entities[0].structure = PersonStructure(
         given=[GivenName(written=name.split()[0])],
-        surnames=[Surname(written="LOBIG")] if " " in name else [],
+        surnames=[Surname(written=name.split()[-1])] if " " in name else [],
     )
     batch.claims[0].source = batch.claims[0].source.model_copy(
         update={"artifact": artifact}
@@ -157,6 +159,35 @@ def _seed(registry, name, key, aliases):
     )
     registry.index_binding(binding)
     return binding
+
+
+def _entity(client, qid):
+    """Terms and statements as the server keeps them, reference hashes
+    included, which WBI serialization omits."""
+    return client.api_get(
+        {
+            "action": "wbgetentities",
+            "ids": qid,
+            "props": "labels|descriptions|aliases|claims",
+        }
+    )["entities"][qid]
+
+
+def _aliases(entity):
+    return [
+        alias["value"] for alias in entity.get("aliases", {}).get("en", [])
+    ]
+
+
+def _offered(client, store, registry, source, qid):
+    """Whether candidate review offers the item ``qid`` for the source's
+    mention, under current graph state; no proposal is stored."""
+    _synchronize(client)
+    prepared = prepare_cohort_additions(
+        store, ReviewRequest(sources=(source,)), registry
+    )
+    (mention,) = prepared.candidates.mentions
+    return qid in {candidate.qid for candidate in mention.candidates}
 
 
 def _request(source, operation, target=None):
@@ -609,13 +640,45 @@ def test_protected_cohort_choices_claims_and_creation_recovery(
         )
         support = _claim(store, applied.request, registry, tmp_path)
         assert support.qid == target.qid
+
+        renamed = client.wbi.item.get(target.qid)
+        renamed.labels.set("en", "Curator's existing cohort identity")
+        (curated_birth,) = renamed.claims.get(properties["date_of_birth"])
+        curated_birth.rank = WikibaseRank.PREFERRED
+        write_existing(renamed, summary="fictional curator rename")
+        _synchronize(client)
+        carried = prepare_cohort_additions(store, corroborate, registry)
+        assert carried.review.proposals[0].digest == decision.proposal.digest
+        assert store.get_decision(decision.proposal.id) == decision
+        repeated = _apply(
+            store, corroborate, registry, tmp_path, "corroborate"
+        )
+        assert (
+            repeated.acceptance.snapshot.assignments[mention]
+            == applied.acceptance.snapshot.assignments[mention]
+        )
+        # The renamed item no longer holds the accepted mention's name.
+        (again,) = repeated.publications
+        assert again.aliases.added == ("Gustav",)
         (original_birth,) = client.fetch_claims([target.qid])[target.qid][
             properties["date_of_birth"]
         ]
+        assert original_birth["rank"] == "preferred"
+
+        # The second source gives a variant; a third names him only by it.
         corroborating_source = _source(
             client, tmp_path, "birth-extract-1938", "corroborating-reading"
         )
+        corroborating_source.batch.entities[0].aliases.append("Gustav Löbig")
         assert corroborating_source.artifact_sha1 != first.artifact_sha1
+        former_name = _source(
+            client,
+            tmp_path,
+            "naturalisation-1952",
+            "former-name",
+            name="Gustav LÖBIG",
+        )
+        assert not _offered(client, store, registry, former_name, target.qid)
         corroborating_request = _request(
             corroborating_source, "assign", target
         )
@@ -624,6 +687,7 @@ def test_protected_cohort_choices_claims_and_creation_recovery(
             store, corroborating_request, registry
         )
         _approve(store, corroborating_review)
+        before = _entity(client, target.qid)
         corroborated = _apply(
             store,
             corroborating_request,
@@ -631,6 +695,25 @@ def test_protected_cohort_choices_claims_and_creation_recovery(
             tmp_path,
             "corroborating-reading",
         )
+        (publication,) = corroborated.publications
+        assert publication.aliases.added == ("Gustav Löbig",)
+        after = _entity(client, target.qid)
+        assert after["labels"] == before["labels"]
+        assert after["descriptions"] == before["descriptions"]
+        assert _aliases(after) == [*_aliases(before), "Gustav Löbig"]
+        link = properties["identity_record"]
+        assert {
+            key: value for key, value in after["claims"].items() if key != link
+        } == {
+            key: value
+            for key, value in before["claims"].items()
+            if key != link
+        }
+        assert all(
+            statement in after["claims"][link]
+            for statement in before["claims"].get(link, [])
+        )
+        assert _offered(client, store, registry, former_name, target.qid)
         added_support = _claim(store, corroborated.request, registry, tmp_path)
         assert added_support.statement_guid == support.statement_guid
         assert added_support.primary_hash != support.primary_hash
@@ -659,21 +742,6 @@ def test_protected_cohort_choices_claims_and_creation_recovery(
         assert store.get_decision(decision.proposal.id) == decision
         assert (
             registry.assignment_snapshot().assignments[mention]
-            == applied.acceptance.snapshot.assignments[mention]
-        )
-
-        renamed = client.wbi.item.get(target.qid)
-        renamed.labels.set("en", "Curator's existing cohort identity")
-        write_existing(renamed, summary="fictional curator rename")
-        _synchronize(client)
-        carried = prepare_cohort_additions(store, corroborate, registry)
-        assert carried.review.proposals[0].digest == decision.proposal.digest
-        assert store.get_decision(decision.proposal.id) == decision
-        repeated = _apply(
-            store, corroborate, registry, tmp_path, "corroborate"
-        )
-        assert (
-            repeated.acceptance.snapshot.assignments[mention]
             == applied.acceptance.snapshot.assignments[mention]
         )
 

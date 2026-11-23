@@ -20,7 +20,7 @@ Generic `name` records a distinct additional form whose type the source leaves o
 
 Validation rejects a generic-name claim on a known non-person or vocabulary subject; a human or `unclassified_entity` is accepted. It also rejects a form equal to the subject's known label under NFC normalization, collapsed whitespace and lowercasing, preserving accents and the difference between `ß` and `ss`. An existing QID without known kind or label cannot receive those checks. This validation does not prove that the model interpreted a name's type correctly.
 
-Source-attributed claims remain when cleanup removes a redundant alias. Graph mutation depends on the application route: the legacy writer appends name variants, while [reviewed retained additions](IDENTITY_REVIEW.md#apply-later-cohort-identity-additions) deliberately do not append aliases. The static site currently shows a flat alias list; frontend name factoring and composed-alias search remain [#140](https://github.com/WillHirsch/yizkr/issues/140).
+Source-attributed claims remain when cleanup removes a redundant alias. Both application routes append name variants to an entity's aliases and remove none: the legacy writer each document's, and [reviewed additions](IDENTITY_REVIEW.md#apply-later-cohort-identity-additions) each accepted mention's label and aliases as its identity decision's review row showed them, so a variant that only a later source gives keys candidate blocking for the sources after it. The static site currently shows a flat alias list; frontend name factoring and composed-alias search remain [#140](https://github.com/WillHirsch/yizkr/issues/140).
 
 ## Address forms and perspective (ADR-0018)
 

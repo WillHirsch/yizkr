@@ -2,8 +2,10 @@
 
 The immutable assignment history supplies the original human decision and
 source observation. Publication adds an operational identity link, never a
-historical kind or an assignment. Creation decisions additionally require
-their original immutable authorization and verified registry receipt.
+historical kind or an assignment, and then appends the mention's reviewed
+names to the entity's aliases (``assignment_aliases``). Creation decisions
+additionally require their original immutable authorization and verified
+registry receipt.
 """
 
 from __future__ import annotations
@@ -17,6 +19,11 @@ from yizkr.core.identity_assignments import AssignmentRevision
 from yizkr.core.provenance import ProcessRecord, StageProvenance
 from yizkr.core.reviewed_creation import ReviewedCreationAuthorization
 from yizkr.core.write_recovery import CreationRegistry
+from yizkr.pipeline.assignment_aliases import (
+    AliasAddition,
+    alias_contribution,
+    append_aliases,
+)
 from yizkr.pipeline.cancellation import check_cancelled
 from yizkr.pipeline.identity_provenance import (
     IdentityProvenanceRefused,
@@ -39,6 +46,17 @@ class _Accepted:
     mention: MentionRevision
     source: IdentitySource
     creation: ReviewedCreationAuthorization | None
+
+
+@dataclass(frozen=True)
+class CohortPublication(IdentityPublication):
+    """A published cohort origin and the aliases appended after it.
+
+    ``changed`` describes the origin publication alone; ``aliases.added``
+    names what the alias update appended.
+    """
+
+    aliases: AliasAddition
 
 
 def _accepted_cohort(registry, mention_id):
@@ -141,18 +159,25 @@ def _accepted_cohort(registry, mention_id):
 
 def publish_cohort_assignment(
     client, mention_id: str, *, record_dir: Path
-) -> IdentityPublication:
+) -> CohortPublication:
     """Project an accepted direct cohort choice and its human confirmation.
 
     Unknown origins and decisions merely inherited through ``same`` cannot
     acquire a direct manual origin. Only an actual supplied ``ProcessRecord``
     is preserved as producer metadata. The original proposal retains all
     recorded graph, matching and source evidence independently of publication.
+
+    After the origin, the names the confirmed decision's review row showed
+    for the mention are appended to the entity's aliases. The process record
+    lists them with the assignment that contributes them, and those left out
+    because the instance may keep them in another form. Repeating the call
+    completes an interrupted alias update from a fresh read of the item.
     """
     check_cancelled()
     registry = CreationRegistry(client)
     accepted = _accepted_cohort(registry, mention_id)
     decision = accepted.decision
+    contribution = alias_contribution(decision, mention_id)
     origin = decision.proposal.origin
     producer = None
     producer_refs = ()
@@ -193,6 +218,7 @@ def publish_cohort_assignment(
                     if accepted.creation is not None
                     else None
                 ),
+                "aliases": contribution.model_dump(mode="json"),
             }
         },
         limitations=limitations + (producer.limitations if producer else ()),
@@ -224,7 +250,7 @@ def publish_cohort_assignment(
             producer=producer,
         )
 
-    return publish_identity_record(
+    publication = publish_identity_record(
         client,
         registry=registry,
         record=record,
@@ -238,4 +264,12 @@ def publish_cohort_assignment(
         sources=(accepted.source,),
         references=references,
         revalidate=revalidate,
+    )
+    check_cancelled()
+    revalidate()
+    return CohortPublication(
+        publication.record_qid,
+        publication.changed,
+        publication.statements,
+        append_aliases(client, accepted.source.qid, contribution),
     )

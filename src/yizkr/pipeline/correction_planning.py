@@ -42,8 +42,14 @@ from yizkr.pipeline.assigned_support import (
     _reference_key,
     same_statement,
 )
+from yizkr.pipeline.assignment_aliases import (
+    AliasContribution,
+    alias_contribution,
+    direct_decision,
+)
 from yizkr.pipeline.cancellation import check_cancelled
 from yizkr.pipeline.claim_review import ClaimRole
+from yizkr.pipeline.identity_review import Decision
 
 
 class _Record(BaseModel):
@@ -128,6 +134,9 @@ class CorrectionPlan(_Record):
     generation: Generation | None
     assignment_head: str | None
     changes: tuple[AssignmentChange, ...]
+    # The names each selected mention's own accepted decision gives the
+    # source entity's aliases (``assignment_aliases``).
+    aliases: tuple[AliasContribution, ...]
     catalog_plan_ids: tuple[str, ...]
     catalog_complete: bool
     # Full original decisions, source evidence and producer records for each
@@ -301,6 +310,9 @@ def plan_correction(
     The caller supplies exact accepted revisions and both verified bindings.
     This function never prepares a review, acquires write authority, allocates
     an entity, retires support or transfers any previous confirmation.
+    For each selected mention whose assignment has its own approved
+    ``assign`` or ``new_entity`` decision, it lists the names that decision
+    gives the source entity's aliases; it plans no alias removal.
     """
     request = CorrectionRequest.model_validate(request.model_dump(mode="json"))
     request = request.model_copy(
@@ -324,7 +336,7 @@ def plan_correction(
         )
         for a in request.assignments
     )
-    blockers, impacts, statements = [], [], []
+    blockers, impacts, statements, aliases = [], [], [], []
     applications, catalog, generation, head = (), (), None, None
     complete = False
     items, bindings, source_bindings = {}, {}, {}
@@ -370,6 +382,17 @@ def plan_correction(
         generation, head = snapshot.generation, snapshot.head
         if generation is None:
             raise ValueError("accepted assignment generation is unavailable")
+        decisions = [
+            Decision.model_validate(raw)
+            for commit in snapshot.history
+            for raw in commit.delta.evidence.decisions.values()
+        ]
+        for assignment in request.assignments:
+            decision = direct_decision(decisions, assignment)
+            if decision is not None:
+                aliases.append(
+                    alias_contribution(decision, assignment.mention_id)
+                )
         for expected in (request.source, request.target):
             if binding(expected.binding.entity_id) != expected:
                 block(
@@ -659,6 +682,7 @@ def plan_correction(
         generation=generation,
         assignment_head=head,
         changes=changes,
+        aliases=tuple(aliases),
         catalog_plan_ids=tuple(p.plan_id for p in catalog),
         catalog_complete=complete,
         applications=applications,
