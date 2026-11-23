@@ -20,14 +20,13 @@ from yizkr.core.provenance import ProcessRecord, StageProvenance
 from yizkr.core.reviewed_creation import ReviewedCreationAuthorization
 from yizkr.core.write_recovery import CreationRegistry
 from yizkr.pipeline.assignment_aliases import (
-    AliasAddition,
+    AssignmentPublication,
     alias_contribution,
     append_aliases,
 )
 from yizkr.pipeline.cancellation import check_cancelled
 from yizkr.pipeline.identity_provenance import (
     IdentityProvenanceRefused,
-    IdentityPublication,
     IdentitySource,
     identity_references,
     publish_identity_record,
@@ -46,17 +45,6 @@ class _Accepted:
     mention: MentionRevision
     source: IdentitySource
     creation: ReviewedCreationAuthorization | None
-
-
-@dataclass(frozen=True)
-class CohortPublication(IdentityPublication):
-    """A published cohort origin and the aliases appended after it.
-
-    ``changed`` describes the origin publication alone; ``aliases.added``
-    names what the alias update appended.
-    """
-
-    aliases: AliasAddition
 
 
 def _accepted_cohort(registry, mention_id):
@@ -159,7 +147,7 @@ def _accepted_cohort(registry, mention_id):
 
 def publish_cohort_assignment(
     client, mention_id: str, *, record_dir: Path
-) -> CohortPublication:
+) -> AssignmentPublication:
     """Project an accepted direct cohort choice and its human confirmation.
 
     Unknown origins and decisions merely inherited through ``same`` cannot
@@ -267,7 +255,7 @@ def publish_cohort_assignment(
     )
     check_cancelled()
     revalidate()
-    return CohortPublication(
+    return AssignmentPublication(
         publication.record_qid,
         publication.changed,
         publication.statements,

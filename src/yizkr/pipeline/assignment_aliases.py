@@ -22,6 +22,11 @@ are. One revision-checked, single-attempt edit sends them; a conflict or an
 uncertain result stops, and a retry reads the item again instead of resending
 an earlier edit. A repeat against an unchanged item adds nothing; one after a
 curator's edit appends whichever of the names the item no longer holds.
+
+Each publisher of an accepted assignment's direct origin, a cohort choice's
+(``cohort_provenance``) and an owner override's
+(``owner_override_provenance``), appends them after the origin and returns an
+``AssignmentPublication``.
 """
 
 from __future__ import annotations
@@ -34,6 +39,7 @@ from pydantic import BaseModel, ConfigDict
 from yizkr.core.identity_assignments import AssignmentRevision
 from yizkr.core.instance import require_retained_code
 from yizkr.core.write_recovery import write_existing
+from yizkr.pipeline.identity_provenance import IdentityPublication
 from yizkr.pipeline.identity_review import Decision
 from yizkr.pipeline.writer import _terms, unknown_characters
 
@@ -65,6 +71,17 @@ class AliasAddition:
     contribution: AliasContribution
     qid: str
     added: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class AssignmentPublication(IdentityPublication):
+    """A published assignment origin and the aliases appended after it.
+
+    ``changed`` describes the origin publication alone; ``aliases.added``
+    names what the alias update appended.
+    """
+
+    aliases: AliasAddition
 
 
 def alias_contribution(

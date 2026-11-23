@@ -11,11 +11,11 @@ import json
 from collections.abc import Callable, Collection
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from yizkr.core.mutation_guard import protected_mutation
 from yizkr.core.reviewed_creation import creation_review_evidence
 from yizkr.core.write_recovery import CreationRegistry
+from yizkr.pipeline.assignment_aliases import AssignmentPublication
 from yizkr.pipeline.assignment_stages import (
     AssignmentAcceptance,
     accept_reviewed_assignments,
@@ -37,9 +37,6 @@ from yizkr.pipeline.review_stages import (
 )
 from yizkr.pipeline.source_bindings import unique_source_qids
 
-if TYPE_CHECKING:
-    from yizkr.pipeline.cohort_provenance import CohortPublication
-
 _EVIDENCE = "cohort_candidates"
 _METHODS = {"assign": "reviewed_assignment", "new_entity": "reviewed_creation"}
 
@@ -55,7 +52,7 @@ class PreparedCohort:
 @dataclass(frozen=True)
 class CohortApplication:
     acceptance: AssignmentAcceptance
-    publications: tuple[CohortPublication, ...]
+    publications: tuple[AssignmentPublication, ...]
     request: ReviewRequest
     protection: dict
 

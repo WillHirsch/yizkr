@@ -16,6 +16,10 @@ from yizkr.core.provenance import ProcessRecord, RecordRef, StageProvenance
 from yizkr.core.write_recovery import CreationRegistry
 from yizkr.pipeline import identity_provenance
 from yizkr.pipeline.assignment_stages import accept_reviewed_assignments
+from yizkr.pipeline.correction_planning import (
+    CorrectionRequest,
+    plan_correction,
+)
 from yizkr.pipeline.identity_origins import owner_override_evidence
 from yizkr.pipeline.identity_provenance import IdentityProvenanceRefused
 from yizkr.pipeline.identity_review import ReviewStore
@@ -24,11 +28,12 @@ from yizkr.pipeline.review_stages import ReviewProposal, prepare_review
 from yizkr.pipeline.run_provenance import read_record, record_digest
 
 
-def fixture(tmp_path, *, producer=False, ordinary=False):
+def fixture(tmp_path, *, producer=False, ordinary=False, aliases=()):
     wiki = Wiki(detached=True)
     registry = CreationRegistry(wiki)
     wrong, right = binding(wiki, 1), binding(wiki, 2)
     initial = request()
+    initial.sources[0].batch.entities[0].aliases = list(aliases)
     key = initial.proposals[0].mentions[0]
     origin = {"method": "adjudicated", "run_id": "untyped-fictional-origin"}
     original = None
@@ -268,3 +273,55 @@ def test_interrupted_projection_recovers_metadata_and_exact_refs(
         len([r for r in kind(case).references if values(r, "identity_method")])
         == 1
     )
+
+
+def test_replacement_names_become_aliases_once_as_correction_planning_lists(
+    tmp_path,
+):
+    case = fixture(tmp_path, aliases=("Leopold LÖBIG",))
+    before = case.wiki.wbi.item.get(case.target).get_json()
+    result = publish(case)
+    after = case.wiki.wbi.item.get(case.target).get_json()
+    assert result.aliases.added == ("Leopold LÖBIG", "Leopold Löbig")
+    assert [a["value"] for a in after["aliases"]["en"]] == [
+        "Leopold LÖBIG",
+        "Leopold Löbig",
+    ]
+    assert after["labels"] == before["labels"]
+    assert after["descriptions"] == before["descriptions"]
+    origin = next(
+        r for r in kind(case).references if values(r, "identity_method")
+    )
+    (digest,) = values(origin, "run_record_sha256")
+    record = read_record(case.directory, RecordRef(sha256=digest))
+    contribution = record.metadata["identity_owner_override"]["aliases"]
+    assert contribution["names"] == ["Leopold Löbig", "Leopold LÖBIG"]
+    assert (
+        contribution["mention_id"],
+        contribution["decision_id"],
+        contribution["decision_revision"],
+    ) == (case.mention, case.confirmed.id, case.confirmed.revision)
+    writes = case.wiki.wbi.item.writes
+    assert publish(case).aliases.added == ()
+    assert case.wiki.wbi.item.writes == writes
+    other = case.wiki.wbi.item.new()
+    other.labels.set("en", "Eugen Löbig")
+    target = case.registry.index_binding(
+        case.registry.create(
+            {"kind": "fictional correction target"},
+            other,
+            summary="fictional existing correction target",
+        )
+    )
+    assignment = case.accepted.snapshot.assignments[case.mention]
+    plan = plan_correction(
+        case.registry,
+        CorrectionRequest(
+            source=case.registry.binding(assignment.entity_id),
+            target=target,
+            assignments=(assignment,),
+            reason="Review a possible mistaken mention assignment.",
+        ),
+    )
+    (listed,) = plan.aliases
+    assert listed.model_dump(mode="json") == contribution
