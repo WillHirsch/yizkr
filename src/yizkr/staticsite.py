@@ -1093,6 +1093,19 @@ def short_code(value: str) -> str:
     return f'<code title="{esc(value)}">{esc(shown)}</code>'
 
 
+def prompt_code(value: str) -> str:
+    """A stage's prompt hash in a ``code`` element. A run record states it
+    as "<template name>:<SHA-256>": the name shows whole and the digest is
+    cut to its first SHORT characters, with the whole value as the
+    element's title. A value of another shape is cut as ``short_code``
+    cuts it."""
+    name, colon, sha256 = value.rpartition(":")
+    if not (colon and re.fullmatch(r"[0-9a-f]{64}", sha256)):
+        return short_code(value)
+    shown = f"{name}:{sha256[:SHORT]}…"
+    return f'<code title="{esc(value)}">{esc(shown)}</code>'
+
+
 class SiteBuilder:
     def __init__(
         self, config: Config, out_dir: Path, run=None, vocabulary=None
@@ -2222,9 +2235,10 @@ class SiteBuilder:
         person" for none; then its cluster, map hash, assignment and
         decision revisions, process record and original producer's record,
         each shortened (``short_code``), its original run, its record's
-        stages with their models and prompts, and its stated limitations,
-        each only where the rows give it. The record is named by its
-        digest alone, never by a file."""
+        stages with their models and prompts (each prompt by its template
+        name and shortened digest, ``prompt_code``), and its stated
+        limitations, each only where the rows give it. The record is named
+        by its digest alone, never by a file."""
         status = []
         if origin.unratified:
             status.append(
@@ -2270,7 +2284,7 @@ class SiteBuilder:
             details.append(
                 f"stage <code>{esc(stage)}</code>"
                 + (f", model <code>{esc(model)}</code>" if model else "")
-                + (f", prompt {short_code(prompt)}" if prompt else "")
+                + (f", prompt {prompt_code(prompt)}" if prompt else "")
             )
         lines = [
             f"<strong>{esc(origin.method_label or origin.method)}</strong>"

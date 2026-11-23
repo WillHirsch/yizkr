@@ -3439,6 +3439,15 @@ MAP = digest("identity map")
 PRODUCER = digest("clustering run record")
 RUN = "20261006-090000"
 CURATOR = "fictional curator"
+# a record's stages as (stage, model, prompt hash): the deterministic
+# clustering stage, and the adjudication stage with its model and its
+# prompt, which a run record states as "<template name>:<SHA-256>"
+CLUSTERING = ("clustering", "", "")
+ADJUDICATION = (
+    "adjudication",
+    "example-model",
+    "pipeline.adjudication.PROMPT:" + digest("adjudication prompt"),
+)
 # the limitations the publishers state
 MAP_LIMIT = (
     "map placement is unratified; it does not establish an accepted "
@@ -3532,7 +3541,7 @@ def placed(entity: str, method: str, kind: str, **given) -> list[dict]:
         method,
         MAP_RECORD,
         kind=kind,
-        stages=(("cluster", "", ""),),
+        stages=(CLUSTERING,),
         limitations=(MAP_LIMIT,),
         cluster=digest(f"{entity}'s cluster"),
         mapHash=MAP,
@@ -3578,9 +3587,8 @@ def reviewed(
 # Sebastian's owner override, which names the rejected and the replacing
 # decision; the family's ambiguous placement; and, with no person page,
 # two places, an organisation and a firm with a reviewed assignment
-ADJUDICATION = ("adjudicate", "example-model", digest("adjudication prompt"))
 UNREVIEWED = {
-    "stages": (("cluster", "", ""), ADJUDICATION),
+    "stages": (CLUSTERING, ADJUDICATION),
     "mapHash": MAP,
     "unratified": "true",
 }
@@ -3668,6 +3676,17 @@ def shortened(value: str, text: str) -> bool:
     return value[:8] in text and value not in text
 
 
+def in_order(text: str, *parts: str) -> bool:
+    """Whether `text` shows each of `parts`, each after the one before."""
+    at = 0
+    for part in parts:
+        at = text.find(part, at)
+        if at < 0:
+            return False
+        at += len(part)
+    return True
+
+
 class TestIdentityOrigins:
     """Each person page lists the identity origins the graph records for
     the person, and one identity page those of every other entity, by
@@ -3741,7 +3760,7 @@ class TestIdentityOrigins:
         assert shortened(digest(MAP_RECORD), entry)
         assert shortened(PRODUCER, entry)
         assert RUN in entry
-        assert "stage cluster" in entry
+        assert CLUSTERING[0] in entry
         assert MAP_LIMIT in entry
         # what the rows do not give, the entry does not state
         for absent in ("model", "prompt", "revision", f"by {CURATOR}"):
@@ -3756,7 +3775,6 @@ class TestIdentityOrigins:
         # the method that made the proposal still names the origin
         assert accepted.startswith("confident identity origin")
         assert f"confirmed by {CURATOR} at 2026-10-20T09:30:00Z" in accepted
-        assert "does not say whether it is unratified" in accepted
         assert "unreviewed machine output" not in accepted
         assert "not confirmed by a person" not in accepted
         assert shortened(digest(f"{EUGEN}'s cluster"), accepted)
@@ -3790,17 +3808,50 @@ class TestIdentityOrigins:
         ):
             assert entry.startswith(f"{method} identity origin")
             assert f"confirmed by {CURATOR} at {when}" in entry
-            # a record that does not say is never shown as reviewed or not
+            # a record that does not say is never shown as unreviewed
             assert "unreviewed machine output" not in entry
-            assert "does not say whether it is unratified" in entry
         assert COHORT_LIMIT in created
         assert OVERRIDE_LIMIT in overridden
         # the override names the rejected and the replacing decision
-        assert "decision revisions" in overridden
         assert shortened(
             decision("Sebastian's rejected proposal", 1), overridden
         )
         assert shortened(decision("Sebastian's replacement", 2), overridden)
+
+    def test_a_record_that_does_not_say_is_told_apart_from_either_mark(
+        self, tmp_path, vocabulary
+    ):
+        # three records of Flörburg's placement, alike but for what each
+        # states of being unratified
+        marks = {
+            "true": MAP_RECORD,
+            "false": UNREVIEWED_RECORD,
+            "unknown": "Q892",
+        }
+        rows = [
+            row
+            for mark, record in marks.items()
+            for row in origin_rows(
+                FLOERBURG, "singleton", record, kind="place", unratified=mark
+            )
+        ]
+        site = self.site(tmp_path, vocabulary, rows)
+        entries = origin_entries((site / "identity.html").read_text())
+
+        def stated(record: str) -> str:
+            """The first line of the entry of `record`'s origin."""
+            (entry,) = [
+                each for each in entries if shortened(digest(record), each)
+            ]
+            return entry.splitlines()[0]
+
+        first = {mark: stated(record) for mark, record in marks.items()}
+        assert "unreviewed machine output" in first["true"]
+        for mark in ("false", "unknown"):
+            assert "unreviewed machine output" not in first[mark]
+        # each mark is stated in its own words: a record that does not say
+        # is shown neither as marked unratified nor as marked not
+        assert len(set(first.values())) == 3
 
     def test_an_unreviewed_assignment_names_its_stages_and_model(
         self, tmp_path, vocabulary
@@ -3809,9 +3860,13 @@ class TestIdentityOrigins:
         assert entry.startswith("confident identity origin")
         assert "unreviewed machine output" in entry
         assert "not confirmed by a person" in entry
-        assert "stage cluster" in entry
-        assert "stage adjudicate, model example-model, prompt" in entry
-        assert shortened(ADJUDICATION[2], entry)
+        # each stage, with its model and its prompt after it: the prompt's
+        # template name whole and its digest shortened
+        stage, model, prompt = ADJUDICATION
+        name, sha256 = prompt.rsplit(":", 1)
+        assert in_order(entry, stage, model, f"{name}:{sha256[:8]}")
+        assert shortened(sha256, entry)
+        assert CLUSTERING[0] in entry
         assert shortened(digest(f"{GUSTAV}'s assignment"), entry)
         assert shortened(decision("Gustav's proposal", 1), entry)
         for absent in ("limitation", "original run", "producer record"):
@@ -3838,10 +3893,21 @@ class TestIdentityOrigins:
         *typed, untyped = kinds
         assert typed == ["organization", "place"]
 
+        labels = [
+            item.label
+            for key, item in MANIFEST_ITEMS.items()
+            if key.startswith("identity_")
+        ]
+
         def methods(part: str) -> dict[str, list[str]]:
+            """Each entity heading in `part`, with the method label each
+            of its entries starts with."""
             return {
                 heading: [
-                    entry.split(" — ")[0] for entry in origin_entries(text)
+                    label
+                    for entry in origin_entries(text)
+                    for label in labels
+                    if entry.startswith(label)
                 ]
                 for heading, text in headed(part, "h3").items()
             }
@@ -3897,7 +3963,7 @@ class TestIdentityOrigins:
             self.site(tmp_path, vocabulary, rows) / "identity.html"
         ).read_text()
         assert "<script>" not in page
-        assert (
-            f"confirmed by {hostile} at 2026-10-24" in origin_entries(page)[0]
-        )
-        assert f"stated limitation: {hostile}" in origin_entries(page)[0]
+        (entry,) = origin_entries(page)
+        assert f"confirmed by {hostile} at 2026-10-24" in entry
+        # the actor and the limitation each show as text
+        assert entry.count(hostile) == 2
