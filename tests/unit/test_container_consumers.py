@@ -50,7 +50,6 @@ from yizkr.pipeline.extract import (
     ExtractionFailed,
     cite_artifact,
     placed_by,
-    placed_lines,
 )
 from yizkr.pipeline.pdf_inventory import inventory_pdf
 from yizkr.pipeline.presentation import unpack_pptx
@@ -59,6 +58,7 @@ from yizkr.pipeline.source_context import (
     PlacedSource,
     SourceContext,
     bind_source_support,
+    placement_lines,
 )
 from yizkr.pipeline.text_stages import (
     CritiqueRequest,
@@ -465,7 +465,7 @@ def test_bad_quote_requires_every_observation_of_its_part_to_be_valid(problem):
 
 def test_extraction_and_critique_share_original_placement_occurrences():
     reading = located_slide()
-    lines = placed_lines(reading)
+    lines = placement_lines(reading)
     assert placed_by(reading, DECK_REF) == {
         DECK_REF.sha1: frozenset({LETTER_REF.sha1})
     }
@@ -924,7 +924,7 @@ def test_both_formats_keep_repeats_and_refuse_excluded_sources(tmp_path, kind):
     reading = paged(prepared.source, [(1, [], CAPTION)]).model_copy(
         update={"source_context": context}
     )
-    lines = placed_lines(reading)
+    lines = placement_lines(reading)
     assert len(lines) == 2
     assert all(LETTER_SHA1 in line for line in lines)
     assert all(

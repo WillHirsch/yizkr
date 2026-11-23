@@ -47,7 +47,6 @@ from yizkr.claims import (
     ExtractionRunMetadata,
     artifact_kind_problems,
     load_vocabulary,
-    placed_artifacts,
     reject_reasons,
     validate_against_manifest,
     vital_problems,
@@ -75,7 +74,7 @@ from yizkr.pipeline.source_context import (
     support_failure,
 )
 from yizkr.pipeline.stages import atomic_write_text
-from yizkr.pipeline.transcribe import DECK_ENGINE, Transcription
+from yizkr.pipeline.transcribe import Transcription
 
 EXTRACTION_PROMPT = load_prompt("extraction.md")
 PRIMARY_QUOTATION_NOTE = "\n\n" + load_prompt("primary-quotation.md")
@@ -133,29 +132,14 @@ PLACED_ARTIFACTS = load_prompt("placed-artifacts.md").rstrip("\n")
 NO_PLACED_ARTIFACTS = load_prompt("no-placed-artifacts.md").rstrip("\n")
 
 
-def placed_lines(transcription: Transcription) -> list[str]:
-    """Bound source owners and original occurrence locators for the prompt.
-
-    Standalone readings without source context retain their image markers.
-    """
-    if getattr(transcription, "source_context", None) is not None:
-        return placement_lines(transcription)
-    unit = "slide" if transcription.engine == DECK_ENGINE else "page"
-    return [
-        f'  {{"kind": "artifact", "sha1": "{sha1}"}}: {unit} {page.page}, '
-        f"image {place}"
-        for page in transcription.pages or ()
-        for place, sha1 in enumerate(page.images, start=1)
-    ]
-
-
 def document_block(transcription: Transcription, artifact: ArtifactRef) -> str:
     """The document and its placed sources, without other sources' claims.
 
-    Located context supplies original occurrences and canonical media owners;
-    standalone compatibility readings supply their existing page markers.
+    The reading's source context alone supplies the placed sources: their
+    canonical media owners and original occurrences (placement_lines). A
+    reading without a source context places none.
     """
-    lines = placed_lines(transcription)
+    lines = placement_lines(transcription)
     placed = (
         PLACED_ARTIFACTS.format(placed_lines="\n".join(lines))
         if lines
@@ -167,13 +151,9 @@ def document_block(transcription: Transcription, artifact: ArtifactRef) -> str:
 def placed_by(
     transcription: Transcription, artifact: ArtifactRef
 ) -> dict[str, frozenset[str]]:
-    """Owners the current source context permits as placed claim subjects."""
-    owners = (
-        placed_owners(transcription)
-        if getattr(transcription, "source_context", None) is not None
-        else placed_artifacts(transcription.pages)
-    )
-    return {artifact.sha1: owners}
+    """Owners the current source context permits as placed claim subjects:
+    none for a reading without a source context."""
+    return {artifact.sha1: placed_owners(transcription)}
 
 
 def run_metadata(model_identifier: str) -> ExtractionRunMetadata:
@@ -1088,10 +1068,10 @@ class ClaimFileExtractor:
     The file holds either a full ClaimBatch or a bare {"claims": [...]}
     object; in the latter case run metadata is generated here. Its claims
     cite their artifacts themselves, by content key, and are validated as
-    they are, with the artifacts the transcription's pages place taken as
-    placed by the transcription's artifact (placed_by): `extract` takes
-    the same arguments as the other extractors and uses only that. A
-    file that cannot be read, is not JSON or not a JSON object, or fails
+    they are, with the artifacts the transcription's source context places
+    taken as placed by the transcription's artifact (placed_by): `extract`
+    takes the same arguments as the other extractors and uses only that.
+    A file that cannot be read, is not JSON or not a JSON object, or fails
     schema or manifest validation raises ExtractionFailed.
     """
 

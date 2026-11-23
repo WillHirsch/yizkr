@@ -49,6 +49,7 @@ from yizkr.claims import (
     load_vocabulary,
 )
 from yizkr.core.verbatim import Transcript, words
+from yizkr.pipeline import source_context
 from yizkr.pipeline.extract import scan_json_objects
 from yizkr.pipeline.interpretation_context import InterpretationContext
 from yizkr.pipeline.llm import (
@@ -60,7 +61,6 @@ from yizkr.pipeline.llm import (
 )
 from yizkr.pipeline.prompts import load_prompt
 from yizkr.pipeline.review import describe_value
-from yizkr.pipeline.transcribe import DECK_ENGINE
 
 logger = logging.getLogger(__name__)
 
@@ -265,9 +265,10 @@ def _ref_id(
 ) -> str:
     """A reference as the prompt lists it: its local id, QID or
     vocabulary key; an artifact subject as THIS_DOCUMENT when it is the
-    claim's own source (`source`, its SHA-1), by its place ("page 6,
-    image 1") when it is an image the document places (`places`,
-    artifact_places), else by its content key (ADR-0039 §10.4)."""
+    claim's own source (`source`, its SHA-1), by its place ("page/slide
+    6, placement <id>") when it is an image the document places
+    (`places`, artifact_places), else by its content key (ADR-0039
+    §10.4)."""
     if isinstance(ref, ArtifactRef):
         if ref.sha1 == source:
             return THIS_DOCUMENT
@@ -317,24 +318,12 @@ def _value(claim: Claim) -> str:
 
 
 def artifact_places(transcription: Any) -> dict[str, str]:
-    """Located source occurrences shared with extraction, by media owner.
-
-    Readings without context retain their first legacy image marker.
-    """
+    """Located source occurrences shared with extraction, by media owner
+    (source_context.artifact_places): none without a transcription, or
+    for one without a source context."""
     if transcription is None:
         return {}
-    if getattr(transcription, "source_context", None) is not None:
-        from yizkr.pipeline.source_context import (
-            artifact_places as source_places,
-        )
-
-        return source_places(transcription)
-    unit = "slide" if transcription.engine == DECK_ENGINE else "page"
-    places: dict[str, str] = {}
-    for page in transcription.pages or ():
-        for place, sha1 in enumerate(page.images, start=1):
-            places.setdefault(sha1, f"{unit} {page.page}, image {place}")
-    return places
+    return source_context.artifact_places(transcription)
 
 
 def listings(
@@ -581,8 +570,8 @@ def claim_of(
     """The index of the claim of `batch` the finding names, as the prompt
     lists it (listings, with `places`), when that claim names the
     finding's entity; None otherwise. A subject named by an image's place
-    is matched whatever its case, as the transcription's markers write
-    "Page 6, image 1" where the rows write "page 6, image 1"."""
+    is matched whatever its case, so a critic that capitalizes the place
+    a row gives still names that row's claim."""
     if finding.claim is None:
         return None
     named_places = {place.casefold() for place in (places or {}).values()}
