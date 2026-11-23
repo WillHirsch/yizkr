@@ -604,10 +604,11 @@ class EntityClient(ApiClient):
     vocabulary, which holds `entities`, id -> entity data, None for an
     entity that is listed but served missing. It answers `wbgetentities`
     as Wikibase does: only the props asked for, terms only in the
-    languages asked for, and each id under its own key."""
+    languages asked for, and each id under its own key. Given `answer`,
+    it lists `entities` and answers every request with that instead."""
 
-    def __init__(self, entities):
-        super().__init__(self.wbgetentities)
+    def __init__(self, entities, answer=None):
+        super().__init__(answer or self.wbgetentities)
         self.entities = entities
 
     def immutable_page(self, title):
@@ -731,6 +732,53 @@ def test_generation_refuses_at_the_first_item_that_is_not_a_marker():
 )
 def test_generation_refuses_an_item_read_as_more_than_the_marker(entity):
     client = EntityClient({"Q1000": served_marker(), "Q1001": entity})
+
+    with pytest.raises(CreationRefused):
+        CreationRegistry(client).check_generation()
+
+
+def answer_with_a_redirect(params):
+    """A `wbgetentities` answer after Q1001 became a redirect to the
+    marker Q1000 and Q1003 was deleted: Wikibase serves the redirect under
+    the id asked for, with its target's id and data, and the deleted item
+    as missing. The answer leaves out Q1002 altogether."""
+    served = {
+        "Q1000": {"id": "Q1000", **served_marker()},
+        "Q1001": {
+            "id": "Q1000",
+            "redirects": {"from": "Q1001", "to": "Q1000"},
+            **served_marker(),
+        },
+        "Q1003": {"id": "Q1003", "missing": ""},
+    }
+    return {
+        "entities": {
+            entity_id: served[entity_id]
+            for entity_id in params["ids"].split("|")
+            if entity_id in served
+        }
+    }
+
+
+def test_entity_data_holds_only_entities_served_live_under_their_own_id():
+    client = ApiClient(answer_with_a_redirect)
+
+    assert list(client.entity_data(["Q1000", "Q1001", "Q1002", "Q1003"])) == [
+        ("Q1000", {"id": "Q1000", **served_marker()}),
+        ("Q1001", None),
+        ("Q1002", None),
+        ("Q1003", None),
+    ]
+
+
+@pytest.mark.parametrize(
+    "listed", ["Q1001", "Q1002"], ids=["redirect", "unserved"]
+)
+def test_generation_refuses_an_item_not_served_as_a_live_entity(listed):
+    client = EntityClient(
+        {"Q1000": served_marker(), listed: served_marker()},
+        answer=answer_with_a_redirect,
+    )
 
     with pytest.raises(CreationRefused):
         CreationRegistry(client).check_generation()
