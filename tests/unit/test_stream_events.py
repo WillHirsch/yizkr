@@ -1972,8 +1972,9 @@ class TestTheCliGivingUp:
 
 def notice_alone(**marks):
     """An edit that leaves each call's stream gave_up's init event and its
-    notice alone, with `marks` in place of the notice's `error`: a stream
-    that ends on the CLI's notice of an API error, with no result event."""
+    notice alone, the notice's `error` dropped and `marks` set on it: a
+    stream that ends on the CLI's notice of an API error, with no result
+    event."""
 
     def edit(events):
         init, *_, notice, _ = gave_up(events)
