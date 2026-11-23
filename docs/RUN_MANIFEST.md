@@ -10,7 +10,7 @@ Code: `yizkr.pipeline.rundir` stores manifests and checks settings; `yizkr.pipel
 
 The manifest records settings, hashes and paths:
 
-- the mode (`scratch run`) and project stage (`development`); keeper operation remains separate work under #118;
+- the mode (`scratch run`) and project stage (`development`); reviewed increments onto a retained instance remain separate work under #876 and #158;
 - the engine, and the claude CLI version the pass is pinned to;
 - for each role the engine is called in (`transcribe`, `extract`, `critique`): the model the run configures, the effort, the epoch and whether the run refreshes it, and, once the role's engine client has started, what that client applies: its model, its effort, its configuration hash (`config_hash`, `yizkr.pipeline.llm`) and its model identifier;
 - the LLM cache's absolute path, or `null` when the run has no cache;
@@ -77,7 +77,7 @@ A reader checks `format`. A later format may add fields; a reader that meets fie
 | `format` | `1` |
 | `run_id` | Set at the first invocation and kept: `<UTC time>-<6 hex digits>`. A scratch run's is its directory's name, and its hex digits give the microsecond it started; when the clock reads at or before the latest run id already in the runs directory (a clock set back), the id is the first after that one instead, so that runs always sort as they were started. A run refuses to start, naming the entry, when an entry in the runs directory is named like a run id that no id sorts after (the last microsecond of the year 9999, or past it) |
 | `mode` | What wrote the manifest: `scratch run` |
-| `project_stage` | `development`, or `kept` from keeper mode on (ADR-0024 §7, ADR-0025 §6) |
+| `project_stage` | `development`, the only value a run records; the report also knows `kept` (ADR-0024 §7, ADR-0025 §6) |
 | `engine` | `{name, cli_version}`: `claude-code` or `anthropic`, or `borrowed` for a run whose caller lends it its engine clients, as `SourceIngestion.prepare` does, so that it makes no engine; the claude CLI version the pass is pinned to, once a claude-code client started in the invocation (`null` otherwise, and for the API engine) |
 | `roles` | Per role (`transcribe`, `extract`, `critique`), see below |
 | `cache` | The configured LLM cache's absolute path; deterministic-only invocations need not open it. `null` for a run with borrowed engines and no cache |
@@ -165,4 +165,4 @@ With placeholder paths and hashes:
 
 ## Operational limits
 
-Keeper scheduling remains under #118. Scratch pacing records subscription reserve and maximum-wait settings, which affect when calls run rather than their content. A usage-credit notice stops dispatch after it arrives; already-active calls may have used credits. Disable extra usage on the account to prevent that spending, and confirm its state before restarting a run paused for credits.
+Scheduling of reviewed increments onto a retained instance remains under #876 and #158. Scratch pacing records subscription reserve and maximum-wait settings, which affect when calls run rather than their content. A usage-credit notice stops dispatch after it arrives; already-active calls may have used credits. Disable extra usage on the account to prevent that spending, and confirm its state before restarting a run paused for credits.

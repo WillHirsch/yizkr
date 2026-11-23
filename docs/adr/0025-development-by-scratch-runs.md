@@ -16,7 +16,7 @@ Whole-corpus rebuilds expose interactions between sources, identity decisions an
 
 Scratch writes carry unratified development provenance, have no human-approval stop and omit `depicts`. They are not human confirmations for identity, privacy or any other purpose. The output is disposable development material, not an authorized shared/public archive. Fix pipeline defects in the pipeline and regenerate the experiment; do not mistake a manual repair of its graph for a pipeline fix.
 
-The implemented scratch write path and reset guards refuse an instance marked kept. A resumed scratch run can reuse or continue an intact recorded write phase; a new run or an invalidated instance state requires a reset. This is not an incremental retained writer. The runbook documents the [write-side guards](../runbooks/scratch-run.md#the-write-side).
+The implemented scratch write path and reset guards refuse an instance marked kept. A resumed scratch run can reuse or continue an intact recorded write phase; a new run or an invalidated instance state requires a reset. This is not an incremental retained writer. The target is that the scratch write stage uses the unreviewed mode of the assignment writer on a designated disposable instance (#862, #883), the writer that alone writes retained data (#822). Each rebuild then exercises the write path that retained data uses, and no retained map-written graph needs migrating. The runbook documents the [write-side guards](../runbooks/scratch-run.md#the-write-side).
 
 ### 2. Stage-level reuse
 
@@ -50,15 +50,15 @@ A small semantic acceptance set and corpus review are complementary. Fictional c
 
 Retained ingestion preserves existing identities, source evidence and human decisions while adding or reprocessing sources. Admission requires scoped human authorization; ordinary assertions can be approved together, new identity equivalences must be explicit in reviewed assignments, and face associations require affirmative confirmation. Unchanged approvals carry forward. New corroborating evidence alone does not invalidate an approval; material changes to content, attribution, identity assignment or its basis reopen only affected decisions. Approval to retain does not authorize publication.
 
-The owner authorizes the first retained dataset under #159 after readiness is demonstrated for supported workflows: reviewed admission, stable identity, safe retries, correction/recovery, privacy controls and workable backup/restore. No fixed number of unchanged runs or end to extraction development is required. Missing advanced operations can remain explicit refusals when the supported workflow is safe and useful.
+The owner authorizes designating an instance retained under #159 after readiness is demonstrated for supported workflows: reviewed admission, stable identity, safe retries, correction/recovery, privacy controls and workable backup/restore. No fixed number of unchanged runs or end to extraction development is required. Missing advanced operations can remain explicit refusals when the supported workflow is safe and useful.
 
-The code already reads both the `Project:Kept state` page and the host's `kept.json` marker, and `core.instance.mark_kept` can write both. Reset refuses if either marks the instance kept or the necessary state cannot be established. These helpers do not constitute a complete keeper or incremental-ingestion workflow. Current writes through a single identity map must not be treated as support for evolving retained identities; #723 is the narrow incremental addition milestone.
+The code already reads both the `Project:Kept state` page and the host's `kept.json` marker, and `core.instance.mark_kept` can write both. Reset refuses if either marks the instance kept or the necessary state cannot be established. Writing these markers is not the designation of an instance as retained: that needs the owner's authorization under #159 and is to be one owner-invoked command (#904). Nor do these helpers implement increments onto a retained instance (#822). Current writes through a single identity map must not be treated as support for evolving retained identities; #723 is the narrow incremental addition milestone.
 
 <a id="7-development-stage-code-may-run-ahead-of-the-proposed-drafts"></a>
 
 ### 7. Implementation and readiness boundaries
 
-The contract is agreed policy; future code is not assumed implemented. [Shared document operations](../ARCHITECTURE.md#shared-document-stage-operations) and their freshness planning are implemented; durable identity/review state and provider-session separation remain tracked work. Existing approval, exclusion, provenance and reset guards stay in force until replacements are implemented and verified. Approving policy does not authorize a keeper run or a migration of real data.
+The contract is agreed policy; future code is not assumed implemented. [Shared document operations](../ARCHITECTURE.md#shared-document-stage-operations) and their freshness planning are implemented; durable identity/review state and provider-session separation remain tracked work. Existing approval, exclusion, provenance and reset guards stay in force until replacements are implemented and verified. Approving policy neither designates an instance retained nor authorizes a migration of real data.
 
 ### 8. Protocol consequences
 

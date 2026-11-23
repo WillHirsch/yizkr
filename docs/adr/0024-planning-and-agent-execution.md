@@ -50,7 +50,7 @@ Keep current documentation internally consistent and describe implemented behavi
 
 - Prefer a bounded change that establishes a useful outcome; do not make completion of a general framework or every adapter a prerequisite for a narrow working path.
 - Preserve human decisions and evidence during reprocessing. Disposable rebuilds and retained ingestion are permanent modes, not phases separated by the end of extraction development ([ADR-0025](0025-development-by-scratch-runs.md)).
-- Retained readiness is demonstrated for supported workflows, including safe retries, correction/recovery, privacy controls and workable backups/restore. The owner separately authorizes the first retained dataset under #159; convergence is diagnostic, not a prerequisite.
+- Retained readiness is demonstrated for supported workflows, including safe retries, correction/recovery, privacy controls and workable backups/restore. The owner separately authorizes designating an instance retained under #159; convergence is diagnostic, not a prerequisite.
 - Keep owner-made work that cannot be regenerated recoverable. Disposable graphs may be regenerated, but that does not make human decisions or the retained archive disposable.
 - Planning automation remains idempotent, resumable and reviewable. Coordinate and throttle external mutations under the protocol rather than duplicating task state in local planning files.
 

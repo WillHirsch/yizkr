@@ -12,6 +12,8 @@ The pipeline turns supplied sources into inspectable readings, attributed claim 
 
 The [one-source guide](../../../docs/SOURCE_INGESTION.md) documents the retained Python API, durable products, admission of saved views and recovery. It supports one text source or standalone image and bounded additions; retained orchestration of containers and GEDCOM and a curation interface remain separate work. CSV claim approval does not establish durable identity correspondence or make a map-bound writer an incremental writer.
 
+The two workflows are to share one writer ([#822](https://github.com/WillHirsch/yizkr/issues/822)). Today the one-source workflow writes through the assignment writer (`assignment_writes`), and whole-corpus development writes through the map-bound `writer.BatchWriter.write_batch`. The target is that scratch runs use the assignment writer's unreviewed mode on a designated disposable instance, and that the map-bound writer is retired.
+
 ## Whole-corpus execution
 
 The [scratch runbook](../../../docs/runbooks/scratch-run.md) gives commands, prerequisites and recovery instructions. The [stage breakdown](../../../docs/SCRATCH_WORKFLOW.md) identifies each stage's inputs, outputs and process type. The driver owns scheduling, document publication and run resources; the stage APIs own document processing semantics.
@@ -91,13 +93,13 @@ flowchart LR
     snapshot --> writer["Guarded mapped writing"]
 ```
 
-The map writer checks complete mention coverage, verifies durable bindings and preserves its one-map-per-generation restriction. The [durable identity APIs](../../../docs/IDENTITY_REVIEW.md) provide reviewed assignments, recorded graph matching and protected additions. Identity decisions and historical-claim decisions remain distinct. Unsupported correction, merge and split refuse rather than guessing correspondence.
+The map writer checks complete mention coverage, verifies durable bindings and preserves its one-map-per-generation restriction. As policy, it writes disposable instances only, until it is retired ([#893](https://github.com/WillHirsch/yizkr/issues/893)); for retained data the map is a source of proposals for durable identity review ([#835](https://github.com/WillHirsch/yizkr/issues/835)). The [durable identity APIs](../../../docs/IDENTITY_REVIEW.md) provide reviewed assignments, recorded graph matching and protected additions. Identity decisions and historical-claim decisions remain distinct. Unsupported correction, merge and split refuse rather than guessing correspondence.
 
 ## Individual stage and review commands
 
 `yizkr ingest --help` lists the supported adapters. `register`, `transcribe`, `extract`, `gedcom`, `reconcile`, `resolve`, `export-review`, `apply-review` and `write` are useful for explicit operations and inspection. The Python [shared stages](../../../docs/ARCHITECTURE.md#shared-document-stage-operations) serve callers that already own execution resources.
 
-Claim review sheets identify rows by content-derived `claim_id`, so sorting cannot transfer decisions to another claim. Explicit per-row approval and supported corrections are checked against the supplied batch. Source locations are evidence to inspect, not editable authority. `apply-review` emits the approved or corrected subset for standalone writing. The writer retains registration, identity-map and retained-state guards. Durable retained applications use the shared review store and support receipts through the one-source API.
+Claim review sheets identify rows by content-derived `claim_id`, so sorting cannot transfer decisions to another claim. Explicit per-row approval and supported corrections are checked against the supplied batch. Source locations are evidence to inspect, not editable authority. `apply-review` emits the approved or corrected subset for standalone writing. The writer retains registration, identity-map and retained-state guards. `yizkr ingest write` with an identity map is the standalone adapter of the map-bound writer and, as policy, writes no retained data. Today kept state alone does not refuse it: on a kept instance it requires clean, committed code, and it keeps its one-map restriction on every instance. Without an identity map it writes only a batch that names every entity by QID, the route of a row-approved `depicts` batch; [#892](https://github.com/WillHirsch/yizkr/issues/892) is to remove the command and the CSV commands that feed it. Durable retained applications use the shared review store and support receipts through the one-source API.
 
 Every `depicts` association needs affirmative confirmation of that exact proposed association. General document/run approval cannot supply it. Face detection and matching produce proposals for review; enrollment and confirmed writes remain separate operations. Scratch runs exclude this workflow. See [face-region architecture](../../../docs/ARCHITECTURE.md#human-confirmed-face-links) and the [claim contract](../claims.py).
 
