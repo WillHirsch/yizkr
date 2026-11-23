@@ -308,6 +308,9 @@ def test_a_circumstance_source_is_located_after_the_source(tmp_path):
 
 
 def test_a_claim_with_no_local_reference_is_counted_apart(tmp_path):
+    """Each claim is counted by its own local references, not by those of
+    the batch it shares with an anchored claim."""
+
     def of_the_source(source):
         return claim(
             {"kind": "artifact", "sha1": source},
@@ -322,16 +325,25 @@ def test_a_claim_with_no_local_reference_is_counted_apart(tmp_path):
 
     made = build(
         tmp_path / "run",
-        document("text", URSULA, [entity("e1", "Ursula")], [of_the_source]),
+        document(
+            "text",
+            URSULA,
+            [entity("e1", "Ursula"), entity("e2", "Angerring 57", "place")],
+            [of_the_source, placed("residence", "e1", "e2", URSULA)],
+        ),
     )
     counts = admitted(made, "text")
     assert counts["claims_by_references"] == {
-        "anchored": 0,
+        "anchored": 1,
         "not_anchored": 0,
         "no_local_reference": 1,
     }
-    assert counts["located_by_references"]["no_local_reference"] == 1
-    assert counts["upper_bound"] == 1
+    assert counts["located_by_references"] == {
+        "anchored": 1,
+        "not_anchored": 0,
+        "no_local_reference": 1,
+    }
+    assert counts["upper_bound"] == 2
 
 
 def test_documents_it_cannot_observe_are_counted_never_left_out(tmp_path):
