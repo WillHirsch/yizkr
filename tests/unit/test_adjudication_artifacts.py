@@ -1,7 +1,8 @@
 """How adjudication names an artifact a claim is about (#667): its own
 document as "this document", an image the document places by its place,
-as the critic names it ("page 6, image 1"), from the transcription view
-where the stage has one; and the stage's key and code digest cover both.
+as the critic names it (critique.artifact_places), from the source
+context of the transcription view where the stage has one, else by the
+SHA-1 of its media; and the stage's key and code digest cover both.
 
 The fixtures are the fictional universe's (docs/EXAMPLES.md): *Our Family
 from Germany* (`family-booklet-2011`) places the top of Sebastian's
@@ -15,6 +16,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from tests.fixtures.located_readings import located
 from tests.unit.test_adjudication import Engine, context_of, truths
 from tests.unit.test_clustering import RUN, Doc, day, human, register
 from tests.unit.test_container_claims import (
@@ -104,9 +106,10 @@ class TestNamed:
             about(LETTER_REF, "addressee", "e1"),
         )
         places = critique.artifact_places(booklet())
+        place = places[LETTER_REF.sha1]
         found = lines_of(doc, places)
-        assert "named as the author of page 6, image 1" in found
-        assert "named as the addressee of page 6, image 1" in found
+        assert f"named as the author of {place}" in found
+        assert f"named as the addressee of {place}" in found
         assert not any("an entity" in line for line in found)
 
     def test_an_image_without_a_place_is_named_by_its_media(self):
@@ -122,8 +125,9 @@ class TestNamed:
             f"named as the author of the artifact of media SHA-1 "
             f"{LETTER_REF.sha1}"
         ) in unplaced
-        placed = lines_of(doc, critique.artifact_places(booklet()))
-        assert "named as the author of page 6, image 1" in placed
+        places = critique.artifact_places(booklet())
+        placed = lines_of(doc, places)
+        assert f"named as the author of {places[LETTER_REF.sha1]}" in placed
         assert (
             f"named as the shows of the artifact of media SHA-1 "
             f"{STRAY_REF.sha1}"
@@ -138,7 +142,8 @@ class TestNamed:
         evidence = Evidence(manifests, identity["mentions"], places)
         fingerprint = doc.fingerprint("e1", identity)
         shown = "\n".join(evidence.mention(fingerprint, "A"))
-        assert "named as the author of page 6, image 1" in shown
+        place = places[BOOKLET_REF.sha1][LETTER_REF.sha1]
+        assert f"named as the author of {place}" in shown
         # the register's document has none
         assert evidence._documents[other.sha1].places == {}
 
@@ -167,11 +172,21 @@ class TestDocumentPlaces:
             type("D", (), {"sha1": "c" * 40, "transcription": broken}),
         ]
         assert document_places(documents) == {
-            BOOKLET_REF.sha1: {LETTER_REF.sha1: "page 6, image 1"}
+            BOOKLET_REF.sha1: critique.artifact_places(booklet())
         }
 
     def test_a_view_that_places_no_image_gives_none(self, tmp_path):
         view = write_view(tmp_path, paged(BOOKLET_REF, [(1, [], "x")]))
+        documents = [
+            type("D", (), {"sha1": BOOKLET_REF.sha1, "transcription": view})
+        ]
+        assert document_places(documents) == {}
+
+    def test_a_view_without_a_source_context_gives_none(self, tmp_path):
+        """A view whose pages mark the letter's image but that has no
+        source context to locate it gives no place."""
+        unlocated = booklet().model_copy(update={"source_context": None})
+        view = write_view(tmp_path, unlocated)
         documents = [
             type("D", (), {"sha1": BOOKLET_REF.sha1, "transcription": view})
         ]
@@ -198,8 +213,22 @@ class TestStage:
         context, engine = staged(tmp_path, booklet())
         adjudication.run_stage(context)
         (prompt,) = engine.prompts
-        assert "named as the author of page 6, image 1" in prompt
+        place = critique.artifact_places(booklet())[LETTER_REF.sha1]
+        assert f"named as the author of {place}" in prompt
+        assert LETTER_REF.sha1 not in prompt
         assert "an entity" not in prompt
+
+    def test_an_unlocated_view_s_image_is_named_by_its_media(self, tmp_path):
+        """A view without a source context gives the image no place: the
+        prompt names it by the SHA-1 of its media, as any artifact with
+        no known place."""
+        unlocated = booklet().model_copy(update={"source_context": None})
+        context, engine = staged(tmp_path, unlocated)
+        adjudication.run_stage(context)
+        (prompt,) = engine.prompts
+        place = critique.artifact_places(booklet())[LETTER_REF.sha1]
+        assert LETTER_REF.sha1 in prompt
+        assert place not in prompt
 
     def test_a_view_that_places_the_image_elsewhere_is_asked_again(
         self, tmp_path
@@ -210,14 +239,13 @@ class TestStage:
         (booklet_doc,) = [
             d for d in context.documents if d.sha1 == BOOKLET_REF.sha1
         ]
-        write_view(
-            booklet_doc.batch.parent,
-            paged(BOOKLET_REF, [(7, [LETTER_REF.sha1], CAPTION)]),
-        )
+        moved = located(paged(BOOKLET_REF, [(7, [LETTER_REF.sha1], CAPTION)]))
+        write_view(booklet_doc.batch.parent, moved)
         output = ensure_adjudicated(context)
         assert not output.reused
         assert len(engine.prompts) == 2
-        assert "named as the author of page 7, image 1" in engine.prompts[1]
+        place = critique.artifact_places(moved)[LETTER_REF.sha1]
+        assert f"named as the author of {place}" in engine.prompts[1]
         record = json.loads(
             (context.directory / adjudication.RECORD).read_text()
         )
@@ -266,11 +294,15 @@ class TestEdges:
         assert set(document_places(documents)) == {BOOKLET_REF.sha1}
 
     def test_each_image_and_each_view_keeps_its_own_place(self, tmp_path):
-        two = paged(
-            BOOKLET_REF,
-            [(6, [LETTER_REF.sha1, PHOTO_REF.sha1], CAPTION)],
+        two = located(
+            paged(
+                BOOKLET_REF,
+                [(6, [LETTER_REF.sha1, PHOTO_REF.sha1], CAPTION)],
+            )
         )
-        deck = paged(DECK_REF, [(2, [PHOTO_REF.sha1], "x")], DECK_ENGINE)
+        deck = located(
+            paged(DECK_REF, [(2, [PHOTO_REF.sha1], "x")], DECK_ENGINE)
+        )
         documents = [
             type(
                 "D",
@@ -291,19 +323,21 @@ class TestEdges:
         ]
         places = document_places(documents)
         assert places == {
-            BOOKLET_REF.sha1: {
-                LETTER_REF.sha1: "page 6, image 1",
-                PHOTO_REF.sha1: "page 6, image 2",
-            },
-            DECK_REF.sha1: {PHOTO_REF.sha1: "slide 2, image 1"},
+            BOOKLET_REF.sha1: critique.artifact_places(two),
+            DECK_REF.sha1: critique.artifact_places(deck),
         }
+        booklet_places = places[BOOKLET_REF.sha1]
+        letter = booklet_places[LETTER_REF.sha1]
+        photo = booklet_places[PHOTO_REF.sha1]
+        assert letter != photo
+        assert places[DECK_REF.sha1][PHOTO_REF.sha1] != photo
         doc = the_booklet(
             about(LETTER_REF, "author", "e1"),
             about(PHOTO_REF, "shows", "e1"),
         )
         found = lines_of(doc, places[BOOKLET_REF.sha1])
-        assert "named as the author of page 6, image 1" in found
-        assert "named as the shows of page 6, image 2" in found
+        assert f"named as the author of {letter}" in found
+        assert f"named as the shows of {photo}" in found
 
     def test_a_mention_of_an_artifact_is_named_by_its_label(self):
         """A claim on the document's own mention of an artifact it only

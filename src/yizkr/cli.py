@@ -82,24 +82,18 @@ def read_placed(values: Iterable[str]) -> dict[str, frozenset[str]]:
     """The artifacts each source places, by the SHA-1 of its media, as a
     command line gives them (PLACED_OPTION), in the form
     validate_against_manifest and the writer take as `placed`. Each value
-    is a source's SHA-1 and the SHA-1s of the artifacts it places, or
-    a verified common inventory, or an explicit compatibility record of
-    derived media. Directories prefer their common inventory; an invalid
-    common record never falls back to older metadata. A directory holding
-    only an older record retains the compatibility adapter, which provides
-    owner keys but no structural provenance. Common records verify their
-    named bytes and project eligible bound owners; older records name
-    already registered owners without requiring their local media files.
-    Values for one source add up. Raises ValueError for invalid records or
-    a source said to place itself."""
-    from pydantic import ValidationError
-
+    is a source's SHA-1 and the SHA-1s of the artifacts it places, a
+    container's common inventory (container-inventory.json), or the
+    document directory that keeps it: the inventory's named bytes are
+    verified, and its source places the eligible owners its projection
+    binds. Values for one source add up. Raises ValueError naming the
+    forms it takes for any other value and for a missing or invalid
+    inventory, and ValueError for a source said to place itself."""
     from yizkr.pipeline.container_inventory import (
         CONTAINER_INVENTORY,
         read_inventory,
     )
     from yizkr.pipeline.container_sources import project_sources
-    from yizkr.pipeline.presentation import DERIVED_MEDIA, DerivedMediaRecord
 
     placed: dict[str, set[str]] = {}
     for value in values:
@@ -110,44 +104,21 @@ def read_placed(values: Iterable[str]) -> dict[str, frozenset[str]]:
         else:
             path = Path(value)
             if path.is_dir():
-                common = path / CONTAINER_INVENTORY
-                path = (
-                    common
-                    if common.exists() or common.is_symlink()
-                    else path / DERIVED_MEDIA
-                )
-            if path.name == CONTAINER_INVENTORY:
-                inventory = read_inventory(path.parent)
-                if inventory is None:
-                    raise ValueError(
-                        f"{path} is missing or invalid; reconstruct the "
-                        "container inventory from its original source"
-                    )
-                projection = project_sources(inventory, path.parent)
-                source, artifacts = (
-                    inventory.source.sha1,
-                    set(projection.sources),
-                )
-                if source in artifacts:
-                    raise ValueError(
-                        f"{value}: a source does not place itself"
-                    )
-                placed.setdefault(source, set()).update(artifacts)
-                continue
-            try:
-                record = DerivedMediaRecord.model_validate_json(
-                    path.read_bytes()
-                )
-            except OSError as exc:
+                path = path / CONTAINER_INVENTORY
+            if path.name != CONTAINER_INVENTORY:
                 raise ValueError(
-                    f"{path}: {exc.strerror}; give {PLACED_OPTION}"
-                ) from None
-            except ValidationError:
+                    f"{path} is neither a container inventory nor a "
+                    f"document directory; give {PLACED_OPTION}"
+                )
+            inventory = read_inventory(path.parent)
+            if inventory is None:
                 raise ValueError(
-                    f"{path} is not a record of a container's derived media "
-                    f"({DERIVED_MEDIA}); give {PLACED_OPTION}"
-                ) from None
-            source, artifacts = record.source_sha1, set(record.media)
+                    f"{path} is missing or invalid; reconstruct the "
+                    "container inventory from its original source, or "
+                    f"give {PLACED_OPTION}"
+                )
+            projection = project_sources(inventory, path.parent)
+            source, artifacts = inventory.source.sha1, set(projection.sources)
         if source in artifacts:
             raise ValueError(
                 f"{value}: a source does not place itself (ADR-0039 §2.1)"
@@ -172,14 +143,13 @@ def _add_placed(parser) -> None:
         "--placed",
         action="append",
         default=[],
-        metavar="RECORD|SOURCE=SHA1,...",
+        metavar="INVENTORY|SOURCE=SHA1,...",
         help="the artifacts a source places, which its caption and "
         "document-subject claims may take as their subject (ADR-0039 "
         "§2.1, §10.1): container-inventory.json or its document directory, "
-        "an explicit derived-media.json compatibility record, or a source's "
-        "SHA-1, '=', and the SHA-1s of what it places, comma-separated; "
-        "repeatable. Without it every claim about an artifact a source "
-        "places is refused",
+        "or a source's SHA-1, '=', and the SHA-1s of what it places, "
+        "comma-separated; repeatable. Without it every claim about an "
+        "artifact a source places is refused",
     )
 
 
@@ -692,6 +662,15 @@ def cmd_extract(args) -> int:
             f"reads ({found}): transcribe the media again with `yizkr ingest "
             f"transcribe`"
         )
+    # a reading whose pages mark images but that has no source context to
+    # locate them is refused in one line, as the shared stage refuses it,
+    # before any engine is reached
+    from yizkr.pipeline.text_stages import UnlocatedReading, refuse_unlocated
+
+    try:
+        refuse_unlocated(transcription)
+    except UnlocatedReading as exc:
+        sys.exit(f"{args.transcription.name}: {exc}; refusing")
     # the transcription names the artifact it transcribes by the SHA-1 of
     # its media, the key its claims cite: the list is asked for that key,
     # and for the media file by name and hash when one is given. A name

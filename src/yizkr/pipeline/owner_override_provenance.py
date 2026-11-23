@@ -3,7 +3,9 @@
 This reads the existing assignment authority. It cannot establish an override,
 move a mention, create a historical kind statement or turn ordinary approval
 into a curator replacement. Complete review evidence remains content-addressed;
-the graph receives separate origin and human-confirmation references.
+the graph receives separate origin and human-confirmation references. After
+the origin, the mention's reviewed names are appended to the entity's aliases
+(``assignment_aliases``).
 """
 
 from __future__ import annotations
@@ -13,11 +15,15 @@ from pathlib import Path
 
 from yizkr.core.provenance import ProcessRecord, StageProvenance
 from yizkr.core.write_recovery import CreationRegistry
+from yizkr.pipeline.assignment_aliases import (
+    AssignmentPublication,
+    alias_contribution,
+    append_aliases,
+)
 from yizkr.pipeline.cancellation import check_cancelled
 from yizkr.pipeline.identity_origins import verified_owner_override
 from yizkr.pipeline.identity_provenance import (
     IdentityProvenanceRefused,
-    IdentityPublication,
     IdentitySource,
     identity_references,
     publish_identity_record,
@@ -98,7 +104,7 @@ def _accepted_override(registry, mention_id):
 
 def publish_owner_override(
     client, mention_id: str, *, record_dir: Path
-) -> IdentityPublication:
+) -> AssignmentPublication:
     """Append provenance for a verified replacement before first assignment.
 
     A typed original producer in the rejected proposal's ``origin.provenance``
@@ -106,11 +112,16 @@ def publish_owner_override(
     immutable record, with an explicit limit when actual producer metadata is
     unavailable. Repeating or resuming publication uses the same record and
     appends only missing references to the existing source-backed kind.
+
+    After the origin, the names the confirmed replacement's review row showed
+    for the mention are appended to the entity's aliases once, with an alias
+    receipt, as for a cohort choice.
     """
     check_cancelled()
     registry = CreationRegistry(client)
     accepted = _accepted_override(registry, mention_id)
     assignment, decision, evidence, mention, source = accepted
+    contribution = alias_contribution(decision, mention_id)
     origin = evidence.rejected.proposal.origin
     producer = None
     producer_refs = ()
@@ -173,7 +184,7 @@ def publish_owner_override(
             producer=producer,
         )
 
-    return publish_identity_record(
+    publication = publish_identity_record(
         client,
         registry=registry,
         record=record,
@@ -187,4 +198,12 @@ def publish_owner_override(
         sources=(source,),
         references=references,
         revalidate=revalidate,
+    )
+    check_cancelled()
+    revalidate()
+    return AssignmentPublication(
+        publication.record_qid,
+        publication.changed,
+        publication.statements,
+        append_aliases(registry, assignment, source.qid, contribution),
     )

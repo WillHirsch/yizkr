@@ -56,10 +56,7 @@ from yizkr.pipeline.document_state import (
 )
 from yizkr.pipeline.estimate import Estimator, StageCalls
 from yizkr.pipeline.language import detect_language
-from yizkr.pipeline.presentation import (
-    DERIVED_MEDIA,
-    derived_transcription,
-)
+from yizkr.pipeline.presentation import derived_transcription
 from yizkr.pipeline.rundir import RunDir, RunSettingsConflict
 from yizkr.pipeline.scratch import EXIT_OK, LATEST, ScratchDriver, runs_in
 from yizkr.pipeline.stages import content_hash, sha1_file
@@ -433,7 +430,6 @@ class TestTheRoute:
             (page["page"], page["status"], page["provenance"]["method"])
             for page in stored["pages"]
         ] == [(1, "transcribed", "vision")]
-        assert not (doc.dir / DERIVED_MEDIA).exists()
 
     def test_repeated_scans_read_and_extract_only_the_original_image(
         self, tmp_path

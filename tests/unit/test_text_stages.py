@@ -17,8 +17,12 @@ from tests.fixtures.semantic_acceptance import (
     homonym_batches,
     source_case,
 )
-from yizkr.claims import ArtifactRef, LocalRef
-from yizkr.pipeline.extract import ExtractionFailed, LlmClaimExtractor
+from yizkr.claims import ArtifactRef, ClaimBatch, LocalRef
+from yizkr.pipeline.extract import (
+    ExtractionFailed,
+    LlmClaimExtractor,
+    run_metadata,
+)
 from yizkr.pipeline.llm import (
     OutputLimitReached,
     PassPaused,
@@ -31,6 +35,7 @@ from yizkr.pipeline.text_stages import (
     CritiqueRequest,
     ExtractionRequest,
     TextReadRequest,
+    UnlocatedReading,
     critique,
     extract,
     read_text,
@@ -569,6 +574,58 @@ def test_failure_pause_and_interrupt_propagate_without_taking_client_ownership(
     assert caught.value is error
     assert not diagnostic.exists()
     assert not client.closed
+
+
+def unlocated_container_reading():
+    """A container reading whose pages mark an image, without the source
+    context to locate it."""
+    transcription = empty_container_reading()
+    transcription.source_context = None
+    return transcription
+
+
+@pytest.mark.parametrize("strategy", ["chunked", "single", "auto", "file"])
+def test_a_marked_reading_without_source_context_is_refused(
+    tmp_path, strategy
+):
+    """No strategy reads a reading whose images cannot be located: the
+    model is not asked, the claims file not read and nothing written."""
+    transcription = unlocated_container_reading()
+    claims = tmp_path / "claims.json"
+    claims.write_text('{"claims":[]}')
+    out = tmp_path / "out"
+    client = ScriptedClient(AssertionError("the model was asked"))
+    with pytest.raises(UnlocatedReading):
+        extract(
+            ExtractionRequest(
+                transcription,
+                transcription.artifact,
+                strategy=strategy,
+                claims_file=claims if strategy == "file" else None,
+                state_dir=out / "state",
+                raw_dump=out / "raw.txt",
+                rejects_dump=out / "rejected.json",
+                diagnostic_dump=out / "partial.json",
+            ),
+            client,
+        )
+    assert client.prompts == []
+    assert not out.exists()
+
+
+def test_the_critic_is_not_asked_about_a_reading_it_cannot_locate():
+    transcription = unlocated_container_reading()
+    batch = ClaimBatch.model_validate(
+        {
+            "extraction_run": run_metadata("recorded").model_dump(mode="json"),
+            "entities": [{"id": "e1", "label": "Wastl", "kind": "human"}],
+            "claims": [],
+        }
+    )
+    client = ScriptedClient(AssertionError("the critic was asked"))
+    with pytest.raises(UnlocatedReading):
+        critique(CritiqueRequest(batch, transcription), client)
+    assert client.prompts == []
 
 
 def test_source_mismatch_is_refused_before_any_model_call():
