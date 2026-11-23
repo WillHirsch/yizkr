@@ -346,10 +346,11 @@ result's `refusal_reasons` gives each claim of `refused` its reason, and
 refused_by_reason counts them, every reason in that order, summing to
 the claims refused.
 
-yizkr.pipeline.text_storage states the instance's text rules below,
-and holds the names in capitals they give (TEXT_LIMIT and the others),
-stored_term, unknown_characters, extends and the cuts, which the writer
-imports from it.
+yizkr.pipeline.text_storage states the instance's text rules below and
+holds the names they give (TEXT_LIMIT and the other names in capitals,
+stored_term, unknown_characters, extends and the cuts). The writer
+imports from it the two limits, CUT_MARK, unknown_characters and the
+helpers it checks, cleans up and cuts a text with.
 
 Wikibase holds at most TEXT_LIMIT (400) characters in the text of a
 string, external-id or monolingual text value, whether the value is a
