@@ -42,6 +42,11 @@ from yizkr.pipeline.assigned_support import (
     _reference_key,
     same_statement,
 )
+from yizkr.pipeline.assignment_aliases import (
+    AliasIntent,
+    AliasReceipt,
+    alias_records,
+)
 from yizkr.pipeline.cancellation import check_cancelled
 from yizkr.pipeline.claim_review import ClaimRole
 
@@ -128,6 +133,12 @@ class CorrectionPlan(_Record):
     generation: Generation | None
     assignment_head: str | None
     changes: tuple[AssignmentChange, ...]
+    # The alias receipts of the selected mentions' assignments whose
+    # completed update appended names, each naming those it appended, and
+    # the intents of interrupted updates without a receipt, whose names may
+    # or may not have been appended (``assignment_aliases``).
+    aliases: tuple[AliasReceipt, ...]
+    pending_aliases: tuple[AliasIntent, ...]
     catalog_plan_ids: tuple[str, ...]
     catalog_complete: bool
     # Full original decisions, source evidence and producer records for each
@@ -301,6 +312,13 @@ def plan_correction(
     The caller supplies exact accepted revisions and both verified bindings.
     This function never prepares a review, acquires write authority, allocates
     an entity, retires support or transfers any previous confirmation.
+    From each selected mention's assignment alias records it lists, in
+    ``aliases``, the receipt of a completed alias update that appended
+    names, naming exactly the names appended, and, in ``pending_aliases``,
+    the intent of an interrupted update without a receipt, whose names may
+    or may not have been appended. An assignment no alias update has
+    appended to, such as one whose origin is unpublished, is in neither. It
+    plans no alias removal.
     """
     request = CorrectionRequest.model_validate(request.model_dump(mode="json"))
     request = request.model_copy(
@@ -325,6 +343,7 @@ def plan_correction(
         for a in request.assignments
     )
     blockers, impacts, statements = [], [], []
+    aliases, pending = (), ()
     applications, catalog, generation, head = (), (), None, None
     complete = False
     items, bindings, source_bindings = {}, {}, {}
@@ -365,11 +384,19 @@ def plan_correction(
             items[qid] = value
         return items[qid]
 
+    def alias_updates():
+        records = [alias_records(registry, a) for a in request.assignments]
+        return (
+            tuple(r for _, r in records if r is not None and r.added),
+            tuple(i for i, r in records if i is not None and r is None),
+        )
+
     try:
         snapshot = registry.assignment_snapshot()
         generation, head = snapshot.generation, snapshot.head
         if generation is None:
             raise ValueError("accepted assignment generation is unavailable")
+        aliases, pending = alias_updates()
         for expected in (request.source, request.target):
             if binding(expected.binding.entity_id) != expected:
                 block(
@@ -624,6 +651,7 @@ def plan_correction(
             registry.application_catalog() != catalog
             or sorted(registry.client.page_titles(prefix)) != inventory
             or registry.assignment_snapshot() != snapshot
+            or alias_updates() != (aliases, pending)
         ):
             complete = False
             block(
@@ -659,6 +687,8 @@ def plan_correction(
         generation=generation,
         assignment_head=head,
         changes=changes,
+        aliases=aliases,
+        pending_aliases=pending,
         catalog_plan_ids=tuple(p.plan_id for p in catalog),
         catalog_complete=complete,
         applications=applications,

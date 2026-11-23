@@ -34,10 +34,7 @@ from yizkr.pipeline.container_inventory import (
 )
 from yizkr.pipeline.document_state import BATCHED, FAILED
 from yizkr.pipeline.estimate import Estimator, _Made
-from yizkr.pipeline.presentation import (
-    derived_transcription,
-    read_derived_media,
-)
+from yizkr.pipeline.presentation import derived_transcription
 from yizkr.pipeline.textlayer import png
 
 pytestmark = pytest.mark.usefixtures("fixed_capture")
@@ -108,7 +105,6 @@ def test_contextual_representations_do_not_invent_distinct_source_owners(
     (part,) = embedded(saved(doc))
     assert {rep.byte_object.sha1 for rep in part.representations} == digests
     assert reader.read == []
-    assert read_derived_media(doc.dir) is None
     assert not any(
         derived_transcription(doc.dir, digest).is_file() for digest in digests
     )

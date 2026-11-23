@@ -243,6 +243,27 @@ def _context_attention(context: InterpretationContext | None) -> list[str]:
     return [f"interpretation context is incomplete: {reasons}"]
 
 
+class UnlocatedReading(ValueError):
+    """A reading whose pages mark images but that has no source context.
+
+    The images a reading places are named only from its source context,
+    never reconstructed from its page markers, so such a reading is read
+    again from its media rather than extracted or critiqued.
+    """
+
+
+def refuse_unlocated(transcription: Transcription) -> None:
+    """Raise UnlocatedReading for a reading whose pages mark images and
+    that has no source context; any other reading passes."""
+    if transcription.source_context is None and any(
+        page.images for page in transcription.pages or ()
+    ):
+        raise UnlocatedReading(
+            "the reading's pages mark images but it has no source context "
+            "to locate them: transcribe the media again"
+        )
+
+
 def empty_container_reading(transcription: Transcription) -> bool:
     """Prove that a current container reading holds only generated markers.
 
@@ -367,9 +388,12 @@ def extract(
     The caller owns client cleanup, accepted outputs and review decisions.
     Optional interpretation context is a separate, declared input: it never
     changes the primary reading or supplies a claim's supporting quotation.
+    A reading whose pages mark images without a source context is refused
+    (refuse_unlocated) before any path, capture or model is used.
     """
     if request.transcription.artifact != request.artifact:
         raise ValueError("the transcription names a different source artifact")
+    refuse_unlocated(request.transcription)
     if request.context is not None:
         request.context.validate_target(request.transcription)
     strategy = request.resolved_strategy
@@ -594,9 +618,14 @@ class CritiqueResult:
 
 
 def critique(request: CritiqueRequest, client: LlmClient) -> CritiqueResult:
-    """Return advisory findings, preserving an unfinished critic's status."""
+    """Return advisory findings, preserving an unfinished critic's status.
+
+    A reading whose pages mark images without a source context is refused
+    (refuse_unlocated) before the critic is asked.
+    """
     from yizkr.pipeline.critique import run_critique
 
+    refuse_unlocated(request.transcription)
     capture = Capture("critique", "model")
     attention = _context_attention(request.context)
     incomplete: list[str] = []

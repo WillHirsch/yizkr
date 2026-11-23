@@ -3,8 +3,7 @@
 The inventory names original bytes and structural occurrences, independently
 of eligibility and reading results. It is not a source-owner registry or an
 authorization to send a part to a model. Readers and registration project it
-through yizkr.pipeline.container_sources; an older derived-media record is
-read only as a compatibility input.
+through yizkr.pipeline.container_sources.
 """
 
 from __future__ import annotations
