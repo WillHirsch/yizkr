@@ -692,6 +692,15 @@ def cmd_extract(args) -> int:
             f"reads ({found}): transcribe the media again with `yizkr ingest "
             f"transcribe`"
         )
+    # a reading whose pages mark images but that has no source context to
+    # locate them is refused in one line, as the shared stage refuses it,
+    # before any engine is reached
+    from yizkr.pipeline.text_stages import UnlocatedReading, refuse_unlocated
+
+    try:
+        refuse_unlocated(transcription)
+    except UnlocatedReading as exc:
+        sys.exit(f"{args.transcription.name}: {exc}; refusing")
     # the transcription names the artifact it transcribes by the SHA-1 of
     # its media, the key its claims cite: the list is asked for that key,
     # and for the media file by name and hash when one is given. A name

@@ -15,7 +15,7 @@ Extraction turns a located source reading into proposed claims. It does not esta
 | Critique | Model + validation | Batch, reading and the same interpretation context → findings and completion status. |
 | Identity matching | Deterministic blocking + optional model | Source mentions and explicit corpus/graph context → identity proposals, separately reviewed before retained application. |
 
-The shared API defaults to `chunked`; run ingestion explicitly uses it for its entity manifest. Standalone `ingest extract` defaults to `auto`, selecting chunked above 4,000 transcription characters and single-call otherwise. `single` has no entity-manifest pass. `file` validates prepared claims while retaining their citations. A verified container reading with no container-authored text can produce a complete empty batch deterministically, avoiding duplicate extraction of independently owned images.
+The shared API defaults to `chunked`; run ingestion explicitly uses it for its entity manifest. Standalone `ingest extract` defaults to `auto`, selecting chunked above 4,000 transcription characters and single-call otherwise. A reading whose pages mark images but that has no source context to locate them is refused before any model call, by `ingest extract` in one line and by the shared extraction and critique operations: transcribe the media again, since placed images are named only from a reading's source context, never from its page markers. `single` has no entity-manifest pass. `file` validates prepared claims while retaining their citations. A verified container reading with no container-authored text can produce a complete empty batch deterministically, avoiding duplicate extraction of independently owned images.
 
 ## Entity manifest and fallback
 

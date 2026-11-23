@@ -894,8 +894,12 @@ class TestNoExtractionNamesAnArtifactKind:
         )
         claims_file = tmp_path / "claims.json"
         claims_file.write_text(json.dumps({"claims": [made]}))
+        # a reading of the booklet that marks no image, so none is located
+        reading = Transcription(
+            artifact=BOOKLET_REF, text="Our Family from Germany.", engine="t"
+        )
         extracted = ClaimFileExtractor(claims_file).extract(
-            booklet(), BOOKLET_REF
+            reading, BOOKLET_REF
         )
         assert extracted.extraction_run.model_identifier == "manual"
         assert pre_plan_refusals(extracted, {}) == {}
@@ -1268,16 +1272,17 @@ class TestTheCritic:
 
     def test_the_rows_name_the_document_and_the_image_by_its_place(self):
         places = critique.artifact_places(booklet())
-        assert places == {LETTER_REF.sha1: "page 6, image 1"}
+        assert set(places) == {LETTER_REF.sha1}
+        place = places[LETTER_REF.sha1]
         assert critique.listings(self.claims(), places) == [
-            ("page 6, image 1", "author", "e3"),
-            ("page 6, image 1", "addressee", "e4"),
+            (place, "author", "e3"),
+            (place, "addressee", "e4"),
             ("this document", "inception", "2011"),
         ]
         prompt = critique.critique_prompt(
             self.claims(), booklet(), ["author"], ["human"]
         )
-        assert "page 6, image 1 | author | e3 | times: -" in prompt
+        assert f"{place} | author | e3 | times: -" in prompt
         assert '"this document" for the source itself' in flat(prompt)
 
     def test_the_support_test_names_the_artifact(self):
@@ -1295,50 +1300,25 @@ class TestTheCritic:
             flat(critique.CATEGORIES["excerpt_does_not_state"])
         )
 
-    def test_a_deck_s_image_is_named_by_its_slide_and_first_place(self):
-        from tests.unit.test_container_claims import ALBUM_REF, paged
-        from yizkr.pipeline.transcribe import DECK_ENGINE
-
-        deck = paged(
-            DECK_REF,
-            [
-                (2, [ALBUM_REF.sha1], "Wastl and Hilde"),
-                (3, [PORTRAIT_REF.sha1, ALBUM_REF.sha1], "Stupfield"),
-            ],
-            engine=DECK_ENGINE,
-        )
-        assert critique.artifact_places(deck) == {
-            ALBUM_REF.sha1: "slide 2, image 1",
-            PORTRAIT_REF.sha1: "slide 3, image 1",
-        }
-
     def test_without_its_transcription_an_image_is_its_content_key(self):
         assert critique.listings(self.claims())[0][0] == str(LETTER_REF)
 
     def test_a_finding_on_the_image_s_claim_resolves_to_it(self):
-        finding = {
-            "entity": "e3",
-            "claim": {
-                "subject": "page 6, image 1",
-                "property": "author",
-                "value": "e3",
-            },
-            "axis": "value",
-            "category": "excerpt_does_not_state",
-            "issue": "the caption names a writer",
-            "suggestion": {"note": "keep"},
-        }
+        finding = on_the_image()
         places = critique.artifact_places(booklet())
         vocabulary = (dict(VOCABULARY), {"human"})
         found = critique.check(finding, self.claims(), vocabulary, places)
         assert isinstance(found, critique.Finding)
         assert critique.claim_of(found, self.claims(), places) == 0
-        marked = {
+        capitalized = {
             **finding,
-            "claim": {**finding["claim"], "subject": "Page 6, image 1"},
+            "claim": {
+                **finding["claim"],
+                "subject": finding["claim"]["subject"].upper(),
+            },
         }
         assert isinstance(
-            critique.check(marked, self.claims(), vocabulary, places),
+            critique.check(capitalized, self.claims(), vocabulary, places),
             critique.Finding,
         )
         unresolved = critique.check(finding, self.claims(), vocabulary)
@@ -1357,22 +1337,25 @@ class FindingLlm:
     def complete(self, prompt, image_paths=()):
         self.prompts.append(prompt)
         return "\n".join(
-            [json.dumps(ON_THE_IMAGE), json.dumps({"done": True})]
+            [json.dumps(on_the_image()), json.dumps({"done": True})]
         )
 
 
-ON_THE_IMAGE = {
-    "entity": "e3",
-    "claim": {
-        "subject": "page 6, image 1",
-        "property": "author",
-        "value": "e3",
-    },
-    "axis": "value",
-    "category": "excerpt_does_not_state",
-    "issue": "the caption names a writer",
-    "suggestion": {"note": "keep"},
-}
+def on_the_image() -> dict:
+    """A finding on the letter image's `author` claim, which names the
+    image by its place in the booklet, as the prompt lists it."""
+    return {
+        "entity": "e3",
+        "claim": {
+            "subject": critique.artifact_places(booklet())[LETTER_REF.sha1],
+            "property": "author",
+            "value": "e3",
+        },
+        "axis": "value",
+        "category": "excerpt_does_not_state",
+        "issue": "the caption names a writer",
+        "suggestion": {"note": "keep"},
+    }
 
 
 class TestTheCriticWiring:
@@ -1399,10 +1382,11 @@ class TestTheCriticWiring:
         llm = FindingLlm()
         (found,) = critique.run_critique(llm, self.claims(), booklet())
         assert isinstance(found, critique.Finding), found
-        assert "page 6, image 1 | author | e3" in llm.prompts[0]
+        place = critique.artifact_places(booklet())[LETTER_REF.sha1]
+        assert f"{place} | author | e3" in llm.prompts[0]
 
     def test_the_sheet_note_lands_on_the_image_claim_s_row(self):
-        finding = critique.Finding.model_validate(ON_THE_IMAGE)
+        finding = critique.Finding.model_validate(on_the_image())
         places = critique.artifact_places(booklet())
         claims = self.claims()
         assert list(

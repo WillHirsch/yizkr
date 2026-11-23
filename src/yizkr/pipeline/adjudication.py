@@ -36,9 +36,9 @@ names it as a value (its kin, the events it takes part in with its role,
 its places), each value named by its label and kind, an artifact a
 claim is about named plainly: its own document as "this document", an
 image the document places by its place, as the critic names it
-(critique.artifact_places: "page/slide 6, placement <id>", or "page 6,
-image 1" in a reading without source context), from the document's
-transcription view where the stage has one; with clustering's own
+(critique.artifact_places: "page/slide 6, placement <id>"), from the
+source context of the document's transcription view where the stage has
+one, else by the SHA-1 of its media; with clustering's own
 evidence for the pair (how names, dates and kin compare, and what
 keeps the pair apart). A date is rendered at its own precision, as the
 site renders it (core.dates.time_text): "the 1830s", "the 19th
@@ -278,10 +278,9 @@ class _Document:
         """An entity a claim names: a local id by its label and kind, a
         vocabulary item by its key, an item already in the graph as one,
         never by its QID; an artifact as THIS_DOCUMENT when it is the
-        document's own, by its place ("page/slide 6, placement <id>", or
-        "page 6, image 1" in a reading without source context) when it
-        is an image the document places, else by the SHA-1 of its
-        media."""
+        document's own, by its place ("page/slide 6, placement <id>")
+        when it is an image the document places, else by the SHA-1 of
+        its media."""
         if isinstance(ref, ArtifactRef):
             if ref.sha1 == self.sha1:
                 return THIS_DOCUMENT
@@ -771,9 +770,10 @@ def code_digest() -> str:
     source, the date formatters it renders dates with (the claim date's
     stamp, precision and span rule, and the site's formatter), how it
     shows an unknown value (review.UNKNOWN_SHOWN), and how it names an
-    artifact (critique.artifact_places and THIS_DOCUMENT)."""
+    artifact (critique.artifact_places, the source context's places it
+    reads, and THIS_DOCUMENT)."""
     from yizkr import claims, staticsite
-    from yizkr.pipeline import critique, review
+    from yizkr.pipeline import critique, review, source_context
 
     return sha256_text(
         canonical_json(
@@ -792,6 +792,8 @@ def code_digest() -> str:
                 ),
                 "artifacts": sha256_text(
                     inspect.getsource(critique.artifact_places)
+                    + inspect.getsource(source_context.artifact_places)
+                    + inspect.getsource(source_context._places)
                     + repr(critique.THIS_DOCUMENT)
                 ),
                 "unknown": review.UNKNOWN_SHOWN,
@@ -837,8 +839,8 @@ def document_places(documents: Iterable[Any]) -> dict[str, dict[str, str]]:
     """The places of the images each document's transcription view
     places (critique.artifact_places), by the document's SHA-1: none for a
     document without a view (`transcription`, its path), or whose view is
-    missing or cannot be read, or places no image. Read only, never
-    made."""
+    missing or cannot be read, or whose source context places no image (a
+    view without a source context places none). Read only, never made."""
     from yizkr.pipeline.transcribe import Transcription
 
     found: dict[str, dict[str, str]] = {}
