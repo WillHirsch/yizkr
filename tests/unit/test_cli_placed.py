@@ -3,7 +3,7 @@
 Validation and the writer take a `caption` only on an artifact its source
 places, so each needs the source's placed media. `yizkr claims
 --validate` and `yizkr ingest write` take them with `--placed`: a
-container's record of derived media (`derived-media.json`, or the
+container's inventory (`container-inventory.json`, or the document
 directory that keeps it) or a source's SHA-1 and theirs. Without it a
 caption is refused as before, and the command says how to give them.
 
@@ -38,36 +38,34 @@ from yizkr.claims import PLACED_OPTION, unplaced_claims, unplaced_hint
 from yizkr.cli import read_placed
 from yizkr.core.exits import EXIT_OK
 from yizkr.model.schema import DEFAULT_MANIFEST, read_manifest_data
-from yizkr.pipeline.presentation import (
-    DERIVED_MEDIA,
-    DERIVED_MEDIA_DIR,
-    DerivedMediaRecord,
-    DerivedMedium,
-)
 
-TITLE = "Our Family from Germany"
+# the booklet places the top of the letter: the value `--placed` takes
+PLACED = f"{BOOKLET_REF.sha1}={LETTER_REF.sha1}"
 
 
-def record(directory, source=BOOKLET_REF, *placed):
-    """The booklet's record of derived media, as the pipeline keeps it in
-    its document directory: the images its pages place, by their SHA-1s
-    (only the record: the media's bytes are not read)."""
-    directory.mkdir(parents=True, exist_ok=True)
-    path = directory / DERIVED_MEDIA
+def old_record(directory):
+    """An older run's record of the booklet's derived media in its
+    document directory, beside the bytes of the image it names (those
+    LETTER_REF names): not an input."""
+    image = directory / "derived-media" / f"{LETTER_REF.sha1}.png"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(b"\x89PNG the top of the 1939 letter")
+    path = directory / "derived-media.json"
     path.write_text(
-        DerivedMediaRecord(
-            source_sha1=source.sha1,
-            container="pdf",
-            title=TITLE,
-            media={
-                ref.sha1: DerivedMedium(
-                    names=[f"page 6, image {place}"],
-                    slides=[6],
-                    file=f"{DERIVED_MEDIA_DIR}/{ref.sha1}.png",
-                )
-                for place, ref in enumerate(placed or (LETTER_REF,), 1)
-            },
-        ).model_dump_json(indent=2)
+        json.dumps(
+            {
+                "source_sha1": BOOKLET_REF.sha1,
+                "container": "pdf",
+                "title": "Our Family from Germany",
+                "media": {
+                    LETTER_REF.sha1: {
+                        "names": ["page 6, image 1"],
+                        "slides": [6],
+                        "file": f"derived-media/{LETTER_REF.sha1}.png",
+                    }
+                },
+            }
+        )
     )
     return path
 
@@ -89,13 +87,6 @@ def manifest_file(tmp_path, name, change=lambda caption: None):
 
 
 class TestReadPlaced:
-    def test_a_record_names_its_container_and_what_it_places(self, tmp_path):
-        path = record(tmp_path / "booklet", BOOKLET_REF, LETTER_REF, STRAY_REF)
-        expected = {BOOKLET_REF.sha1: {LETTER_REF.sha1, STRAY_REF.sha1}}
-        assert read_placed([str(path)]) == expected
-        # the document directory that keeps the record names it too
-        assert read_placed([str(path.parent)]) == expected
-
     def test_a_source_and_its_artifacts_by_sha1(self):
         value = f"{BOOKLET_REF.sha1}={LETTER_REF.sha1},{STRAY_REF.sha1}"
         assert read_placed([value]) == {
@@ -107,14 +98,14 @@ class TestReadPlaced:
     def test_the_whole_value_is_the_pair(self):
         """A value with more than a pair in it is read as a path, never
         cut to the pair it begins with."""
-        with pytest.raises(ValueError, match="--placed <derived-media"):
+        with pytest.raises(ValueError) as refusal:
             read_placed([f"{BOOKLET_REF.sha1}={LETTER_REF.sha1}0"])
+        assert PLACED_OPTION in str(refusal.value)
 
-    def test_values_for_one_source_add_up(self, tmp_path):
-        path = record(tmp_path / "booklet")
+    def test_values_for_one_source_add_up(self):
         assert read_placed(
             [
-                str(path),
+                PLACED,
                 f"{BOOKLET_REF.sha1}={STRAY_REF.sha1}",
                 f"{DECK_REF.sha1}={LETTER_REF.sha1}",
             ]
@@ -126,12 +117,12 @@ class TestReadPlaced:
     def test_none_given_places_nothing(self):
         assert read_placed([]) == {}
 
-    def test_a_file_that_is_no_record_is_refused(self, tmp_path):
+    def test_a_file_that_is_no_inventory_is_refused(self, tmp_path):
         other = tmp_path / "batch.json"
         other.write_text(batch_of(caption()).model_dump_json())
-        with pytest.raises(ValueError, match="derived media") as refusal:
+        with pytest.raises(ValueError) as refusal:
             read_placed([str(other)])
-        assert "--placed <derived-media.json>" in str(refusal.value)
+        assert PLACED_OPTION in str(refusal.value)
         # a path that is not there, or a mistyped pair, says what to give
         with pytest.raises(ValueError, match="booklet") as refusal:
             read_placed([str(tmp_path / "booklet")])
@@ -141,12 +132,23 @@ class TestReadPlaced:
         with pytest.raises(ValueError, match="does not place itself"):
             read_placed([f"{BOOKLET_REF.sha1}={BOOKLET_REF.sha1}"])
 
-    def test_a_record_never_places_its_own_container(self, tmp_path):
-        path = record(
-            tmp_path / "booklet", BOOKLET_REF, LETTER_REF, BOOKLET_REF
-        )
-        with pytest.raises(ValueError, match="does not place itself"):
-            read_placed([str(path)])
+    def test_an_older_record_is_refused(self, tmp_path):
+        """A derived-media record an older run kept, given by its path,
+        is refused with the forms `--placed` takes."""
+        with pytest.raises(ValueError) as refusal:
+            read_placed([str(old_record(tmp_path / "booklet"))])
+        assert PLACED_OPTION in str(refusal.value)
+
+    def test_a_directory_holding_only_an_older_record_is_refused(
+        self, tmp_path
+    ):
+        """A document directory with no container inventory is refused
+        with the forms `--placed` takes, whatever older record it keeps."""
+        directory = tmp_path / "booklet"
+        old_record(directory)
+        with pytest.raises(ValueError) as refusal:
+            read_placed([str(directory)])
+        assert PLACED_OPTION in str(refusal.value)
 
     def test_the_captions_left_without_their_placed_media(self):
         batch = batch_of(caption(), caption(text="Wastl to Klara."))
@@ -192,11 +194,10 @@ class TestReadPlaced:
 
 class TestValidate:
     def test_with_the_placed_media_the_caption_passes(self, tmp_path, capsys):
-        placed = record(tmp_path / "booklet")
         status = cli.main(
             [
                 *("claims", "--validate", str(batch_file(tmp_path))),
-                *("--placed", str(placed)),
+                *("--placed", PLACED),
             ]
         )
         out, err = capsys.readouterr()
@@ -228,10 +229,9 @@ class TestValidate:
     def test_a_caption_of_what_the_source_does_not_place_is_refused(
         self, tmp_path, capsys
     ):
-        placed = record(tmp_path / "booklet")
         batch = batch_file(tmp_path, caption(STRAY_REF.model_dump()))
         status = cli.main(
-            ["claims", "--validate", str(batch), "--placed", str(placed)]
+            ["claims", "--validate", str(batch), "--placed", PLACED]
         )
         err = capsys.readouterr().err
         assert status != EXIT_OK
@@ -260,7 +260,7 @@ class TestValidate:
         refuses it; and under one that marks `caption` no placed subject,
         it is not counted among the claims that want placed media."""
         validate = ("claims", "--validate", str(batch_file(tmp_path)))
-        placed = ("--placed", str(record(tmp_path / "booklet")))
+        placed = ("--placed", PLACED)
 
         same = manifest_file(tmp_path, "same.yaml")
         status = cli.main([*validate, *placed, "--manifest", str(same)])
@@ -289,11 +289,10 @@ class TestWrite:
         wiki = CaptionWiki()
         qids = artifacts(wiki, BOOKLET_REF, LETTER_REF)
         monkeypatch.setattr(cli, "_client", lambda args: wiki)
-        placed = record(tmp_path / "booklet")
         status = cli.main(
             [
                 *("ingest", "write", "--batch", str(batch_file(tmp_path))),
-                *("--placed", str(placed.parent)),
+                *("--placed", PLACED),
             ]
         )
         out, err = capsys.readouterr()

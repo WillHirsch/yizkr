@@ -32,11 +32,7 @@ from yizkr.pipeline.language import (
 )
 from yizkr.pipeline.llm import LlmClient
 from yizkr.pipeline.pdf_inventory import PdfInventory, inventory_pdf
-from yizkr.pipeline.presentation import (
-    PresentationContent,
-    read_derived_media,
-    unpack_pptx,
-)
+from yizkr.pipeline.presentation import PresentationContent, unpack_pptx
 from yizkr.pipeline.slide_reading import SlideVisionRequest
 from yizkr.pipeline.stages import canonical_json, sha256_text
 from yizkr.pipeline.textlayer import check_pdf_vision, is_pdf_input
@@ -144,7 +140,6 @@ def prepare_container(request: PreparationRequest) -> PreparedContainer | None:
             prepared.data,
             directory,
             previous=read_inventory(directory, verify_bytes=False),
-            legacy=read_derived_media(directory),
             excluded=excluded,
         )
         if prepared.pdf is not None:

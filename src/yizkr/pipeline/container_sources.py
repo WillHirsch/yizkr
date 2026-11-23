@@ -14,7 +14,6 @@ import mimetypes
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING
 
 from yizkr.claims import ArtifactRef, PlacementSupport, SourceSupport
 from yizkr.pipeline.container_inventory import (
@@ -25,9 +24,6 @@ from yizkr.pipeline.container_inventory import (
     SourcePart,
     _read_regular,
 )
-
-if TYPE_CHECKING:
-    from yizkr.pipeline.presentation import DerivedMediaRecord
 
 
 def _never(_sha1: str, _names: Sequence[str] = ()) -> bool:
@@ -326,14 +322,14 @@ def prepare_sources(
     directory: Path,
     *,
     previous: ContainerInventory | None = None,
-    legacy: DerivedMediaRecord | None = None,
     excluded: Callable[[str, Sequence[str]], bool] = _never,
 ) -> ContainerInventory:
     """Prepare explicit media-owner bindings without publication or models.
 
     A previous record is structural evidence only until its canonical bytes
-    are verified. A legacy record can establish a binding only by exact
-    current input correspondence, never by page number or filtered ordinal.
+    are verified. An image marker of the saved transcription can establish a
+    binding only by exact current input correspondence, never by page number
+    or filtered ordinal.
     """
     result = inventory.model_copy(deep=True)
     aliases = _aliases(result)
@@ -346,16 +342,10 @@ def prepare_sources(
         part.id: [p for p in result.placements if p.child == part.id]
         for part in result.parts
     }
-    legacy_media = (
-        legacy.media
-        if legacy is not None and legacy.source_sha1 == result.source.sha1
-        else {}
-    )
-    recovered, prior_aliases = _surviving_bindings(result, directory)
+    recovered, known_aliases = _surviving_bindings(result, directory)
     recovered_owners = {
         owner for owners in recovered.values() for owner in owners
     }
-    known_aliases = set(legacy_media) | prior_aliases
     legacy_candidates: dict[str, list[str]] = {}
     for part in result.parts:
         for item in _inputs(part, placed[part.id]):
@@ -476,7 +466,6 @@ def prepare_sources(
                 "prepared source bytes are missing or damaged"
             )
             continue
-        medium = legacy_media.get(item.representation.sha1)
         if item.representation.sha1 in known_aliases:
             candidates = legacy_candidates[item.representation.sha1]
             if len(candidates) > 1 and not all(
@@ -495,11 +484,7 @@ def prepare_sources(
                     "legacy image owner matches multiple distinct source parts"
                 )
                 continue
-            name = (
-                medium.file
-                if medium is not None
-                else _canonical_file(directory, item.representation)
-            )
+            name = _canonical_file(directory, item.representation)
             canonical = (
                 _payload(directory, name, item.representation)
                 if name

@@ -40,8 +40,8 @@ Per batch, the writer:
    the media the caller gives as that source's placed media (`placed`),
    which must have an item. The pipeline gives the derived media it
    registers for the source in the same write; `yizkr ingest write` those
-   its `--placed` names, from a container's inventory (or an explicit
-   derived-media compatibility record) or by their SHA-1s. A
+   its `--placed` names, from a container's inventory (or its document
+   directory) or by their SHA-1s. A
    document-subject claim whose subject is not its own
    source carries the passage that conveys it as its excerpt (ADR-0039
    §10.4). A subject of any other form, an artifact subject on a property
@@ -3897,7 +3897,7 @@ class BatchWriter:
         of a source's media, the SHA-1s of the artifacts it places: the
         derived media registered for that source in this write, or those
         `yizkr ingest write --placed` names (from a container's inventory,
-        an explicit derived-media compatibility record or their SHA-1s),
+        its document directory or their SHA-1s),
         which a `caption` claim of that source may take as its subject
         (step 0 of the module docstring). Without it a caption is
         refused."""

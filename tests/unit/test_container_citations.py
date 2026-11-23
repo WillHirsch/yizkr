@@ -359,7 +359,7 @@ def test_verified_legacy_binding_can_enrich_an_existing_owner(tmp_path):
     assert_additive(before, wiki.entities[prior.artifact_qid])
 
 
-def test_common_placed_input_is_primary_and_never_downgrades_invalid_data(
+def test_common_placed_input_gives_its_owners_and_refuses_damage(
     tmp_path,
 ):
     source = ArtifactRef.from_bytes(b"fictional library-talk-2018 container")
@@ -371,26 +371,6 @@ def test_common_placed_input_is_primary_and_never_downgrades_invalid_data(
     assert read_placed([str(tmp_path / CONTAINER_INVENTORY)]) == read_placed(
         [str(tmp_path)]
     )
-    # A valid metadata-only compatibility record must not mask a damaged
-    # common record; otherwise stale ownership could regain admission.
-    (tmp_path / "derived-media.json").write_text(
-        json.dumps(
-            {
-                "source_sha1": source.sha1,
-                "title": "Library Talk 2018",
-                "media": {
-                    image.sha1: {
-                        "file": f"derived-media/{image.sha1}.png",
-                        "names": ["album.png"],
-                        "slides": [1],
-                    }
-                },
-            }
-        )
-    )
-    assert read_placed([str(tmp_path / "derived-media.json")]) == {
-        source.sha1: frozenset({image.sha1})
-    }
     (tmp_path / inventory.parts[-1].file).unlink()
     with pytest.raises(ValueError, match="reconstruct"):
         read_placed([str(tmp_path)])
