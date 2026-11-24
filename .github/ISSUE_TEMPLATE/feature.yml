@@ -96,11 +96,11 @@ body:
         Does the issue's scope, design or decision need evidence from a
         turn of a corpus run, and from which? An issue that needs none
         merges before the next turn that has not started. One that needs a
-        turn's evidence merges before the next run after that turn and is
-        linked as a blocker of that run's issue. A new capability that
-        serves only review or a retained instance merges before the first
-        increment, whatever the answer. A local check on real data before
-        merge is not a turn's evidence. See
+        turn's evidence merges before the next turn (after the last turn,
+        the first increment) and is linked as a blocker of the next turn's
+        issue. A new capability that serves only review or a retained
+        instance merges before the first increment, whatever the answer. A
+        local check on real data before merge is not a turn's evidence. See
         [docs/AGENT_PROTOCOL.md §5](https://github.com/WillHirsch/yizkr/blob/main/docs/AGENT_PROTOCOL.md#5-integration-and-corpus-evidence).
       options:
         - "none (no corpus evidence)"

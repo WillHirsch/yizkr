@@ -26,7 +26,7 @@ actually ran. An all-skipped run is not integration evidence.
 -->
 
 <!--
-When needs:scratch-diff applies, name the run issue that supplies the whole-corpus evidence and say that the evidence is read after merge (docs/AGENT_PROTOCOL.md §5). Only for a change to the clustering settings, include before merge the reason bounded evidence was insufficient, tested commit and baseline, stages, aggregate report/diff summary, verdict and the owner's sign-off. Detailed corpus reports remain local-only. Otherwise omit corpus-run evidence; changing a pre-write file alone does not require it.
+When needs:scratch-diff applies, name the run issue that supplies the whole-corpus evidence and, unless the change is to the clustering settings, say that the evidence is read after merge ([docs/AGENT_PROTOCOL.md §5](https://github.com/WillHirsch/yizkr/blob/main/docs/AGENT_PROTOCOL.md#5-integration-and-corpus-evidence)). Only for a change to the clustering settings, include before merge the reason bounded evidence was insufficient, tested commit and baseline, stages, aggregate report/diff summary, verdict and the owner's sign-off. Detailed corpus reports remain local-only. Otherwise omit corpus-run evidence; changing a pre-write file alone does not require it.
 -->
 
 ## Owner actions
