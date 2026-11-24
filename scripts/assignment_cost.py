@@ -65,7 +65,7 @@ def _git(*args: str) -> str:
     return subprocess.check_output(["git", *args], cwd=ROOT, text=True).strip()
 
 
-def measurement(names: list[str]) -> dict:
+def measurement(names: list[str], *, trace: bool = False) -> dict:
     from tests.fixtures.assignment_cohort import SIZES, measure
 
     report = {
@@ -80,7 +80,10 @@ def measurement(names: list[str]) -> dict:
             isolate(Path(tmp))
             started = time.perf_counter()
             found = measure(
-                SIZES[name], Path(tmp) / "run", clock=time.perf_counter
+                SIZES[name],
+                Path(tmp) / "run",
+                clock=time.perf_counter,
+                trace=trace,
             )
             found["seconds"] = time.perf_counter() - started
         report["sizes"][name] = {"scale": asdict(SIZES[name]), **found}
@@ -182,6 +185,12 @@ def main(argv=None) -> int:
         "--baseline", type=Path, help="an earlier report to compare with"
     )
     parser.add_argument(
+        "--trace",
+        action="store_true",
+        help="also attribute every request to the yizkr functions that "
+        "sent it (slower; the report's senders)",
+    )
+    parser.add_argument(
         "--write-baseline",
         nargs="?",
         type=Path,
@@ -206,7 +215,7 @@ def main(argv=None) -> int:
             json.loads(args.baseline.read_text()) if args.baseline else None
         )
         names = args.size or list(SIZES)
-        report = measurement(names)
+        report = measurement(names, trace=args.trace)
         with args.output.open("x") as output:
             output.write(json.dumps(report, indent=1) + "\n")
         print(summary(report))

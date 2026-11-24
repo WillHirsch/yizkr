@@ -43,6 +43,7 @@ import hashlib
 import io
 import json
 import re
+import sys
 import urllib.parse
 import urllib.request
 import urllib.response
@@ -234,6 +235,39 @@ def record_kind(title: str) -> str:
     return "other-record"
 
 
+def _sender() -> tuple[str, ...]:
+    """The yizkr functions on the stack, outermost first, without the wiki
+    client, whose methods only carry a request."""
+    names = []
+    frame = sys._getframe(2)
+    while frame is not None:
+        module = frame.f_globals.get("__name__", "")
+        if module.startswith("yizkr.") and module != "yizkr.core.wiki":
+            names.append(
+                f"{module.removeprefix('yizkr.')}.{frame.f_code.co_qualname}"
+            )
+        frame = frame.f_back
+    return tuple(reversed(names))
+
+
+def account(log: RequestLog, params: Mapping[str, str]) -> None:
+    """Count one API request in `log` by kind, and a write request by what
+    it writes: "page:<record kind>" for a page edit, "item-create" and
+    "item-update" for an item, "file" for an upload. A write is counted as
+    it is sent, so a refused one counts too; a single writer sends none
+    that is refused."""
+    kind = request_kind(params)
+    log.request(kind)
+    if kind == "page-write":
+        log.wrote(f"page:{record_kind(params.get('title', ''))}")
+    elif kind == "item-create":
+        log.wrote("item-create")
+    elif kind == "item-edit":
+        log.wrote("item-update")
+    elif kind == "upload":
+        log.wrote("file")
+
+
 @dataclass
 class RequestLog:
     """Requests by phase and kind, and what the server wrote by phase and
@@ -244,6 +278,10 @@ class RequestLog:
     current: str = "setup"
     requests: dict[str, Counter] = field(default_factory=dict)
     writes: dict[str, Counter] = field(default_factory=dict)
+    # with `trace`, every request is also counted by its phase, kind and
+    # the yizkr functions that sent it, outermost first: `paths`
+    trace: bool = False
+    paths: Counter = field(default_factory=Counter)
 
     @contextmanager
     def phase(self, name: str) -> Iterator[None]:
@@ -255,6 +293,8 @@ class RequestLog:
 
     def request(self, kind: str, count: int = 1) -> None:
         self.requests.setdefault(self.current, Counter())[kind] += count
+        if self.trace:
+            self.paths[self.current, kind, _sender()] += count
 
     def wrote(self, kind: str) -> None:
         self.writes.setdefault(self.current, Counter())[kind] += 1
@@ -422,7 +462,7 @@ def observing(log: RequestLog, settings: Config) -> Iterator[RequestLog]:
     def send(adapter, request, **kwargs):
         if request.url.split("?", 1)[0] == api:
             _, params, _, _ = request_parts(request)
-            log.request(request_kind(params))
+            account(log, params)
         return original(adapter, request, **kwargs)
 
     HTTPAdapter.send = send
@@ -498,7 +538,7 @@ class FakeWikibase:
     # -- dispatch --------------------------------------------------------
 
     def api(self, method, params, files, headers) -> dict:
-        self.log.request(request_kind(params))
+        account(self.log, params)
         try:
             return self._answer(method, params, files, headers)
         except ApiError as error:
@@ -604,7 +644,6 @@ class FakeWikibase:
         revision = self._revise(
             title, params.get("summary", ""), params["text"]
         )
-        self.log.wrote(f"page:{record_kind(title)}")
         return {
             "edit": {
                 "result": "Success",
@@ -820,7 +859,6 @@ class FakeWikibase:
         self.files[name] = sha1
         self._revise(f"File:{name}", params.get("comment", ""), "")
         self.logs += 1
-        self.log.wrote("file")
         return {"upload": {"result": "Success", "filename": name}}
 
     # -- the mutation guard ----------------------------------------------
@@ -1082,7 +1120,6 @@ class FakeWikibase:
             f"/* wbeditentity-{action}:0| */ {summary}".rstrip(),
         )
         self.entity_pages.setdefault(entity_id, []).append(revision.revid)
-        self.log.wrote(f"item-{action}")
         return {"entity": self.entity_json(entity_id), "success": 1}
 
     # -- set-up ----------------------------------------------------------

@@ -849,12 +849,15 @@ def measure(
     directory: Path,
     *,
     clock: Callable[[], float] | None = None,
+    trace: bool = False,
 ) -> dict:
     """The report of one run of `scale`'s cohort against a fresh
     `FakeWikibase`, set up as a fictional-lane stack is: bootstrapped
     through the production bootstrap, with the existing people and the
     deployment generation. Products and workspaces are made in
-    `directory`; `clock`, when given, times every operation."""
+    `directory`; `clock`, when given, times every operation. With `trace`,
+    the report's "senders" give each operation kind's requests by kind and
+    by the chain of yizkr functions that sent them."""
     from tests.fixtures import fake_wikibase
 
     from yizkr.core.wiki import WikiClient
@@ -862,6 +865,7 @@ def measure(
     cohort = generate(scale)
     saved = saved_products(cohort, directory / "products")
     wiki = fake_wikibase.FakeWikibase()
+    wiki.log.trace = trace
     with fake_wikibase.serving(wiki):
         wiki.bootstrap()
         client = WikiClient(fake_wikibase.config())
@@ -884,4 +888,10 @@ def measure(
             clock=clock,
         )
     run.setup = setup
-    return report(run)
+    found = report(run)
+    if trace:
+        found["senders"] = [
+            {"phase": phase, "kind": kind, "path": list(path), "count": n}
+            for (phase, kind, path), n in wiki.log.paths.most_common()
+        ]
+    return found
