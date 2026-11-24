@@ -183,6 +183,135 @@ Without `--baseline`, the command only records a measurement and prints no budge
 
 Investigate a breach and rerun a comparable baseline/candidate pair under quiet conditions if load or thermal variation is suspected. Record both results in the PR; do not hide a failure by widening the budget or replacing the baseline with the slower candidate. An intentional workload, environment or budget change needs a separately explained calibration. Keep raw reports outside the repository; report measurements and limitations in GitHub. This check runs explicitly and adds no timing assertion to normal unit tests or always-on Actions job. It supplies regression evidence, not a promised reduction in CI minutes.
 
+## Assignment path cost
+
+Run the offline benchmark to measure what one identity and one claim cost on the reviewed assignment path as the graph grows, and to give a change to that path its before and after. `make benchmark-assignments` (`scripts/assignment_cost.py`) generates fictional cohorts ([EXAMPLES.md](EXAMPLES.md#generated-cohorts)) and takes each register, in order, through `SourceIngestion`: registration (`prepare`, `prepare_registration`, `register_source`); identity review (`prepare_identities` with explicit choices, `assign` to the entity an earlier register's mention received and `new_entity` otherwise, each approved in the review store); one `apply_identities` call per mention, because a protected operation creates at most one entity; claim review (`prepare_claims`, which prepares through `prepare_claim_review`, each claim approved); and one `apply_claims` call for the register's claims. The production `WikiClient`, WikibaseIntegrator, query reader, mutation guard and creation registry run unchanged against an in-memory Wikibase and query service (`tests/fixtures/fake_wikibase.py`) that answers them at the transport, so each request the code sends is counted once, by kind; a request the fake does not model fails the run. The query service's index follows the wiki only when the driver synchronises it, before each identity preparation and application, because the path refuses a stale index rather than waiting for it. The benchmark reads no archive setting or instance record, calls no model and changes nothing in `src/yizkr`. Stages before registration, model calls and map-derived choices (`prepare_cluster_proposals`) are outside it.
+
+```sh
+uv sync --locked --dev
+make benchmark-assignments ARGS="--output /tmp/assignment-cost.json"
+# One size, compared with an earlier report:
+make benchmark-assignments ARGS="--size small --baseline /tmp/assignment-cost.json --output /tmp/assignment-cost-candidate.json"
+# Also attribute every request to the yizkr functions that sent it (slower):
+make benchmark-assignments ARGS="--size small --trace --output /tmp/assignment-cost-trace.json"
+```
+
+Three sizes span fifty times in identities and in entities:
+
+| Size | Registers | People per register | Shared with an earlier register | Claims per register | Entities before the first register | Identities | Claims |
+| --- | --: | --: | --: | --: | --: | --: | --: |
+| small | 2 | 1 | all | 1 | 203 | 2 | 2 |
+| medium | 10 | 2 | half | 2 | 1,203 | 20 | 20 |
+| large | 50 | 2 | half | 2 | 10,203 | 100 | 100 |
+
+Every size starts from the bootstrapped model's 203 properties and items; medium and large add 1,000 and 10,000 people already in the graph, items that no register names and that hold no registry binding. The report is a new JSON file (an existing one is never overwritten). It gives every operation's kind and register, the graph's state before it (entities, bindings, authorizations, assignment commits, application plans, identity and claim proposals), its server requests by kind, the records it wrote by kind, its review-store calls and the proposal rows `list_proposals` returned, and its wall time; each phase's totals; and the mean cost of one identity (its share of its register's identity review, and its application), one claim (its share of its register's claim review and application) and one registration. The request categories are entity scans (whole-instance enumerations, `iter_entities` or `list_entity_ids`) and the listing and 50-entity batch requests they take, revision reads, immutable page reads (two requests each), item reads, writes (page edits, item creations and edits, uploads), query-service queries by purpose, and other requests: the mutation guard, revision and log watermarks, retained-code checks, registry page listings and creation checks. With `--trace` the report also counts every request by the chain of yizkr functions that sent it. With `--baseline` the command prints the ratio of each per-identity and per-claim category to the baseline's, for each size measured at the same scale, and gives no verdict. Errors exit 2. On the development host the small size takes seconds, medium about three minutes and large about forty minutes, with at most about 700 MB of memory.
+
+### What one identity and one claim cost
+
+Measured on a shared development host. The request counts do not depend on the host; the seconds do, and with other work running they are indicative only.
+
+Mean cost of one identity:
+
+| Size | Entities before | Server requests | Entity scans | Entity-scan requests | Immutable page reads | Item reads | Writes | Query-service queries | Review-store calls | Proposals read | Seconds |
+| --- | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: |
+| small | 203 | 1,239 | 11.0 | 68 | 481 | 7.0 | 11.0 | 14.0 | 85 | 32 | 1.27 |
+| medium | 1,203 | 4,570 | 9.5 | 210 | 1,856 | 14.4 | 11.3 | 10.5 | 108 | 230 | 5.60 |
+| large | 10,203 | 18,769 | 9.5 | 1,564 | 7,239 | 44.5 | 11.1 | 10.5 | 108 | 1,090 | 18.31 |
+
+Mean cost of one claim:
+
+| Size | Entities before | Server requests | Entity scans | Entity-scan requests | Immutable page reads | Item reads | Writes | Query-service queries | Review-store calls | Proposals read | Seconds |
+| --- | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: |
+| small | 203 | 1,248 | 13.0 | 104 | 494 | 8.0 | 10.0 | 0.0 | 66 | 26 | 0.86 |
+| medium | 1,203 | 2,800 | 8.0 | 241 | 1,117 | 7.5 | 7.0 | 0.0 | 52 | 94 | 2.31 |
+| large | 10,203 | 10,596 | 8.0 | 1,841 | 3,835 | 7.5 | 7.0 | 0.0 | 52 | 434 | 4.69 |
+
+The small size applies one claim per register and medium and large two, so a claim's share of each application's fixed scans halves from small to medium.
+
+Each phase's requests per operation, as the mean over the size's operations, grow with the cohort and the graph it meets:
+
+| Phase                | small | medium |  large |
+| -------------------- | ----: | -----: | -----: |
+| Registration         |   106 |    172 |    772 |
+| Identity review      |   146 |    666 |  3,133 |
+| Identity application | 1,092 |  4,237 | 17,202 |
+| Claim review         |   168 |    575 |  2,172 |
+| Claim application    | 1,080 |  5,026 | 19,020 |
+
+Immutable registry page reads dominate. Their two requests each are 78 and 80 per cent of the small and medium sizes' requests and 75 per cent of the large size's, where entity scans and revision reads take 15 per cent. Most are the chain replays and the generation page rereads that come with every registry call. A mean also hides that an operation's cost grows with what came before it. Fitted over the medium size's operations (to within 2 per cent of each, apart from 7 for the first claim review), each operation costs a fixed number of requests, a number more for each earlier creation (in these cohorts each creation's binding, authorization and assignment commit come together; an assignment to an earlier register's entity adds a commit alone, which costs each later identity application about ten more immutable page reads), and about 22 more requests per 1,000 entities for each of its entity scans:
+
+| Operation | Entity scans | Requests at 1,203 entities, no earlier creation | More per earlier creation | More per 1,000 entities | Proposal rows read per stored proposal |
+| --- | --: | --: | --: | --: | --: |
+| Registration | 3 | 172 | 0 | 66 | 0 |
+| Identity review, two mentions | 3 | 165 | 93 | 66 | 9 |
+| Identity application, new entity | 8 | 1,367 | 579 | 176 | 17 |
+| Identity application, assignment | 8 | 575 | 554 | 176 | 17 |
+| Claim review, two claims | 2 | 197 | 58 | 44 | 7 |
+| Claim application, two claims | 14 | 1,406 | 557 | 308 | 10 |
+
+The large size's operations, fitted the same way, give the same figures per earlier creation and per stored proposal to within 4 per cent, and fixed parts larger by about nine times the entity column's figure, for the 9,000 more entities they meet. A cohort's total therefore grows with the square of its creations, and every operation also grows with the entities it meets. The reads that grow:
+
+- **With entity count:** every whole-instance scan, `source_bindings.source_owners` alone or through `unique_source_qids`, in `Registrar`'s instance read, `_admit_registration`, `_verify_source`, `apply_cohort_additions`, `identity_provenance._targets`, `claim_review._authority` and `assignment_writes._authority`; and `capture_graph_projection`'s two entity ID listings with the revision reads of every entity. The query service's revision index and roster return a row per entity or typed item, in one query each.
+- **With assignment-chain length:** `CreationRegistry.assignment_snapshot` replays every commit: it reads the commit's page and, for a creation commit, `verify_reviewed_creation` rereads the creation's binding and records, with generation page rereads between them. It runs once per identity review and claim review, ten times per identity application, and 3n + 5 times per application of n claims that need a write.
+- **With authorization count:** `CreationRegistry.reviewed_creation_authorizations` lists and reads every authorization, twice in each `capture_cohort_context` and once more in `authorize_reviewed_creation`; each capture reads the item of every bound creation; `matching_candidates` runs `block_candidates` once per source and earlier creation.
+- **With binding count:** `SourceIngestion._request` lists and reads every indexed binding, and prepares the review once more, on each prepare and apply call; `accept_reviewed_assignments` verifies every binding in `current_targets` and checks each approved creation against every target.
+- **With review-store size:** `ReviewStore.list_proposals` returns every stored proposal, and each operation calls it 7 to 17 times.
+
+Records written:
+
+| Unit | Items created | Item edits | Registry pages |
+| --- | --: | --: | --- |
+| Registration | 1, the artifact, and the file's upload | 1 | creation intent, dispatch and receipt |
+| Identity, new entity | 2, the entity and its identity record | 2 | creation intent, dispatch and receipt of each item; binding index; authorization; assignment commit; alias receipt (10) |
+| Identity, assignment to an earlier register's entity | 1, the identity record | 2 | the identity record's creation intent, dispatch and receipt; assignment commit; alias receipt (5) |
+| Claim | none | 1 | application intent, support dispatch reservation and application receipt (3) |
+| Each claim application, besides its claims | 1, the process item | 1 | the process item's creation intent, dispatch and receipt; application plan (4) |
+
+An identity's two item edits are the identity record's run statements and the entity's identity statement; a claim application's other edit is the process item's run statements. A mention that brings a name its item lacks also writes an alias intent page and an alias edit of the item. The generated cohorts repeat each person's name exactly, so they never do, and the figures above omit those writes.
+
+### Whole-graph and whole-history reads, checked
+
+Reading the code suggests that the reads below cover the whole graph, or its whole history, on every operation. Each is checked against the measured counts and confirmed or corrected.
+
+- **`unique_source_qids` reads every live entity; `assignment_writes._authority` calls it and replays the assignment chain at least three times for each claim that needs a write.** Confirmed: a claim application runs `_authority` twice before its plan, three times for each claim that needs a write and once for the process item, nine full scans and nine replays for two claims. `prepare_claim_review`, which `apply_claims` runs again before applying, adds a scan and a replay each time through `claim_review._authority`, and `_verify_source` three scans: fourteen full scans in all.
+- **`apply_cohort_additions` allows one creation per protected operation; each preparation and each application captures the whole graph and refuses until the query service has indexed the previous creation.** Confirmed, with more queries than listed: each identity preparation and each application captures once, with two entity ID listings and every entity's revision (two revision reads per 50 entities), the revision index twice, the roster and containment, and also the unsupported-date, birth and death queries `fetch_roster` sends (seven queries a capture), and three revision-and-log watermarks (six requests). The driver synchronises the index first, so no refusal is measured; a real stack waits for its updater there.
+- **`authorize_reviewed_creation` reads every earlier authorization; `capture_cohort_context` reads them all twice and the item of each bound one; `matching_candidates` calls `block_candidates` once per source and creation context.** Confirmed, and `match_cohort` also runs `block_candidates` once per source.
+- **`accept_reviewed_assignments` verifies every binding in `current_targets`, which `prepare_cohort_additions` fills with every indexed binding, and checks each approved creation against every target.** Confirmed. With the chain replays, which verify each creation commit's binding and reviewed creation again, an identity application calls `verify_binding` and `verify_reviewed_creation` about eleven more times for each earlier creation.
+- **`publish_cohort_assignment` runs once per accepted mention, replays the chain at its start and at each revalidation, scans every entity for source ownership (`identity_provenance._targets`) and creates one metadata item.** Corrected: it replays the chain six times (at its start, at its own revalidation and at four in `publish_identity_record`) and `_targets` scans every entity three times (before publication, after the metadata item's creation and at completion). Besides the metadata item it makes the two item edits and the alias receipt in the table above. With the capture and acceptance (`accept_reviewed_assignments` and its `append_assignments`), an identity application replays the chain ten times.
+- **`SourceIngestion._admit_registration` and `_verify_source` scan every entity for each registration and each later step.** Confirmed, and `Registrar` scans the whole instance once more per registration: three full scans per registration. `_verify_source` scans once per identity or claim review, twice per identity application and three times per claim application.
+- **`prepare_review` loads every stored proposal three times per call.** Confirmed. `SourceIngestion` prepares the review three times per identity review, five times per identity application, twice per claim review and three times per claim application, and pinning a projection or an application reads the proposals once or twice more: 9, 17, 7 and 10 full reads per operation.
+- **Each read of an immutable registry page is two API requests (`WikiClient.immutable_page`), and most registry calls reread the generation page.** Confirmed: generation rereads are 35 to 48 per cent of each operation's immutable page reads at the medium size.
+
+Not listed: each protected operation sends four to six requests to the server's mutation guard (begin, inspect, end and `assert_active`), and each retained-code check (`require_retained_code`) is a request: two per registration, seven per new entity's application, five per assignment's and 4n + 3 per application of n claims.
+
+### Regression baseline
+
+`tests/unit/test_assignment_cost.py` measures the small size, the regression scenario, in the offline unit run (a few seconds) and compares each operation's server requests by kind, review-store calls, proposal rows read and records written by kind with `tests/fixtures/assignment_cost_baseline.json`. It is a performance baseline read through the benchmark's own report, not a check of how the path is built: it reads no clock and names none of the path's functions or records. It fails when a change sends more or fewer requests, calls the review store more or less often or writes other records, and lists each operation's changed counts. The other checks there keep the generated cohorts reviewable: each scale draws one cohort from the universe's tables, a larger one extends it, every mention is anchored and every claim located, and the fake refuses a request it does not model.
+
+When a change moves the counts on purpose, record them with it:
+
+```sh
+# On accepted main, before the change:
+make benchmark-assignments ARGS="--output /tmp/assignment-cost-before.json"
+# With the change:
+make benchmark-assignments ARGS="--write-baseline"
+make benchmark-assignments ARGS="--baseline /tmp/assignment-cost-before.json --output /tmp/assignment-cost-after.json"
+```
+
+Commit the new baseline with the change, update the tables above from the new report, and say in the pull request which counts moved and why. A change to the cohort tables, the generator or the driver moves the counts too, and takes the same update. A change that moves only time changes nothing here.
+
+### On a real stack
+
+An opt-in mode of the integration launcher runs the small size on a fresh fictional stack, to give the wall time of an identity and a claim, query-service waits included, by which to scale the offline counts:
+
+```sh
+make test-integration ARGS="--measure"
+# With an explicit state directory:
+python3 scripts/fictional_integration.py run --measure --state /tmp/yizkr-fictional-measure
+```
+
+`--measure` runs the launcher's `MEASUREMENT_CASES` instead of `REQUIRED_CASES`, each group on a fresh stack of its own; CI never passes it, and it adds nothing to the required lane or its time budget. The [assignment-cost case](../tests/fictional_integration/test_assignment_cost.py) takes the small cohort through the same driver against the real Wikibase and query service. It counts every API request and query-service query at the transport by the offline kinds and times each operation. Before each identity preparation and application it waits until the query service's revision index equals the API's entity revisions, polling every quarter second for at most 300 seconds, and times those waits apart (`sync_seconds`, `sync_seconds_per_identity`). It then measures the same cohort against the fake in the same process. The run writes `<state>/assignment_cost.json` with both reports and, for each operation, the request and write kinds whose counts differ, beside the lane's usual evidence. Record the run's revision, command, source hash and result in the pull request. `make integration-down` recovers the measurement groups too.
+
 ## Live integration and the transition
 
 The designated lane is CI's `fictional-integration` job, run on pull requests, main pushes and manual workflow dispatch. The same required invocation runs locally or in an authorized cloud session:
