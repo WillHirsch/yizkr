@@ -19,11 +19,13 @@ place's mention record (by its name, which locates the entry's evidence
 and the transcription line it was compared with in the extraction's
 local `containers.json`); the statement-part it
 doubts (`axis`, ADR-0023); a `category` from CATEGORIES; the issue; and a
-suggestion whose kind or property, when given, is a manifest key. Code
-checks every record against the batch and the model manifest. A record
-that fails is kept verbatim with the reasons it failed (`Invalid`),
-beside the valid ones, and never repaired: nothing is read from a
-finding's wording.
+suggestion whose kind or property, when given, is a manifest key. The
+prompt lists the property and item keys that extraction is offered
+(prompt_vocabulary), so a vocabulary change held back from every
+prompt leaves every critique prompt as it is. Code checks every record
+against the batch and the whole model manifest. A record that fails is
+kept verbatim with the reasons it failed (`Invalid`), beside the valid
+ones, and never repaired: nothing is read from a finding's wording.
 """
 
 from __future__ import annotations
@@ -49,6 +51,7 @@ from yizkr.claims import (
     load_vocabulary,
 )
 from yizkr.core.verbatim import Transcript, words
+from yizkr.model.schema import DEFAULT_MANIFEST, load_manifest
 from yizkr.pipeline import source_context
 from yizkr.pipeline.claim_naming import describe_value
 from yizkr.pipeline.extract import scan_json_objects
@@ -660,16 +663,28 @@ def check(
 GAVE_UP = f"critique {CUT_OFF_AT_LIMIT}: no findings"
 
 
-def offered_properties() -> list[str]:
-    """The manifest's property keys the critique prompt lists: every one
-    the manifest offers (`offered`), retired and reference properties
-    among them, which a suggestion may name as the claim's property to
-    leave. A property held back from the prompts (`offered: false`), such
-    as a run item's statement, is never listed."""
-    from yizkr.model.schema import load_manifest
+def prompt_vocabulary(
+    manifest_path=DEFAULT_MANIFEST,
+) -> tuple[list[str], list[str]]:
+    """(property keys, item keys) of the manifest at `manifest_path` that
+    the critique prompt lists, each sorted: the vocabulary extraction is
+    offered, chosen by the two tests its prompts apply
+    (extract.vocabulary_prompt_lines), a property's
+    `ManifestProperty.in_prompts` and an item's `ManifestItem.offered`.
 
-    return sorted(
-        key for key, spec in load_manifest().properties.items() if spec.offered
+    A suggestion names the kind or the property an extraction should
+    have used, so it needs no key extraction is not offered. A retired
+    or a reference property, which no claim may use, and a property or
+    an item the manifest holds back from prompts (a run item's
+    statement, `machine_assisted`) are left out, so a vocabulary change
+    that no prompt carries leaves the critique prompt, and the key of
+    its call, as they are."""
+    manifest = load_manifest(manifest_path)
+    return (
+        sorted(
+            key for key, spec in manifest.properties.items() if spec.in_prompts
+        ),
+        sorted(key for key, item in manifest.items.items() if item.offered),
     )
 
 
@@ -709,6 +724,7 @@ def run_critique(
     incomplete_reasons: list[str] | None = None,
     vocabulary: tuple[Mapping[str, str], Iterable[str]] | None = None,
     context: InterpretationContext | None = None,
+    manifest_path=DEFAULT_MANIFEST,
 ) -> list[Finding | Invalid]:
     """Review the batch; return its findings (possibly none), each valid
     or kept verbatim as `Invalid`, in the order the critic gave them.
@@ -717,9 +733,12 @@ def run_critique(
     citation located in it (ADR-0003); with none, it carries no
     transcription, and every citation is one not in it.
     `vocabulary` is the model manifest's (property key -> datatype, item
-    keys), loaded when not given; the prompt then lists the properties
-    the manifest offers (offered_properties), and the answer is checked
-    against them all.
+    keys), loaded from `manifest_path` when not given; the prompt then
+    lists only the keys extraction is offered (prompt_vocabulary), and
+    the answer is checked against the whole manifest, so a suggestion
+    that names a key the prompt leaves out is still valid. A
+    `vocabulary` given is listed whole, and the answer checked against
+    it.
 
     Advisory only — an unfinished answer never raises (unlike chunk
     extraction), but for a rejection the cache refuses (a pause, as a
@@ -745,14 +764,15 @@ def run_critique(
     if not batch.entities and not batch.claims:
         return []
     if vocabulary is None:
-        properties, items = load_vocabulary()
-        listed = offered_properties()
+        properties, items = load_vocabulary(manifest_path)
+        listed, kinds = prompt_vocabulary(manifest_path)
     else:
         properties, items = vocabulary
-        listed = list(properties)
+        items = frozenset(items)
+        listed, kinds = list(properties), items
     vocabulary = (properties, frozenset(items))
     prompt = critique_prompt(
-        batch, transcription, listed, vocabulary[1], context=context
+        batch, transcription, listed, kinds, context=context
     )
     places = artifact_places(transcription)
     try:
