@@ -67,7 +67,8 @@ ENTITIES = [
 ]
 
 
-def time(year: int, month: int | None = None, day: int | None = None):
+def when(year: int, month: int | None = None, day: int | None = None):
+    """A claim's time value, at the precision of the fields given."""
     value: dict = {"type": "time", "year": year}
     if month is not None:
         value["month"] = month
@@ -117,30 +118,30 @@ def codes(*claims: dict) -> list[str]:
 
 def imprisonment_start(*qualifiers: tuple[str, dict]) -> dict:
     """The imprisonment's own start, a date value: September 1939."""
-    return claim(IMPRISONMENT, "start_time", time(1939, 9), *qualifiers)
+    return claim(IMPRISONMENT, "start_time", when(1939, 9), *qualifiers)
 
 
 def imprisonment_end(*qualifiers: tuple[str, dict]) -> dict:
     """The imprisonment's own end, a date value: October 1939."""
-    return claim(IMPRISONMENT, "end_time", time(1939, 10), *qualifiers)
+    return claim(IMPRISONMENT, "end_time", when(1939, 10), *qualifiers)
 
 
 class TestAnEntitysOwnStartOrEnd:
     def test_a_latest_start_date_is_refused(self):
         assert codes(
-            imprisonment_start(("latest_start_date", time(1939, 9, 5)))
+            imprisonment_start(("latest_start_date", when(1939, 9, 5)))
         ) == [PERIOD_BOUND]
 
     def test_an_earliest_end_date_alone_is_refused(self):
         assert codes(
-            imprisonment_end(("earliest_end_date", time(1939, 10, 1)))
+            imprisonment_end(("earliest_end_date", when(1939, 10, 1)))
         ) == [PERIOD_BOUND]
 
     def test_a_range_beside_its_own_bound_is_still_refused(self):
         assert codes(
             imprisonment_start(
-                ("earliest_date", time(1939, 9, 1)),
-                ("latest_start_date", time(1939, 9, 5)),
+                ("earliest_date", when(1939, 9, 1)),
+                ("latest_start_date", when(1939, 9, 5)),
             )
         ) == [PERIOD_BOUND]
 
@@ -148,12 +149,12 @@ class TestAnEntitysOwnStartOrEnd:
         assert (
             codes(
                 imprisonment_start(
-                    ("earliest_date", time(1939, 9, 1)),
-                    ("latest_date", time(1939, 9, 5)),
+                    ("earliest_date", when(1939, 9, 1)),
+                    ("latest_date", when(1939, 9, 5)),
                 ),
                 imprisonment_end(
-                    ("earliest_date", time(1939, 10, 1)),
-                    ("latest_date", time(1939, 10, 31)),
+                    ("earliest_date", when(1939, 10, 1)),
+                    ("latest_date", when(1939, 10, 31)),
                 ),
             )
             == []
@@ -172,8 +173,8 @@ class TestOtherDatesTakeNoPeriodBound:
             claim(
                 "gustav-loebig",
                 "date_of_birth",
-                time(1919, 1, 7),
-                (bound, time(1919, 1, 7)),
+                when(1919, 1, 7),
+                (bound, when(1919, 1, 7)),
                 source="birth-extract-1938",
             )
         ) == [PERIOD_BOUND]
@@ -186,8 +187,8 @@ class TestOtherDatesTakeNoPeriodBound:
             claim(
                 IMPRISONMENT,
                 "point_in_time",
-                time(1939, 9),
-                (bound, time(1939, 9, 5)),
+                when(1939, 9),
+                (bound, when(1939, 9, 5)),
             )
         ) == [PERIOD_BOUND]
 
@@ -197,8 +198,8 @@ class TestOtherDatesTakeNoPeriodBound:
                 "felix-loebig",
                 "residence",
                 item("wasserallee-59"),
-                ("point_in_time", time(1930)),
-                ("earliest_end_date", time(1930)),
+                ("point_in_time", when(1930)),
+                ("earliest_end_date", when(1930)),
             )
         ) == [PERIOD_BOUND]
 
@@ -211,9 +212,9 @@ class TestAPeriodTakesTheBoundsOfItsEnds:
                     "gustav-loebig",
                     "residence",
                     item("australia"),
-                    ("start_time", time(1939)),
-                    ("earliest_date", time(1938)),
-                    ("latest_start_date", time(1939)),
+                    ("start_time", when(1939)),
+                    ("earliest_date", when(1938)),
+                    ("latest_start_date", when(1939)),
                     source="naturalisation-1952",
                 )
             )
@@ -227,9 +228,9 @@ class TestAPeriodTakesTheBoundsOfItsEnds:
                     "felix-loebig",
                     "residence",
                     item("wasserallee-59"),
-                    ("end_time", time(1931)),
-                    ("earliest_end_date", time(1930)),
-                    ("latest_date", time(1931)),
+                    ("end_time", when(1931)),
+                    ("earliest_end_date", when(1930)),
+                    ("latest_date", when(1931)),
                 )
             )
             == []
@@ -244,8 +245,8 @@ class TestAPeriodTakesTheBoundsOfItsEnds:
                     "felix-loebig",
                     "residence",
                     item("wasserallee-59"),
-                    ("end_time", time(1931)),
-                    ("latest_start_date", time(1930)),
+                    ("end_time", when(1931)),
+                    ("latest_start_date", when(1930)),
                 )
             )
             == []
@@ -258,8 +259,8 @@ class TestAPeriodTakesTheBoundsOfItsEnds:
                     "gustav-loebig",
                     "residence",
                     item("australia"),
-                    ("start_time", time(1939)),
-                    ("earliest_end_date", time(1952)),
+                    ("start_time", when(1939)),
+                    ("earliest_end_date", when(1952)),
                     source="naturalisation-1952",
                 )
             )
@@ -275,7 +276,7 @@ class TestSalvage:
         location = claim(
             IMPRISONMENT, "location", item("peiltal-court-prison")
         )
-        stray = imprisonment_start(("latest_start_date", time(1939, 9, 5)))
+        stray = imprisonment_start(("latest_start_date", when(1939, 9, 5)))
         batch, rejects = salvage_valid_claims(
             [participant, stray, location], RUN, entities=ENTITIES
         )
