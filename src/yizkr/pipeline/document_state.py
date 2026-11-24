@@ -20,6 +20,7 @@ from yizkr.core.corpus import (
     ExclusionList,
     is_excluded,
 )
+from yizkr.core.file_writes import atomic_write_text
 from yizkr.pipeline import stage_planning
 from yizkr.pipeline.rundir import (
     ALERTS,
@@ -29,7 +30,6 @@ from yizkr.pipeline.rundir import (
 )
 from yizkr.pipeline.stage_planning import VIEWS
 from yizkr.pipeline.stages import (
-    atomic_write_text,
     sha1_file,
     sha256_file,
     sha256_text,

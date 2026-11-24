@@ -15,8 +15,8 @@ import pytest
 
 from tests.unit.test_run_provenance import fixed_capture  # noqa: F401
 from yizkr.claims import ArtifactRef, ClaimBatch, EntityRecord
+from yizkr.core.cancellation import RunCancelled
 from yizkr.pipeline.anomalies import batch_findings, load_config
-from yizkr.pipeline.cancellation import RunCancelled
 from yizkr.pipeline.chunking import (
     ENTITY_MANIFEST_PROMPT,
     ChunkedClaimExtractor,

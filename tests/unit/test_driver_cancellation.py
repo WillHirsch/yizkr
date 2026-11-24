@@ -7,8 +7,8 @@ import pytest
 from tests.fixtures.records import record_answer
 from tests.unit.test_pdf_exclusions import EXTRACT
 from tests.unit.test_registrar import PORTRAIT, RESCAN
+from yizkr.core.cancellation import current_cancellation
 from yizkr.core.corpus import ExclusionList
-from yizkr.pipeline.cancellation import current_cancellation
 from yizkr.pipeline.rundir import RunDir, run_state
 from yizkr.pipeline.scratch import ScratchDriver
 from yizkr.pipeline.workers import WorkerShutdownTimeout
@@ -189,7 +189,7 @@ def test_pause_does_not_cancel_active_call_or_poison_resumed_work(
 def test_scoped_cancellation_cannot_return_as_complete(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
-    from yizkr.pipeline.cancellation import RunCancelled
+    from yizkr.core.cancellation import RunCancelled
 
     driver = scratch(tmp_path, monkeypatch)
     doc = driver.documents()[0]

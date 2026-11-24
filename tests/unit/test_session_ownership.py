@@ -13,8 +13,8 @@ from pathlib import Path
 import pytest
 
 from tests.unit.test_claude_code_pinning import install_fake_cli
+from yizkr.core.cancellation import Cancellation, RunCancelled
 from yizkr.pipeline import llm
-from yizkr.pipeline.cancellation import Cancellation, RunCancelled
 
 
 @pytest.fixture

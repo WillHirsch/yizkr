@@ -12,6 +12,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from yizkr.core.cancellation import check_cancelled
 from yizkr.core.claim_applications import (
     ApplicationPlan,
     PlannedClaim,
@@ -47,7 +48,6 @@ from yizkr.pipeline.assignment_aliases import (
     AliasReceipt,
     alias_records,
 )
-from yizkr.pipeline.cancellation import check_cancelled
 from yizkr.pipeline.claim_review import ClaimRole
 
 

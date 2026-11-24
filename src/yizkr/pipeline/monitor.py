@@ -101,6 +101,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol, TextIO
 
+from yizkr.core.file_writes import staging_path
 from yizkr.pipeline.rundir import (
     ABORT,
     ALERTS,
@@ -133,7 +134,7 @@ from yizkr.pipeline.rundir import (
     invocation_records,
     invocation_stage_state,
 )
-from yizkr.pipeline.stages import read_jsonl, staging_path
+from yizkr.pipeline.stages import read_jsonl
 
 # the status page, in a directory of its own in the run directory: that
 # directory is all that may be served (serve_status), never the run

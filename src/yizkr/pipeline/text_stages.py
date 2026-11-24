@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from yizkr.claims import ArtifactRef, ClaimBatch
+from yizkr.core.file_writes import atomic_write_text
 from yizkr.core.provenance import ProcessRecord
 from yizkr.pipeline.chunking import (
     AUTO_CHUNK_THRESHOLD,
@@ -28,7 +29,6 @@ from yizkr.pipeline.language import LanguageResolution, resolve_language
 from yizkr.pipeline.llm import LlmClient
 from yizkr.pipeline.run_provenance import Capture
 from yizkr.pipeline.stages import (
-    atomic_write_text,
     content_hash,
     sha256_file,
     sha256_text,

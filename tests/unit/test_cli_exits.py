@@ -19,6 +19,7 @@ from tests.unit.test_pipeline import (
     _citing,
 )
 from yizkr import cli
+from yizkr.core.cancellation import RunCancelled
 from yizkr.core.exits import (
     EXIT_FAILED,
     EXIT_INTERRUPTED,
@@ -27,7 +28,6 @@ from yizkr.core.exits import (
     EXIT_STOPPED,
 )
 from yizkr.pipeline import scratch
-from yizkr.pipeline.cancellation import RunCancelled
 from yizkr.pipeline.llm import (
     REFUSAL_STOP,
     ClassifierRefused,

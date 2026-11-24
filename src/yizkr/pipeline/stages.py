@@ -1,12 +1,13 @@
-"""Content hashes and atomic writes for the pipeline's files.
+"""Content hashes and append-only log reads for the pipeline's files.
 
 Document stages write plain-file views of their
 outputs into each document's directory, and `derivations.json` records
 what every derived file was made from by content hash
 (yizkr.pipeline.document_state). These helpers give those files, the run
 directory (yizkr.pipeline.rundir) and the LLM cache
-(yizkr.pipeline.llmcache) one canonical serialisation to hash, and
-writes that readers see whole or not at all.
+(yizkr.pipeline.llmcache) one canonical serialisation to hash, and read
+their append-only logs. The writes that readers see whole or not at all
+are in yizkr.core.file_writes, which core shares.
 
 Nothing here reads modification times: a file is current while its
 content hashes the same.
@@ -16,8 +17,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import uuid
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
@@ -88,33 +87,6 @@ def content_hash(value: Any, *, volatile: Iterable[str] = ()) -> str:
     timestamps, engine build strings) left out, so an identical recompute
     hashes the same."""
     return sha256_text(canonical_json(strip_volatile(value, volatile)))
-
-
-def write_synced(path: Path, text: str) -> None:
-    """Write `text` to `path` and flush it to disk before returning."""
-    with open(path, "w", encoding="utf-8") as handle:
-        handle.write(text)
-        handle.flush()
-        os.fsync(handle.fileno())
-
-
-def staging_path(path: Path) -> Path:
-    """A fresh name beside `path` to write it under first: dot-prefixed,
-    so nothing that reads the directory's entries takes it for one."""
-    return path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-
-
-def atomic_write_text(path: Path, text: str) -> None:
-    """Replace `path` with `text` in one step: readers see the old file or
-    the new one, never a partial write."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    staging = staging_path(path)
-    try:
-        write_synced(staging, text)
-        os.replace(staging, path)
-    except BaseException:
-        staging.unlink(missing_ok=True)
-        raise
 
 
 def read_jsonl(path: Path) -> list[dict]:

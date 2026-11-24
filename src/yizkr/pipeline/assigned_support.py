@@ -20,8 +20,8 @@ from wikibaseintegrator.models import Reference
 from wikibaseintegrator.wbi_enums import ActionIfExists
 
 from yizkr.claims import ArtifactRef, Claim, LocalRef, QidRef, VocabRef
+from yizkr.core.cancellation import check_cancelled
 from yizkr.core.write_recovery import write_existing
-from yizkr.pipeline.cancellation import check_cancelled
 from yizkr.pipeline.writer import BatchWriter, WriteResult
 
 _QID = r"^Q[1-9][0-9]*$"

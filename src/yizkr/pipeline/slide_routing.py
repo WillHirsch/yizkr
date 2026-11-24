@@ -16,7 +16,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from yizkr.claims import ArtifactRef
-from yizkr.pipeline.cancellation import check_cancelled
+from yizkr.core.cancellation import check_cancelled
 from yizkr.pipeline.container_sources import ContainerSources
 from yizkr.pipeline.pptx_inventory import PptxPackage
 from yizkr.pipeline.slide_admission import (

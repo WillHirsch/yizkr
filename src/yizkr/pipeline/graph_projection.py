@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from yizkr.backup import REVISIONS_QUERY
 from yizkr.core import sparql
 from yizkr.core.dates import GREGORIAN
+from yizkr.core.file_writes import atomic_write_text
 from yizkr.core.identity_assignments import (
     AssignmentSnapshot,
     RegistryBinding,
@@ -33,7 +34,6 @@ from yizkr.pipeline.reconcile import (
     fetch_place_containment,
     fetch_roster,
 )
-from yizkr.pipeline.stages import atomic_write_text
 
 _ENTITY = re.compile(r"[PQ][1-9][0-9]*")
 _ITEM = re.compile(r"Q[1-9][0-9]*")

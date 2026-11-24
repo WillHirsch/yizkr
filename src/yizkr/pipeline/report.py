@@ -149,6 +149,7 @@ from yizkr.claims import (
     PlaceStructure,
     load_vocabulary,
 )
+from yizkr.core.file_writes import staging_path
 from yizkr.model.schema import load_acceptance
 from yizkr.pipeline.anomalies import (
     ERROR_EVENT,
@@ -220,7 +221,7 @@ from yizkr.pipeline.stage_planning import (
     STAGES,
     VIEWS,
 )
-from yizkr.pipeline.stages import read_jsonl, staging_path
+from yizkr.pipeline.stages import read_jsonl
 from yizkr.pipeline.transcribe import Transcription
 from yizkr.pipeline.writer import REFUSAL_REASONS
 from yizkr.staticsite import RELEASE_CAUSES, UNSTATED_KIND

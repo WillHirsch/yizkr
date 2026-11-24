@@ -51,7 +51,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from yizkr.core.config import Config
-from yizkr.pipeline.stages import atomic_write_text
+from yizkr.core.file_writes import atomic_write_text
 
 # the page on the instance whose presence marks the instance kept
 KEPT_STATE_PAGE = "Project:Kept state"

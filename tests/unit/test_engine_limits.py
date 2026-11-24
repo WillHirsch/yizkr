@@ -888,7 +888,7 @@ class TestAskingAgain:
         assert client.last_pacing() == {}
 
     def test_a_closed_client_does_not_wait(self, cli, clock):
-        from yizkr.pipeline.cancellation import RunCancelled
+        from yizkr.core.cancellation import RunCancelled
 
         client = ClaudeCodeClient()
         client.close()
@@ -903,7 +903,7 @@ class TestAskingAgain:
         """A call waiting out a rate limit waits on the client's stop
         event: the fake sleep waits on nothing else, so only close() can
         wake it, and the hang guard fails a wait it never wakes."""
-        from yizkr.pipeline.cancellation import RunCancelled
+        from yizkr.core.cancellation import RunCancelled
 
         waiting = threading.Event()
         woken = []

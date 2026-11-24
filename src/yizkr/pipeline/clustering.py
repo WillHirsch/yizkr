@@ -349,6 +349,7 @@ from yizkr.claims import (
     label_container,
     name_form_key,
 )
+from yizkr.core.file_writes import atomic_write_text
 from yizkr.died_by import When, died_by, from_batch
 from yizkr.pipeline.document_state import BATCH_VOLATILE
 from yizkr.pipeline.fingerprints import (
@@ -366,7 +367,6 @@ from yizkr.pipeline.reconcile import (
     impossible_pair,
 )
 from yizkr.pipeline.stages import (
-    atomic_write_text,
     canonical_json,
     content_hash,
     sha256_text,

@@ -27,7 +27,8 @@ from pydantic import (
 )
 
 from yizkr.claims import ArtifactRef
-from yizkr.pipeline.stages import canonical_json, staging_path
+from yizkr.core.file_writes import staging_path
+from yizkr.pipeline.stages import canonical_json
 from yizkr.source_structure import StructuralLocator as StructuralLocator
 
 CONTAINER_INVENTORY = "container-inventory.json"

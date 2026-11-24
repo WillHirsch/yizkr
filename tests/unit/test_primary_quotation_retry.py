@@ -18,7 +18,7 @@ from tests.unit.test_interpretation_consumers import (
 )
 from tests.unit.test_text_stages import ScriptedClient
 from yizkr.claims import ArtifactRef
-from yizkr.pipeline.cancellation import (
+from yizkr.core.cancellation import (
     Cancellation,
     RunCancelled,
     cancellation_scope,

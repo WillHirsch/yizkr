@@ -10,12 +10,12 @@ from PIL import Image
 
 from tests.unit.test_slide_admission import deck
 from yizkr.claims import ArtifactRef
-from yizkr.pipeline import slide_renders as renders
-from yizkr.pipeline.cancellation import (
+from yizkr.core.cancellation import (
     Cancellation,
     RunCancelled,
     cancellation_scope,
 )
+from yizkr.pipeline import slide_renders as renders
 from yizkr.pipeline.container_inventory import (
     MediaOwnerBinding,
     read_inventory,

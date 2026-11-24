@@ -123,6 +123,7 @@ from pathlib import Path
 from typing import Any
 
 from yizkr.claims import ArtifactRef
+from yizkr.core.cancellation import check_cancelled
 from yizkr.core.corpus import (
     MISSING_LIST,
     ExclusionConfigError,
@@ -130,7 +131,6 @@ from yizkr.core.corpus import (
     follow_decks,
     is_excluded,
 )
-from yizkr.pipeline.cancellation import check_cancelled
 from yizkr.pipeline.run_resources import MODEL_VARIABLE, RunResources
 from yizkr.pipeline.stages import sha256_text
 
@@ -818,7 +818,7 @@ def import_transcriptions(
     engine cannot serve the pass (llm.PassPaused). `log` takes the
     corpus's discovery lines, which name its files. Returns what became of
     each media's transcriptions."""
-    from yizkr.pipeline.cancellation import current_cancellation
+    from yizkr.core.cancellation import current_cancellation
     from yizkr.pipeline.document_state import (
         discover_documents,
         validate_source_owners,
