@@ -19,11 +19,11 @@ included), the disagreement report, an identity page listing by kind
 the identity origins of every entity that has no person page, and a
 places index: a containment tree that shows each place under every
 container a source gives it, labelled by that source, an undated
-containment as of the date its source gives itself (docs/PLACES.md,
-"Containment as an assertion"), and a map once places carry
-coordinates. A death event a curator makes that states no date shows as
-"died (date not stated)" with its sources on its principal's page and
-timeline (ADR-0040 Q5).
+containment as of each date the source's `inception` statements give it
+(docs/PLACES.md, "Containment as an assertion"), and a map once places
+carry coordinates. A death event a curator makes that states no date
+shows as "died (date not stated)" with its sources on its principal's
+page and timeline (ADR-0040 Q5).
 
 Design constraints:
 
@@ -322,10 +322,11 @@ ORDER BY ?childLabel
 """
 )
 
-# the dates the artifacts give themselves, for the places page's reading
-# of an undated containment as of its source's date (docs/PLACES.md,
-# "Containment as an assertion"): every `inception` statement at any rank
-# but deprecated, with its time value and precision, a row for each source
+# the artifacts' dates, for the places page's reading of an undated
+# containment as of its source's date (docs/PLACES.md, "Containment as an
+# assertion"): every `inception` statement at any rank but deprecated,
+# whether the artifact states it of itself or another source states it of
+# the artifact, with its time value and precision, a row for each source
 # it is stated in, with the artifact a page fragment belongs to
 # (?dateWhole), and one row with none for a statement that cites none.
 # Its qualifiers, the range its source states and circa among them, come
@@ -1038,8 +1039,8 @@ class Said:
 class Stated:
     """A statement as the places page reads it (PLACE_TREE_QUERY and
     SOURCE_DATES_QUERY): its qualifier cells (QUALIFIER_CELL) and the QIDs
-    of the artifacts it is stated in, a page fragment by its whole; for a
-    date an artifact gives itself, the time and its precision as well."""
+    of the artifacts it is stated in, a page fragment by its whole; for an
+    `inception` statement, the time and its precision as well."""
 
     cells: str
     value: str = ""
@@ -3114,8 +3115,13 @@ class SiteBuilder:
         sources put in two containers shows under both and neither is
         picked. Beside it, under each container, the page says what gives
         it that container (``containment_html``, with `date_rows`,
-        SOURCE_DATES_QUERY's rows). Places with no recorded container list
-        last, a place whose every containment is deprecated among them."""
+        SOURCE_DATES_QUERY's rows). A place with no recorded container, a
+        place whose every containment is deprecated among them, heads the
+        tree when it contains places and is listed last otherwise. A place
+        shows under a container only where a chain of containers leads up
+        from it to such a head: a cycle is cut where it returns to a place
+        already shown, and a cycle with no container outside it is not
+        shown, nor is a place that only it contains."""
         if not tree_rows:
             return ""
         labels: dict[str, str] = {}
@@ -3187,10 +3193,11 @@ class SiteBuilder:
 
     @staticmethod
     def source_dates(rows: list[dict]) -> dict[str, list[Stated]]:
-        """SOURCE_DATES_QUERY's rows as the dates each artifact gives
-        itself, by the artifact's QID: each `inception` statement once,
-        with its time, precision, qualifier cells and the artifacts it is
-        stated in, in the order the query gives them."""
+        """SOURCE_DATES_QUERY's rows as each artifact's dates, by the
+        artifact's QID: each of its `inception` statements once, whatever
+        source states it, with its time, precision, qualifier cells and
+        the artifacts it is stated in, in the order the query gives
+        them."""
         found: dict[str, dict[str, Stated]] = defaultdict(dict)
         for row in rows:
             stated = found[qid_of(row, "document")].setdefault(
@@ -3217,10 +3224,11 @@ class SiteBuilder:
         stated in, linked to the source's page, with the statement's own
         qualifiers ("start time: 1937"). A statement that carries a time
         qualifier (DATE_QUALIFIERS: a start or end time, a point in time
-        or a bound) is shown with that time alone. An undated one is read
-        as of each date its source gives itself (`dates`, by the source's
-        QID), "as of 1905-12-15" (``as_of``), and a source that gives
-        itself no date is named alone. Every reading is shown, in reading
+        or a bound) is shown with that time, and its source's date is not
+        used. An undated one is read as of each date that its source's
+        `inception` statements give it (`dates`, by the source's QID), "as
+        of 1905-12-15" (``as_of``), and a source with no `inception`
+        statement is named alone. Every reading is shown, in reading
         order, and none is picked. A statement that cites no source shows
         "no recorded source". The reading is the view's: nothing it shows
         is stored, and no statement gains a time."""
@@ -3258,13 +3266,13 @@ class SiteBuilder:
         return "".join(parts)
 
     def as_of(self, source: str, date: Stated) -> str:
-        """An undated containment's reading as of a date its source (by
-        QID) gives itself: ", as of 1905-12-15", the date at the precision
-        its statement gives, with the range and circa the statement states
-        as the site shows them beside any date ("as of 1833 (sourcing
-        circumstances: circa)"). A date that other sources state, and not
-        the source itself, names them ("date per" each, linked to its
-        page); a date stated in no source says so."""
+        """An undated containment's reading as of `date`, one `inception`
+        statement of its source (by QID): ", as of 1905-12-15", the date at
+        the precision its statement gives, with the range and circa the
+        statement states as the site shows them beside any date ("as of
+        1833 (sourcing circumstances: circa)"). A date that the source does
+        not state of itself names the sources that state it ("date per"
+        each, linked to its page); a date stated in no source says so."""
         where = f"the inception of {source}"
         aside = []
         qualifiers = self.qualifier_text(date.cells, where)
