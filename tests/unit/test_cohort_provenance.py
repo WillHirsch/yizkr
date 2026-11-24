@@ -23,6 +23,7 @@ from yizkr.core.wiki import RecoveryEvidenceError
 from yizkr.core.write_recovery import CreationRefused, CreationRegistry
 from yizkr.pipeline import identity_provenance
 from yizkr.pipeline.assignment_aliases import alias_records
+from yizkr.pipeline.cohort_additions import MAP_PROPOSAL
 from yizkr.pipeline.cohort_provenance import publish_cohort_assignment
 from yizkr.pipeline.correction_planning import (
     CorrectionRequest,
@@ -246,6 +247,12 @@ def test_direct_human_origin_is_repeatable_without_historical_kind(
             for s in record.stages
         )
     assert record.stages[-1].process == "manual"
+    # No identity map gave this choice: no cluster or map is published.
+    assert not values(origin, "identity_cluster")
+    assert "identity_map_hash" not in record.metadata
+    assert not case.wiki.wbi.item.get(result.record_qid).claims.get(
+        PROPERTIES["identity_map_hash"]
+    )
     writes = case.wiki.wbi.item.writes
     assert not publish(case).changed
     assert case.wiki.wbi.item.writes == writes
@@ -268,6 +275,84 @@ def test_unknown_or_noncohort_origin_refuses_before_effects(
     with pytest.raises(
         IdentityProvenanceRefused, match="cohort decision origin"
     ):
+        publish(case)
+    assert case.wiki.wbi.item.writes == writes
+    assert case.wiki._recovery_pages == pages
+    assert not case.directory.exists()
+
+
+def map_origin(**changes):
+    """The origin an identity map gives a choice (cluster_proposals)."""
+    return {
+        "operation": MAP_PROPOSAL,
+        "method": "adjudicated",
+        "identity_cluster": "c" * 64,
+        "identity_map_hash": "a" * 64,
+        "identity_map_inputs": "b" * 64,
+        "increment": ["e" * 40],
+        "assignment_head": None,
+    } | changes
+
+
+@pytest.mark.parametrize("operation", ["assign", "new_entity"])
+def test_a_map_derived_choice_publishes_the_maps_method_and_cluster(
+    tmp_path, operation
+):
+    derived = map_origin()
+    case = fixture(
+        tmp_path, operation, origin_update={"proposal_origin": derived}
+    )
+    result = publish(case)
+    origin = next(
+        r for r in anchor(case).references if values(r, "identity_method")
+    )
+    confirmation = next(
+        r
+        for r in anchor(case).references
+        if values(r, "identity_confirmation_actor")
+    )
+    assert (
+        values(origin, "identity_method")[0]["id"]
+        == (ITEMS["identity_adjudicated"])
+    )
+    assert values(origin, "identity_cluster") == ["c" * 64]
+    assert not values(confirmation, "identity_method")
+    assert not values(confirmation, "identity_cluster")
+    assert values(confirmation, "identity_confirmation_actor") == [
+        "fictional curator"
+    ]
+    (digest,) = values(origin, "run_record_sha256")
+    record = read_record(case.directory, RecordRef(sha256=digest))
+    assert record.metadata["identity_map_hash"] == "a" * 64
+    assert (
+        record.metadata["identity_cohort"]["original_origin"][
+            "proposal_origin"
+        ]
+        == derived
+    )
+    (stated,) = case.wiki.wbi.item.get(result.record_qid).claims.get(
+        PROPERTIES["identity_map_hash"]
+    )
+    assert stated.mainsnak.datavalue["value"] == "a" * 64
+    writes = case.wiki.wbi.item.writes
+    assert not publish(case).changed
+    assert case.wiki.wbi.item.writes == writes
+
+
+@pytest.mark.parametrize(
+    "derived",
+    [
+        map_origin(method="owner_override"),
+        map_origin(method="reviewed_assignment"),
+        map_origin(identity_cluster=None),
+        map_origin(identity_map_hash="not a map hash"),
+    ],
+)
+def test_an_unsupported_map_origin_refuses_before_effects(tmp_path, derived):
+    case = fixture(tmp_path, origin_update={"proposal_origin": derived})
+    writes = case.wiki.wbi.item.writes
+    pages = dict(case.wiki._recovery_pages)
+    with pytest.raises(IdentityProvenanceRefused):
         publish(case)
     assert case.wiki.wbi.item.writes == writes
     assert case.wiki._recovery_pages == pages
