@@ -47,9 +47,11 @@ process record keeps it. Map fields are origin, not basis, so a choice
 whose candidate evidence is unchanged is not sent back to review when its
 cluster gains a member or the map is made again; the review store then
 keeps the origin of the derivation that first proposed that basis. A
-choice a caller already stored explicitly keeps its explicit origin when a
-derivation gives it too, and a derived choice keeps its map origin when a
-caller supplies it explicitly, so neither reopens a decision.
+choice a caller already stored explicitly is kept as stored, with its
+explicit origin and the evidence its caller gave, when a derivation gives
+it too, so it keeps its decision. A derived choice keeps its map origin
+when a caller supplies it explicitly, and keeps its decision unless the
+caller gives evidence of its own.
 
 **Report.** What each mention got, the clusters whose members are assigned
 to more than one entity, and the entities whose assigned mentions the map

@@ -715,15 +715,39 @@ def test_map_derived_choices_mark_whether_clustering_saw_each_candidate(
         assert proposal not in current.review.proposals
 
 
-@pytest.mark.parametrize("decided", ["explicit", "derived"])
+@pytest.mark.parametrize(
+    ("decided", "other"),
+    [
+        ("explicit", "derived"),
+        ("explicit with evidence", "derived"),
+        ("derived", "explicit"),
+    ],
+)
 def test_a_decided_choice_supplied_by_the_other_route_stays_decided(
-    graph, tmp_path, decided
+    graph, tmp_path, decided, other
 ):
     _, registry, target, _, _ = graph
     first = source()
+    (creation,) = new_request(first).proposals
+    noted = ReviewRequest(
+        sources=(first,),
+        proposals=(
+            creation.model_copy(
+                update={
+                    "evidence": {
+                        "curator_note": "Gustav's birth register extract "
+                        "names no existing person."
+                    }
+                }
+            ),
+        ),
+    )
     routes = {
         "explicit": lambda store: additions.prepare_cohort_additions(
             store, new_request(first), registry
+        ),
+        "explicit with evidence": lambda store: (
+            additions.prepare_cohort_additions(store, noted, registry)
         ),
         "derived": lambda store: (
             prepare_cluster_proposals(
@@ -735,7 +759,6 @@ def test_a_decided_choice_supplied_by_the_other_route_stays_decided(
             ).prepared
         ),
     }
-    (other,) = routes.keys() - {decided}
     with ReviewStore(tmp_path / "review.sqlite") as store:
         prepared = routes[decided](store)
         (proposal,) = prepared.review.proposals
@@ -744,7 +767,8 @@ def test_a_decided_choice_supplied_by_the_other_route_stays_decided(
         assert set(marks(prepared)) == {target.binding.qid}
         approve(store, prepared)
         # The same creation, explicit or derived from a map, keeps the
-        # stored choice, its origin and its decision.
+        # stored choice, its origin, the evidence its caller gave and its
+        # decision.
         again = routes[other](store)
         assert again.review.proposals == (proposal,)
         (application,) = again.review.projection.applications

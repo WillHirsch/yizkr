@@ -214,9 +214,10 @@ def prepare_cohort_additions(
     stored basis gives it, so a repeated preparation, including the one
     inside application, leaves an unchanged basis unchanged; a candidate
     the stored basis lacks is marked null. Other choices are not marked. A
-    stored choice that the request supplies by the other route, an
-    explicit choice an identity map also gives or the reverse, keeps its
-    stored origin and so its marks.
+    stored choice that the request supplies by the other route keeps its
+    stored origin and so its marks: an explicit choice an identity map
+    also gives is kept as stored, with the evidence its caller gave, and a
+    derived choice supplied explicitly takes the caller's evidence.
     """
     if represented is not None:
         represented = frozenset(represented)
@@ -271,11 +272,17 @@ def prepare_cohort_additions(
             and (map_origin(stored.origin) is None)
             != (map_origin(proposal.origin) is None)
         ):
-            # A stored choice supplied again by the other route, derived
-            # from an identity map or not, keeps its stored origin and with
-            # it whether its candidates are marked, so an unchanged basis
-            # and its decision stay current.
-            proposal = proposal.model_copy(update={"origin": stored.origin})
+            # A stored choice supplied again by the other route keeps its
+            # stored origin and with it whether its candidates are marked,
+            # so an unchanged basis and its decision stay current. A
+            # derivation adds nothing to a stored explicit choice, which is
+            # kept whole with the evidence its caller gave; an explicit
+            # choice brings its caller's evidence to a stored derived one.
+            proposal = (
+                choices[key]
+                if map_origin(proposal.origin) is not None
+                else proposal.model_copy(update={"origin": stored.origin})
+            )
         choices[key] = proposal
         if proposal.target is not None:
             previous.setdefault(proposal.mentions[0].key, set()).add(
