@@ -12,7 +12,7 @@ from yizkr.claims import (
     Qualifier,
     load_vocabulary,
 )
-from yizkr.model.schema import read_manifest_data
+from yizkr.model.schema import load_manifest, read_manifest_data
 from yizkr.pipeline.critique import (
     CATEGORIES,
     CRITIQUE_PROMPT,
@@ -215,8 +215,6 @@ class TestCritique:
         scratch run's run-item marks (#200), is never listed, nor is a
         retired or a reference property, which no claim may use, nor an
         item held back from the prompts."""
-        from yizkr.model.schema import load_manifest
-
         held = [
             key
             for key, spec in load_manifest().properties.items()
@@ -428,17 +426,20 @@ def manifest_copy(tmp_path, change):
     return path
 
 
-# a property a fictional manifest change adds
+# a property and an item a fictional manifest change adds
 HATTERS_MARK = {
     "label": "hatters' mark",
     "description": "the mark a hatter stamped inside a hat's sweatband",
     "datatype": "string",
 }
+BLUE_HAT_STAMP = {
+    "label": "Blue Hat stamp",
+    "description": "the stamp of the Hutmacherei zum Blauen Hut",
+}
 
 
-def hold_back(raw):
-    """Add to a parsed manifest a reference property, a property held
-    back from the prompts and an item held back from them."""
+def add_reference_property(raw):
+    """Add a reference property to a parsed manifest."""
     raw["properties"]["album_slide"] = {
         "label": "album slide",
         "description": "reference locator; the slide of a talk that shows "
@@ -446,12 +447,23 @@ def hold_back(raw):
         "datatype": "string",
         "reference": True,
     }
+
+
+def add_held_back_property(raw):
+    """Add to a parsed manifest a property held back from the prompts."""
     raw["properties"]["hatters_mark"] = HATTERS_MARK | {"offered": False}
-    raw["items"]["blue_hat_stamp"] = {
-        "label": "Blue Hat stamp",
-        "description": "the stamp of the Hutmacherei zum Blauen Hut",
-        "offered": False,
-    }
+
+
+def add_held_back_item(raw):
+    """Add to a parsed manifest an item held back from the prompts."""
+    raw["items"]["blue_hat_stamp"] = BLUE_HAT_STAMP | {"offered": False}
+
+
+def add_all_held_back(raw):
+    """Add all three of the above to a parsed manifest."""
+    add_reference_property(raw)
+    add_held_back_property(raw)
+    add_held_back_item(raw)
 
 
 class TestHeldBackVocabulary:
@@ -468,17 +480,34 @@ class TestHeldBackVocabulary:
         return llm.prompts[0], found
 
     @pytest.mark.parametrize(
-        "suggestion",
+        ("change", "suggestion"),
         [
-            {"property": "album_slide"},
-            {"property": "hatters_mark"},
-            {"kind": "blue_hat_stamp"},
+            pytest.param(
+                add_reference_property,
+                {"property": "album_slide"},
+                id="reference-property",
+            ),
+            pytest.param(
+                add_held_back_property,
+                {"property": "hatters_mark"},
+                id="property-offered-false",
+            ),
+            pytest.param(
+                add_held_back_item,
+                {"kind": "blue_hat_stamp"},
+                id="item-offered-false",
+            ),
+            pytest.param(
+                add_all_held_back,
+                {"property": "album_slide"},
+                id="all-three",
+            ),
         ],
     )
     def test_an_addition_held_back_leaves_the_prompt(
-        self, tmp_path, suggestion
+        self, tmp_path, change, suggestion
     ):
-        copy = manifest_copy(tmp_path, hold_back)
+        copy = manifest_copy(tmp_path, change)
         named = FINDING | {"suggestion": suggestion}
         at_head, unknown = self.ask(named)
         with_copy, known = self.ask(named, manifest_path=copy)
@@ -487,27 +516,35 @@ class TestHeldBackVocabulary:
         assert with_copy == at_head
 
     def test_a_reference_property_removed_leaves_the_prompt(self, tmp_path):
-        copy = manifest_copy(
-            tmp_path,
-            lambda raw: raw["properties"].pop("identity_migration_id"),
+        # chosen by what it is, not by name, so that the test outlives
+        # the removal of any one reference property from the manifest
+        key = next(
+            key
+            for key, spec in load_manifest().properties.items()
+            if spec.reference
         )
-        named = FINDING | {"suggestion": {"property": "identity_migration_id"}}
+        copy = manifest_copy(tmp_path, lambda raw: raw["properties"].pop(key))
+        named = FINDING | {"suggestion": {"property": key}}
         at_head, known = self.ask(named)
         with_copy, unknown = self.ask(named, manifest_path=copy)
         assert isinstance(known, Finding) and isinstance(unknown, Invalid)
         assert with_copy == at_head
 
     def test_an_offered_addition_is_listed(self, tmp_path):
-        """The prompt is the copy's: a property extraction is offered is
-        listed once the manifest holds it."""
-        copy = manifest_copy(
-            tmp_path,
-            lambda raw: raw["properties"].update(hatters_mark=HATTERS_MARK),
-        )
+        """The prompt is the copy's: a property and an item extraction is
+        offered are listed once the manifest holds them."""
+
+        def offer(raw):
+            raw["properties"]["hatters_mark"] = HATTERS_MARK
+            raw["items"]["blue_hat_stamp"] = BLUE_HAT_STAMP
+
+        copy = manifest_copy(tmp_path, offer)
         at_head, _ = self.ask(FINDING)
         with_copy, _ = self.ask(FINDING, manifest_path=copy)
         assert "hatters_mark" not in listed(at_head, "Properties")
         assert "hatters_mark" in listed(with_copy, "Properties")
+        assert "blue_hat_stamp" not in listed(at_head, "Kinds")
+        assert "blue_hat_stamp" in listed(with_copy, "Kinds")
 
 
 VOCABULARY = load_vocabulary()
