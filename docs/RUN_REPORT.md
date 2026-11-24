@@ -131,5 +131,5 @@ Unit tests (`tests/unit/test_run_report.py`) guard it four ways. A fictional run
 
 ## Not yet
 
-- The scratch driver does not run the report as a run closes (#145); run `yizkr scratch report` after the run, or at any time during it.
+- The scratch driver does not run the report as a run closes; run `yizkr scratch report` after the run, or at any time during it.
 - Flag counts by tier and class wait for the flags stage (#112), as above.
