@@ -1168,7 +1168,6 @@ class FakeQueryService:
     def __init__(self, wiki: FakeWikibase) -> None:
         self.wiki = wiki
         self.indexed: dict[str, tuple[int, dict]] = {}
-        self.synchronizations = 0
         self.manifest = load_manifest()
 
     def synchronize(self) -> None:
@@ -1180,15 +1179,6 @@ class FakeQueryService:
             entity_id: (self.wiki.revision_of(entity_id), data)
             for entity_id, data in self.wiki.entities.items()
         }
-        self.synchronizations += 1
-
-    def lagging(self) -> int:
-        """How many entities the index holds at another revision, or not."""
-        return sum(
-            self.indexed.get(entity_id, (None,))[0]
-            != self.wiki.revision_of(entity_id)
-            for entity_id in self.wiki.entities
-        )
 
     def answer(self, query: str) -> list[dict]:
         purpose = query_purpose(query)
@@ -1280,12 +1270,10 @@ class FakeQueryService:
                 )
                 row[f"{name}Qids"] = _literal("|".join(related))
                 if name in ("spouse", "father", "mother"):
-                    row[f"{name}s" if name == "spouse" else f"{name}s"] = (
-                        _literal(
-                            "|".join(
-                                f"{self._label(other)} ({other})"
-                                for other in related
-                            )
+                    row[f"{name}s"] = _literal(
+                        "|".join(
+                            f"{self._label(other)} ({other})"
+                            for other in related
                         )
                     )
             appellations = sorted(
