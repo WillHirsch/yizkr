@@ -15,70 +15,29 @@ import uuid
 from collections import Counter, defaultdict
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
+from yizkr.core.review_records import (
+    ClaimDecision,
+    ClaimProposal,
+    Decision,
+    MentionObservation,
+    MentionRevision,
+    Operation,
+    Outcome,
+    Proposal,
+    ReviewRefused,
+    check_actor_time,
+)
 from yizkr.core.write_recovery import EntityBinding
-from yizkr.pipeline.review_mentions import MentionObservation
 from yizkr.pipeline.stages import sha256_text
-
-Operation = Literal["same", "different", "assign", "new_entity"]
-Outcome = Literal["approve", "reject"]
-
-
-class ReviewRefused(ValueError):
-    """The requested review cannot be attached to its claimed evidence."""
 
 
 class _Record(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
-
-
-class MentionRevision(_Record):
-    id: str
-    revision: int = Field(gt=0)
-    observation: MentionObservation
-    correspondence: dict[str, Any]
-
-    @property
-    def key(self) -> tuple[str, str]:
-        return self.observation.artifact, self.observation.local_id
-
-    @property
-    def reference(self) -> dict[str, Any]:
-        return {"id": self.id, "revision": self.revision}
-
-
-class Proposal(_Record):
-    id: str
-    revision: int = Field(gt=0)
-    operation: Operation
-    mentions: tuple[str, ...]
-    mention_revisions: tuple[dict[str, Any], ...]
-    target: EntityBinding | None = None
-    before: dict[str, Any] = Field(default_factory=dict)
-    basis_version: Literal[1] = 1
-    basis: dict[str, Any]
-    origin: dict[str, Any]
-    digest: str
-
-
-class Decision(_Record):
-    id: str
-    revision: int = Field(gt=0)
-    proposal: Proposal
-    outcome: Outcome
-    actor: str
-    time: str
-    predecessor: dict[str, Any] | None = None
-    review_sheet_id: str | None = None
-
-    @property
-    def reference(self) -> dict[str, Any]:
-        return {"id": self.id, "revision": self.revision}
 
 
 class DecisionInput(_Record):
@@ -90,32 +49,6 @@ class DecisionInput(_Record):
     time: str
     expected_decision_revision: int | None = None
     review_sheet_id: str | None = None
-
-
-class ClaimProposal(_Record):
-    """An immutable historical meaning and support, separate from identity."""
-
-    id: str
-    revision: Literal[1] = 1
-    basis_version: Literal[1] = 1
-    basis: dict[str, Any]
-    digest: str
-    origin: dict[str, Any]
-
-
-class ClaimDecision(_Record):
-    id: str
-    revision: int = Field(gt=0)
-    proposal: ClaimProposal
-    outcome: Outcome
-    actor: str
-    time: str
-    depicts_confirmed: bool = False
-    predecessor: dict[str, Any] | None = None
-
-    @property
-    def reference(self) -> dict[str, Any]:
-        return {"id": self.id, "revision": self.revision}
 
 
 class ClaimDecisionInput(_Record):
@@ -163,17 +96,6 @@ def _dump(record: BaseModel) -> str:
 
 def _binding_key(binding: EntityBinding) -> tuple[str, str, str]:
     return binding.deployment_id, binding.generation, binding.entity_id
-
-
-def _actor_time(actor: str, time: str) -> None:
-    if not actor.strip():
-        raise ReviewRefused("a review actor is required")
-    try:
-        parsed = datetime.fromisoformat(time)
-    except (TypeError, ValueError) as exc:
-        raise ReviewRefused("review time must be an ISO timestamp") from exc
-    if parsed.tzinfo is None or parsed.utcoffset() is None:
-        raise ReviewRefused("review time must include its timezone")
 
 
 class ReviewStore:
@@ -440,7 +362,7 @@ class ReviewStore:
         Location changes may be reviewed; changing the source owner or native
         part cannot be described as a harmless locator remapping.
         """
-        _actor_time(actor, time)
+        check_actor_time(actor, time)
         if not reason.strip():
             raise ReviewRefused("a correspondence reason is required")
         old = prior.observation.source_scope or prior.observation.anchor
@@ -625,7 +547,7 @@ class ReviewStore:
         result = []
         with self._transaction():
             for request in requests:
-                _actor_time(request.actor, request.time)
+                check_actor_time(request.actor, request.time)
                 if request.review_sheet_id is not None:
                     sheet = self.get_review_sheet(request.review_sheet_id)
                     rows = [
@@ -787,7 +709,7 @@ class ReviewStore:
         with self._transaction():
             self._check_projection(projection, mentions)
             for request in requests:
-                _actor_time(request.actor, request.time)
+                check_actor_time(request.actor, request.time)
                 proposal = self.get_claim_proposal(request.proposal_id)
                 if request.expected_digest != proposal.digest:
                     raise ReviewRefused("altered claim review proposal")

@@ -10,14 +10,12 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from yizkr.core.review_records import Decision, MentionRevision
 from yizkr.core.write_recovery import EntityBinding, Generation
-
-if TYPE_CHECKING:
-    from yizkr.pipeline.identity_review import Decision
 
 _ID = r"^[0-9a-f]{32}$"
 _HASH = r"^[0-9a-f]{64}$"
@@ -157,8 +155,6 @@ def canonical_delta(delta: AssignmentDelta) -> AssignmentDelta:
 
 def _evidence(delta: AssignmentDelta):
     # Use the existing review schemas, not a competing decision vocabulary.
-    from yizkr.pipeline.identity_review import Decision, MentionRevision
-
     try:
         mentions = {
             key: MentionRevision.model_validate(value)

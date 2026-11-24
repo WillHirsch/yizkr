@@ -7,7 +7,6 @@ model client, change response keys, or invent missing legacy facts.
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import tempfile
 from collections.abc import Mapping, Sequence
@@ -21,7 +20,12 @@ from yizkr.core.provenance import (
     ProcessRecord,
     RecordRef,
     StageProvenance,
+    record_bytes,
 )
+
+# the process-record digest (yizkr.core.provenance), which pipeline modules
+# take from here
+from yizkr.core.provenance import record_digest as record_digest
 from yizkr.pipeline.llm import client_metadata
 from yizkr.pipeline.rundir import code_version
 from yizkr.pipeline.stages import canonical_json
@@ -46,23 +50,6 @@ def producer_run_context(manifest: Mapping[str, Any] | None) -> dict:
 
 def now() -> datetime:
     return datetime.now(UTC)
-
-
-def record_bytes(record: ProcessRecord) -> bytes:
-    return (
-        json.dumps(
-            record.model_dump(mode="json"),
-            sort_keys=True,
-            ensure_ascii=False,
-            separators=(",", ":"),
-            allow_nan=False,
-        )
-        + "\n"
-    ).encode("utf-8")
-
-
-def record_digest(record: ProcessRecord) -> str:
-    return hashlib.sha256(record_bytes(record)).hexdigest()
 
 
 def freeze_record(directory: Path, record: ProcessRecord) -> RecordRef:

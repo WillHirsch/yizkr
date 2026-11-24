@@ -16,9 +16,12 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from yizkr.claims import EntityRecord, container_problems, structure_problems
 from yizkr.core.identity_assignments import record_digest
+from yizkr.core.review_records import (
+    Decision,
+    MentionRevision,
+    source_scope_data,
+)
 from yizkr.core.write_recovery import Generation
-from yizkr.pipeline.identity_review import Decision, MentionRevision
-from yizkr.pipeline.review_mentions import source_scope_data
 
 _HASH = r"^[0-9a-f]{64}$"
 
