@@ -329,8 +329,13 @@ def identity_references(
     method,
     producer=None,
     migration_id=None,
+    cluster=None,
 ):
-    """Separate the assignment's origin from its affirmative confirmation."""
+    """Separate the assignment's origin from its affirmative confirmation.
+
+    An origin an identity map gave names the map's ``cluster`` for the
+    mention beside its method.
+    """
     origin = Reference()
     for snak in (
         Item(prop_nr=properties["identity_record"], value=record_qid),
@@ -344,6 +349,8 @@ def identity_references(
         _string(properties, "run_record_sha256", record_sha256),
     ):
         origin.add(snak)
+    if cluster is not None:
+        origin.add(_string(properties, "identity_cluster", cluster))
     if migration_id is not None:
         origin.add(_string(properties, "identity_migration_id", migration_id))
     if producer is not None:

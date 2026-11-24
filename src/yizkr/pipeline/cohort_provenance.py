@@ -6,6 +6,12 @@ historical kind or an assignment, and then appends the mention's reviewed
 names to the entity's aliases (``assignment_aliases``). Creation decisions
 additionally require their original immutable authorization and verified
 registry receipt.
+
+A choice derived from an identity map (``cohort_additions.map_origin``)
+publishes the map's method for the mention and its cluster on the origin
+reference, and the map's hash on the record item; the reviewer's
+confirmation stays a separate reference. Any other choice publishes the
+reviewed method alone.
 """
 
 from __future__ import annotations
@@ -25,6 +31,7 @@ from yizkr.pipeline.assignment_aliases import (
     alias_contribution,
     append_aliases,
 )
+from yizkr.pipeline.cohort_additions import MAP_METHODS, map_origin
 from yizkr.pipeline.identity_provenance import (
     IdentityProvenanceRefused,
     IdentitySource,
@@ -45,6 +52,9 @@ class _Accepted:
     mention: MentionRevision
     source: IdentitySource
     creation: ReviewedCreationAuthorization | None
+    # the identity map's cluster and hash, for a choice derived from one
+    cluster: str | None = None
+    map_hash: str | None = None
 
 
 def _accepted_cohort(registry, mention_id):
@@ -108,6 +118,20 @@ def _accepted_cohort(registry, mention_id):
         raise IdentityProvenanceRefused(
             "assignment has no recorded cohort decision origin"
         )
+    derived = map_origin(origin)
+    cluster = map_hash = None
+    if derived is not None:
+        cluster = derived.get("identity_cluster")
+        map_hash = derived.get("identity_map_hash")
+        if derived.get("method") not in MAP_METHODS or any(
+            not isinstance(value, str)
+            or re.fullmatch(r"[0-9a-f]{64}", value) is None
+            for value in (cluster, map_hash)
+        ):
+            raise IdentityProvenanceRefused(
+                "cohort decision has an unsupported identity-map origin"
+            )
+        method = derived["method"]
     mention = next(iter(mentions.values()))
     scope = mention.observation.source_scope
     if scope is None or scope.owner.sha1 != mention.observation.artifact:
@@ -142,6 +166,8 @@ def _accepted_cohort(registry, mention_id):
             mention_id, mention.observation.artifact, None, binding, method
         ),
         creation,
+        cluster,
+        map_hash,
     )
 
 
@@ -154,6 +180,8 @@ def publish_cohort_assignment(
     acquire a direct manual origin. Only an actual supplied ``ProcessRecord``
     is preserved as producer metadata. The original proposal retains all
     recorded graph, matching and source evidence independently of publication.
+    A choice derived from an identity map publishes the map's method and
+    cluster for the mention as its origin and the map's hash on the record.
 
     After the origin, the names the confirmed decision's review row showed
     for the mention are appended to the entity's aliases, once for the
@@ -180,6 +208,28 @@ def publish_cohort_assignment(
             "origin and review evidence are retained without inferred model "
             "or prompt.",
         )
+    metadata = {
+        "identity_cohort": {
+            "assignment": accepted.assignment.model_dump(mode="json"),
+            "mention": accepted.mention.model_dump(mode="json"),
+            "binding": accepted.source.binding.model_dump(mode="json"),
+            "confirmation": decision.model_dump(mode="json"),
+            "supporting_decisions": [
+                d.model_dump(mode="json")
+                for d in accepted.supporting_decisions
+            ],
+            "original_origin": origin,
+            "creation_authorization": (
+                accepted.creation.model_dump(mode="json")
+                if accepted.creation is not None
+                else None
+            ),
+        }
+    }
+    if accepted.map_hash is not None:
+        # The record item states it (run_statements), so the origin's map
+        # is readable in the graph.
+        metadata["identity_map_hash"] = accepted.map_hash
     record = ProcessRecord(
         kind="cohort-identity-confirmation",
         stages=(producer.stages if producer else ())
@@ -191,24 +241,7 @@ def publish_cohort_assignment(
             ),
         ),
         producer_refs=producer_refs,
-        metadata={
-            "identity_cohort": {
-                "assignment": accepted.assignment.model_dump(mode="json"),
-                "mention": accepted.mention.model_dump(mode="json"),
-                "binding": accepted.source.binding.model_dump(mode="json"),
-                "confirmation": decision.model_dump(mode="json"),
-                "supporting_decisions": [
-                    d.model_dump(mode="json")
-                    for d in accepted.supporting_decisions
-                ],
-                "original_origin": origin,
-                "creation_authorization": (
-                    accepted.creation.model_dump(mode="json")
-                    if accepted.creation is not None
-                    else None
-                ),
-            }
-        },
+        metadata=metadata,
         limitations=limitations + (producer.limitations if producer else ()),
     )
     ref = freeze_record(record_dir, record)
@@ -236,6 +269,7 @@ def publish_cohort_assignment(
             record_sha256=ref.sha256,
             method=target.method,
             producer=producer,
+            cluster=accepted.cluster,
         )
 
     publication = publish_identity_record(
