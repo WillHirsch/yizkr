@@ -58,14 +58,19 @@ def test_media_products_close_when_publication_fails(
 
     monkeypatch.setattr(media_stages, "read_media", read)
 
+    class PublicationFailure(OSError):
+        """The fault the transcription case injects."""
+
     def fail(*_args, **_kwargs):
-        raise OSError("fictional publication failure")
+        raise PublicationFailure("fictional publication failure")
 
     if publication == "images":
         # a file where the folder of the image readings goes, so that the
         # page's image reading cannot be published
         (doc.dir / DERIVED_MEDIA_DIR).write_text("")
+        expected = FileExistsError
     else:
+        expected = PublicationFailure
         write = scratch._write_view
 
         def write_view(path, value):
@@ -74,7 +79,7 @@ def test_media_products_close_when_publication_fails(
             return write(path, value)
 
         monkeypatch.setattr(scratch, "_write_view", write_view)
-    with pytest.raises(OSError):
+    with pytest.raises(expected):
         driver._step_transcribe(doc)
     (result,) = results
     assert not Path(result.products.folder.name).exists()

@@ -395,7 +395,8 @@ def keep_image_readings(
     Reading paths retain their supported compatibility names. Source and
     placement authority is the common inventory; no image-only record is
     reconstructed from transcription markers. A kept reading that no
-    longer stands is set aside before the new one is written.
+    longer stands is set aside; the image's new reading, when it has one,
+    is then written.
     """
     from yizkr.pipeline.presentation import derived_transcription
 

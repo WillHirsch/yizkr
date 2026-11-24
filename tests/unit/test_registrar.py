@@ -3388,8 +3388,9 @@ class TestStepRegister:
     def test_a_source_changed_since_it_was_read_is_refused(
         self, tmp_path, kind
     ):
-        """A source changed since discovery prepared it is refused before
-        the inventory discovery prepared is published in its directory."""
+        """A source changed since discovery read it is refused before
+        anything is published in its directory: for a deck or PDF, the
+        inventory discovery prepared."""
         wiki = Untouchable()
         orchestrator, _ = self.orchestrator(tmp_path, wiki)
         source = self.source_for_admission(orchestrator.folder, kind)

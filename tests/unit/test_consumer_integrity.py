@@ -195,6 +195,10 @@ def test_registration_context_tracks_bindings_and_placements_not_readings(
     )
     part.owner_binding.basis = "prepared-part"
     assert _registration(doc, projection) != before
+    # the projection the write key reads through the driver is this one
+    assert _registration(doc, driver._container_sources(doc)) == (
+        _registration(doc, projection)
+    )
     part.owner_binding.basis = "original-media"
     source.placements = source.placements[1:]
     assert _registration(doc, projection) != before
