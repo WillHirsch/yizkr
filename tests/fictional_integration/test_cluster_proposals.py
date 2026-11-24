@@ -4,8 +4,9 @@ A first increment onto a stack that holds only the bootstrapped model and
 its registered source, where every cluster is new, and a second increment
 that adds a source whose mention joins the first's entity. Decisions are
 recorded and applied through the review store and the protected cohort
-application, and the production identity-provenance query reads the
-published origin of the map-derived assignment. Readings and mention
+application, the production identity-provenance query reads the
+published origin of the map-derived assignment, and the static site's entry
+for that origin is made from the rows it returns. Readings and mention
 records are authored fiction; no model is called.
 """
 
@@ -21,6 +22,7 @@ from yizkr.claims import GivenName, PersonStructure, Surname
 from yizkr.core import sparql
 from yizkr.core.wiki import WikiClient
 from yizkr.core.write_recovery import CreationRegistry
+from yizkr.model.schema import load_manifest
 from yizkr.pipeline.cluster_proposals import prepare_cluster_proposals
 from yizkr.pipeline.clustering import (
     DOCUMENT,
@@ -31,10 +33,12 @@ from yizkr.pipeline.cohort_additions import apply_cohort_additions
 from yizkr.pipeline.identity_review import ReviewStore
 from yizkr.pipeline.registrar import register_artifact
 from yizkr.queries.publish import load_templates, render_for_instance
+from yizkr.staticsite import SHORT, SiteBuilder, identity_origins, visible
 
 from .test_write_query import _synchronize
 
 pytestmark = pytest.mark.live
+MANIFEST = load_manifest()
 WHEN = "2026-01-01T12:00:00Z"
 CURATOR = "fictional cluster curator"
 BIRTH = "birth-extract-1938"
@@ -192,7 +196,7 @@ def test_cluster_choices_reach_review_application_and_graph_origins(
     def origin(mention_id, source, identity, method):
         """The graph's origin rows of the mention's assignment: the map's
         method and cluster for it, the map's hash, and the reviewer's
-        separate confirmation."""
+        separate confirmation; and the site's entry for that origin."""
         revision = assignments[mention_id].revision_id
         found = [
             row
@@ -218,6 +222,20 @@ def test_cluster_choices_reach_review_application_and_graph_origins(
             "clustering",
             "cohort-identity-confirmation",
         }
+        # The site's entry for the origin, made from these rows, names the
+        # map's method, with the confirmation beside it, and does not call
+        # it unreviewed.
+        (shown,) = [
+            visible(SiteBuilder.origin_html(each))
+            for each in identity_origins(rows)[qid]
+            if each.assignment_revision == revision
+        ]
+        assert shown.startswith(MANIFEST.items[method].label + " — ")
+        assert f"confirmed by {CURATOR} at {WHEN}" in shown
+        assert "not confirmed by a person" not in shown
+        assert "unreviewed machine output" not in shown
+        for value in (cluster, identity.hash):
+            assert value[:SHORT] + "…" in shown
 
     # The creation's origin is its own map's singleton cluster; the joining
     # mention's is the confident cluster of the second increment's map.
