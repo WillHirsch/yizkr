@@ -23,6 +23,8 @@ from yizkr.claims import (
     EntityRecord,
     GivenName,
     PersonStructure,
+    PlaceName,
+    PlaceStructure,
     Surname,
 )
 from yizkr.core.identity_assignments import (
@@ -33,8 +35,10 @@ from yizkr.core.identity_assignments import (
 from yizkr.core.provenance import ProcessRecord, StageProvenance
 from yizkr.core.write_recovery import EntityBinding
 from yizkr.pipeline.cluster_proposals import (
+    NO_PRODUCER,
     NOT_IN_MAP,
     OTHER_BATCH,
+    UNOBSERVABLE,
     ClusterProposalRefused,
     derive_cluster_choices,
 )
@@ -45,6 +49,7 @@ from yizkr.pipeline.clustering import (
     cluster_corpus,
 )
 from yizkr.pipeline.cohort_additions import MAP_PROPOSAL
+from yizkr.pipeline.fingerprints import mention_map
 from yizkr.pipeline.identity_review import ReviewStore
 from yizkr.pipeline.review_stages import (
     ReviewRequest,
@@ -220,13 +225,20 @@ def test_a_cluster_with_no_assigned_member_creates_one_entity(tmp_path):
         derived = derive(store, data, (birth, naturalisation))
         reordered = derive(store, data, (naturalisation, birth))
         ids = {mention_id(store, s): s for s in (birth, naturalisation)}
-    # Gustav's two birth sources share one cluster: one of his mentions
-    # creates his entity and the other waits for it, whatever the order the
-    # sources are given in.
+    # Gustav's two birth sources share one cluster: the mention with the
+    # smaller fingerprint creates his entity and the other waits for it,
+    # whatever the order the sources are given in.
     (cluster,) = {row["cluster"] for row in data["mentions"].values()}
     (created,) = derived.request.proposals
     assert created.operation == "new_entity"
-    assert choices(reordered) == choices(derived)
+    fingerprints = {
+        s.artifact_sha1: mention_map(s.artifact_sha1, s.batch)["gustav"]
+        for s in (birth, naturalisation)
+    }
+    assert created.mentions[0].artifact_sha1 == min(
+        fingerprints, key=fingerprints.get
+    )
+    assert reordered.request.proposals == derived.request.proposals
     outcomes = derived.report.mentions
     assert {outcomes[m].outcome for m in ids} == {"new_entity", "waiting"}
     assert {outcomes[m].cluster for m in ids} == {cluster}
@@ -237,7 +249,7 @@ def test_a_cluster_with_no_assigned_member_creates_one_entity(tmp_path):
     # The map, the increment and the (empty) assignment history are its
     # origin; the map has no producer record, which the origin says.
     origin = dict(created.origin)
-    assert origin.pop("limitations")
+    assert origin.pop("limitations") == [NO_PRODUCER]
     assert origin == {
         "operation": MAP_PROPOSAL,
         "method": "confident",
@@ -385,10 +397,12 @@ def test_a_conflict_is_reported_beside_a_member_not_supplied(tmp_path):
             registry,
             increment=[third.artifact_sha1],
         )
+        third_id = mention_id(store, third)
     (cluster,) = {row["cluster"] for row in data["mentions"].values()}
     # The supplied members already show the cluster's two entities; the
     # unsupplied copy holds it back as well.
     assert derived.request.proposals == ()
+    assert derived.report.mentions[third_id].outcome == "conflict"
     assert derived.report.conflicts == {cluster: ("a" * 32, "b" * 32)}
     assert derived.report.unresolved == {cluster: (fourth.artifact_sha1,)}
     assert derived.report.counts["conflicting_clusters"] == 1
@@ -438,6 +452,11 @@ def test_a_source_the_map_does_not_hold_in_full_is_refused(tmp_path):
         stale = derive(store, both, (birth, naturalisation))
         unsupplied = derive(store, both, (birth,))
         birth_id = mention_id(store, birth)
+        # A cluster whose supplied members are all assigned holds nothing
+        # back.
+        settled = derive(
+            store, both, (birth,), Assignments({birth_id: "e" * 32})
+        )
     for derived in (stale, unsupplied):
         assert derived.request.proposals == ()
         assert derived.report.mentions[birth_id].outcome == "unresolved"
@@ -446,6 +465,49 @@ def test_a_source_the_map_does_not_hold_in_full_is_refused(tmp_path):
         ]
     assert unsupplied.report.unsupplied == (naturalisation.artifact_sha1,)
     assert unsupplied.report.refused == {}
+    assert stale.report.unsupplied == ()
+    assert settled.request.proposals == ()
+    assert settled.report.mentions[birth_id].outcome == "assigned"
+    assert settled.report.unresolved == {}
+    assert settled.report.counts["unresolved_clusters"] == 0
+
+
+def test_a_source_whose_products_review_cannot_observe_is_refused(tmp_path):
+    birth, naturalisation = gustav(BIRTH), gustav(NATURALISATION)
+    # The certificate's batch, given with the birth extract's reading.
+    foreign = ReviewSource(
+        naturalisation.artifact_sha1, naturalisation.batch, birth.reading
+    )
+    with ReviewStore(tmp_path / "review.sqlite") as store:
+        derived = derive(
+            store,
+            map_of(birth),
+            (birth, foreign),
+            increment=[birth.artifact_sha1],
+        )
+    assert derived.report.refused == {
+        naturalisation.artifact_sha1: UNOBSERVABLE
+    }
+    assert derived.request.sources == (birth,)
+    assert choices(derived) == [
+        ("new_entity", (birth.artifact_sha1, "gustav"), None)
+    ]
+
+
+class Unbound(Assignments):
+    """Accepted assignments whose entities have no verified binding."""
+
+    def binding(self, entity_id):
+        return None
+
+
+def test_an_accepted_entity_without_a_verified_binding_is_refused(tmp_path):
+    birth, naturalisation = gustav(BIRTH), gustav(NATURALISATION)
+    data = map_of(birth, naturalisation)
+    with ReviewStore(tmp_path / "review.sqlite") as store:
+        registry = Unbound({mention_id(store, birth): "e" * 32})
+        with pytest.raises(ClusterProposalRefused):
+            derive(store, data, (birth, naturalisation), registry)
 
 
 def test_a_mention_the_assignment_path_cannot_admit_gets_no_choice(tmp_path):
@@ -453,11 +515,31 @@ def test_a_mention_the_assignment_path_cannot_admit_gets_no_choice(tmp_path):
     unread = ReviewSource(naturalisation.artifact_sha1, naturalisation.batch)
     added = gustav(BIRTH)
     added.batch.entities[0].structure.given.append(GivenName(written="Felix"))
+    # The certificate's place of birth, put in a country its record gives
+    # no evidence for.
+    placed = gustav(NATURALISATION)
+    placed.batch.entities.append(
+        EntityRecord(
+            id="floerburg",
+            label="Floerburg",
+            kind="place",
+            mention_lines=[1],
+            structure=PlaceStructure(
+                names=[PlaceName(written="Floerburg")], within=["Germany"]
+            ),
+        )
+    )
     with ReviewStore(tmp_path / "review.sqlite") as store:
         derived = derive(store, map_of(birth, unread), (birth, unread))
         unread_id = mention_id(store, unread)
         problem = derive(store, map_of(added, unread), (added, unread))
         added_id = mention_id(store, added)
+        nested = derive(store, map_of(placed), (placed,))
+        place_id = (
+            prepare_review(store, ReviewRequest(sources=(placed,)))
+            .mentions[placed.artifact_sha1, "floerburg"]
+            .id
+        )
     # The mention without a reading is not admitted, whichever member the
     # cluster would otherwise create its entity from.
     assert choices(derived) == [
@@ -472,6 +554,11 @@ def test_a_mention_the_assignment_path_cannot_admit_gets_no_choice(tmp_path):
         "structure: addition",
     )
     assert problem.report.counts["not_admitted"] == 2
+    assert nested.report.mentions[place_id].outcome == "not_admitted"
+    assert "container: no-evidence" in nested.report.mentions[place_id].reasons
+    assert "floerburg" not in {
+        proposal.mentions[0].local_id for proposal in nested.request.proposals
+    }
 
 
 def test_the_maps_producer_record_is_the_origin_provenance(tmp_path):

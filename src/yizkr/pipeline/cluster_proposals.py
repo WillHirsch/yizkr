@@ -2,7 +2,7 @@
 
 An identity map (``clustering``) puts each source mention in a cluster. This
 module turns a map into explicit per-mention choices in the review store,
-the proposal step of every increment, whatever its size and whatever the
+the proposal step for an increment, whatever its size and whatever the
 graph holds: ``assign`` to the entity another member of the mention's
 cluster is already assigned to, or ``new_entity`` for one member of a
 cluster none of whose members is assigned. An empty graph is the case with
@@ -14,11 +14,12 @@ nothing to the graph.
 
 **Correspondence.** A supplied source's current mentions meet the map's by
 their fingerprints (``IdentityMap.clusters_of``), never by local ID or by
-order. A source whose batch the map does not hold in full, every mention of
-it and no other of its document, is refused with a reason, and the others
-proceed. A cluster with a member in a document the map holds but whose
-products were not supplied, or were refused, gives no choice, since an
-assignment of that member cannot be seen.
+order. A source whose products review cannot observe, or whose batch the
+map does not hold in full, every mention of it and no other of its
+document, is refused with a reason, and the others proceed. A cluster
+with a member in a document the map holds but whose products were not
+supplied, or were refused, gives its unassigned members no choice, since
+an assignment of that member cannot be seen.
 
 **Choices.** Each mention gets at most one, and a mention with an accepted
 assignment gets none. A cluster whose members are assigned to one entity
@@ -33,9 +34,9 @@ are proposed for it once it is applied and the proposals are derived
 again. A mention the assignment path cannot admit (a limitation of its
 source observation, such as no unique located occurrence, or a problem in
 its mention record) gets no choice. No target is chosen by label or QID.
-The map's clusters are taken as they are: the members of ambiguous and
-conflicting entries, and a mention the map leaves unclustered, are each a
-cluster of their own and are never merged here.
+The map's clusters are taken as they are: a mention the map gives the
+method ``ambiguous`` or ``conflicting``, or leaves ``unclustered``, is a
+cluster of its own, never merged here, and its choice records that method.
 
 **Origin.** Each choice's origin names ``MAP_PROPOSAL`` and records the
 map's method for the mention, its cluster, the map's hash and inputs key,
@@ -137,9 +138,10 @@ class ClusterReport:
     durable mention ID; each cluster whose members are assigned to more
     than one entity, with those entities; each entity whose assigned
     mentions the map puts in more than one cluster, with those clusters;
-    each refused source by SHA-1, with its reason; each cluster held back
-    for a member whose products were not supplied or were refused, with
-    those documents; and the map's documents not supplied at all."""
+    each refused source by SHA-1, with its reason; each cluster whose
+    unassigned members are held back for a member whose products were not
+    supplied or were refused, with those documents; and the map's
+    documents not supplied at all."""
 
     mentions: dict[str, MentionOutcome]
     conflicts: dict[str, tuple[str, ...]]
@@ -324,7 +326,7 @@ def derive_cluster_choices(
         )
         entities = sorted(set(assigned.values()))
         held: Outcome | None = None
-        if missing:
+        if missing and open_members:
             unresolved[cluster_id] = tuple(missing)
             held = "unresolved"
         # Two entities among the supplied members are a conflict whatever

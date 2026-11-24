@@ -715,6 +715,35 @@ def test_map_derived_choices_mark_whether_clustering_saw_each_candidate(
         assert proposal not in current.review.proposals
 
 
+def noted_request(first):
+    """The explicit creation for the source's mention, with evidence its
+    caller gives."""
+    (creation,) = new_request(first).proposals
+    return ReviewRequest(
+        sources=(first,),
+        proposals=(
+            creation.model_copy(
+                update={
+                    "evidence": {
+                        "curator_note": "Gustav's birth register extract "
+                        "names no existing person."
+                    }
+                }
+            ),
+        ),
+    )
+
+
+def derived_creation(store, registry, first):
+    return prepare_cluster_proposals(
+        store,
+        identity(first),
+        (first,),
+        registry,
+        increment=[first.artifact_sha1],
+    ).prepared
+
+
 @pytest.mark.parametrize(
     ("decided", "other"),
     [
@@ -728,20 +757,7 @@ def test_a_decided_choice_supplied_by_the_other_route_stays_decided(
 ):
     _, registry, target, _, _ = graph
     first = source()
-    (creation,) = new_request(first).proposals
-    noted = ReviewRequest(
-        sources=(first,),
-        proposals=(
-            creation.model_copy(
-                update={
-                    "evidence": {
-                        "curator_note": "Gustav's birth register extract "
-                        "names no existing person."
-                    }
-                }
-            ),
-        ),
-    )
+    noted = noted_request(first)
     routes = {
         "explicit": lambda store: additions.prepare_cohort_additions(
             store, new_request(first), registry
@@ -749,15 +765,7 @@ def test_a_decided_choice_supplied_by_the_other_route_stays_decided(
         "explicit with evidence": lambda store: (
             additions.prepare_cohort_additions(store, noted, registry)
         ),
-        "derived": lambda store: (
-            prepare_cluster_proposals(
-                store,
-                identity(first),
-                (first,),
-                registry,
-                increment=[first.artifact_sha1],
-            ).prepared
-        ),
+        "derived": lambda store: derived_creation(store, registry, first),
     }
     with ReviewStore(tmp_path / "review.sqlite") as store:
         prepared = routes[decided](store)
@@ -773,3 +781,33 @@ def test_a_decided_choice_supplied_by_the_other_route_stays_decided(
         assert again.review.proposals == (proposal,)
         (application,) = again.review.projection.applications
         assert application.status == "applied"
+
+
+def test_caller_evidence_returns_a_decided_derived_choice_to_review(
+    graph, tmp_path
+):
+    _, registry, target, _, _ = graph
+    first = source()
+    noted = noted_request(first)
+    with ReviewStore(tmp_path / "review.sqlite") as store:
+        derived = derived_creation(store, registry, first)
+        (proposal,) = derived.review.proposals
+        approve(store, derived)
+        # A caller supplies the derived creation explicitly, with evidence
+        # of its own: the choice stays derived, marks and all, and its new
+        # material needs review.
+        again = additions.prepare_cohort_additions(store, noted, registry)
+        (revised,) = again.review.proposals
+        assert revised.id == proposal.id
+        assert revised.revision > proposal.revision
+        (given,) = noted.proposals
+        assert {
+            key: revised.basis["evidence"][key] for key in given.evidence
+        } == given.evidence
+        assert additions.map_origin(revised.origin) == (
+            additions.map_origin(proposal.origin)
+        )
+        assert marks(again) == marks(derived)
+        assert set(marks(again)) == {target.binding.qid}
+        (application,) = again.review.projection.applications
+        assert application.status == "needs_review"
