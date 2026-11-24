@@ -28,9 +28,9 @@ death of unknown value. The places page shows each place under every container
 a source gives it, labelled by that source: the 1905 marriage certificate,
 which states its own date, puts Fläckfeld in Kreis Mockburg, and the tree puts
 it in Kreis Peiltal. A misreading of the tree's words that puts Kreis Peiltal
-in Fläckfeld carries a curator's deprecated rank. A worked row gives the
-letter's placing of Kaldovsky District in Chadsk Oblast a start time of its
-own, 1937 (docs/EXAMPLES.md).
+in Fläckfeld, and a misreading of the certificate's date, each carry a
+curator's deprecated rank. A worked row gives the letter's placing of Kaldovsky
+District in Chadsk Oblast a start time of its own, 1937 (docs/EXAMPLES.md).
 
 Every label, title and image carries a marker, eight hex digits of a hash
 over the fixture, over the writer's and the site generator's source and
@@ -53,6 +53,7 @@ import shutil
 import struct
 import urllib.parse
 import zlib
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -100,8 +101,9 @@ FIXTURE = (
     "ended by his death, with Nina widowed, as the dated 1958 letter "
     "states it, Fläckfeld in Kreis Mockburg as the dated 1905 marriage "
     "certificate gives it and in Kreis Peiltal as the tree gives it, "
-    "beside a deprecated misreading of the tree, and Kaldovsky District "
-    "in Chadsk Oblast from 1937 as a worked row gives the letter's"
+    "beside a deprecated misreading of the tree and one of the "
+    "certificate's date, and Kaldovsky District in Chadsk Oblast from "
+    "1937 as a worked row gives the letter's"
 )
 MARK = f"(site test {fixture_mark(FIXTURE, writer, staticsite)})"
 
@@ -149,6 +151,9 @@ HELD_BY = said(CARD, "participant", "imprisonment-1939")  # Leopold
 # the tree each give Fläckfeld, Kreis Mockburg and Kreis Peiltal; neither
 # states a time
 CERTIFICATE_DATED = said(CERTIFICATE, "inception", CERTIFICATE)
+# a misreading of the certificate's "1905" as 1903, which the fixture
+# deprecates
+MISREAD_DAY = {"type": "time", "year": 1903, "month": 12, "day": 15}
 PLACED = {
     source: said(source, "part_of", "flaeckfeld")
     for source in (CERTIFICATE, TREE)
@@ -294,11 +299,11 @@ def fixture_batch(sources: dict[str, ArtifactRef]) -> ClaimBatch:
     the address in the town, the tree's claims about Rahel's death and
     Cäcilie's birth, and the card's dating of Leopold's imprisonment by
     its own start and end time, and the letter's own date, its union end
-    by Rudolf's death and Nina's widowhood, the certificate's own date
-    and its and the tree's containers for Fläckfeld, the tree's misread
-    containment of Kreis Peiltal, and the letter's containment of
-    Kaldovsky District, with the worked row's start time, each citing its
-    source by the SHA-1 of its media (#102)."""
+    by Rudolf's death and Nina's widowhood, the certificate's own date and
+    a misreading of it, its and the tree's containers for Fläckfeld, the
+    tree's misread containment of Kreis Peiltal, and the letter's
+    containment of Kaldovsky District, with the worked row's start time,
+    each citing its source by the SHA-1 of its media (#102)."""
     person = local("person", PERSON, "human")
     address = local("address", ADDRESS, "place")
     street = local("street", STREET, "place")
@@ -417,6 +422,14 @@ def fixture_batch(sources: dict[str, ArtifactRef]) -> ClaimBatch:
             CERTIFICATE,
             CERTIFICATE_DATED.excerpt,
         ),
+        # the misread date, which the fixture deprecates
+        claim(
+            sources[CERTIFICATE].model_dump(mode="json"),
+            "inception",
+            MISREAD_DAY,
+            CERTIFICATE,
+            CERTIFICATE_DATED.excerpt,
+        ),
         claim(
             flaeckfeld,
             "part_of",
@@ -439,13 +452,20 @@ def fixture_batch(sources: dict[str, ArtifactRef]) -> ClaimBatch:
     return ClaimBatch.model_validate({"extraction_run": RUN, "claims": claims})
 
 
-def deprecate_containment(client, qid: str) -> None:
-    """A curator's deprecated rank on the `part_of` statement of `qid`,
-    its only one: an overlay on a misreading (docs/PLACES.md, "Containment
-    as an assertion"). Idempotent."""
+def deprecate(
+    client, qid: str, prop: str, misread: Callable[[dict], bool]
+) -> None:
+    """A curator's deprecated rank on the one `prop` statement of `qid`
+    whose value (its datavalue's) `misread` picks: an overlay on a
+    misreading (docs/PLACES.md, "Containment as an assertion").
+    Idempotent."""
     properties, _ = client.vocabulary()
     entity = client.wbi.item.get(qid)
-    (statement,) = entity.claims.get(properties["part_of"])
+    (statement,) = [
+        statement
+        for statement in entity.claims.get(properties[prop])
+        if misread((statement.mainsnak.datavalue or {}).get("value") or {})
+    ]
     if statement.rank != WikibaseRank.DEPRECATED:
         statement.rank = WikibaseRank.DEPRECATED
         entity.write(summary="integration test: curator rank on a fixture")
@@ -523,7 +543,20 @@ def site(client, config, tmp_path_factory):
             "oblast",
         )
     ]
-    deprecate_containment(client, written.created_items["peiltal"])
+    flaeckfeld = written.created_items["flaeckfeld"]
+    deprecate(
+        client,
+        written.created_items["peiltal"],
+        "part_of",
+        lambda value: value.get("id") == flaeckfeld,
+    )
+    misread = "+{year:04d}-{month:02d}-{day:02d}T".format(**MISREAD_DAY)
+    deprecate(
+        client,
+        sources[CERTIFICATE],
+        "inception",
+        lambda value: value.get("time", "").startswith(misread),
+    )
     wait_for_query_service(config, client, [*seeded, *sources.values()])
 
     out = tmp_path_factory.mktemp("site")
@@ -917,7 +950,9 @@ def test_the_places_page_labels_each_container_by_its_source(site):
     # the certificate, which states its own date, and the tree, which
     # states none, give Fläckfeld two containers: it stands under each,
     # the certificate's read as of the certificate's date and the tree's
-    # labelled by the tree alone, and neither is picked
+    # labelled by the tree alone, and neither is picked; the misread
+    # date's statement is deprecated, so the certificate is read as of
+    # its one date
     tree = containers(site.read("places.html"))
     certificate = tree[MOCKBURG, FLAECKFELD]
     assert source_link(site, CERTIFICATE, root="") in certificate
@@ -928,8 +963,10 @@ def test_the_places_page_labels_each_container_by_its_source(site):
     assert source_link(site, TREE, root="") in family_tree
     assert staticsite.visible(family_tree) == marked(TREE)
     # the misreading's statement is deprecated, so it gives Kreis Peiltal
-    # no container
+    # no container, and Kreis Peiltal, which contains Fläckfeld, heads the
+    # tree
     assert (FLAECKFELD, PEILTAL) not in tree
+    assert PEILTAL not in {place for _, place in tree}
     # the letter's statement carries a start time of its own: that time
     # shows, and the letter's date is not used
     district = tree[OBLAST, DISTRICT]
