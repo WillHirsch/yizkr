@@ -169,7 +169,7 @@ def test_discovery_refuses_equal_decodings_from_distinct_originals(
     docs = driver.documents()
     containers = [doc for doc in docs if doc.source.suffix == ".pdf"]
     for doc in containers:
-        sources = driver._container_sources(doc)
+        sources = driver.containers.container_sources(doc)
         assert LETTER_SHA1 not in sources.sources
         assert any(
             "equal prepared image bytes" in u.reason
@@ -184,7 +184,7 @@ def test_registration_context_tracks_bindings_and_placements_not_readings(
     corpus, name = container_corpus(tmp_path, "pptx")
     driver = run(tmp_path, corpus, Reader({LETTER_SHA1: EXCERPT}))
     doc = document(driver, name)
-    projection = driver._container_sources(doc)
+    projection = driver.containers.container_sources(doc)
     before = _registration(doc, projection)
     source = projection.sources[LETTER_SHA1]
     source.reading_path = None
@@ -204,13 +204,14 @@ def test_registration_metadata_recovery_uses_current_preparation(tmp_path):
     corpus, name = container_corpus(tmp_path, "pptx")
     driver = run(tmp_path, corpus, Reader({LETTER_SHA1: EXCERPT}))
     doc = document(driver, name)
-    before = _registration(doc, driver._container_sources(doc))
+    before = _registration(doc, driver.containers.container_sources(doc))
     (doc.dir / CONTAINER_INVENTORY).unlink()
     rebuilt = CachedRun(
         corpus, tmp_path / "state", engine=RefusingReader({}), log=quiet
     )
     current = document(rebuilt, name)
     assert (
-        _registration(current, rebuilt._container_sources(current)) == before
+        _registration(current, rebuilt.containers.container_sources(current))
+        == before
     )
     assert not (doc.dir / CONTAINER_INVENTORY).exists()

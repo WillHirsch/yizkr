@@ -3365,9 +3365,11 @@ class TestStepRegister:
 
     @pytest.mark.parametrize("kind", ["png", "pdf", "pptx"])
     def test_a_listed_document_is_refused_before_the_wiki(
-        self, tmp_path, monkeypatch, kind
+        self, tmp_path, kind
     ):
-        """Current exclusions refuse all source types before preparation."""
+        """Current exclusions refuse all source types before preparation:
+        preparation would refuse the listed source with another error, and
+        nothing is published in its directory."""
         from yizkr.pipeline.document_state import DocumentRun
 
         wiki = Untouchable()
@@ -3377,11 +3379,6 @@ class TestStepRegister:
         orchestrator.exclusions = ExclusionList.parse(
             sha1(source.read_bytes())
         )
-        monkeypatch.setattr(
-            orchestrator,
-            "_record_container_inventory",
-            lambda *_args: pytest.fail("excluded source reached preparation"),
-        )
         with pytest.raises(ExcludedMedia):
             orchestrator._step_register(doc)
         assert wiki.asked == []
@@ -3389,18 +3386,15 @@ class TestStepRegister:
 
     @pytest.mark.parametrize("kind", ["png", "pdf", "pptx"])
     def test_a_source_changed_since_it_was_read_is_refused(
-        self, tmp_path, monkeypatch, kind
+        self, tmp_path, kind
     ):
+        """A source changed since discovery prepared it is refused before
+        the inventory discovery prepared is published in its directory."""
         wiki = Untouchable()
         orchestrator, _ = self.orchestrator(tmp_path, wiki)
         source = self.source_for_admission(orchestrator.folder, kind)
         (doc,) = orchestrator.documents()
         source.write_bytes(RESCAN)  # after the run read its SHA-1
-        monkeypatch.setattr(
-            orchestrator,
-            "_record_container_inventory",
-            lambda *_args: pytest.fail("changed source reached preparation"),
-        )
         with pytest.raises(RuntimeError, match="no longer has the bytes"):
             orchestrator._step_register(doc)
         assert wiki.asked == []

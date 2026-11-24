@@ -125,7 +125,7 @@ The pipeline neither writes nor reads `D/derived-media.json`. A directory that k
 
 An independently read image can become an excerpt document when it has a transcribed or illegible document page. Images that are wholly blank or not document pages, excluded images and images already represented by corpus files do not become excerpts. Repeated placements share the bound media owner while retaining every occurrence. The container keeps its own text; the image's claims cite its bound owner and source-part support. Excerpt extraction and critique then produce their own `batch.json` and `critique.json`. Ambiguous body/notes or compiler/inner-source support makes extraction incomplete; any supported claims remain diagnostic and are not accepted for writing.
 
-Implementation: [typed preparation, reading and excerpt operations](../src/yizkr/pipeline/media_stages.py), [scheduling and publication](../src/yizkr/pipeline/scratch.py), [transcribers](../src/yizkr/pipeline/transcribe.py), [transcription record](../src/yizkr/pipeline/transcription_record.py) and [container readers](../src/yizkr/pipeline/containers.py).
+Implementation: [typed preparation, reading and excerpt operations](../src/yizkr/pipeline/media_stages.py), [scheduling and transcription publication](../src/yizkr/pipeline/scratch.py), [container inventory publication and reading outcomes](../src/yizkr/pipeline/container_lifecycle.py), [transcribers](../src/yizkr/pipeline/transcribe.py), [transcription record](../src/yizkr/pipeline/transcription_record.py) and [container readers](../src/yizkr/pipeline/containers.py).
 
 ### Interpretation context for scanned pages
 

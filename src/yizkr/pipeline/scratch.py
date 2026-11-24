@@ -121,7 +121,6 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import functools
-import hashlib
 import json
 import os
 import re
@@ -153,7 +152,6 @@ from yizkr.core.corpus import (
     ExclusionConfigError,
     ExclusionList,
     follow_decks,
-    is_excluded,
 )
 
 # the CLI's exit statuses (yizkr.core.exits), which the scratch commands
@@ -919,6 +917,12 @@ class ScratchDriver:
         # the never-ingest list. run() refuses to start without one:
         # an empty ExclusionList is an explicit configuration, None is none.
         self.exclusions = exclusions
+        from yizkr.pipeline.container_lifecycle import ContainerPreparations
+
+        # each document's prepared container, kept for the life of the
+        # driver, and the never-ingest predicate, which reads the list
+        # above as it stands at each call (_gather_embedded replaces it)
+        self.containers = ContainerPreparations(lambda: self.exclusions)
         self.slide_vision = dict(slide_vision or {})
         for owner, selection in self.slide_vision.items():
             ArtifactRef(sha1=owner)
@@ -1639,7 +1643,9 @@ class ScratchDriver:
         doc.state.content_sha1 = doc.sha1
         doc.state.file = str(doc.source)
         if doc.kind == "presentation":
-            self._record_container_inventory(doc)
+            from yizkr.pipeline.container_lifecycle import publish_inventory
+
+            publish_inventory(doc, self.containers)
         self._prepared.add(doc.dir)
 
     # -- refreshes ------------------------------------------------------------
@@ -2439,7 +2445,7 @@ class ScratchDriver:
         return docs
 
     def _check_container_owners(self, docs: Sequence[DocumentRun]) -> None:
-        validate_source_owners(docs, self._container_preparation)
+        validate_source_owners(docs, self.containers.container_preparation)
         self._index_interpretation_parents(docs)
 
     def _index_interpretation_parents(
@@ -2454,7 +2460,7 @@ class ScratchDriver:
                 continue
             seen.add(doc.sha1)
             try:
-                projection = self._container_sources(doc)
+                projection = self.containers.container_sources(doc)
             except Exception:
                 # A preparation failure supplies no verified correspondence.
                 continue
@@ -2488,7 +2494,7 @@ class ScratchDriver:
         containers, unavailable = [], []
         for parent in parents:
             try:
-                sources = self._container_sources(parent)
+                sources = self.containers.container_sources(parent)
             except Exception:
                 sources = None
             if sources is None:
@@ -2550,8 +2556,9 @@ class ScratchDriver:
         hashed by corpus.follow_decks, the one function the single-file
         steps and the transcription import ask too, so every path asks the
         list a run asks. This comes before any container's images are
-        read, so the reader (`_excluded_image`) and the write's registrar,
-        which both ask this list, keep those bytes out of every deck and
+        read, so the reader (`ContainerPreparations.excluded`) and the
+        write's registrar, which both ask this list as it then stands,
+        keep those bytes out of every deck and
         PDF that holds them as they are, and out of the run as a file of
         their own (ADR-0008). A deck the list excludes is asked too: its
         members are hashed in memory and nothing of it is kept, so listing
@@ -2747,7 +2754,7 @@ class ScratchDriver:
                     fallback_language=self.fallback_language,
                 )
                 prepared = (
-                    self._media_preparation(doc)
+                    self.containers.preparation(doc)
                     if doc.kind != "text"
                     else None
                 )
@@ -3025,15 +3032,17 @@ class ScratchDriver:
         `_step_register` registers a document that is not an excerpt. The
         derived media are kept by the document's SHA-1 too
         (registered_media), for the write of its claims."""
+        from yizkr.pipeline.container_lifecycle import publish_inventory
+
         registrar.check_media_source(doc.source, sha1=doc.sha1)
-        self._record_container_inventory(doc)
+        publish_inventory(doc, self.containers)
         artifact_type = self.artifact_type
         pages = 0
         if doc.kind == "presentation":
             # a deck is a compound artifact: its slides ARE the page
             # fragments (ADR-0008), so claim locators point into slides
             artifact_type = "presentation"
-            pages = self._presentation(doc).slide_count
+            pages = self.containers.presentation(doc).slide_count
         elif doc.kind == "gedcom":
             artifact_type = "genealogical_report"
         result = registrar.register_artifact(
@@ -3046,7 +3055,7 @@ class ScratchDriver:
             pages=pages,
             sha1=doc.sha1,
         )
-        sources = self._container_sources(doc)
+        sources = self.containers.container_sources(doc)
         derived: dict[str, str] = {}
         if sources is not None:
             derived = registrar.register_container_sources(
@@ -3074,55 +3083,8 @@ class ScratchDriver:
         return self._registered_media
 
     def _container_sources(self, doc: DocumentRun):
-        """Current eligible sources, occurrences and readings; no publication.
-
-        All consumers observe the same original-source preparation and current
-        policy.
-        """
-        from yizkr.pipeline.container_sources import project_sources
-
-        prepared = self._container_preparation(doc)
-        if prepared is None:
-            return None
-        inventory, data = prepared
-        return project_sources(
-            inventory, doc.dir, data=data, excluded=self._excluded_image
-        )
-
-    def _media_preparation(self, doc: DocumentRun):
-        """Current deterministic preparation, shared by readers and reuse."""
-        from yizkr.pipeline.media_stages import (
-            PreparationRequest,
-            prepare_container,
-        )
-
-        if not hasattr(self, "_media_preparations"):
-            self._media_preparations = {}
-        key = (doc.dir, doc.sha1)
-        if key not in self._media_preparations:
-            self._media_preparations[key] = prepare_container(
-                PreparationRequest(
-                    source=doc.source,
-                    expected_artifact=ArtifactRef(sha1=doc.sha1),
-                    existing_directory=doc.dir,
-                    excluded=self._excluded_image,
-                )
-            )
-        return self._media_preparations[key]
-
-    def _presentation(self, doc: DocumentRun):
-        prepared = self._media_preparation(doc)
-        if prepared is None or prepared.presentation is None:
-            raise ValueError("source has no prepared presentation")
-        return prepared.presentation
-
-    def _container_preparation(self, doc: DocumentRun):
-        """Expose current preparation without publishing persisted views."""
-        prepared = self._media_preparation(doc)
-        if prepared is None:
-            return None
-        # Readers can add representations and outcomes to this preparation.
-        return prepared.inventory, prepared.data
+        """The document's source projection, as the write key reads it."""
+        return self.containers.container_sources(doc)
 
     def _slide_vision_request(
         self, doc: DocumentRun, *, directory: Path | None = None
@@ -3157,9 +3119,9 @@ class ScratchDriver:
         try:
             return slide_vision_dependencies(
                 doc.source,
-                self._presentation(doc),
+                self.containers.presentation(doc),
                 request,
-                excluded=self._excluded_image,
+                excluded=self.containers.excluded,
             )
         except (OSError, ValueError, SlideRenderError) as exc:
             raise ScratchRefused(
@@ -3177,259 +3139,25 @@ class ScratchDriver:
         request = self._slide_vision_request(doc)
         if request is None:
             return
-        content = self._presentation(doc)
+        content = self.containers.presentation(doc)
+        excluded = self.containers.excluded
         request, _report = resolve_slide_vision(
-            doc.source, content, request, excluded=self._excluded_image
+            doc.source, content, request, excluded=excluded
         )
         if request is None:
             return
         product = inspect_slide_renders(
             doc.source,
             request.directory,
-            excluded=self._excluded_image,
+            excluded=excluded,
             settings=request.settings,
             prepared=content,
         )
         if product is None:
             raise ValueError("slide render product is missing or stale")
         restore_slide_render_representations(
-            content, product, request.directory, excluded=self._excluded_image
+            content, product, request.directory, excluded=excluded
         )
-
-    def _record_container_inventory(self, doc: DocumentRun) -> None:
-        """Publish source correspondence while retaining human products."""
-        from yizkr.pipeline.container_inventory import keep_inventory
-
-        prepared = self._container_preparation(doc)
-        if prepared is not None:
-            inventory, data = prepared
-            keep_inventory(inventory, data, doc.dir)
-
-    def _pdf_inventory(self, doc: DocumentRun):
-        prepared = self._media_preparation(doc)
-        if prepared is None or prepared.pdf is None:
-            raise ValueError("source has no prepared PDF")
-        return prepared.pdf
-
-    def _record_pdf_inventory(self, doc: DocumentRun) -> None:
-        """Publish PDF source parts before choosing or reusing a reading.
-
-        Missing metadata and damaged representations are rebuilt without
-        invalidating an unchanged transcription, proposal or review.
-        """
-        from yizkr.pipeline.container_inventory import (
-            keep_inventory,
-            read_inventory,
-        )
-        from yizkr.pipeline.textlayer import PdfExclusionError, is_pdf_input
-
-        if is_pdf_input(doc.source):
-            prepared = self._pdf_inventory(doc)
-            previous = read_inventory(doc.dir)
-            if (
-                previous is not None
-                and previous.source == prepared.inventory.source
-            ):
-                parts = {part.id: part for part in prepared.inventory.parts}
-                for old in previous.parts:
-                    part = parts.get(old.id)
-                    if part is None or part.kind not in {
-                        "container_source",
-                        "page_body",
-                    }:
-                        continue
-                    try:
-                        prepared.guard(
-                            {part.locator.position}
-                            if part.kind == "page_body"
-                            else None
-                        )
-                    except PdfExclusionError:
-                        continue
-                    for representation in old.representations:
-                        if (
-                            representation.file is not None
-                            and representation.method
-                            in {
-                                "rendered-pdf-v1",
-                                "pdfium-page-render",
-                                "pdf-page-image",
-                            }
-                            and representation.eligibility.state == "allowed"
-                            and not any(
-                                current.method == representation.method
-                                for current in part.representations
-                            )
-                        ):
-                            part.representations.append(representation)
-                            prepared.data[representation.byte_object.sha1] = (
-                                doc.dir / representation.file
-                            ).read_bytes()
-            keep_inventory(prepared.inventory, prepared.data, doc.dir)
-
-    def _restore_pdf_representations(self, doc: DocumentRun, transcription):
-        """Recreate missing prepared bytes without making another model call.
-
-        The caller has validated the saved reading. These are current source
-        representations, not proof of an unrecorded historical model payload.
-        """
-        from tempfile import TemporaryDirectory
-
-        from yizkr.pipeline.textlayer import prepare_pdf_vision, read_pages
-
-        prepared = self._pdf_inventory(doc)
-        if transcription.input_representation == "rendered-pdf-v1":
-            if any(
-                rep.method == "rendered-pdf-v1"
-                for part in prepared.inventory.parts
-                for rep in part.representations
-            ):
-                return
-            with TemporaryDirectory(
-                prefix="yizkr-pdf-inventory-"
-            ) as directory:
-                prepare_pdf_vision(
-                    doc.source,
-                    Path(directory),
-                    self._excluded_image,
-                    inventory=prepared,
-                )
-        else:
-            needed = {
-                page.page
-                for page in transcription.pages or ()
-                if page.provenance.method == "vision"
-            }
-            if not any(
-                not prepared.page_parts[number].representations
-                for number in needed
-            ):
-                return
-            with TemporaryDirectory(
-                prefix="yizkr-pdf-inventory-"
-            ) as directory:
-                read_pages(
-                    doc.source,
-                    Path(directory),
-                    excluded=self._excluded_image,
-                    inventory=prepared,
-                )
-        self._record_pdf_inventory(doc)
-
-    def _keep_inventory_readings(
-        self, doc: DocumentRun, reading=None, transcription=None
-    ) -> None:
-        """Record actual image outcomes beside the structural inventory.
-
-        Native text belongs to the producer. Image success requires a
-        validated reading of those bytes, including an explicitly empty
-        reading. Reconstructing missing inventory can adopt an existing
-        valid reading without making another model call.
-        """
-        from yizkr.pipeline.container_inventory import (
-            ReadingOutcome,
-            keep_inventory,
-        )
-        from yizkr.pipeline.presentation import derived_transcription
-        from yizkr.pipeline.transcribe import Transcription
-
-        if transcription is not None and doc.kind == PDF:
-            self._restore_pdf_representations(doc, transcription)
-        if (
-            transcription is not None
-            and self._slide_vision_request(doc) is not None
-        ):
-            self._restore_slide_representations(doc)
-        prepared = self._container_preparation(doc)
-        if prepared is None:
-            return
-        inventory, data = prepared
-        if inventory.source.sha1 != doc.sha1:
-            raise ValueError("container inventory is missing or invalid")
-        observed = (
-            {image.sha1: image for image in reading.images}
-            if reading is not None
-            else {}
-        )
-        for part in inventory.parts:
-            binding = part.owner_binding
-            if (
-                part.kind != "embedded_resource"
-                or binding is None
-                or part.ownership_issue is not None
-                or part.eligibility.state != "allowed"
-                or part.reading.state == "unsupported"
-            ):
-                continue
-            sha1 = binding.artifact.sha1
-            image = observed.get(sha1)
-            if image is not None and image.failure is not None:
-                part.reading = ReadingOutcome(
-                    state="failed", reason=image.failure
-                )
-                continue
-            path = derived_transcription(doc.dir, sha1)
-            if not path.is_file() or path.is_symlink():
-                if part.reading.state != "failed":
-                    part.reading = ReadingOutcome(state="unattempted")
-                continue
-            failure = self._image_failure(
-                doc, sha1, verify_product=image is None
-            )
-            if failure is not None:
-                part.reading = ReadingOutcome(state="failed", reason=failure)
-                continue
-            reading_data = path.read_bytes()
-            image_transcription = Transcription.model_validate_json(
-                reading_data
-            )
-            record = image_transcription.record()
-            empty = not any(page.text.strip() for page in record.pages)
-            part.reading = ReadingOutcome(
-                state="read",
-                method=image_transcription.engine,
-                empty=empty,
-                product=path.relative_to(doc.dir).as_posix(),
-                product_sha256=hashlib.sha256(reading_data).hexdigest(),
-            )
-        if transcription is not None:
-            pages = {page.page: page for page in transcription.pages or ()}
-            digest = hashlib.sha256(doc.transcription.read_bytes()).hexdigest()
-            for part in inventory.parts:
-                if (
-                    part.kind == "container_source"
-                    and transcription.input_representation == "rendered-pdf-v1"
-                ):
-                    part.reading = ReadingOutcome(
-                        state="read",
-                        method=transcription.engine,
-                        empty=not any(
-                            page.text.strip()
-                            for page in transcription.record().pages
-                        ),
-                        product=doc.transcription.name,
-                        product_sha256=digest,
-                    )
-                if part.kind not in {"page_body", "slide_body"}:
-                    continue
-                page = pages.get(part.locator.position)
-                if part.kind == "slide_body" and (
-                    page is None or page.provenance.method != "vision"
-                ):
-                    continue
-                if page is not None:
-                    part.reading = ReadingOutcome(
-                        state="read",
-                        method=page.provenance.engine,
-                        empty=not transcription.text[
-                            page.start : page.body_end
-                            if page.body_end is not None
-                            else page.end
-                        ].strip(),
-                        product=doc.transcription.name,
-                        product_sha256=digest,
-                    )
-        keep_inventory(inventory, data, doc.dir)
 
     def _step_batch(self, doc: DocumentRun) -> ClaimBatch:
         """Dispatch the batch producer declared by the document's plan."""
@@ -3495,10 +3223,14 @@ class ScratchDriver:
         memo = (doc.sha1, doc.transcription.name)
         if memo in self._views:
             return self._views[memo]
+        from yizkr.pipeline.container_lifecycle import (
+            publish_pdf_inventory,
+            record_reading_outcomes,
+        )
         from yizkr.pipeline.textlayer import is_pdf_input
 
         if doc.transcription.is_file():
-            self._record_pdf_inventory(doc)
+            publish_pdf_inventory(doc, self.containers)
         checked = self._route(doc) in CHECKED_ROUTES or is_pdf_input(
             doc.source
         )
@@ -3538,8 +3270,15 @@ class ScratchDriver:
                     volatile=TRANSCRIPTION_VOLATILE,
                 ),
             )
-        if self._container_preparation(doc) is not None:
-            self._keep_inventory_readings(doc, transcription=transcription)
+        if self.containers.container_preparation(doc) is not None:
+            record_reading_outcomes(
+                doc,
+                self.containers,
+                transcription=transcription,
+                restore_slides=functools.partial(
+                    self._restore_slide_representations, doc
+                ),
+            )
         self._views[memo] = transcription
         return transcription
 
@@ -3549,7 +3288,7 @@ class ScratchDriver:
 
         if isinstance(doc, ExcerptRun):
             return self._locate_excerpt(doc, transcription)
-        sources = self._container_sources(doc)
+        sources = self.containers.container_sources(doc)
         if sources is None:
             return transcription
         return transcription.model_copy(
@@ -3638,9 +3377,9 @@ class ScratchDriver:
                     failure = slide_vision_reading_failure(
                         doc.source,
                         transcription,
-                        self._presentation(doc),
+                        self.containers.presentation(doc),
                         request,
-                        excluded=self._excluded_image,
+                        excluded=self.containers.excluded,
                     )
                 except (OSError, ValueError, SlideRenderError) as exc:
                     raise ScratchRefused(
@@ -3660,8 +3399,8 @@ class ScratchDriver:
             failure = pdf_reading_failure(
                 doc.source,
                 transcription,
-                self._excluded_image,
-                inventory=self._pdf_inventory(doc),
+                self.containers.excluded,
+                inventory=self.containers.pdf_inventory(doc),
             )
             if failure is not None:
                 return failure
@@ -3670,7 +3409,7 @@ class ScratchDriver:
                 # quality checks; it still needs source admission above.
                 return None
         if not is_paged(transcription):
-            sources = self._container_sources(doc)
+            sources = self.containers.container_sources(doc)
             if sources is not None and any(
                 source.readable for source in sources.sources.values()
             ):
@@ -3723,7 +3462,7 @@ class ScratchDriver:
         )
         if doc.kind == "presentation" and transcription.pages is None:
             return "it has no pages, one per slide"
-        projection = self._container_sources(doc)
+        projection = self.containers.container_sources(doc)
         if projection is None:
             return None if not images else "reading has no container inventory"
         if doc.kind == "presentation" and any(
@@ -3747,7 +3486,7 @@ class ScratchDriver:
                 return "the reading's image-source page routes have changed"
         for sha1 in images:
             source = projection.sources.get(sha1)
-            if source is None or self._excluded_image(sha1, source.names):
+            if source is None or self.containers.excluded(sha1, source.names):
                 return (
                     f"image {sha1[:12]} has no eligible bound source in "
                     "the current inventory"
@@ -3788,7 +3527,7 @@ class ScratchDriver:
         from yizkr.pipeline.media_stages import verify_image_reading
 
         return verify_image_reading(
-            self._container_sources(doc),
+            self.containers.container_sources(doc),
             sha1,
             doc.dir,
             verify_product=verify_product,
@@ -3803,18 +3542,23 @@ class ScratchDriver:
 
     def _step_transcribe(self, doc: DocumentRun):
         """Read through the shared operation, then publish its products."""
+        from yizkr.pipeline.container_lifecycle import (
+            keep_image_readings,
+            publish_pdf_inventory,
+            record_reading_outcomes,
+        )
         from yizkr.pipeline.textlayer import is_pdf_input
         from yizkr.pipeline.transcribe import is_paged
 
         def transcribe():
-            self._record_pdf_inventory(doc)
+            publish_pdf_inventory(doc, self.containers)
             result = self._transcribe(doc, self._route(doc))
             try:
                 transcription = result.require_complete()
                 check_cancelled()
-                self._record_pdf_inventory(doc)
+                publish_pdf_inventory(doc, self.containers)
                 if result.products is not None:
-                    self._keep_reading(doc, result.products)
+                    keep_image_readings(doc, self.containers, result.products)
                 resolution = result.resolution
                 doc.state.detail = (doc.state.detail or {}) | {
                     "language": {
@@ -3827,8 +3571,13 @@ class ScratchDriver:
                     doc.transcription, transcription.model_dump_json(indent=2)
                 )
                 if is_pdf_input(doc.source):
-                    self._keep_inventory_readings(
-                        doc, transcription=transcription
+                    record_reading_outcomes(
+                        doc,
+                        self.containers,
+                        transcription=transcription,
+                        restore_slides=functools.partial(
+                            self._restore_slide_representations, doc
+                        ),
                     )
                 if is_paged(transcription) and changed:
                     self.log(
@@ -3887,8 +3636,8 @@ class ScratchDriver:
                     expected_artifact=ArtifactRef(sha1=doc.sha1),
                     language=self.language,
                     fallback_language=self.fallback_language,
-                    prepared=self._media_preparation(doc),
-                    excluded=self._excluded_image,
+                    prepared=self.containers.preparation(doc),
+                    excluded=self.containers.excluded,
                     slide_vision=self._slide_vision_request(
                         doc, directory=slide_vision_directory
                     ),
@@ -3900,8 +3649,8 @@ class ScratchDriver:
         if method == "correction" and is_pdf_input(doc.source):
             check_pdf_vision(
                 doc.source,
-                self._excluded_image,
-                inventory=self._pdf_inventory(doc),
+                self.containers.excluded,
+                inventory=self.containers.pdf_inventory(doc),
             )
         result = read_text(
             TextReadRequest(
@@ -3919,40 +3668,6 @@ class ScratchDriver:
             resolution=result.resolution,
             dependencies=result.dependencies,
         )
-
-    def _excluded_image(self, sha1: str, names: Sequence[str] = ()) -> bool:
-        """Does the never-ingest list name an image a paged container
-        places on a page, by the SHA-1 of its bytes or by any of its
-        `names` (a deck's image's names in the archive, which its globs
-        match, as registration matches them)? Its SHA-1 is named too when
-        a glob names those bytes in any deck of the folder
-        (`_gather_embedded`), so a PDF's image is asked of a deck's names
-        for its bytes. Such an image is never read on its own, kept as the
-        container's reading of it, or extracted."""
-        return self.exclusions is not None and any(
-            is_excluded(self.exclusions, name=name, sha1=sha1)
-            for name in names or [None]
-        )
-
-    def _keep_reading(self, doc: DocumentRun, reading) -> None:
-        """Publish image readings beside the source inventory.
-
-        Reading paths retain their supported compatibility names. Source and
-        placement authority is the common inventory; no image-only record is
-        reconstructed from transcription markers.
-        """
-        from yizkr.pipeline.presentation import derived_transcription
-
-        self._record_container_inventory(doc)
-        for image in reading.images:
-            path = derived_transcription(doc.dir, image.sha1)
-            if path.exists() and self._image_failure(doc, image.sha1):
-                _supersede(path)
-            if image.transcription is not None:
-                _write_view(
-                    path, image.transcription.model_dump_json(indent=2)
-                )
-        self._keep_inventory_readings(doc, reading)
 
     def _step_extract(self, doc: DocumentRun, transcription) -> ClaimBatch:
         from yizkr.pipeline import text_stages
@@ -4124,7 +3839,7 @@ class ScratchDriver:
         is one excerpt, with each of them among its containers. Reads files
         only, and writes none."""
         try:
-            projection = self._container_sources(doc)
+            projection = self.containers.container_sources(doc)
         except Exception:
             # A failed original-source preparation is reported by the
             # document's stage. It cannot authorize any excerpt discovery.

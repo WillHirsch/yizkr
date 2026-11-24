@@ -1455,7 +1455,7 @@ def test_an_excerpts_write_raises_its_pdfs_flags_on_the_excerpt(tmp_path):
         common_record(pdf.dir, ArtifactRef(sha1=pdf.sha1), repeats=1),
         pdf.dir,
     )
-    orchestrator._container_sources = lambda doc: sources
+    orchestrator.containers.container_sources = lambda doc: sources
     (medium,) = sources.sources.values()
     excerpt = ExcerptRun(sha1(IMAGE), pdf, medium, tmp_path / "state")
     # the PDF's file and the image's label, each on an item with no hash
