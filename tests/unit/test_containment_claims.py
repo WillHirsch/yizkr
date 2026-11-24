@@ -46,8 +46,10 @@ DATING = {
     "latest_start_date": 1938,
     "earliest_end_date": 1956,
 }
-# the period's end that each of a period's own bounds dates, which a claim
-# carrying that bound carries too (docs/LIFE_EVENTS.md, "Dates and bounds")
+# the period's end that each of a period's own bounds dates: each case
+# gives a bound that end, since a claim with neither a start_time nor an
+# end_time qualifier takes no period bound (docs/LIFE_EVENTS.md, "Dates
+# and bounds")
 BOUNDED_END = {
     "latest_start_date": "start_time",
     "earliest_end_date": "end_time",

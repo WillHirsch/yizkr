@@ -101,19 +101,22 @@ def claim(
     }
 
 
-def codes(*claims: dict) -> list[str]:
-    """The reason codes validation gives the claims' problems."""
-    return reject_reasons(
-        validate_against_manifest(
-            ClaimBatch.model_validate(
-                {
-                    "extraction_run": RUN,
-                    "claims": list(claims),
-                    "entities": ENTITIES,
-                }
-            )
+def problems(*claims: dict) -> list[str]:
+    """The problems validation finds in a batch of the claims."""
+    return validate_against_manifest(
+        ClaimBatch.model_validate(
+            {
+                "extraction_run": RUN,
+                "claims": list(claims),
+                "entities": ENTITIES,
+            }
         )
     )
+
+
+def codes(*claims: dict) -> list[str]:
+    """The reason codes validation gives the claims' problems."""
+    return reject_reasons(problems(*claims))
 
 
 def imprisonment_start(*qualifiers: tuple[str, dict]) -> dict:
@@ -144,6 +147,21 @@ class TestAnEntitysOwnStartOrEnd:
                 ("latest_start_date", when(1939, 9, 5)),
             )
         ) == [PERIOD_BOUND]
+
+    def test_each_stray_bound_is_a_problem_at_its_own_qualifier(self):
+        found = problems(
+            imprisonment_start(
+                ("latest_start_date", when(1939, 9, 5)),
+                ("earliest_date", when(1939, 9, 1)),
+                ("earliest_end_date", when(1939, 10, 1)),
+            )
+        )
+        # each problem begins with the location of what it is about
+        assert [problem.partition(": ")[0] for problem in found] == [
+            "claims[0].qualifiers[0]",
+            "claims[0].qualifiers[2]",
+        ]
+        assert reject_reasons(found) == [PERIOD_BOUND]
 
     def test_its_earliest_and_latest_date_pass(self):
         assert (
