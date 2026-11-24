@@ -177,6 +177,13 @@ REQUIRED_CASES = (
         "test_graph_projection",
         "test_recorded_graph_projection_replays_and_refuses_stale_capture",
     ),
+    # Its first increment needs a stack with no entity but its registered
+    # source, so it has a stack of its own.
+    Case(
+        "clusters",
+        "test_cluster_proposals",
+        "test_cluster_choices_reach_review_application_and_graph_origins",
+    ),
     # It asserts over its whole stack, so it has a stack of its own.
     Case(
         "queries",
