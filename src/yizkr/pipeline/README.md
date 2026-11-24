@@ -81,7 +81,7 @@ Run products may contain private source material. Keep them in ignored `var/` or
 
 ## Corpus clustering (`clustering.py`, the scratch run's identity map)
 
-Corpus clustering proposes correspondence between source mentions and emits a reproducible identity-map snapshot. Labels and a map hash are not durable entity identities. Blocking, constraints and adjudication operate on recorded source-derived context; explicit graph matching records its projection separately. The target is that this clustering is the one identity-proposal mechanism for every increment: it clusters the increment's mentions with those of the sources already applied, accepted assignments are its fixed points, and graph matching only supplies candidate evidence ([statement](../../../docs/MENTIONS_AND_MATCHING.md#one-proposal-mechanism-for-every-increment); [#835](https://github.com/WillHirsch/yizkr/issues/835), [#906](https://github.com/WillHirsch/yizkr/issues/906), [#944](https://github.com/WillHirsch/yizkr/issues/944)).
+Corpus clustering proposes correspondence between source mentions and emits a reproducible identity-map snapshot. Labels and a map hash are not durable entity identities. Blocking, constraints and adjudication operate on recorded source-derived context; explicit graph matching records its projection separately. `cluster_proposals` turns the map's clusters into explicit identity-review proposals, with the map as their origin ([proposals from clustering](../../../docs/IDENTITY_REVIEW.md#proposals-from-clustering)). The target is that this clustering is the one identity-proposal mechanism for every increment: it clusters the increment's mentions with those of the sources already applied, accepted assignments are its fixed points, and graph matching only supplies candidate evidence ([statement](../../../docs/MENTIONS_AND_MATCHING.md#one-proposal-mechanism-for-every-increment); [#906](https://github.com/WillHirsch/yizkr/issues/906), [#944](https://github.com/WillHirsch/yizkr/issues/944)).
 
 ```mermaid
 flowchart LR
@@ -93,7 +93,7 @@ flowchart LR
     snapshot --> writer["Guarded mapped writing"]
 ```
 
-The map writer checks complete mention coverage, verifies durable bindings and preserves its one-map-per-generation restriction. As policy, it writes disposable instances only, until it is retired ([#893](https://github.com/WillHirsch/yizkr/issues/893)); for retained data the map is a source of proposals for durable identity review ([#835](https://github.com/WillHirsch/yizkr/issues/835)). The [durable identity APIs](../../../docs/IDENTITY_REVIEW.md) provide reviewed assignments, recorded graph matching and protected additions. Identity decisions and historical-claim decisions remain distinct. Unsupported correction, merge and split refuse rather than guessing correspondence.
+The map writer checks complete mention coverage, verifies durable bindings and preserves its one-map-per-generation restriction. As policy, it writes disposable instances only, until it is retired ([#893](https://github.com/WillHirsch/yizkr/issues/893)); for retained data the map is a source of proposals for durable identity review (`cluster_proposals`). The [durable identity APIs](../../../docs/IDENTITY_REVIEW.md) provide reviewed assignments, recorded graph matching and protected additions. Identity decisions and historical-claim decisions remain distinct. Unsupported correction, merge and split refuse rather than guessing correspondence.
 
 ## Individual stage and review commands
 

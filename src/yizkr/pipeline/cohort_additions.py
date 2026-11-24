@@ -3,6 +3,11 @@
 A saved graph or matching product is advice. Application reacquires current
 source correspondence and candidate evidence while the server excludes other
 writers. Historical claims retain their separate review and support receipts.
+
+A choice may come from an identity map (``cluster_proposals``): its
+``proposal_origin`` then names ``MAP_PROPOSAL`` and records the map's method
+and cluster for the mention, and its candidates say whether an assigned
+mention among the clustered sources represents their entity.
 """
 
 from __future__ import annotations
@@ -11,6 +16,7 @@ import json
 from collections.abc import Callable, Collection
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Any
 
 from yizkr.core.mutation_guard import protected_mutation
 from yizkr.core.reviewed_creation import creation_review_evidence
@@ -20,6 +26,15 @@ from yizkr.pipeline.assignment_stages import (
     AssignmentAcceptance,
     accept_reviewed_assignments,
     assignment_review_scope,
+)
+from yizkr.pipeline.clustering import (
+    ADJUDICATED,
+    AMBIGUOUS,
+    CONFIDENT,
+    CONFIDENT_COMPONENT,
+    CONFLICTING,
+    SINGLETON,
+    UNCLUSTERED,
 )
 from yizkr.pipeline.cohort_context import (
     CohortCandidates,
@@ -39,6 +54,36 @@ from yizkr.pipeline.source_bindings import unique_source_qids
 
 _EVIDENCE = "cohort_candidates"
 _METHODS = {"assign": "reviewed_assignment", "new_entity": "reviewed_creation"}
+# the operation a choice derived from an identity map names in its origin
+MAP_PROPOSAL = "identity-map-proposal"
+# the methods an identity map gives a mention (clustering), which a derived
+# choice's origin records
+MAP_METHODS = frozenset(
+    {
+        CONFIDENT,
+        CONFIDENT_COMPONENT,
+        ADJUDICATED,
+        AMBIGUOUS,
+        CONFLICTING,
+        SINGLETON,
+        UNCLUSTERED,
+    }
+)
+# whether an assigned mention among the clustered sources represents a
+# derived choice's candidate; null where the candidate was not compared
+# with the map
+REPRESENTED = "represented_in_map"
+
+
+def map_origin(origin: dict[str, Any]) -> dict[str, Any] | None:
+    """The identity-map origin a choice was derived from, if any: the
+    origin its caller gave, which preparation keeps as ``proposal_origin``."""
+    proposal = origin.get("proposal_origin", origin)
+    if isinstance(proposal, dict) and proposal.get("operation") == (
+        MAP_PROPOSAL
+    ):
+        return proposal
+    return None
 
 
 @dataclass(frozen=True)
@@ -74,7 +119,7 @@ def _creation_payload(client, label, mention_id):
     return item.get_json()
 
 
-def _candidate_basis(context, match, own_proposal):
+def _candidate_basis(context, match, own_proposal, represented=None):
     candidates = []
     for candidate in match.candidates:
         # An exact creation's own result is expected on interrupted retries.
@@ -85,20 +130,21 @@ def _candidate_basis(context, match, own_proposal):
             for c in candidate.creations
         ):
             continue
-        candidates.append(
-            {
-                "qid": candidate.qid,
-                "binding": (
-                    candidate.binding.model_dump(mode="json")
-                    if candidate.binding
-                    else None
-                ),
-                "facts": list(candidate.current_facts),
-                "creation_contexts": sorted(
-                    c.authorization.digest for c in candidate.creations
-                ),
-            }
-        )
+        entry = {
+            "qid": candidate.qid,
+            "binding": (
+                candidate.binding.model_dump(mode="json")
+                if candidate.binding
+                else None
+            ),
+            "facts": list(candidate.current_facts),
+            "creation_contexts": sorted(
+                c.authorization.digest for c in candidate.creations
+            ),
+        }
+        if represented is not None:
+            entry[REPRESENTED] = represented(candidate)
+        candidates.append(entry)
     pending = [
         c.authorization.digest
         for c in match.pending
@@ -113,17 +159,68 @@ def _candidate_basis(context, match, own_proposal):
     }
 
 
+def _marks(origin, prior, represented):
+    """How the candidates of a choice derived from an identity map are
+    marked (REPRESENTED): against ``represented`` when given, or else as
+    the stored basis marks the same candidate. None for any other choice,
+    whose candidates carry no mark."""
+    if map_origin(origin) is None:
+        return None
+    if represented is not None:
+        return lambda candidate: (
+            candidate.binding is not None
+            and candidate.binding.entity_id in represented
+        )
+    stored = {
+        (entry["qid"], (entry["binding"] or {}).get("entity_id")): entry.get(
+            REPRESENTED
+        )
+        for entry in (
+            prior.basis.get("evidence", {})
+            .get(_EVIDENCE, {})
+            .get("candidates", ())
+            if prior is not None
+            else ()
+        )
+    }
+    return lambda candidate: stored.get(
+        (
+            candidate.qid,
+            candidate.binding.entity_id if candidate.binding else None,
+        )
+    )
+
+
 def prepare_cohort_additions(
-    store: ReviewStore, request: ReviewRequest, registry: CreationRegistry
+    store: ReviewStore,
+    request: ReviewRequest,
+    registry: CreationRegistry,
+    *,
+    represented: Collection[str] | None = None,
 ) -> PreparedCohort:
     """Refresh explicit choices with current, scoped graph decision material.
 
-    ``assign`` and ``new_entity`` are explicit human choices, never inferred
-    from an empty matcher result. Existing same/different review context is
-    preserved. Display renames, unrelated graph edits and previously accepted
-    identities do not revoke unchanged source decisions. This read-only graph
-    capture is repeated inside the enforced application boundary.
+    ``assign`` and ``new_entity`` are explicit choices, never inferred from
+    an empty matcher result: a caller or an identity map supplies them.
+    Existing same/different review context is preserved. Display renames,
+    unrelated graph edits and previously accepted identities do not revoke
+    unchanged source decisions. This read-only graph capture is repeated
+    inside the enforced application boundary.
+
+    ``represented`` names the entities that an assigned mention among the
+    clustered sources represents. Given, each candidate of a choice derived
+    from an identity map (``map_origin``) is marked with whether its entity
+    is among them. Without it, such a candidate keeps the mark its choice's
+    stored basis gives it, so a repeated preparation, including the one
+    inside application, leaves an unchanged basis unchanged; a candidate
+    the stored basis lacks is marked null. Other choices are not marked. A
+    stored choice that the request supplies by the other route keeps its
+    stored origin and so its marks: an explicit choice an identity map
+    also gives is kept as stored, with the evidence its caller gave, and a
+    derived choice supplied explicitly takes the caller's evidence.
     """
+    if represented is not None:
+        represented = frozenset(represented)
     context = capture_cohort_context(registry)
     targets = {b.entity_id: b for b in request.current_targets}
     for registered in context.projection.bindings.values():
@@ -167,7 +264,26 @@ def prepare_cohort_additions(
             )
     for proposal in request.proposals:
         scope = [observed.mentions[key.key].id for key in proposal.mentions]
-        choices[_scope(proposal, scope)] = proposal
+        key = _scope(proposal, scope)
+        stored = old.get(key)
+        if (
+            stored is not None
+            and stored.origin.get("method") in _METHODS.values()
+            and (map_origin(stored.origin) is None)
+            != (map_origin(proposal.origin) is None)
+        ):
+            # A stored choice supplied again by the other route keeps its
+            # stored origin and with it whether its candidates are marked,
+            # so an unchanged basis and its decision stay current. A
+            # derivation adds nothing to a stored explicit choice, which is
+            # kept whole with the evidence its caller gave; an explicit
+            # choice brings its caller's evidence to a stored derived one.
+            proposal = (
+                choices[key]
+                if map_origin(proposal.origin) is not None
+                else proposal.model_copy(update={"origin": stored.origin})
+            )
+        choices[key] = proposal
         if proposal.target is not None:
             previous.setdefault(proposal.mentions[0].key, set()).add(
                 proposal.target.qid
@@ -199,6 +315,7 @@ def prepare_cohort_additions(
                 prior.id
                 if prior and proposal.operation == "new_entity"
                 else None,
+                _marks(proposal.origin, prior, represented),
             )
         evidence[_EVIDENCE] = graph_basis
         if proposal.operation == "new_entity":
