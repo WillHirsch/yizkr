@@ -397,6 +397,9 @@ def test_a_conflict_is_reported_beside_a_member_not_supplied(tmp_path):
             registry,
             increment=[third.artifact_sha1],
         )
+        # With only the two assigned members supplied, no member is left
+        # to hold back.
+        assigned_only = derive(store, data, (birth, naturalisation), registry)
         third_id = mention_id(store, third)
     (cluster,) = {row["cluster"] for row in data["mentions"].values()}
     # The supplied members already show the cluster's two entities; the
@@ -406,6 +409,14 @@ def test_a_conflict_is_reported_beside_a_member_not_supplied(tmp_path):
     assert derived.report.conflicts == {cluster: ("a" * 32, "b" * 32)}
     assert derived.report.unresolved == {cluster: (fourth.artifact_sha1,)}
     assert derived.report.counts["conflicting_clusters"] == 1
+    assert assigned_only.request.proposals == ()
+    assert assigned_only.report.conflicts == {cluster: ("a" * 32, "b" * 32)}
+    assert assigned_only.report.unresolved == {}
+    assert assigned_only.report.unsupplied == tuple(
+        sorted((third.artifact_sha1, fourth.artifact_sha1))
+    )
+    assert assigned_only.report.counts["conflicting_clusters"] == 1
+    assert assigned_only.report.counts["unresolved_clusters"] == 0
 
 
 def test_a_source_the_map_does_not_hold_in_full_is_refused(tmp_path):
