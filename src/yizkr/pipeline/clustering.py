@@ -387,8 +387,10 @@ DEFAULTS = PACKAGE / "clustering.yaml"
 # the modules whose source makes the identity map: a map another source
 # made is made again, whatever VERSION says. The other yizkr modules that
 # this one and fingerprints.py import reach the key through the batches'
-# hashes: yizkr.claims parses the batches, document_state says what a hash
-# leaves out, and stages makes it. text_storage.py gives the form the
+# hashes (yizkr.claims parses the batches, document_state says what a hash
+# leaves out, and stages makes it) or decide nothing in the map
+# (core.file_writes writes it out whole, and run_provenance describes the
+# run that made it). text_storage.py gives the form the
 # instance keeps a term in (stored_term), which names are compared in, and
 # names.py which forms are appellations (appellations_of).
 CODE = (

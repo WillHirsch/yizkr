@@ -6,8 +6,8 @@ what every derived file was made from by content hash
 (yizkr.pipeline.document_state). These helpers give those files, the run
 directory (yizkr.pipeline.rundir) and the LLM cache
 (yizkr.pipeline.llmcache) one canonical serialisation to hash, and read
-their append-only logs. The writes that readers see whole or not at all
-are in yizkr.core.file_writes, which core shares.
+the run directory's append-only logs. The writes that readers see whole
+or not at all are in yizkr.core.file_writes, which core shares.
 
 Nothing here reads modification times: a file is current while its
 content hashes the same.
