@@ -171,8 +171,10 @@ _PROPERTY_KEY = re.compile(r"[a-z][a-z0-9_]{0,63}")
 # output token limit: the engine read the give-up from the call's stream
 # (yizkr.pipeline.llm.output_limit_reached) and raised OutputLimitReached.
 # The event's `api_error` (max_output_tokens) does not tell it alone: a
-# call that crashed or timed out after the CLI printed its notice names
-# that class too, and failed.
+# call that crashed or timed out after the CLI printed its notice, or whose
+# stream holds the notice and no answer at a zero exit (no result event,
+# or an empty result), names that class too, under another `error`, and
+# failed.
 OUTPUT_LIMIT_REACHED = "OutputLimitReached"
 
 # the routes whose transcriptions the transcription check judges, by the

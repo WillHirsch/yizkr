@@ -3128,7 +3128,19 @@ class ClaudeCodeClient:
         not a limit raises RuntimeError, whatever the exit status: neither
         is assembled and returned as the answer. A call whose stream
         reports the Read tool failing on one of its ``inputs`` raises
-        EngineToolError, after the version and tool checks."""
+        EngineToolError, after the version and tool checks. Last, a call
+        whose stream gives no answer (_assemble_stream) raises
+        RuntimeError. When the stream holds an API-error assistant event,
+        as one does that ends on the CLI's notice of an API error at a
+        zero exit with no result event or an empty result, the message
+        says that the stream ended on an API error with no answer, and
+        names the error's class only when the stream's last assistant
+        event gives it as a plain token (the ``api_error`` of
+        stream_report), never the notice's text;
+        otherwise, that the CLI returned no output. An API-error event's
+        notice is never taken for the answer, so the LLM cache keeps
+        nothing of such a call, an attempt's included, and the next call
+        asks again."""
         stdout = ""
         held = False
         try:
@@ -3211,6 +3223,13 @@ class ClaudeCodeClient:
             failures = tool_failures(stdout, inputs) if inputs else []
             if failures:
                 raise EngineToolError(failures, text)
+            if not text.strip() and any(map(is_api_error_event, events)):
+                error = stream_report(events).get("api_error")
+                raise RuntimeError(
+                    "claude CLI's stream ended on an API error"
+                    + (f" ({error})" if error else "")
+                    + " with no answer"
+                )
             if not text.strip():
                 raise RuntimeError("claude CLI returned no output")
             held = hold
@@ -3255,13 +3274,18 @@ class ClaudeCodeClient:
         An assistant event that stands for an API error (one with an
         `error` or marked is_api_error_message, such as a refusal frame
         the CLI prints before it asks again) carries the CLI's notice,
-        not the model's words, so its text is never part of the answer.
-        Falls back to the terminal result event, then to the API-error
-        events' text, then to raw stdout, if no other assistant event
-        holds any text.
+        not the model's words, so its text is never part of the answer,
+        nor a fallback for one. If no other assistant event holds any
+        text, the answer is the terminal result event's text, even when
+        that text is the notice: the result decides. Failing that, a
+        stream that holds an API-error event gives no answer (""), and
+        any other stream's raw stdout is the answer. So a stream that ends
+        on the CLI's notice, with no result event or one whose text is
+        empty, gives no answer, and its call fails (_attempt), as does one
+        whose model wrote text only before its last tool result.
         """
         pieces: list[str] = []
-        notices: list[str] = []
+        api_error = False
         spoke = False
         result_text: str | None = None
         for event in _stream_events(stdout):
@@ -3279,7 +3303,7 @@ class ClaudeCodeClient:
                     and isinstance(block.get("text"), str)
                 ]
                 if is_api_error_event(event):
-                    notices += texts
+                    api_error = True
                 elif texts:
                     spoke = True
                     pieces += texts
@@ -3298,9 +3322,7 @@ class ClaudeCodeClient:
             return "".join(pieces)
         if result_text:
             return result_text
-        if notices:
-            return "".join(notices)
-        return stdout
+        return "" if api_error else stdout
 
     @staticmethod
     def available(executable: str = "claude") -> bool:
