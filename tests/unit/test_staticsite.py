@@ -997,7 +997,7 @@ class TestSections:
 
 # the places and the sources of the places page's tests, by universe key,
 # with the QIDs they have here; a page of the marriage certificate stands
-# for the certificate in one statement's reference
+# for the certificate in two statements' references
 PLACE_QIDS = {
     "flaeckfeld": "Q501",
     "kreis-mockburg": "Q502",
@@ -1009,6 +1009,9 @@ PLACE_QIDS = {
     "brunnenring": "Q508",
     "moshausen": "Q509",
     "germany": "Q510",
+    "floerburg": "Q511",
+    "hesse": "Q512",
+    "russia": "Q513",
 }
 SOURCE_QIDS = {
     "marriage-cert-1905": "Q601",
@@ -1017,6 +1020,7 @@ SOURCE_QIDS = {
     "letter-to-leopold-1958": "Q604",
     "letter-excerpt-1939": "Q605",
     "family-booklet-2011": "Q606",
+    "family-history-2008": "Q607",
 }
 CERTIFICATE_PAGE = "Q611"
 
@@ -1067,32 +1071,51 @@ def a_place(key: str) -> dict:
 
 
 def dated(
-    st: str, document: str, day: str, *sources: str, cells: str = ""
+    st: str,
+    document: str,
+    day: str,
+    *sources: str,
+    cells: str = "",
+    precision: str = "11",
+    page_of: str = "",
 ) -> list[dict]:
     """SOURCE_DATES_QUERY's rows for one `inception` statement of the
-    artifact `document` (a universe key) giving it the day `day`
-    ("1905-12-15"), a row for each source (universe keys) it is stated
-    in."""
+    artifact `document` (a universe key) giving it the time `day`
+    ("1905-12-15") at `precision` (11 a day, 9 a year): a row for each
+    source it is stated in (a universe key, or a fragment's QID with the
+    key of the artifact it belongs to as `page_of`), one with none for a
+    statement that cites none, each with the statement's qualifier
+    cells."""
     base = {
         "document": uri(SOURCE_QIDS[document]),
         "st": uri(st),
         "date": time_literal(f"+{day}T00:00:00Z"),
-        "datePrecision": literal("11"),
+        "datePrecision": literal(precision),
         "qualifierCells": literal(cells),
     }
-    return [{**base, "dateSource": uri(SOURCE_QIDS[s])} for s in sources]
+    rows = [
+        {**base, "dateSource": uri(SOURCE_QIDS.get(source, source))}
+        for source in sources
+    ]
+    if page_of:
+        rows = [
+            {**row, "dateWhole": uri(SOURCE_QIDS[page_of])} for row in rows
+        ]
+    return rows or [base]
 
 
 # The 1905 marriage certificate puts Fläckfeld in Kreis Mockburg, in a
 # statement that cites a page of it, and the 1984 tree puts it in Kreis
 # Peiltal; neither states a time. The 1941 death certificate and the 1958
 # letter both put Koshnovka in Kaldovsky District, one statement stated in
-# each; and the certificate puts the district in Chadsk Oblast. A worked
-# row (docs/EXAMPLES.md) gives the district "in Chadsk Oblast from 1937",
-# here as the letter's statement, with a start time of its own. Another
-# reads Brunnenring 35 in Brunnenring from the heading of Sebastian's 1939
-# letter ("Flörburg, Brunnenring 35"). No source states that Moshausen is
-# in Germany: a curator's statement cites none.
+# each; and the certificate puts the district in Chadsk Oblast, and the
+# oblast in Russia, which it names "РСФСР". A worked row
+# (docs/EXAMPLES.md) gives the district "in Chadsk Oblast from 1937", here
+# as the letter's statement, with a start time of its own. Another reads
+# Brunnenring 35 in Brunnenring from the heading of Sebastian's 1939
+# letter ("Flörburg, Brunnenring 35"). The 2008 family history puts
+# Flörburg in Hesse ("Flörburg, in Hesse"). No source states that
+# Moshausen is in Germany: a curator's statement cites none.
 TREE_ROWS = [
     *contained(
         "c1",
@@ -1124,22 +1147,38 @@ TREE_ROWS = [
     ),
     *contained("c6", "brunnenring-35", "brunnenring", "letter-excerpt-1939"),
     *contained("c7", "moshausen", "germany"),
+    *contained("c8", "floerburg", "hesse", "family-history-2008"),
+    *contained(
+        "c9",
+        "chadsk-oblast",
+        "russia",
+        "death-certificate-1941",
+        cells=qualifier_cells(("referred_to_as", "РСФСР", "")),
+    ),
     *(
         a_place(key)
         for key in (
             "kreis-mockburg",
             "kreis-peiltal",
-            "chadsk-oblast",
+            "russia",
             "brunnenring",
             "germany",
+            "hesse",
         )
     ),
 ]
 # What each source says of its own making: every one but the tree states
-# its date. The 2011 booklet states the 1939 letter's date too, read from
-# its machine translation of the letter.
+# its date, the certificate on a page of it, and the family history to
+# the year alone ("Stupfield, 2008"). The 2011 booklet states the 1939
+# letter's date too, read from its machine translation of the letter.
 SOURCE_DATE_ROWS = [
-    *dated("i1", "marriage-cert-1905", "1905-12-15", "marriage-cert-1905"),
+    *dated(
+        "i1",
+        "marriage-cert-1905",
+        "1905-12-15",
+        CERTIFICATE_PAGE,
+        page_of="marriage-cert-1905",
+    ),
     *dated(
         "i2", "death-certificate-1941", "1941-03-07", "death-certificate-1941"
     ),
@@ -1160,6 +1199,13 @@ SOURCE_DATE_ROWS = [
             )
         ),
     ),
+    *dated(
+        "i6",
+        "family-history-2008",
+        "2008-01-01",
+        "family-history-2008",
+        precision="9",
+    ),
 ]
 PLACE_SOURCES = [
     {
@@ -1173,7 +1219,7 @@ PLACE_RESPONSES = {
     **RESPONSES,
     "?kind wdt:": ARTIFACTS + PLACE_SOURCES,
     "?childLabel": TREE_ROWS,  # the places page's containment
-    "?dateSource": SOURCE_DATE_ROWS,  # the dates artifacts give themselves
+    "?dateSource": SOURCE_DATE_ROWS,  # the artifacts' inception statements
 }
 
 
@@ -1198,13 +1244,26 @@ def containers(page: str) -> dict[tuple[str, str], str]:
 class TestThePlacesPage:
     """The places page shows each place under every container a source
     gives it, labelled by the source, and an undated containment as of
-    the date its source gives itself (docs/PLACES.md, "Containment as an
-    assertion")."""
+    each date its source's `inception` statements give it (docs/PLACES.md,
+    "Containment as an assertion")."""
+
+    @staticmethod
+    def tree_of(
+        tmp_path, vocabulary, tree_rows: list[dict], date_rows: list[dict]
+    ) -> dict[tuple[str, str], str]:
+        """The places page's tree (``containers``) built from these rows of
+        PLACE_TREE_QUERY and SOURCE_DATES_QUERY."""
+        responses = {
+            **PLACE_RESPONSES,
+            "?childLabel": tree_rows,
+            "?dateSource": date_rows,
+        }
+        site, _ = build(tmp_path, vocabulary, responses)
+        return containers((site / "places.html").read_text())
 
     @pytest.fixture
     def tree(self, tmp_path, vocabulary) -> dict[tuple[str, str], str]:
-        site, _ = build(tmp_path, vocabulary, PLACE_RESPONSES)
-        return containers((site / "places.html").read_text())
+        return self.tree_of(tmp_path, vocabulary, TREE_ROWS, SOURCE_DATE_ROWS)
 
     @staticmethod
     def entry(tree, place: str, container: str) -> str:
@@ -1225,8 +1284,8 @@ class TestThePlacesPage:
 
     def test_each_container_is_labelled_by_its_source(self, tree):
         # the certificate states its own date, so its container reads as
-        # of that date; the tree states none, so its container is the tree
-        # alone; Fläckfeld stands under both and neither is picked
+        # of that date; no statement dates the tree, so its container is
+        # the tree alone; Fläckfeld stands under both and neither is picked
         certificate = source_title("marriage-cert-1905")
         assert self.beside(tree, "flaeckfeld", "kreis-mockburg") == (
             f"{certificate}, as of 1905-12-15"
@@ -1234,7 +1293,9 @@ class TestThePlacesPage:
         assert self.beside(tree, "flaeckfeld", "kreis-peiltal") == (
             source_title("family-tree-1984")
         )
-        # a page of the certificate is read as the certificate
+        # a page of the certificate is read as the certificate, both in
+        # the containment's reference and in its date's, so the date is
+        # the certificate's own and names no other source
         mockburg = self.entry(tree, "flaeckfeld", "kreis-mockburg")
         assert self.link("marriage-cert-1905") in mockburg
         peiltal = self.entry(tree, "flaeckfeld", "kreis-peiltal")
@@ -1255,6 +1316,62 @@ class TestThePlacesPage:
             f"{source_title('letter-to-leopold-1958')} (start time: 1937)"
         )
 
+    @pytest.mark.parametrize(
+        "qualifier, shown",
+        [
+            # the worked row "in 1941 Koshnovka belonged to Kaldovsky
+            # District" (docs/EXAMPLES.md), and each other time a source
+            # might give that containment, a bound alone among them
+            ("point_in_time", "point in time: 1941"),
+            ("start_time", "start time: 1937"),
+            ("end_time", "end time: 1957"),
+            ("earliest_date", "earliest date: 1936"),
+            ("latest_date", "latest date: 1958"),
+        ],
+    )
+    def test_any_time_of_its_own_stands_in_place_of_its_source_s_date(
+        self, tmp_path, vocabulary, qualifier, shown
+    ):
+        # the certificate dates itself, but a statement of it that carries
+        # a time of its own shows that time and is not read as of the
+        # certificate's date
+        year = shown.rsplit(" ", 1)[-1]
+        cells = qualifier_cells((qualifier, f"{year}-01-01T00:00:00Z", "9"))
+        rows = [
+            *contained(
+                "c1",
+                "koshnovka",
+                "kaldovsky-district",
+                "death-certificate-1941",
+                cells=cells,
+            ),
+            a_place("kaldovsky-district"),
+        ]
+        dates = dated(
+            "i1",
+            "death-certificate-1941",
+            "1941-03-07",
+            "death-certificate-1941",
+        )
+        tree = self.tree_of(tmp_path, vocabulary, rows, dates)
+        assert self.beside(tree, "koshnovka", "kaldovsky-district") == (
+            f"{source_title('death-certificate-1941')} ({shown})"
+        )
+
+    def test_a_source_s_date_shows_at_its_own_precision(self, tree):
+        # the family history dates itself to the year alone
+        assert self.beside(tree, "floerburg", "hesse") == (
+            f"{source_title('family-history-2008')}, as of 2008"
+        )
+
+    def test_an_undated_containment_shows_its_own_qualifiers(self, tree):
+        # the certificate names the oblast's container "РСФСР": the name
+        # shows beside the certificate, which is read as of its date
+        assert self.beside(tree, "chadsk-oblast", "russia") == (
+            f"{source_title('death-certificate-1941')} "
+            "(referred to as: РСФСР), as of 1941-03-07"
+        )
+
     def test_every_date_a_source_is_given_is_shown_with_its_source(self, tree):
         # the letter dates itself, and the booklet dates it too: each date
         # is shown, the booklet's named as the booklet's
@@ -1267,6 +1384,36 @@ class TestThePlacesPage:
         )
         address = self.entry(tree, "brunnenring-35", "brunnenring")
         assert self.link("family-booklet-2011") in address
+
+    @pytest.mark.parametrize(
+        "sources, aside",
+        [
+            (["letter-excerpt-1939"], ""),
+            (["family-booklet-2011"], " (date per {booklet})"),
+            # the date the letter states of itself names no other source,
+            # whoever else states it
+            (["letter-excerpt-1939", "family-booklet-2011"], ""),
+            ([], " (no recorded source for the date)"),
+        ],
+    )
+    def test_a_date_names_its_sources_unless_the_source_states_it_of_itself(
+        self, tmp_path, vocabulary, sources, aside
+    ):
+        # the letter's one date, stated in the letter, in the booklet, in
+        # both, or in none
+        rows = [
+            *contained(
+                "c1", "brunnenring-35", "brunnenring", "letter-excerpt-1939"
+            ),
+            a_place("brunnenring"),
+        ]
+        dates = dated("i1", "letter-excerpt-1939", "1939-07-28", *sources)
+        tree = self.tree_of(tmp_path, vocabulary, rows, dates)
+        booklet = source_title("family-booklet-2011")
+        assert self.beside(tree, "brunnenring-35", "brunnenring") == (
+            f"{source_title('letter-excerpt-1939')}, as of 1939-07-28"
+            + aside.format(booklet=booklet)
+        )
 
     def test_a_containment_no_source_states_says_so(self, tree):
         assert self.beside(tree, "moshausen", "germany").strip() == (
