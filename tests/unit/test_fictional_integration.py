@@ -1308,3 +1308,91 @@ def test_distinct_state_directories_control_disjoint_projects(
     assert all(
         project.startswith("yizkr-fictional-") for project in first | second
     )
+
+
+def test_measurement_cases_run_apart_from_the_required_lane():
+    measured = lane.case_groups(lane.MEASUREMENT_CASES)
+    lane.check_declaration(lane.MEASUREMENT_CASES)
+    lane.check_declaration(lane.REQUIRED_CASES + lane.MEASUREMENT_CASES)
+    assert measured.keys().isdisjoint(lane.GROUPS)
+    required = {case.result for case in lane.REQUIRED_CASES}
+    assert required.isdisjoint(c.result for c in lane.MEASUREMENT_CASES)
+
+
+def test_measure_runs_only_its_cases_and_writes_their_reports(
+    docker, monkeypatch
+):
+    copy = docker.run
+
+    def run(args, **kwargs):
+        done = copy(args, **kwargs)
+        if "cp" in args and not done.returncode:
+            # The measurement case records its report as a JUnit property.
+            tree = ET.parse(args[-1])
+            case = tree.getroot().find(".//testcase")
+            listed = ET.SubElement(case, "properties")
+            ET.SubElement(
+                listed, "property", name="fictional_cost", value='{"n": 1}'
+            )
+            tree.write(args[-1])
+        return done
+
+    monkeypatch.setattr(lane, "run", run)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [str(SCRIPT), "run", "--measure", "--state", str(docker.state)],
+    )
+    previous_handler = signal.getsignal(signal.SIGTERM)
+    try:
+        assert lane.main() == 0
+    finally:
+        signal.signal(signal.SIGTERM, previous_handler)
+
+    measured = list(lane.case_groups(lane.MEASUREMENT_CASES))
+    assert [docker.group(project) for project in docker.up] == measured
+    observed = lane.verify_results(
+        docker.state / "results.xml", lane.MEASUREMENT_CASES
+    )
+    assert ran(observed) == [case.result for case in lane.MEASUREMENT_CASES]
+    report = json.loads((docker.state / "fictional_cost.json").read_text())
+    assert report == {"n": 1}
+    docker.assert_clean()
+
+
+def test_a_measurement_without_its_report_fails_after_cleaning_up(
+    docker, monkeypatch
+):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [str(SCRIPT), "run", "--measure", "--state", str(docker.state)],
+    )
+    previous_handler = signal.getsignal(signal.SIGTERM)
+    try:
+        assert lane.main() == 1
+    finally:
+        signal.signal(signal.SIGTERM, previous_handler)
+
+    # The cases passed; the run fails for the report they did not record.
+    assert docker.evidence()["status"] == "passed"
+    docker.assert_clean()
+
+
+def test_down_recovers_the_measurement_groups_too(docker, monkeypatch):
+    monkeypatch.setattr(
+        sys, "argv", [str(SCRIPT), "down", "--state", str(docker.state)]
+    )
+    previous_handler = signal.getsignal(signal.SIGTERM)
+    try:
+        assert lane.main() == 0
+    finally:
+        signal.signal(signal.SIGTERM, previous_handler)
+
+    measured = lane.case_groups(lane.MEASUREMENT_CASES)
+    assert {docker.group(p) for p in docker.down} == {
+        *NAMES,
+        *measured,
+        "legacy",
+    }
+    assert docker.active == set()

@@ -203,6 +203,19 @@ def case_groups(cases) -> dict[str, tuple[Case, ...]]:
 
 GROUPS = case_groups(REQUIRED_CASES)
 
+# Opt-in measurements, never required and never run by CI: `run --measure`
+# runs these cases instead of the required ones, each group on a fresh
+# stack of its own, and `down` recovers their groups too. A measurement
+# case records its report as a JUnit property, which the run writes to
+# <state>/<property>.json (docs/TESTING.md, "Assignment path cost").
+MEASUREMENT_CASES = (
+    Case(
+        "assignment-cost",
+        "test_assignment_cost",
+        "test_assignment_path_cost_on_a_fresh_stack",
+    ),
+)
+
 
 def check_declaration(cases) -> None:
     """Refuse a declaration the launcher cannot run exactly as stated."""
@@ -1093,6 +1106,28 @@ def execute(
             raise failure
 
 
+def measurement_reports(state: Path, cases=MEASUREMENT_CASES) -> list[Path]:
+    """Write each report the measurement cases recorded as a JUnit property
+    to <state>/<property>.json; the paths written."""
+    written = []
+    for name in case_groups(cases):
+        try:
+            root = ET.parse(state / name / "results.xml").getroot()
+            found = [
+                (prop.get("name"), json.loads(prop.get("value")))
+                for prop in root.iter("property")
+            ]
+        except (OSError, ET.ParseError, TypeError, ValueError) as exc:
+            raise LaneError(f"measurement report unreadable: {exc}") from exc
+        for title, report in found:
+            path = state / f"{title}.json"
+            path.write_text(json.dumps(report, indent=1) + "\n")
+            written.append(path)
+    if not written:
+        raise LaneError("no measurement case recorded a report")
+    return written
+
+
 def stack_limit(value: str) -> int:
     limit = int(value)
     if limit < 1:
@@ -1131,7 +1166,16 @@ def main() -> int:
         type=Path,
         default=Path(tempfile.gettempdir()) / f"yizkr-fictional-{key}",
     )
+    parser.add_argument(
+        "--measure",
+        action="store_true",
+        help="run the opt-in measurement cases instead of the required "
+        "ones, each group on a fresh stack; CI never passes it",
+    )
     args = parser.parse_args()
+    cases = MEASUREMENT_CASES if args.measure else REQUIRED_CASES
+    if args.command == "down":
+        cases = REQUIRED_CASES + MEASUREMENT_CASES
     if args.command == "list":
         try:
             check_declaration(REQUIRED_CASES)
@@ -1142,7 +1186,12 @@ def main() -> int:
         return 0
     signal.signal(signal.SIGTERM, stopped)
     try:
-        execute(args.command, args.state.resolve(), stacks=args.stacks)
+        execute(
+            args.command, args.state.resolve(), stacks=args.stacks, cases=cases
+        )
+        if args.measure and args.command == "run":
+            for path in measurement_reports(args.state.resolve()):
+                print(f"Measurement report: {path}", flush=True)
     except (
         LaneError,
         OSError,
