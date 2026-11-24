@@ -17,10 +17,13 @@ death of unknown value beside the person's dated death, and at its foot
 the deaths nothing dates; a photo gallery (ADR-0008 derived media
 included), the disagreement report, an identity page listing by kind
 the identity origins of every entity that has no person page, and a
-places index that becomes a map once places carry coordinates. A death
-event a curator makes that states no date shows as "died (date not
-stated)" with its sources on its principal's page and timeline
-(ADR-0040 Q5).
+places index: a containment tree that shows each place under every
+container a source gives it, labelled by that source, an undated
+containment as of the date its source gives itself (docs/PLACES.md,
+"Containment as an assertion"), and a map once places carry
+coordinates. A death event a curator makes that states no date shows as
+"died (date not stated)" with its sources on its principal's page and
+timeline (ADR-0040 Q5).
 
 Design constraints:
 
@@ -273,18 +276,93 @@ WHERE {{
 ORDER BY ?artifactLabel
 """
 
-# place containment edges — the places page's tree (ADR-0009: a
-# visible hierarchy is a self-auditing one)
-PLACE_TREE_QUERY = """\
-SELECT ?child ?childLabel ?parent
+# the places page's containment tree (docs/PLACES.md, "Containment as an
+# assertion"): every place with its English label, and a row for each
+# `part_of` or `location` statement from it to another place at any rank
+# but deprecated, read through the statement and not the truthy triple,
+# which holds best-rank values only, so containers that sources disagree
+# on are all read. Each row names one stated-in source of the statement,
+# with the artifact a page fragment belongs to (?whole), and carries the
+# statement's qualifiers as QUALIFIER_CELL's cells, gathered by statement
+# in a subquery; a statement that cites no source gives one row with
+# none.
+PLACE_TREE_QUERY = (
+    """\
+SELECT ?child ?childLabel ?st ?parent ?source ?whole ?qualifierCells
 WHERE {{
   ?child wdt:{instance_of} wd:{place} .
   ?child rdfs:label ?childLabel . FILTER(LANG(?childLabel) = "en")
-  OPTIONAL {{ ?child (wdt:{part_of}|wdt:{location}) ?parent .
-              ?parent wdt:{instance_of} wd:{place} . }}
+  OPTIONAL {{
+    ?child (p:{part_of}|p:{location}) ?st .
+    ?st (ps:{part_of}|ps:{location}) ?parent ;
+        wikibase:rank ?containmentRank .
+    FILTER(?containmentRank != wikibase:DeprecatedRank)
+    ?parent wdt:{instance_of} wd:{place} .
+    OPTIONAL {{
+      ?st prov:wasDerivedFrom/pr:{stated_in} ?source .
+      OPTIONAL {{
+        ?source wdt:{instance_of} wd:{artifact_fragment} ;
+                wdt:{part_of} ?whole .
+      }}
+    }}
+    OPTIONAL {{
+      SELECT ?st (GROUP_CONCAT(DISTINCT ?qualifierCell; separator="|")
+                  AS ?qualifierCells)
+      WHERE {{
+        [] (p:{part_of}|p:{location}) ?st .
+"""
+    + QUALIFIER_CELL
+    + """\
+      }}
+      GROUP BY ?st
+    }}
+  }}
 }}
 ORDER BY ?childLabel
 """
+)
+
+# the dates the artifacts give themselves, for the places page's reading
+# of an undated containment as of its source's date (docs/PLACES.md,
+# "Containment as an assertion"): every `inception` statement at any rank
+# but deprecated, with its time value and precision, a row for each source
+# it is stated in, with the artifact a page fragment belongs to
+# (?dateWhole), and one row with none for a statement that cites none.
+# Its qualifiers, the range its source states and circa among them, come
+# as QUALIFIER_CELL's cells.
+SOURCE_DATES_QUERY = (
+    """\
+SELECT ?document ?st ?date ?datePrecision ?dateSource ?dateWhole
+       ?qualifierCells
+WHERE {{
+  ?document p:{inception} ?st .
+  ?st wikibase:rank ?dateRank .
+  FILTER(?dateRank != wikibase:DeprecatedRank)
+  wd:{inception} wikibase:statementValue ?dateValue .
+  ?st ?dateValue ?dateNode .
+  ?dateNode wikibase:timeValue ?date ;
+            wikibase:timePrecision ?datePrecision .
+  OPTIONAL {{
+    ?st prov:wasDerivedFrom/pr:{stated_in} ?dateSource .
+    OPTIONAL {{
+      ?dateSource wdt:{instance_of} wd:{artifact_fragment} ;
+                  wdt:{part_of} ?dateWhole .
+    }}
+  }}
+  OPTIONAL {{
+    SELECT ?st (GROUP_CONCAT(DISTINCT ?qualifierCell; separator="|")
+                AS ?qualifierCells)
+    WHERE {{
+      [] p:{inception} ?st .
+"""
+    + QUALIFIER_CELL
+    + """\
+    }}
+    GROUP BY ?st
+  }}
+}}
+"""
+)
 
 # what each artifact asserts, and where in it — the artifact page's evidence
 # table. A row for each statement and reference block that cites the
@@ -956,6 +1034,19 @@ class Said:
         return ""
 
 
+@dataclass
+class Stated:
+    """A statement as the places page reads it (PLACE_TREE_QUERY and
+    SOURCE_DATES_QUERY): its qualifier cells (QUALIFIER_CELL) and the QIDs
+    of the artifacts it is stated in, a page fragment by its whole; for a
+    date an artifact gives itself, the time and its precision as well."""
+
+    cells: str
+    value: str = ""
+    precision: str = ""
+    sources: set[str] = field(default_factory=set)
+
+
 @dataclass(frozen=True)
 class IdentityOrigin:
     """One identity origin of an entity, as the identity-provenance query
@@ -1480,6 +1571,7 @@ class SiteBuilder:
         )
         places = self.run(self._library_query("places-map"))
         place_tree = self.run(self._instance_query(PLACE_TREE_QUERY))
+        source_dates = self.run(self._instance_query(SOURCE_DATES_QUERY))
         artifacts = self.run(self._instance_query(ARTIFACTS_QUERY))
         assertions = self.run(self._instance_query(ASSERTIONS_QUERY))
         sources_say = self.sources_say(
@@ -1552,7 +1644,9 @@ class SiteBuilder:
         )
         self._write("timeline.json", self.timeline_feed(timeline))
         self._write("gallery.html", self.gallery_page(gallery))
-        self._write("places.html", self.places_page(places, place_tree))
+        self._write(
+            "places.html", self.places_page(places, place_tree, source_dates)
+        )
         self._write(
             "identity.html",
             self.identity_page(
@@ -2980,7 +3074,7 @@ class SiteBuilder:
         return self._page("Gallery", "".join(body))
 
     def places_page(
-        self, rows: list[dict], tree_rows: list[dict] | None = None
+        self, rows: list[dict], tree_rows: list[dict], date_rows: list[dict]
     ) -> str:
         body = ["<h1>Places</h1>"]
         with_coordinates = [row for row in rows if cell(row, "coords")]
@@ -2991,7 +3085,7 @@ class SiteBuilder:
                 "statement yet — the map lights up once places are reconciled "
                 "to coordinates (GeoNames pass, see docs/MODELING.md)</p>"
             )
-        body.append(self.place_tree_html(tree_rows or []))
+        body.append(self.place_tree_html(tree_rows, date_rows))
         body.append(
             "<table><tr><th>Place</th><th>Coordinates</th>"
             "<th>Connected to</th></tr>"
@@ -3010,14 +3104,25 @@ class SiteBuilder:
         body.append("</table>")
         return self._page("Places", "".join(body))
 
-    def place_tree_html(self, tree_rows: list[dict]) -> str:
-        """Nested containment tree (ADR-0009): a visible hierarchy is a
-        self-auditing one. Places with no recorded container list last."""
+    def place_tree_html(
+        self, tree_rows: list[dict], date_rows: list[dict]
+    ) -> str:
+        """The nested containment tree (PLACE_TREE_QUERY; docs/PLACES.md,
+        "Containment as an assertion"): a visible hierarchy is a
+        self-auditing one. A place shows under each container that any
+        statement a curator has not deprecated gives it, so a place that
+        sources put in two containers shows under both and neither is
+        picked. Beside it, under each container, the page says what gives
+        it that container (``containment_html``, with `date_rows`,
+        SOURCE_DATES_QUERY's rows). Places with no recorded container list
+        last, a place whose every containment is deprecated among them."""
         if not tree_rows:
             return ""
         labels: dict[str, str] = {}
         children: dict[str, list[str]] = defaultdict(list)
         parented: set[str] = set()
+        # each containment statement, by the place and its container
+        edges: dict[tuple[str, str], dict[str, Stated]] = defaultdict(dict)
         for row in tree_rows:
             child = qid_of(row, "child")
             labels[child] = cell(row, "childLabel") or child
@@ -3026,13 +3131,26 @@ class SiteBuilder:
                 if child not in children[parent]:
                     children[parent].append(child)
                 parented.add(child)
+                stated = edges[child, parent].setdefault(
+                    cell(row, "st"), Stated(cell(row, "qualifierCells"))
+                )
+                source = qid_of(row, "whole") or qid_of(row, "source")
+                if source:
+                    stated.sources.add(source)
+        dates = self.source_dates(date_rows)
 
-        def render(qid: str, seen: frozenset) -> str:
+        def render(qid: str, seen: frozenset, parent: str = "") -> str:
             if qid in seen:  # cycle safety in display
                 return ""
             label = esc(labels.get(qid, qid))
+            if parent:
+                label += self.containment_html(
+                    edges[qid, parent].values(),
+                    dates,
+                    f"the containment of {qid} in {parent}",
+                )
             below = "".join(
-                render(child, seen | {qid})
+                render(child, seen | {qid}, qid)
                 for child in sorted(
                     children.get(qid, []), key=lambda q: labels.get(q, q)
                 )
@@ -3066,6 +3184,108 @@ class SiteBuilder:
                 + "</p>"
             )
         return "".join(parts)
+
+    @staticmethod
+    def source_dates(rows: list[dict]) -> dict[str, list[Stated]]:
+        """SOURCE_DATES_QUERY's rows as the dates each artifact gives
+        itself, by the artifact's QID: each `inception` statement once,
+        with its time, precision, qualifier cells and the artifacts it is
+        stated in, in the order the query gives them."""
+        found: dict[str, dict[str, Stated]] = defaultdict(dict)
+        for row in rows:
+            stated = found[qid_of(row, "document")].setdefault(
+                cell(row, "st"),
+                Stated(
+                    cell(row, "qualifierCells"),
+                    value=cell(row, "date"),
+                    precision=cell(row, "datePrecision"),
+                ),
+            )
+            source = qid_of(row, "dateWhole") or qid_of(row, "dateSource")
+            if source:
+                stated.sources.add(source)
+        return {qid: list(each.values()) for qid, each in found.items()}
+
+    def containment_html(
+        self,
+        statements: Iterable[Stated],
+        dates: dict[str, list[Stated]],
+        where: str,
+    ) -> str:
+        """What gives a place one container on the places page, shown
+        beside the place: each containment statement by every source it is
+        stated in, linked to the source's page, with the statement's own
+        qualifiers ("start time: 1937"). A statement that carries a time
+        qualifier (DATE_QUALIFIERS: a start or end time, a point in time
+        or a bound) is shown with that time alone. An undated one is read
+        as of each date its source gives itself (`dates`, by the source's
+        QID), "as of 1905-12-15" (``as_of``), and a source that gives
+        itself no date is named alone. Every reading is shown, in reading
+        order, and none is picked. A statement that cites no source shows
+        "no recorded source". The reading is the view's: nothing it shows
+        is stored, and no statement gains a time."""
+        timed = {
+            self.properties[key]
+            for key in DATE_QUALIFIERS
+            if key in self.properties
+        }
+        readings: dict[tuple[str, str], None] = {}
+        unsourced: dict[str, None] = {}
+        for statement in statements:
+            qualifiers = self.qualifier_text(statement.cells, where)
+            own = f" ({esc(qualifiers)})" if qualifiers else ""
+            dated = any(
+                pid in timed for pid, *_ in read_qualifiers(statement.cells)
+            )
+            if not statement.sources:
+                unsourced[qualifiers] = None
+            for source in statement.sources:
+                link = self.artifact_links(
+                    [(source, self.artifact_labels.get(source, ""))], root=""
+                )
+                given = [] if dated else dates.get(source, [])
+                if not given:
+                    readings[link, own] = None
+                for date in given:
+                    readings[link, own + self.as_of(source, date)] = None
+        parts = []
+        if readings:
+            parts.append(self.source_span("; ".join(reading_order(readings))))
+        parts += [
+            self.source_span("") + qualifier_span(qualifiers)
+            for qualifiers in sorted(unsourced)
+        ]
+        return "".join(parts)
+
+    def as_of(self, source: str, date: Stated) -> str:
+        """An undated containment's reading as of a date its source (by
+        QID) gives itself: ", as of 1905-12-15", the date at the precision
+        its statement gives, with the range and circa the statement states
+        as the site shows them beside any date ("as of 1833 (sourcing
+        circumstances: circa)"). A date that other sources state, and not
+        the source itself, names them ("date per" each, linked to its
+        page); a date stated in no source says so."""
+        where = f"the inception of {source}"
+        aside = []
+        qualifiers = self.qualifier_text(date.cells, where)
+        if qualifiers:
+            aside.append(esc(qualifiers))
+        if source not in date.sources and date.sources:
+            aside.append(
+                "date per "
+                + ", ".join(
+                    self.artifact_links(
+                        [(each, self.artifact_labels.get(each, ""))], root=""
+                    )
+                    for each in sorted(date.sources, key=natural_order)
+                )
+            )
+        elif source not in date.sources:
+            aside.append("no recorded source for the date")
+        day = format_time(date.value, date.precision, where)
+        return f", as of {esc(day)}" + (
+            f" ({'; '.join(aside)})" if aside else ""
+        )
 
     def identity_page(self, origins: dict[str, list[IdentityOrigin]]) -> str:
         """The identity page: the identity origins (``origins``, by the

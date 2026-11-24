@@ -343,7 +343,7 @@ The end state is one required real-stack lane, `make test-integration`, which cr
 | `test_live_scratch_reset.py` | `test_a_write_after_a_reset_voids_the_recorded_key` | Lane lacks | #899: a write after a reset voids the recorded contents key. |
 | `test_live_scratch_reset.py` | `test_a_kept_instance_refuses_the_reset` | Lane lacks | #899: the reset refuses a kept instance. |
 | `test_live_scratch_write.py` | all (1) | Lane lacks | #900: the scratch write stage, its run items and the instance-contents record over two runs. It needs `YIZKR_LIVE_RESET=1` and resets the instance. |
-| `test_live_site.py` | all (11) | Lane lacks | #901: the static site built from the query service. The summary counts read the whole instance, and the case asserts only floors for them. |
+| `test_live_site.py` | all (12) | Lane lacks | #901: the static site built from the query service. The summary counts read the whole instance, and the case asserts only floors for them. |
 | `test_live_site_sources.py` | all (5) | Lane lacks | #901: the site's pages of what sources say about an artifact. |
 | `test_live_stack.py` | `test_smoke_roundtrip` | Lane lacks | #899: `yizkr smoke-test` (`yizkr.smoke.run_smoke`), which the reset runs as its last step. |
 | `test_live_stored_terms.py` | all (2) | Lane lacks | Further issue, stored value shapes: terms and text trimmed and cleaned up as the instance keeps them, and a repeated write that sends no edit. |
