@@ -356,6 +356,25 @@ def _anchor(record, transcription: Transcription):
     )
 
 
+# Every limitation observe_mentions records, in the order its checks run: a
+# mention with none of them is anchored.
+OBSERVATION_LIMITATIONS = (
+    "reading_unavailable",
+    "native_mention_location_unavailable",
+    "missing_or_noncontiguous_mention_lines",
+    "unsupported_source_scope",
+    "ambiguous_or_missing_source_scope",
+    "invalid_source_range",
+    "reading_support_mismatch",
+    "invalid_page_scope",
+    "ambiguous_or_unread_page",
+    "repeated_source_quote",
+    "missing_or_ambiguous_literal_mention",
+    "multiple_literal_occurrences",
+    "shared_source_occurrence",
+)
+
+
 def observe_mentions(
     artifact: str,
     batch: ClaimBatch,

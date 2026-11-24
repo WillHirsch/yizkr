@@ -3,6 +3,7 @@
 import json
 
 import pytest
+import yaml
 
 from yizkr.claims import (
     ArtifactRef,
@@ -11,6 +12,7 @@ from yizkr.claims import (
     Qualifier,
     load_vocabulary,
 )
+from yizkr.model.schema import load_manifest, read_manifest_data
 from yizkr.pipeline.critique import (
     CATEGORIES,
     CRITIQUE_PROMPT,
@@ -23,10 +25,10 @@ from yizkr.pipeline.critique import (
     entries,
     listings,
     note,
-    offered_properties,
     run_critique,
     sheet_notes,
 )
+from yizkr.pipeline.extract import vocabulary_prompt_lines
 from yizkr.pipeline.llm import OutputLimitReached
 from yizkr.pipeline.reconcile import apply_equivalences
 
@@ -98,6 +100,32 @@ def response(lines: list[dict]) -> str:
     )
 
 
+def listed(prompt: str, heading: str) -> list[str]:
+    """The keys a critique prompt lists on its line `heading`: `Kinds`
+    or `Properties`."""
+    (line,) = [
+        line
+        for line in prompt.splitlines()
+        if line.startswith(f"{heading} (manifest ")
+    ]
+    return line.split("): ", 1)[1].split(", ")
+
+
+def extraction_vocabulary() -> tuple[list[str], list[str]]:
+    """(property keys, item keys) the extraction prompts list, read from
+    the lines extract.vocabulary_prompt_lines renders: one
+    `  key: datatype — description` line per property, and the item keys
+    on one line."""
+    property_lines, item_line = vocabulary_prompt_lines()
+    return (
+        [
+            line.split(":", 1)[0].strip()
+            for line in property_lines.splitlines()
+        ],
+        item_line.strip().split(", "),
+    )
+
+
 ROLE_ALIAS = {
     "entity": "e01",
     "alias": "MOTHER",
@@ -136,17 +164,19 @@ class TestCritique:
         # a claim's item value is listed by its id, which a finding names
         assert "e01 | employer | e04" in llm.prompts[0]
 
-    def test_the_prompt_lists_every_category_axis_and_manifest_key(self):
-        """The category list is kept with the prompt, and a suggestion
-        names manifest keys, so the prompt lists them (#386)."""
+    def test_the_prompt_lists_every_category_axis_and_offered_key(self):
+        """The category list is kept with the prompt (#386), and a
+        suggestion names the kind or property an extraction should have
+        used, so the prompt lists exactly the keys extraction's prompts
+        list, sorted."""
         llm = ScriptedLlm(response([]))
         run_critique(llm, batch())
         prompt = llm.prompts[0]
         assert all(f"- {key}: " in prompt for key in CATEGORIES)
         assert "subject | predicate | value | existence" in prompt
-        _, items = load_vocabulary()
-        assert ", ".join(sorted(items)) in prompt
-        assert ", ".join(offered_properties()) in prompt
+        properties, kinds = extraction_vocabulary()
+        assert listed(prompt, "Properties") == sorted(properties)
+        assert listed(prompt, "Kinds") == sorted(kinds)
 
     def test_the_prompt_names_the_kinds_author_and_addressee_take(self):
         """`author` and `addressee` (ADR-0039) take a person, an
@@ -182,10 +212,9 @@ class TestCritique:
 
     def test_no_property_held_back_from_the_prompts_reaches_it(self):
         """A property the manifest marks `offered: false`, such as a
-        scratch run's run-item marks, is never listed, so adding one
-        leaves the critique prompt as it was (#200)."""
-        from yizkr.model.schema import load_manifest
-
+        scratch run's run-item marks (#200), is never listed, nor is a
+        retired or a reference property, which no claim may use, nor an
+        item held back from the prompts."""
         held = [
             key
             for key, spec in load_manifest().properties.items()
@@ -194,15 +223,45 @@ class TestCritique:
         assert "scratch_run" in held
         llm = ScriptedLlm(response([]))
         run_critique(llm, batch())
-        listed = (
-            llm.prompts[0]
-            .split("Properties (manifest property keys): ")[1]
-            .split("\n")[0]
+        properties = listed(llm.prompts[0], "Properties")
+        assert not set(held) & set(properties)
+        for key in ("spouse", "stated_in", "identity_migration_id"):
+            assert key not in properties
+        assert "machine_assisted" not in listed(llm.prompts[0], "Kinds")
+
+    def test_a_suggestion_may_name_a_key_the_prompt_leaves_out(self):
+        """The answer is checked against the whole manifest, not the keys
+        the prompt lists: a suggestion naming a reference property or an
+        item held back from the prompts is valid."""
+        named = [
+            FINDING | {"suggestion": {"property": "stated_in"}},
+            FINDING | {"suggestion": {"kind": "machine_assisted"}},
+        ]
+        llm = ScriptedLlm(response(named))
+        findings = run_critique(llm, batch())
+        assert [type(found) for found in findings] == [Finding, Finding]
+        assert "stated_in" not in listed(llm.prompts[0], "Properties")
+        assert "machine_assisted" not in listed(llm.prompts[0], "Kinds")
+
+    def test_a_vocabulary_given_is_listed_whole(self):
+        """A vocabulary the caller gives is listed as given, every key of
+        it, and the answer is checked against it."""
+        vocabulary = (
+            {"employer": "wikibase-item", "stated_in": "wikibase-item"},
+            ["organization", "machine_assisted"],
         )
-        assert not set(held) & set(listed.split(", "))
-        # the retired and reference properties are listed as before
-        assert "spouse" in listed.split(", ")
-        assert "stated_in" in listed.split(", ")
+        named = [FINDING, FINDING | {"suggestion": {"kind": "human"}}]
+        llm = ScriptedLlm(response(named))
+        findings = run_critique(llm, batch(), vocabulary=vocabulary)
+        assert [type(found) for found in findings] == [Finding, Invalid]
+        assert listed(llm.prompts[0], "Properties") == [
+            "employer",
+            "stated_in",
+        ]
+        assert listed(llm.prompts[0], "Kinds") == [
+            "machine_assisted",
+            "organization",
+        ]
 
     def test_the_category_list_is_the_issues(self):
         assert list(CATEGORIES) == [
@@ -355,6 +414,137 @@ class TestCritique:
             ]
         )
         assert run_critique(ScriptedLlm(answer), batch()) == []
+
+
+def manifest_copy(tmp_path, change):
+    """The path of a copy of the package's model manifest, its parsed
+    YAML changed by `change`."""
+    raw = yaml.safe_load(read_manifest_data())
+    change(raw)
+    path = tmp_path / "manifest.yaml"
+    path.write_text(yaml.safe_dump(raw, sort_keys=False))
+    return path
+
+
+# a property and an item a fictional manifest change adds
+HATTERS_MARK = {
+    "label": "hatters' mark",
+    "description": "the mark a hatter stamped inside a hat's sweatband",
+    "datatype": "string",
+}
+BLUE_HAT_STAMP = {
+    "label": "Blue Hat stamp",
+    "description": "the stamp of the Hutmacherei zum Blauen Hut",
+}
+
+
+def add_reference_property(raw):
+    """Add a reference property to a parsed manifest."""
+    raw["properties"]["album_slide"] = {
+        "label": "album slide",
+        "description": "reference locator; the slide of a talk that shows "
+        "a photograph from the family album",
+        "datatype": "string",
+        "reference": True,
+    }
+
+
+def add_held_back_property(raw):
+    """Add to a parsed manifest a property held back from the prompts."""
+    raw["properties"]["hatters_mark"] = HATTERS_MARK | {"offered": False}
+
+
+def add_held_back_item(raw):
+    """Add to a parsed manifest an item held back from the prompts."""
+    raw["items"]["blue_hat_stamp"] = BLUE_HAT_STAMP | {"offered": False}
+
+
+def add_all_held_back(raw):
+    """Add all three of the above to a parsed manifest."""
+    add_reference_property(raw)
+    add_held_back_property(raw)
+    add_held_back_item(raw)
+
+
+class TestHeldBackVocabulary:
+    """A vocabulary change that no extraction prompt carries leaves the
+    prompt run_critique sends byte for byte as it is, and with it the
+    key of every critique call. The answer is still checked against the
+    whole manifest the critic is run with."""
+
+    def ask(self, finding, **kwargs):
+        """(the prompt run_critique sends for the fictional batch, what
+        it makes of an answer of `finding` alone)."""
+        llm = ScriptedLlm(response([finding]))
+        (found,) = run_critique(llm, batch(), **kwargs)
+        return llm.prompts[0], found
+
+    @pytest.mark.parametrize(
+        ("change", "suggestion"),
+        [
+            pytest.param(
+                add_reference_property,
+                {"property": "album_slide"},
+                id="reference-property",
+            ),
+            pytest.param(
+                add_held_back_property,
+                {"property": "hatters_mark"},
+                id="property-offered-false",
+            ),
+            pytest.param(
+                add_held_back_item,
+                {"kind": "blue_hat_stamp"},
+                id="item-offered-false",
+            ),
+            pytest.param(
+                add_all_held_back,
+                {"property": "album_slide"},
+                id="all-three",
+            ),
+        ],
+    )
+    def test_an_addition_held_back_leaves_the_prompt(
+        self, tmp_path, change, suggestion
+    ):
+        copy = manifest_copy(tmp_path, change)
+        named = FINDING | {"suggestion": suggestion}
+        at_head, unknown = self.ask(named)
+        with_copy, known = self.ask(named, manifest_path=copy)
+        # the copy reaches the critic: only it holds the key named
+        assert isinstance(unknown, Invalid) and isinstance(known, Finding)
+        assert with_copy == at_head
+
+    def test_a_reference_property_removed_leaves_the_prompt(self, tmp_path):
+        # chosen by what it is, not by name, so that the test outlives
+        # the removal of any one reference property from the manifest
+        key = next(
+            key
+            for key, spec in load_manifest().properties.items()
+            if spec.reference
+        )
+        copy = manifest_copy(tmp_path, lambda raw: raw["properties"].pop(key))
+        named = FINDING | {"suggestion": {"property": key}}
+        at_head, known = self.ask(named)
+        with_copy, unknown = self.ask(named, manifest_path=copy)
+        assert isinstance(known, Finding) and isinstance(unknown, Invalid)
+        assert with_copy == at_head
+
+    def test_an_offered_addition_is_listed(self, tmp_path):
+        """The prompt is the copy's: a property and an item extraction is
+        offered are listed once the manifest holds them."""
+
+        def offer(raw):
+            raw["properties"]["hatters_mark"] = HATTERS_MARK
+            raw["items"]["blue_hat_stamp"] = BLUE_HAT_STAMP
+
+        copy = manifest_copy(tmp_path, offer)
+        at_head, _ = self.ask(FINDING)
+        with_copy, _ = self.ask(FINDING, manifest_path=copy)
+        assert "hatters_mark" not in listed(at_head, "Properties")
+        assert "hatters_mark" in listed(with_copy, "Properties")
+        assert "blue_hat_stamp" not in listed(at_head, "Kinds")
+        assert "blue_hat_stamp" in listed(with_copy, "Kinds")
 
 
 VOCABULARY = load_vocabulary()

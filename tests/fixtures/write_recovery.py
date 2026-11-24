@@ -7,6 +7,7 @@ Real API semantics are exercised separately by the required fictional lane.
 
 from __future__ import annotations
 
+import copy
 import json
 import threading
 from types import SimpleNamespace
@@ -146,6 +147,20 @@ class RecoveryWiki:
             | set(properties.values())
             | set(items.values())
         )
+
+    def entity_data(self, ids: list[str]):
+        """(id, its entity data) for each of `ids`, as
+        `WikiClient.entity_data` reads it, from the items the fake holds:
+        WikibaseIntegrator items or the entity dicts some fakes store. An
+        id the fake does not hold has none."""
+        store = self.wbi.item.store
+        for entity_id in ids:
+            entity = store.get(entity_id)
+            if entity is None:
+                yield entity_id, None
+                continue
+            data = entity if isinstance(entity, dict) else entity.get_json()
+            yield entity_id, {**copy.deepcopy(data), "id": entity_id}
 
     def creation_revisions(self, marker: str) -> list[EntityCreation]:
         history = self.wbi.item.creation_history

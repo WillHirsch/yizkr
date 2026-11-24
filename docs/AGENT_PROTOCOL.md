@@ -16,7 +16,7 @@ How work moves from an issue to main, and how private data stays within its auth
 | `exec:cloud-agent-ok` | Repository work or an isolated fictional test instance; subject to the cloud-dispatch gate (§6) |
 | `exec:owner` | An owner action or decision; never dispatched |
 | `needs:live-test` | Requires evidence from the affected real writer/query boundary before merge (§5) |
-| `needs:scratch-diff` | Requires whole-corpus evidence for a stated risk; several PRs may share a run (§5) |
+| `needs:scratch-diff` | Requires whole-corpus evidence for a stated risk, supplied after merge by the corpus run of the affected stage's turn; a condition of merge only for a change to the clustering settings (§5) |
 | `stage:*` | Identifies stages whose outputs can change; does not itself require a corpus run |
 | `area:*` | The part of the repository the issue edits; used by the conflict rule (§3) |
 | `kind:*` | The kind of work, such as bug, feature, decision, experiment, chore, ingestion-pass, docs, research or review |
@@ -25,7 +25,7 @@ How work moves from an issue to main, and how private data stays within its auth
 | `gate:cloud-dispatch` | Marks #34 |
 | `epic` | A parent issue grouping sub-issues |
 
-Use the matching `stage:*` labels for changes that can affect stage outputs, including prompts or model configuration. Choose verification from the risk and affected boundary, not the label or file extension. Record why a `needs:scratch-diff` run is necessary and which stages it must cover.
+Use the matching `stage:*` labels for changes that can affect stage outputs, including prompts or model configuration. Choose verification from the risk and affected boundary, not the label or file extension. Record why a `needs:scratch-diff` run is necessary and which stages it must cover. An issue with `needs:scratch-diff` names, in its Evidence scope (in its body, where its form has no such field), the run issue that supplies the evidence, and its acceptance items are checkable at merge. An issue gated on a turn's evidence names that turn's run issue and is linked natively as a blocker of the next turn's issue (after the last turn, the first increment's), never as blocked by the issue of that turn (§5).
 
 ## 3. Dispatch and claiming
 
@@ -80,14 +80,25 @@ Additional centralized live checks may supply evidence on an explicitly disposab
 
 **Corpus evidence.** Require a whole-corpus run when risk depends on cross-document interactions or remains materially uncertain after bounded evidence, such as broad identity/source-boundary changes, an unexplained corpus regression or the readiness of an instance to be designated retained. A changed pre-write file, prompt or model alone does not impose this requirement. Small semantic acceptance checks and bounded observed model outputs are permitted alongside corpus review.
 
+Changes and corpus runs follow the order of the evidence the changes need:
+
+- **Order by evidence.** The stages of a whole-corpus scratch run on the designated disposable instance are each run on main, at their turn: extraction and critique first (the document stages, up to the barrier), then clustering, then the write side. Every planned change that needs no evidence from a corpus run merges before the first turn, whatever stage it affects, so that each turn's model calls are made once, for every change that does not need that turn's evidence. A change that needs evidence from a turn, and from no later one, merges before the next turn. A change that needs evidence from the last turn, or that the owner files from a walk of the views, merges before the first increment onto the retained instance, which counts as the next run. A stage that has run, and that no planned change alters, is not run again.
+- **New capabilities.** Every change to existing functionality, and every new capability that a turn needs or runs, merges before the first turn unless it depends on corpus evidence. A new capability that serves only review or a retained instance, and anything waiting on it, merges before the first increment instead.
+- **Owner decisions and late filings.** An owner decision that a change due before the first turn waits on, before its PR or at its merge, is a precondition of that turn. A change that needs no corpus evidence and is filed after a turn has started merges before the next turn that has not started.
+- **Evidence after merge.** Whole-corpus evidence is read after merge and is not a condition of merge. A local check on real data before merge, such as a `yizkr scratch estimate` on a PR's branch, is not evidence from a corpus run. A run's verdict covers every change merged since its baseline and attributes counts to changes where it can. A regression it shows is fixed by a follow-up change, after which only what that change affects is run again. Nothing is repaired in the disposable graph. Each turn stops where the next begins, the first at the barrier, so a regression found in extraction is fixed before clustering reads it.
+- **Gated follow-ups.** A change gated on one turn's evidence is linked natively as a blocker of the next turn's issue, which after the last turn is the first increment's. It is never linked as blocked by the issue of the turn whose evidence it needs: the issue of each turn before the last stays open until its follow-ups have been run again, so that link would deadlock.
+- **The one exception** to evidence after merge is a change to the clustering settings (`src/yizkr/pipeline/clustering.yaml`): its scratch diff and the owner's sign-off come before merge, so it is gated on a clustering run.
+
 When whole-corpus evidence is needed:
 
-1. A local session records the reason, affected stages, tested revision and baseline. Several related PRs may share a local, unpushed integration merge; attribute the result and separate a PR whose effect remains unclear.
+1. A local session records the reason, affected stages, tested revision and baseline. The tested revision of each turn is a commit of main, and the run covers every change merged since its baseline; the session lists those changes and records each turn's commit.
 2. Run the affected stages and necessary downstream work, reusing compatible model responses. Stop before writes when graph effects are irrelevant. Any write-side run uses an explicitly disposable target; retaining another dataset does not authorize resetting it.
 3. Generate `yizkr scratch report <run>` and `yizkr scratch diff <baseline> <run>`. Review using [RUN_DIFF.md](RUN_DIFF.md). Detailed reports and diffs remain local-only.
-4. Post only the aggregate report, diff summary and verdict. Correct pipeline regressions in code and regenerate affected outputs; do not conceal them by repairing the disposable graph.
+4. Post only the aggregate report, diff summary and verdict, on the run's own issue (kind `ingestion-pass`; a run taken in turns has one for each turn), which lists for each change the run covers what that change asked to be read. File the follow-ups the verdict calls for and link them as gated follow-ups are linked (above). Correct pipeline regressions in code and regenerate affected outputs; do not conceal them by repairing the disposable graph.
 
-Use _Needs local verify_ while a PR awaits local-only evidence. Cloud sessions may supply evidence from permitted fictional fixtures, but never read corpus reports to supply the local review.
+For a change to the clustering settings, the candidate is the PR's head, and the verdict and the owner's sign-off go on the PR before merge.
+
+Use _Needs local verify_ only while a PR awaits local-only evidence that is a condition of its merge: a `needs:live-test` check that only a local session can run on a disposable target, the scratch diff of a clustering-settings change, or a `yizkr scratch estimate` that the issue's acceptance asks a local session for before merge, which makes no model call and writes nothing. Cloud sessions may supply evidence from permitted fictional fixtures, but never read corpus reports to supply the local review.
 
 ## 6. The data boundary
 

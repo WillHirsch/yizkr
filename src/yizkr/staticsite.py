@@ -6,17 +6,21 @@ its source label (R6/ADR-0002 — never silently pick one), a date of
 death of unknown value as "died (date not stated)", beside the dated
 ones, each "died by" date the shared derivation gives (yizkr.died_by,
 ADR-0040 §2.4), labelled as derived, each union the person takes part
-in with its stated end, or the end a view derives (§2.6), and the
-artifacts that name the person; artifact pages showing what the
-artifact asserts and what sources say about it, a container's captions
+in with its stated end, or the end a view derives (§2.6), the
+artifacts that name the person, and each identity origin the graph
+records for the person, with its method and, beside it, any human
+confirmation; artifact pages showing what the artifact asserts and
+what sources say about it, a container's captions
 and the artifact's own statements about itself (ADR-0039 §7); a
 timeline that shows beside each date the range its source states, a
 death of unknown value beside the person's dated death, and at its foot
 the deaths nothing dates; a photo gallery (ADR-0008 derived media
-included), the disagreement report, and a places index that becomes a
-map once places carry coordinates. A death event a curator makes that
-states no date shows as "died (date not stated)" with its sources on
-its principal's page and timeline (ADR-0040 Q5).
+included), the disagreement report, an identity page listing by kind
+the identity origins of every entity that has no person page, and a
+places index that becomes a map once places carry coordinates. A death
+event a curator makes that states no date shows as "died (date not
+stated)" with its sources on its principal's page and timeline
+(ADR-0040 Q5).
 
 Design constraints:
 
@@ -708,6 +712,7 @@ NAV = (
     '<a href="{root}timeline.html">Timeline</a>'
     '<a href="{root}gallery.html">Gallery</a>'
     '<a href="{root}places.html">Places</a>'
+    '<a href="{root}identity.html">Identity</a>'
     '<a href="{root}inconsistencies.html">Inconsistencies</a></nav>'
 )
 
@@ -949,6 +954,156 @@ class Said:
         if value.get("type") == "uri" and "/entity/Q" in raw:
             return raw.rsplit("/", 1)[-1]
         return ""
+
+
+@dataclass(frozen=True)
+class IdentityOrigin:
+    """One identity origin of an entity, as the identity-provenance query
+    reads it from the graph's references: the entity by QID and label, the
+    method that made the origin by its item and label, the digest of its
+    process record, and, where the rows give them, its cluster, its
+    record's map hash, its assignment revision, the digest of its original
+    producer's record and that producer's run. ``unratified`` is what its
+    record states of being unratified ("true", "false" or "unknown"; ""
+    for nothing). ``kinds`` are the types of the statements the origin is
+    on, "" for an operational identity record link, which states none.
+    Gathered from all its rows: each decision revision the origin names,
+    each stage of its record as (stage, model, prompt hash), each
+    limitation its record states, and each human confirmation a separate
+    reference records, as (actor, time, decision revision)."""
+
+    entity: str
+    label: str
+    method: str
+    method_label: str
+    record_sha256: str
+    cluster: str
+    map_hash: str
+    assignment_revision: str
+    origin_record_sha256: str
+    origin_run: str
+    unratified: str
+    kinds: frozenset[str]
+    decision_revisions: tuple[str, ...]
+    stages: tuple[tuple[str, str, str], ...]
+    limitations: tuple[str, ...]
+    confirmations: tuple[tuple[str, str, str], ...]
+
+
+# the cells of an identity-provenance row that tell one origin of an entity
+# from another: its record (by its item and its digest), its method,
+# cluster and assignment revision, its original producer's record and run,
+# and its record's map hash and unratified mark. The query gives an origin
+# a row for each statement it is on, each decision revision it names, each
+# confirmation, each stage of its record and each limitation; those rows
+# are one origin.
+ORIGIN_CELLS = (
+    "record",
+    "recordSha256",
+    "method",
+    "cluster",
+    "assignmentRevision",
+    "originRecordSha256",
+    "originRun",
+    "mapHash",
+    "unratified",
+)
+
+
+def identity_origins(rows: Iterable[dict]) -> dict[str, list[IdentityOrigin]]:
+    """The identity-provenance query's rows as the origins of each entity,
+    by its QID: rows that agree on every one of ORIGIN_CELLS are one
+    origin, and any two that differ in one are two, so no origin is merged
+    into another and none is picked."""
+    grouped: dict[tuple[str, ...], list[dict]] = defaultdict(list)
+    for row in rows:
+        key = (qid_of(row, "entity"), *(cell(row, n) for n in ORIGIN_CELLS))
+        grouped[key].append(row)
+
+    def gathered(group: list[dict], *names: str) -> tuple:
+        """Each distinct value of the cells `names` the group's rows give,
+        sorted; a row without its first cell gives none."""
+        found = {
+            tuple(cell(row, name) for name in names)
+            for row in group
+            if cell(row, names[0])
+        }
+        return tuple(sorted(found))
+
+    origins: dict[str, list[IdentityOrigin]] = defaultdict(list)
+    for group in grouped.values():
+        first = group[0]
+        entity = qid_of(first, "entity")
+        origins[entity].append(
+            IdentityOrigin(
+                entity=entity,
+                label=cell(first, "entityLabel"),
+                method=qid_of(first, "method"),
+                method_label=cell(first, "methodLabel"),
+                record_sha256=cell(first, "recordSha256"),
+                cluster=cell(first, "cluster"),
+                map_hash=cell(first, "mapHash"),
+                assignment_revision=cell(first, "assignmentRevision"),
+                origin_record_sha256=cell(first, "originRecordSha256"),
+                origin_run=cell(first, "originRun"),
+                unratified=cell(first, "unratified"),
+                kinds=frozenset(qid_of(row, "kind") for row in group),
+                decision_revisions=tuple(
+                    each
+                    for (each,) in gathered(group, "originDecisionRevision")
+                ),
+                stages=gathered(group, "stage", "model", "prompt"),
+                limitations=tuple(
+                    each for (each,) in gathered(group, "limitation")
+                ),
+                confirmations=gathered(
+                    group, "actor", "confirmedAt", "decisionRevision"
+                ),
+            )
+        )
+    return dict(origins)
+
+
+# what an origin's record states of being unratified, as its entry says it
+# (the record item's `unratified process`): only "true" is unreviewed
+# machine output, and "unknown" claims neither review nor its absence
+UNRATIFIED = {
+    "true": "unreviewed machine output: its record is marked unratified",
+    "false": "its record is marked not unratified",
+    "unknown": "its record does not say whether it is unratified",
+}
+# how many characters of a long identifier an origin's entry shows
+SHORT = 12
+# the heading the identity page lists an origin under when it is on an
+# operational identity record link, which states no type
+UNTYPED_ORIGINS = "No type stated: an operational identity record link"
+
+
+def short_code(value: str) -> str:
+    """An identifier (a SHA-256, a cluster ID, a revision) in a ``code``
+    element, cut to its first SHORT characters, with the whole value as
+    the element's title. A decision revision ("<id>:<n>") keeps its
+    number after its cut id; a value no longer than SHORT shows whole."""
+    head, colon, number = value.rpartition(":")
+    if not (colon and number.isdigit()):
+        head, number = value, ""
+    shown = head if len(head) <= SHORT else head[:SHORT] + "…"
+    if number:
+        shown += f":{number}"
+    return f'<code title="{esc(value)}">{esc(shown)}</code>'
+
+
+def prompt_code(value: str) -> str:
+    """A stage's prompt hash in a ``code`` element. A run record states it
+    as "<template name>:<SHA-256>": the name shows whole and the digest is
+    cut to its first SHORT characters, with the whole value as the
+    element's title. A value of another shape is cut as ``short_code``
+    cuts it."""
+    name, colon, sha256 = value.rpartition(":")
+    if not (colon and re.fullmatch(r"[0-9a-f]{64}", sha256)):
+        return short_code(value)
+    shown = f"{name}:{sha256[:SHORT]}…"
+    return f'<code title="{esc(value)}">{esc(shown)}</code>'
 
 
 class SiteBuilder:
@@ -1316,6 +1471,9 @@ class SiteBuilder:
         people = self.run(self._instance_query(PEOPLE_QUERY))
         statements = self.run(self._instance_query(STATEMENTS_QUERY))
         timeline = self.run(self._library_query("person-timeline"))
+        identity = identity_origins(
+            self.run(self._library_query("identity-provenance"))
+        )
         gallery = self.run(self._library_query("photo-gallery"))
         inconsistencies = disagreement.disagreements(
             self.run, self.properties, self.items, self.config.concept_uri
@@ -1374,6 +1532,7 @@ class SiteBuilder:
                     naming.get(qid, []),
                     undated.get(qid, []),
                     [u for u in unions if qid in u.partners],
+                    origins=identity.get(qid, []),
                 ),
             )
         for row in artifacts:
@@ -1394,6 +1553,16 @@ class SiteBuilder:
         self._write("timeline.json", self.timeline_feed(timeline))
         self._write("gallery.html", self.gallery_page(gallery))
         self._write("places.html", self.places_page(places, place_tree))
+        self._write(
+            "identity.html",
+            self.identity_page(
+                {
+                    qid: found
+                    for qid, found in identity.items()
+                    if qid not in self.people
+                }
+            ),
+        )
         self._write(
             "inconsistencies.html", self.inconsistencies_page(inconsistencies)
         )
@@ -2057,6 +2226,112 @@ class SiteBuilder:
             + "</ul>"
         )
 
+    @staticmethod
+    def origin_html(origin: IdentityOrigin) -> str:
+        """One identity origin as an entry: the method that made it, by
+        its label; what its record states of being unratified (UNRATIFIED);
+        each human confirmation beside it, with its actor, its time as the
+        graph gives it and its decision revision, or "not confirmed by a
+        person" for none; then its cluster, map hash, assignment and
+        decision revisions, process record and original producer's record,
+        each shortened (``short_code``), its original run, its record's
+        stages with their models and prompts (each prompt by its template
+        name and shortened digest, ``prompt_code``), and its stated
+        limitations, each only where the rows give it. The record is named
+        by its digest alone, never by a file."""
+        status = []
+        if origin.unratified:
+            status.append(
+                esc(
+                    UNRATIFIED.get(
+                        origin.unratified,
+                        f"its record's unratified mark: {origin.unratified}",
+                    )
+                )
+            )
+        status += [
+            f"confirmed by {esc(actor)} at {esc(at)}, decision revision "
+            + short_code(revision)
+            for actor, at, revision in origin.confirmations
+        ] or ["not confirmed by a person"]
+        details = [
+            f"{name} {short_code(value)}"
+            for name, value in (
+                ("cluster", origin.cluster),
+                ("map hash", origin.map_hash),
+                ("assignment revision", origin.assignment_revision),
+            )
+            if value
+        ]
+        if origin.decision_revisions:
+            many = len(origin.decision_revisions) > 1
+            noun = "revisions" if many else "revision"
+            details.append(
+                f"decision {noun} "
+                + ", ".join(map(short_code, origin.decision_revisions))
+            )
+        details.append(f"process record {short_code(origin.record_sha256)}")
+        if origin.origin_record_sha256:
+            details.append(
+                "original producer record "
+                + short_code(origin.origin_record_sha256)
+            )
+        if origin.origin_run:
+            details.append(
+                f"original run <code>{esc(origin.origin_run)}</code>"
+            )
+        for stage, model, prompt in origin.stages:
+            details.append(
+                f"stage <code>{esc(stage)}</code>"
+                + (f", model <code>{esc(model)}</code>" if model else "")
+                + (f", prompt {prompt_code(prompt)}" if prompt else "")
+            )
+        lines = [
+            f"<strong>{esc(origin.method_label or origin.method)}</strong>"
+            " — " + "; ".join(status),
+            '<span class="qualifiers">' + "; ".join(details) + "</span>",
+            *(
+                f"stated limitation: {esc(limitation)}"
+                for limitation in origin.limitations
+            ),
+        ]
+        return "<br>".join(lines)
+
+    def origins_html(self, origins: list[IdentityOrigin]) -> str:
+        """Origins as a list of their entries (``origin_html``), every one
+        of them, sorted by the text a reader sees, so none stands first
+        for any reason but its text."""
+        entries = sorted(
+            (self.origin_html(origin) for origin in origins),
+            key=lambda entry: (natural_order(visible(entry)), entry),
+        )
+        return (
+            '<ul class="origins">'
+            + "".join(f"<li>{entry}</li>" for entry in entries)
+            + "</ul>"
+        )
+
+    def identity_html(self, origins: list[IdentityOrigin]) -> str:
+        """A person page's "Identity origins": each origin the graph
+        records for them (``origins_html``), on a kind statement or an
+        operational identity record link alike, or a line that says the
+        graph records none."""
+        heading = "<h2>Identity origins</h2>"
+        if not origins:
+            return (
+                heading + '<p class="sub">the graph records no identity '
+                "origin for them</p>"
+            )
+        return (
+            heading + '<p class="sub">where the graph says this identity '
+            "came from: each origin it records, with the method that made "
+            "it and its process record, named by its digest. An origin "
+            "saved as unreviewed machine output says so, and still says so "
+            "after a person confirms it: a confirmation is listed beside "
+            "its origin, never in its place. Every origin is listed; none "
+            "is preferred.</p>" + self.origins_html(origins)
+        )
+
     def person_page(
         self,
         person: dict,
@@ -2064,6 +2339,8 @@ class SiteBuilder:
         naming: list[Said] | None = None,
         undated: list[tuple[tuple[str, str], ...]] | None = None,
         unions: list[UnionShown] | None = None,
+        *,
+        origins: list[IdentityOrigin] | None = None,
     ) -> str:
         """A person's page: every statement about them, each value with
         its sources, under its property, a date of death of unknown value
@@ -2071,8 +2348,9 @@ class SiteBuilder:
         "died by" date the shared derivation gives (``derived_html``) and
         each death event a curator makes of theirs that states no date
         (``undated``, its sources as ``undated_deaths`` gives them); then
-        the unions they take part in (``union_html``) and the artifacts
-        that name them."""
+        the unions they take part in (``union_html``), the artifacts
+        that name them, and, when ``origins`` is given, the identity
+        origins the graph records for them (``identity_html``)."""
         qid = qid_of(person, "person")
         label = cell(person, "personLabel") or qid
         aliases = [a for a in cell(person, "aliases").split("|") if a]
@@ -2116,6 +2394,8 @@ class SiteBuilder:
         body.append("</dl>")
         body.append(self.union_html(qid, unions or []))
         body.append(self.named_in_html(naming or []))
+        if origins is not None:
+            body.append(self.identity_html(origins))
         body.append(
             f'<p class="sub">'
             f'<a href="{esc(self.config.wikibase_url)}/wiki/Item:{qid}">'
@@ -2786,6 +3066,72 @@ class SiteBuilder:
                 + "</p>"
             )
         return "".join(parts)
+
+    def identity_page(self, origins: dict[str, list[IdentityOrigin]]) -> str:
+        """The identity page: the identity origins (``origins``, by the
+        QID of their entity) of every entity that has no person page,
+        places, organisations and every other kind, under the type of the
+        statement each origin is on, by the type's manifest label (its QID
+        for a type the manifest does not hold), and, last, under a heading
+        of their own, those on an operational identity record link, which
+        states no type. Under each, every entity by its label, an artifact
+        linked to its page, with its origins (``origins_html``)."""
+        labels = load_manifest().items
+        keys = {qid: key for key, qid in self.items.items()}
+
+        def heading(kind: str) -> str:
+            if not kind:
+                return UNTYPED_ORIGINS
+            item = labels.get(keys.get(kind, ""))
+            return item.label if item else kind
+
+        by_heading: dict[str, dict[str, list[IdentityOrigin]]] = defaultdict(
+            lambda: defaultdict(list)
+        )
+        for qid, found in origins.items():
+            for origin in found:
+                for name in {heading(kind) for kind in origin.kinds}:
+                    by_heading[name][qid].append(origin)
+        body = [
+            "<h1>Identity origins</h1>",
+            '<p class="sub">where the graph says the identity of each '
+            "entity that has no person page came from: places, "
+            "organisations and every other kind, under the type of the "
+            "statement each origin is recorded on; an origin on an "
+            "operational identity record link, which states no type, is "
+            "under a heading of its own. The origins of people and "
+            "families are on their own pages. Each origin names the method "
+            "that made it and its process record, by its digest. An origin "
+            "saved as unreviewed machine output says so, and still says so "
+            "after a person confirms it: a confirmation is listed beside "
+            "its origin, never in its place. Every origin is listed; none "
+            "is preferred.</p>",
+        ]
+        for heading in sorted(
+            by_heading,
+            key=lambda text: (text == UNTYPED_ORIGINS, text.casefold()),
+        ):
+            body.append(f"<h2>{esc(heading)}</h2>")
+            entities = by_heading[heading]
+            for qid in sorted(
+                entities,
+                key=lambda q: (natural_order(entities[q][0].label or q), q),
+            ):
+                label = esc(entities[qid][0].label or qid)
+                if qid in self.artifact_qids:
+                    label = f'<a href="artifacts/{esc(qid)}.html">{label}</a>'
+                body.append(
+                    f"<h3>{label} "
+                    f'<a class="sub" href="{esc(self.config.wikibase_url)}'
+                    f'/wiki/Item:{esc(qid)}">{esc(qid)}</a></h3>'
+                    + self.origins_html(entities[qid])
+                )
+        if not by_heading:
+            body.append(
+                "<p>The graph records no identity origin of an entity "
+                "that has no person page.</p>"
+            )
+        return self._page("Identity origins", "".join(body))
 
     def inconsistencies_page(self, rows: list[Disagreement]) -> str:
         """The disagreement report (yizkr.disagreement) as a page: both

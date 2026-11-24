@@ -11,7 +11,7 @@ Use focused checks while implementing and CI's broad offline result for the revi
 | Documentation or mechanical edits | Relevant formatting, links and diagrams; review changed commands. Executable prompts and queries are behavior inputs even when stored in Markdown. |
 | Internal refactor | Affected existing behavioral tests and callers, plus the broad offline result. Add cases for meaningful coverage gaps; an equivalent implementation does not itself require new tests. |
 | Changed parser or schema semantics | Focused fictional semantic and rejected-input cases for the changed behavior, plus affected callers. Fixtures need not preserve known defects. |
-| Material prompt, model or inference change | Schema/wiring checks and observed outputs from a bounded representative sample or suitable corpus evidence, with configuration recorded. Purely mechanical edits do not automatically require fresh model calls. |
+| Material prompt, model or inference change | Schema/wiring checks and observed outputs from a bounded representative sample or suitable existing corpus evidence, with configuration recorded. Purely mechanical edits do not automatically require fresh model calls. |
 | Writer, identity, migration or query boundary | Repeatable fictional checks against the real affected writer/query engine; verify returned evidence and relevant repeated or interrupted writes. |
 | Privacy, exclusions or review gates | Positive and negative boundary cases inspecting actual outbound model inputs, persisted statements or emitted exports, as applicable. |
 | Cancellation, locking or concurrency | Fake clocks for scheduling logic; controlled real threads, processes or locks for operating-system behavior. |
@@ -31,7 +31,7 @@ Migrate incidental assertions within the subsystem change that encounters them. 
 
 These are responsibilities of the affected subsystem work, not a separate repository-wide rewrite prerequisite. [Transcription validation performance](#transcription-validation-performance) has a separate local check.
 
-The [small semantic acceptance set](#semantic-acceptance) checks deterministic archive behavior; real-model evaluation is a separate bounded activity. A canned engine establishes orchestration, not inference quality. Whole-corpus evidence is required when cross-document interactions or material uncertainty remain beyond bounded checks; record the reason and affected stages. A prompt, model or pre-write code edit alone does not require a corpus run. The procedure and local-only boundary are in [AGENT_PROTOCOL.md §5](AGENT_PROTOCOL.md#5-integration-and-corpus-evidence).
+The [small semantic acceptance set](#semantic-acceptance) checks deterministic archive behavior; real-model evaluation is a separate bounded activity. A canned engine establishes orchestration, not inference quality. Whole-corpus evidence is required when cross-document interactions or material uncertainty remain beyond bounded checks; record the reason and affected stages. A prompt, model or pre-write code edit alone does not require a corpus run. Changes merge in the order of the corpus evidence they need, and whole-corpus evidence is read after they merge, when the affected stage is next run on main; a regression it shows is fixed by a follow-up change. A change to the clustering settings is the exception, with its scratch diff and the owner's sign-off before merge. The order, the procedure and the local-only boundary are in [AGENT_PROTOCOL.md §5](AGENT_PROTOCOL.md#5-integration-and-corpus-evidence).
 
 ## Current test layers and limits
 

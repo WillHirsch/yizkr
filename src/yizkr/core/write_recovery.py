@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from yizkr.core.smoke_marker import is_smoke_marker
 from yizkr.core.wiki import RecoveryEvidenceError
 from yizkr.pipeline.cancellation import check_cancelled
 
@@ -159,7 +160,8 @@ class CreationRegistry:
     creation revision. Explicit ensure, claim, create and reconcile operations
     publish records.
     An absent generation may initialize only on an empty or vocabulary-only
-    graph; existing ingestion requires a separate verified migration.
+    graph, where a smoke-test marker item (`core.smoke_marker`) does not
+    count; existing ingestion requires a separate verified migration.
     """
 
     def __init__(self, client):
@@ -189,14 +191,28 @@ class CreationRegistry:
         return generation
 
     def check_generation(self) -> Generation | None:
-        """Check admission without publishing a generation or other effects."""
+        """Check admission without publishing a generation or other effects.
+
+        With no generation, every entity outside the vocabulary must be a
+        smoke-test marker item. A property refuses at once. Each item's
+        entity data is read, not the search index, and the first that is
+        not a marker refuses without reading the rest."""
         generation = self.generation
         if generation is not None:
             return generation
         ids = set(self.client.list_entity_ids())
         if ids:
             properties, items = self.client.vocabulary()
-            if ids - set(properties.values()) - set(items.values()):
+            others = sorted(
+                ids - set(properties.values()) - set(items.values())
+            )
+            if others and not (
+                all(entity_id.startswith("Q") for entity_id in others)
+                and all(
+                    entity is not None and is_smoke_marker(entity)
+                    for _, entity in self.client.entity_data(others)
+                )
+            ):
                 raise CreationRefused(
                     "existing ingested entities have no deployment "
                     "generation; "

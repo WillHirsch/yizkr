@@ -17,9 +17,11 @@ from yizkr.core.write_recovery import (
 )
 from yizkr.pipeline.assignment_stages import accept_reviewed_assignments
 from yizkr.pipeline.claim_review import (
+    LOCATION_REFUSALS,
     ClaimDecisionInput,
     ClaimRefused,
     ClaimSelection,
+    locate_support,
     pin_claim_review,
     prepare_claim_review,
     prepare_source_claims,
@@ -1032,6 +1034,37 @@ def test_whole_source_reports_an_excerpt_the_reading_repeats(case):
         "excerpt_repeated",
         "support",
     )
+
+
+def test_the_public_location_check_is_the_one_preparation_applies(case):
+    """locate_support gives each claim of a source what whole-source
+    preparation gives it: a prepared claim's located support, the location
+    code of a claim refused for its support, and a location for a claim
+    refused for a role."""
+    request = three_claims(case)
+    source = request.sources[0]
+    batch = source.batch.model_copy(deep=True)
+    repeated = batch.claims[0].model_copy(deep=True)
+    repeated.source.transcription_excerpt.text = "Löbig"
+    batch.claims.append(repeated)
+    prepared = whole(case, replace_batch(request, batch))
+    located, codes = {}, {}
+    for index, claim in enumerate(batch.claims):
+        try:
+            located[index] = locate_support(claim.source, source.reading)
+        except ClaimRefused as refusal:
+            codes[index] = refusal.code
+    assert [c.selection.index for c in prepared.claims] == [0]
+    assert prepared.claims[0].provenance["source"] == located[0]
+    assert codes == {
+        index: code
+        for (_, index), (code, _) in refused(prepared).items()
+        if code in LOCATION_REFUSALS
+    }
+    assert set(codes) == {1, 3}
+    # the claim refused for its unassigned role is one the check locates
+    assert refused(prepared)[source.artifact_sha1, 2][0] == "no_assignment"
+    assert 2 in located
 
 
 @pytest.mark.parametrize(

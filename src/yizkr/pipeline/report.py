@@ -56,6 +56,16 @@ record of its calls: each miss's reason (`absent`, `rejected`,
 call's key are kept in the cache's entry, not in the run directory, and
 which of them changed shows only against a baseline run (ADR-0032 §11).
 
+**Assignment admission.** Each planned document's transcription and batch
+are also read as the assignment path reads them, as a `Transcription` and
+a `ClaimBatch`, and counted as that path's own checks take them
+(`_admission`): each mention as review_mentions.observe_mentions observes
+it, and each claim's support as claim review's source-location check
+(claim_review.locate_support) locates it. Both read their arguments alone.
+A view that is not of the models' shape, as one an older run made may not
+be, counts its document among those whose views cannot be read; every
+planned document is counted, under how it stands for the checks.
+
 **Outputs.** `write_report` writes three files into the run directory's
 REPORT_DIR, a folder made private to its owner and opened once: each file
 is written through the folder as it was opened, never through its path
@@ -133,6 +143,7 @@ from yizkr.claims import (
     REJECT_REASONS,
     SOURCE_FORM,
     SUBJECT_FORMS,
+    ClaimBatch,
     JudgementNote,
     PersonStructure,
     PlaceStructure,
@@ -146,6 +157,11 @@ from yizkr.pipeline.anomalies import (
     Checks,
     route,
 )
+from yizkr.pipeline.claim_review import (
+    LOCATION_REFUSALS,
+    ClaimRefused,
+    locate_support,
+)
 from yizkr.pipeline.clustering import WEDDING_KINDS
 from yizkr.pipeline.critique import AXES, CATEGORIES, Finding
 from yizkr.pipeline.critique import entry as critique_entry
@@ -153,6 +169,7 @@ from yizkr.pipeline.document_state import (
     EXCERPT,
     EXCERPTS_DIR,
 )
+from yizkr.pipeline.fingerprints import local_refs
 from yizkr.pipeline.llm import OUTPUT_LIMIT, ROLE_STAGES, USAGE_TOKENS
 from yizkr.pipeline.monitor import (
     _CLASS_NAME,
@@ -163,6 +180,10 @@ from yizkr.pipeline.monitor import (
     _value,
     failure_label,
     reason_label,
+)
+from yizkr.pipeline.review_mentions import (
+    OBSERVATION_LIMITATIONS,
+    observe_mentions,
 )
 from yizkr.pipeline.rundir import (
     ALERTS,
@@ -200,6 +221,7 @@ from yizkr.pipeline.stage_planning import (
     VIEWS,
 )
 from yizkr.pipeline.stages import read_jsonl, staging_path
+from yizkr.pipeline.transcribe import Transcription
 from yizkr.pipeline.writer import REFUSAL_REASONS
 from yizkr.staticsite import RELEASE_CAUSES, UNSTATED_KIND
 
@@ -384,6 +406,29 @@ RECORD_STATUSES = frozenset(
     for status in get_args(model.model_fields["status"].annotation)
 )
 MAP_STATES = frozenset({"read", "missing", "unreadable"})
+# what the assignment path's own checks make of a planned document's saved
+# views (`_admission`): its mentions by their observation
+# (review_mentions.observe_mentions), anchored or by the limitation that
+# leaves one unanchored; its claims by claim review's source-location check
+# (claim_review.locate_support), located, refused by it, or of a document
+# with no reading (claim review's own code); and its claims by whether their
+# local references are anchored, every one of them, not all, or there are
+# none
+ANCHORED = "anchored"
+MENTION_OUTCOMES = (ANCHORED, *OBSERVATION_LIMITATIONS)
+LOCATED = "located"
+NO_READING = "no_reading"
+CLAIM_OUTCOMES = (LOCATED, NO_READING, *LOCATION_REFUSALS)
+REFERENCE_STATES = ("anchored", "not_anchored", "no_local_reference")
+# how a planned document stands for those checks: observed; no batch view
+# of a completed stage; a view of a completed stage that is missing, cannot
+# be read, or is not the model the assignment path reads it as; or products
+# observe_mentions refuses to observe
+OBSERVED = "observed"
+NO_BATCH = "no_batch"
+UNREADABLE = "unreadable"
+UNOBSERVABLE = "unobservable"
+ADMISSION_STATES = (OBSERVED, NO_BATCH, UNREADABLE, UNOBSERVABLE)
 # the leading labels of the reasons stages give an output that needs
 # attention: the extraction's fallback tiers and empty batches, and the
 # clustering stage's clusters left unmerged and pairs left undecided
@@ -1225,6 +1270,100 @@ def _slide_routing(transcription: dict) -> dict:
     }
 
 
+def _batch_stage(document: Document) -> str | None:
+    """The completed stage whose view is the document's batch, if any."""
+    return next(
+        (
+            name
+            for name in document.stages
+            if name in STAGES
+            and STAGES[name].artifact == "batch.json"
+            and document.completed(name)
+        ),
+        None,
+    )
+
+
+def _admission(
+    document: Document, reading: dict | None, batch: dict
+) -> dict[str, Any]:
+    """What the assignment path's own checks make of the document's saved
+    views, read as the models it reads them as (Transcription, ClaimBatch):
+    each mention as observe_mentions observes it, anchored or by its
+    limitation; each claim as claim review's source-location check
+    (locate_support) locates its source and then its circumstance source,
+    or NO_READING with no reading; and each claim by its local references
+    (fingerprints.local_refs, the subject, item value and item-valued
+    qualifiers claim review gives roles), all anchored, not all, or none.
+    Every name is one of the checks' own (MENTION_OUTCOMES, CLAIM_OUTCOMES)
+    or OTHER. Views that are not those models are UNREADABLE, and products
+    observe_mentions refuses (duplicate local IDs, a reference with no
+    entity record, a reading of another source) are UNOBSERVABLE."""
+    try:
+        products = ClaimBatch.model_validate(batch)
+        transcription = (
+            Transcription.model_validate(reading)
+            if reading is not None
+            else None
+        )
+    except (ValueError, RecursionError):
+        return {"status": UNREADABLE}
+    try:
+        observations = observe_mentions(document.sha1, products, transcription)
+    except ValueError:
+        return {"status": UNOBSERVABLE}
+    mentions: Counter = Counter()
+    anchored: dict[str, bool] = {}
+    for observation in observations:
+        # claim review's test of a role's mention: anchored, with no
+        # limitation
+        anchored[observation.local_id] = (
+            observation.anchor is not None and not observation.limitations
+        )
+        outcome = (
+            observation.limitations[0] if observation.limitations else ANCHORED
+        )
+        mentions[_known(outcome, MENTION_OUTCOMES)] += 1
+    claims: Counter = Counter()
+    references: Counter = Counter()
+    located: Counter = Counter()
+    for claim in products.claims:
+        if transcription is None:
+            outcome = NO_READING
+        else:
+            try:
+                for support in (claim.source, claim.circumstance_source):
+                    if support is not None:
+                        locate_support(support, transcription)
+                outcome = LOCATED
+            except ClaimRefused as refused:
+                outcome = refused.code
+        outcome = _known(outcome, CLAIM_OUTCOMES)
+        claims[outcome] += 1
+        roles = [
+            anchored.get(ref.local_id, False)
+            for ref in local_refs(
+                products.model_copy(update={"claims": [claim]})
+            )
+        ]
+        if not roles:
+            state = "no_local_reference"
+        elif all(roles):
+            state = "anchored"
+        else:
+            state = "not_anchored"
+        references[state] += 1
+        if outcome == LOCATED:
+            located[state] += 1
+    return {
+        "status": OBSERVED,
+        "mentions": mentions,
+        "claims": claims,
+        "references": references,
+        "located_references": located,
+    }
+
+
 def _read_views(document: Document, directory: Path, state: dict) -> None:
     """What the document's views hold, for each stage that completed: the
     transcription's language, route and how its language was resolved;
@@ -1232,12 +1371,17 @@ def _read_views(document: Document, directory: Path, state: dict) -> None:
     extraction's marriages by their weddings (`_marriages`); the extraction's
     coverage (chunks, rejects, fallback tiers, and the mention records
     and judgement notes it counts: None for both unless it counts both);
-    and the critique's findings by class. A view that is missing or
-    cannot be read counts nothing, and is noted."""
+    the critique's findings by class; and what the assignment path's own
+    checks make of the transcription and the batch (`_admission`). A view
+    that is missing or cannot be read counts nothing in the other figures,
+    and is noted. The admission counts its document as UNREADABLE instead,
+    as it does a view that is not of the model the assignment path reads it
+    as, which is not noted."""
     document.directory = directory.name
     views = document.views
     detail = state.get("detail")
     detail = detail if isinstance(detail, dict) else {}
+    found = None
     if document.completed("transcription"):
         found = _view(
             document, "transcription", directory / VIEWS["transcription"], dict
@@ -1253,21 +1397,18 @@ def _read_views(document: Document, directory: Path, state: dict) -> None:
                 **_pages(found.get("pages")),
                 "slide_routing": _slide_routing(found),
             }
-    stage = next(
-        (
-            name
-            for name in document.stages
-            if name in STAGES
-            and STAGES[name].artifact == "batch.json"
-            and document.completed(name)
-        ),
-        None,
-    )
+    stage = _batch_stage(document)
     batch = (
         _view(document, stage, directory / VIEWS[stage], dict)
         if stage is not None
         else None
     )
+    if stage is None:
+        views["admission"] = {"status": NO_BATCH}
+    elif batch is None or "transcription" in document.unread:
+        views["admission"] = {"status": UNREADABLE}
+    else:
+        views["admission"] = _admission(document, found, batch)
     if batch is not None:
         entities = [
             e for e in _list(batch.get("entities")) if isinstance(e, dict)
@@ -2569,6 +2710,7 @@ def _aggregate(
         "content": _aggregate_content(
             documents, clusters, flags, vocabulary, written, placed, sited
         ),
+        "assignment_admission": _aggregate_admission(documents),
         "calls": _aggregate_calls(fold, vocabulary),
         "control": _aggregate_control(control, vocabulary),
     }
@@ -3342,6 +3484,75 @@ def _aggregate_content(
     }
 
 
+def _admission_row(
+    states: Counter,
+    mentions: Counter,
+    claims: Counter,
+    references: Counter,
+    located: Counter,
+) -> dict[str, Any]:
+    """One kind's figures of the assignment admission, or all kinds'."""
+    return {
+        "documents": states.total(),
+        **{state: states[state] for state in ADMISSION_STATES},
+        "mentions": mentions.total(),
+        "mentions_by_outcome": _by_count(mentions),
+        "anchored_share": _share(mentions[ANCHORED], mentions.total()),
+        "claims": claims.total(),
+        "claims_by_outcome": _by_count(claims),
+        "located_share": _share(claims[LOCATED], claims.total()),
+        "claims_by_references": {
+            state: references[state] for state in REFERENCE_STATES
+        },
+        "located_by_references": {
+            state: located[state] for state in REFERENCE_STATES
+        },
+        # the located claims none of whose local references is unanchored:
+        # at most the claims the assignment path can admit
+        "upper_bound": located["anchored"] + located["no_local_reference"],
+    }
+
+
+def _aggregate_admission(documents: dict[str, Document]) -> dict[str, Any]:
+    """What the assignment path's own checks make of each planned
+    document's saved views (`_admission`), by the document's kind and for
+    all kinds: every planned document is counted under how it stands for
+    them (ADMISSION_STATES), one with no directory to read as UNREADABLE
+    when its batch's stage completed and as NO_BATCH otherwise, and only an
+    observed one counts mentions and claims."""
+    parts = ("states", "mentions", "claims", "references", "located")
+    kinds: dict[str, dict[str, Counter]] = {}
+    for document in documents.values():
+        if not document.planned:
+            continue
+        admission = document.views.get("admission") or {
+            "status": UNREADABLE if _batch_stage(document) else NO_BATCH
+        }
+        counts = kinds.setdefault(
+            _kind(document.kind), {part: Counter() for part in parts}
+        )
+        counts["states"][admission["status"]] += 1
+        if admission["status"] == OBSERVED:
+            counts["mentions"].update(admission["mentions"])
+            counts["claims"].update(admission["claims"])
+            counts["references"].update(admission["references"])
+            counts["located"].update(admission["located_references"])
+    every = {part: Counter() for part in parts}
+    for counts in kinds.values():
+        for part in parts:
+            every[part].update(counts[part])
+    ordered = sorted(
+        kinds.items(), key=lambda item: (-item[1]["states"].total(), item[0])
+    )
+    return {
+        "all": _admission_row(*(every[part] for part in parts)),
+        "by_kind": {
+            kind: _admission_row(*(counts[part] for part in parts))
+            for kind, counts in ordered
+        },
+    }
+
+
 def _subject_forms(claims: list[dict], entities: list[dict]) -> Counter:
     """A batch's document-subject claims by the form of their subject
     (claims.SUBJECT_FORMS, ADR-0039 §10.1), read from the claims as the
@@ -3697,6 +3908,7 @@ def _sections(aggregate: Mapping[str, Any], *, local: bool) -> list[_Section]:
         *_stage_sections(aggregate["stages"], aggregate["corpus_stages"]),
         _anomalies_section(aggregate["anomalies"]),
         *_content_sections(aggregate["content"]),
+        _admission_section(aggregate["assignment_admission"]),
         *_calls_sections(aggregate["calls"]),
         _control_section(aggregate["control"]),
     ]
@@ -4261,6 +4473,123 @@ def _content_sections(content: Mapping[str, Any]) -> list[_Section]:
         ),
     ]
     return sections
+
+
+def _admission_section(admission: Mapping[str, Any]) -> _Section:
+    """The assignment admission (`_aggregate_admission`): its documents,
+    mentions and claims by kind, and for all kinds."""
+    rows = [*admission["by_kind"].items(), ("all", admission["all"])]
+    return _Section(
+        "Assignment admission",
+        [
+            "What the assignment path's own checks make of the planned "
+            "documents' saved views, read as the models it reads them as: "
+            "each mention as `review_mentions.observe_mentions` observes it, "
+            "and each claim as claim review's source-location check "
+            "(`claim_review.locate_support`) locates its source and then its "
+            "circumstance source in the reading, or `no_reading` with none. "
+            "An upper bound: registration, accepted assignments, identity "
+            "review and claim review's other checks are not applied, and "
+            "reviewed ingestion admits the saved products of text and media "
+            "sources alone. A view not readable is missing, cannot be read, "
+            "or is not of the models' current shape, as a view an older run "
+            "made may not be. An excerpt is located only where the reading "
+            "holds it exactly and once, so the claims not located are not "
+            "those of Excerpts not in their source, which compares folded "
+            "text.",
+            _table(
+                (
+                    "Kind",
+                    "Documents",
+                    "Observed",
+                    "No completed batch",
+                    "Views not readable",
+                    "Mentions not observable",
+                ),
+                [
+                    (
+                        kind,
+                        row["documents"],
+                        row[OBSERVED],
+                        row[NO_BATCH],
+                        row[UNREADABLE],
+                        row[UNOBSERVABLE],
+                    )
+                    for kind, row in rows
+                ],
+                numbers=(1, 2, 3, 4, 5),
+            ),
+            _table(
+                (
+                    "Kind",
+                    "Mentions",
+                    "Anchored",
+                    "Share",
+                    "Not anchored, by limitation",
+                ),
+                [
+                    (
+                        kind,
+                        row["mentions"],
+                        row["mentions_by_outcome"].get(ANCHORED, 0),
+                        _pct(row["anchored_share"]),
+                        _listed(
+                            {
+                                name: count
+                                for name, count in row[
+                                    "mentions_by_outcome"
+                                ].items()
+                                if name != ANCHORED
+                            }
+                        ),
+                    )
+                    for kind, row in rows
+                ],
+                numbers=(1, 2, 3),
+            ),
+            _table(
+                (
+                    "Kind",
+                    "Claims",
+                    "Located",
+                    "Share",
+                    "Not located, by reason",
+                    "Every local reference anchored",
+                    "No local reference",
+                    "Upper bound",
+                ),
+                [
+                    (
+                        kind,
+                        row["claims"],
+                        row["claims_by_outcome"].get(LOCATED, 0),
+                        _pct(row["located_share"]),
+                        _listed(
+                            {
+                                name: count
+                                for name, count in row[
+                                    "claims_by_outcome"
+                                ].items()
+                                if name != LOCATED
+                            }
+                        ),
+                        row["claims_by_references"]["anchored"],
+                        row["claims_by_references"]["no_local_reference"],
+                        row["upper_bound"],
+                    )
+                    for kind, row in rows
+                ],
+                numbers=(1, 2, 3, 5, 6, 7),
+            ),
+            "A claim's local references are its subject, item value and "
+            "item-valued qualifiers, the roles claim review assigns. A claim "
+            "with none, whose roles are artifacts, vocabulary items or bare "
+            "QIDs, is counted apart: claim review refuses a bare QID and "
+            "checks an artifact's registration, neither of which is counted "
+            "here. Upper bound: the claims located none of whose local "
+            "references is unanchored, those with none among them.",
+        ],
+    )
 
 
 # how the report names each reason the writer refuses a claim for

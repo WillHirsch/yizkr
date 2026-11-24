@@ -330,6 +330,37 @@ class WikiClient:
                 claims[entity_id] = entity.get("claims") or {}
         return claims
 
+    def entity_data(self, ids: list[str]) -> Iterator[tuple[str, dict | None]]:
+        """(id, its entity data) for each of `ids`, in order, as
+        `wbgetentities` serves it in every language: its labels,
+        descriptions, aliases, statements and sitelinks, 50 ids a request.
+        A request is made only when its first id is reached, so a reader
+        that stops early reads no further. The data is None for an id the
+        instance does not hold as a live entity: missing, redirected or
+        absent from the response."""
+        for start in range(0, len(ids), 50):
+            batch = ids[start : start + 50]
+            data = self.api_get(
+                {
+                    "action": "wbgetentities",
+                    "ids": "|".join(batch),
+                    "props": "labels|descriptions|aliases|claims|sitelinks",
+                }
+            )
+            entities = data.get("entities")
+            if not isinstance(entities, dict):
+                entities = {}
+            for entity_id in batch:
+                entity = entities.get(entity_id)
+                if (
+                    not isinstance(entity, dict)
+                    or entity.get("id") != entity_id
+                    or "missing" in entity
+                    or "redirects" in entity
+                ):
+                    entity = None
+                yield entity_id, entity
+
     def snapshot(self) -> dict[str, dict]:
         """Everything on the instance: id -> {'label', 'datatype'}."""
         return self.fetch_entities(self.list_entity_ids())

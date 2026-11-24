@@ -568,26 +568,44 @@ class TestRetried:
         assert NOTICE not in assembled
         assert assembled == "[1, 2, " + RETRIED_ANSWER
 
-    def test_with_no_result_the_frame_comes_before_raw_stdout(self):
-        """The assembler answers a stream cut off after the frame alone
-        with the frame's text, as before, never with the raw event stream
-        (through complete(), the frame raises ClassifierRefused first)."""
+    def test_with_no_result_a_frame_is_no_answer_nor_is_the_raw_stream(self):
+        """The assembler gives a stream cut off after the frame alone no
+        answer: neither the frame's text nor the raw event stream. Through
+        complete(), the frame raises ClassifierRefused before the stream
+        is assembled, so the assembler alone shows it."""
         events = [INIT, retried_events("s1")[0]]
-        assert ClaudeCodeClient._assemble_stream(stream(events)) == NOTICE
+        assert ClaudeCodeClient._assemble_stream(stream(events)) == ""
 
-    def test_every_frames_text_is_the_fallback(self):
+    def test_no_frames_text_is_a_fallback(self):
         frame = retried_events("s1")[0]
         other = json.loads(json.dumps(frame))
         other["message"]["content"] = [{"type": "text", "text": " again"}]
         events = [INIT, frame, other]
-        assert ClaudeCodeClient._assemble_stream(stream(events)) == (
-            NOTICE + " again"
-        )
+        assert ClaudeCodeClient._assemble_stream(stream(events)) == ""
 
-    def test_an_empty_result_gives_way_to_the_frame(self):
-        frame, _, result = retried_events("s1")
-        events = [INIT, frame, {**result, "result": ""}]
-        assert ClaudeCodeClient._assemble_stream(stream(events)) == NOTICE
+    def test_an_empty_result_beside_a_frame_is_no_answer(
+        self, cli, clock, tmp_path
+    ):
+        """A refused turn the CLI asked again whose result reports no
+        error but holds no text: the call fails at a zero exit, naming the
+        frame's class and never its notice, and the cache keeps nothing,
+        so the next call asks again."""
+
+        def empty(session):
+            frame, _, result = retried_events(session)
+            return [frame, {**result, "result": ""}]
+
+        cache = open_cache(tmp_path / "cache")
+        cli.script = [{"events": empty, "exit": 0}]
+        client = cached_client(ClaudeCodeClient(), cache, role="transcribe")
+        with pytest.raises(RuntimeError) as raised:
+            client.complete("Read the letter.")
+        assert not isinstance(raised.value, ClassifierRefused)
+        message = str(raised.value)
+        assert "invalid_request" in message and NOTICE not in message
+        assert not list((tmp_path / "cache").glob("*/*.json"))
+        assert client.complete("Read the letter.") == "answer"
+        assert len(cli.calls) == 2
 
     def test_the_answer_and_its_cache_entry_hold_no_notice(
         self, cli, clock, tmp_path

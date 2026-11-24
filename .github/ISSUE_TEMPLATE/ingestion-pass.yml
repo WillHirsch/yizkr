@@ -29,7 +29,11 @@ body:
       description: >-
         What the run must establish, which stages and sources it needs,
         and why bounded fictional or model checks are insufficient if a
-        whole-corpus run is requested. Several related PRs may share a run.
+        whole-corpus run is requested. The run covers every change merged
+        since its baseline
+        ([docs/AGENT_PROTOCOL.md section 5](https://github.com/WillHirsch/yizkr/blob/main/docs/AGENT_PROTOCOL.md#5-integration-and-corpus-evidence)):
+        list each under "PRs verified" below, and say here what its issue
+        asks the run to show.
     validations:
       required: true
   - type: textarea
@@ -69,7 +73,7 @@ body:
     id: commit
     attributes:
       label: Tested revision
-      description: Commit and configuration used; identify any local integration merge of related PRs.
+      description: The commit of main each stage ran on (for a clustering-settings change, the PR's head), and the configuration used.
   - type: textarea
     id: sources
     attributes:
@@ -88,8 +92,9 @@ body:
       label: Results and review
       description: >-
         Aggregate report, diff summary, relevant anomalies, reviewer and
-        verdict. Attribute batched changes where possible; isolate a PR
-        whose effect remains unclear. State the limitations of the evidence.
+        verdict. Attribute figures to the changes the run covers where
+        possible, and name in the verdict each figure that cannot be
+        attributed to one change. State the limitations of the evidence.
   - type: textarea
     id: problems
     attributes:
@@ -97,8 +102,11 @@ body:
       description: >-
         Issues for observed problems. Correct pipeline regressions in code
         and regenerate affected outputs; do not conceal them by repairing
-        the disposable graph. Retained corrections use supported, authorized
-        curation workflows.
+        the disposable graph. Link a follow-up gated on this run's evidence
+        natively as a blocker of the next turn's issue (after the last
+        turn, the first increment's), never as blocked by this issue
+        ([docs/AGENT_PROTOCOL.md section 5](https://github.com/WillHirsch/yizkr/blob/main/docs/AGENT_PROTOCOL.md#5-integration-and-corpus-evidence)).
+        Retained corrections use supported, authorized curation workflows.
   - type: textarea
     id: retained-review
     attributes:

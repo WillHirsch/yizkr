@@ -7,7 +7,9 @@ the WDQS SPARQL endpoint (the wdqs-updater round-trip).
 Idempotent: re-runs reuse the marker item created on the first run.
 The item carries only a label and description — no statements are
 written, so no reference is required (the ADR-0003 reference
-requirement concerns statements).
+requirement concerns statements). Its terms are defined in
+`yizkr.core.smoke_marker`, beside the predicate by which the deployment
+generation's admission does not count the item as ingested.
 
 CLI: `yizkr smoke-test [--timeout SECONDS]`.
 """
@@ -19,12 +21,7 @@ import time
 import requests
 
 from yizkr.core.config import USER_AGENT, Config
-
-SMOKE_LABEL = "Wikibase Suite smoke-test item"
-SMOKE_DESCRIPTION = (
-    "Created by `yizkr smoke-test` to verify item creation and the "
-    "SPARQL round-trip. Safe to delete."
-)
+from yizkr.core.smoke_marker import SMOKE_DESCRIPTION, SMOKE_LABEL
 
 
 def check_api(config: Config) -> str:
