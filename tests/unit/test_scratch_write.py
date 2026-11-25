@@ -1206,7 +1206,7 @@ def _key(run, identity=None, exclusions=None) -> str:
         identity,
         run.documents,
         exclusions,
-        container_sources=run.driver._container_sources,
+        container_sources=run.driver.containers.container_sources,
     )
 
 

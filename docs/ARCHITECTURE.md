@@ -178,7 +178,7 @@ Verified surrounding page readings remain available as a separate interpretation
 
 Equivalent metadata reconstruction preserves readings, proposals and human review. A real change of attribution requires review of the affected results. These media bindings are compatible with existing byte-addressed artifacts; they do not implement retained identity migration, general owner-equivalence decisions or retroactive graph correction.
 
-Implementation: [inventory schema and persistence](../src/yizkr/pipeline/container_inventory.py), [shared source projection](../src/yizkr/pipeline/container_sources.py), [located extraction context](../src/yizkr/pipeline/source_context.py), [PPTX producer](../src/yizkr/pipeline/pptx_inventory.py), [PDF producer](../src/yizkr/pipeline/pdf_inventory.py) and [PDF reading/admission](../src/yizkr/pipeline/textlayer.py).
+Implementation: [inventory schema and persistence](../src/yizkr/pipeline/container_inventory.py), [run preparation, publication and reading outcomes](../src/yizkr/pipeline/container_lifecycle.py), [shared source projection](../src/yizkr/pipeline/container_sources.py), [located extraction context](../src/yizkr/pipeline/source_context.py), [PPTX producer](../src/yizkr/pipeline/pptx_inventory.py), [PDF producer](../src/yizkr/pipeline/pdf_inventory.py) and [PDF reading/admission](../src/yizkr/pipeline/textlayer.py).
 
 ## Shared document-stage operations
 
