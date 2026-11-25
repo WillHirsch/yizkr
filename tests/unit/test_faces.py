@@ -1,7 +1,5 @@
 """Offline tests for face proposals (pytest; no detector dependency)."""
 
-import codecs
-import csv
 import json
 import sys
 from types import SimpleNamespace
@@ -12,7 +10,6 @@ from wikibaseintegrator.datatypes import String
 from tests.fixtures import example_universe as u
 from tests.fixtures.identity import write_mapped
 from tests.unit.test_pipeline import ITEMS, PROPERTIES, FakeWiki, _cited
-from yizkr import cli
 from yizkr.claims import (
     ArtifactRef,
     Claim,
@@ -46,11 +43,9 @@ from yizkr.pipeline.faces import (
     to_region,
 )
 from yizkr.pipeline.review import (
-    apply_review,
     approval_digest,
     claim_id,
     entity_records,
-    export_review_csv,
     unapproved_depicts,
 )
 from yizkr.pipeline.writer import BatchWriter, UnapprovedDepictsError
@@ -194,15 +189,6 @@ class TestProposals:
         assert ref.kind == "local"
         assert ref.label == "Person One"
         assert ref.instance_of == "human"
-
-    def test_proposals_flow_into_review_csv(self, tmp_path):
-        batch, _ = proposals_to_batch(detection(face(0, A)), gallery_with_a())
-        csv_path = tmp_path / "review.csv"
-        assert export_review_csv(batch, csv_path) == 1
-        content = csv_path.read_text()
-        assert "depicts" in content
-        assert "relative_position_within_image=10%,10%,20%,50%" in content
-        assert f"sha1:{PORTRAIT_SCAN.sha1}" in content
 
 
 class TestPhotoKey:
@@ -434,343 +420,28 @@ def studio_in(place: LocalRef) -> Claim:
 
 
 def approved_on_its_row(claim: Claim, batch: ClaimBatch) -> Claim:
-    """`claim` of `batch` as `apply_review` returns it after a per-row
-    approve."""
+    """`claim` of `batch` with the row approval the writer requires on a
+    depicts claim (review.approval_digest)."""
     return claim.model_copy(
         update={"row_approval": approval_digest(claim, batch)}
     )
 
 
-# Hand edits to a review sheet, as a curator's spreadsheet saves them.
-
-
-def edit_rows(path, edit) -> None:
-    """Re-save a sheet with `edit` applied to each row, a dict by column."""
-    with open(path, newline="") as f:
-        reader = csv.DictReader(f)
-        fieldnames = reader.fieldnames
-        rows = [edit(dict(row)) for row in reader]
-    with open(path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
-
-
-def edit_columns(path, *edits) -> None:
-    """Re-save a sheet with each `edit(header, body)` applied in turn to its
-    cells as lists, for edits to the columns themselves."""
-    with open(path, newline="") as f:
-        header, *body = csv.reader(f)
-    for edit in edits:
-        header, body = edit(header, body)
-    with open(path, "w", newline="") as f:
-        csv.writer(f).writerows([header, *body])
-
-
-def add_boms(path, count: int) -> None:
-    """Prefix `count` byte-order marks: one as Excel's "CSV UTF-8" writes,
-    two when such a file is read as plain UTF-8 and saved that way again."""
-    path.write_bytes(codecs.BOM_UTF8 * count + path.read_bytes())
-
-
-# Invisible characters, named so that the tests show where they are.
-BOM = "\N{BYTE ORDER MARK}"
-ZWSP = "\N{ZERO WIDTH SPACE}"
-
-
-def set_depicts_cells(value: str):
-    """A row edit that writes `value` over each `depicts` property cell."""
-
-    def edit(row: dict) -> dict:
-        if row["property"] == "depicts":
-            row["property"] = value
-        return row
-
-    return edit
-
-
-def drop_column(name: str):
-    def edit(header, body):
-        at = header.index(name)
-        return (
-            header[:at] + header[at + 1 :],
-            [row[:at] + row[at + 1 :] for row in body],
-        )
-
-    return edit
-
-
-def rename_column(old: str, new: str):
-    def edit(header, body):
-        return [new if col == old else col for col in header], body
-
-    return edit
-
-
-def add_columns(**cells: str):
-    """A column edit appending `cells`, each holding its value on every row."""
-
-    def edit(header, body):
-        return [*header, *cells], [[*row, *cells.values()] for row in body]
-
-    return edit
-
-
-def pose_as_equivalences(header, body):
-    """Add an equivalences sheet's columns, judging every row `same`."""
-    return (
-        [*header, "entity_id", "qid", "verdict"],
-        [[*row, f"e{n}", "Q26", "same"] for n, row in enumerate(body, 1)],
-    )
-
-
-class TestExplicitClaimReview:
-    """Malformed or whole-sheet input cannot authorize face claims."""
-
-    @pytest.mark.parametrize("body", ["rows", "header", "empty", "bom-only"])
-    def test_apply_review_refuses_a_sheet_without_claim_id(
-        self, tmp_path, body
-    ):
-        # it matches rows to claims by claim_id: without that column it
-        # refuses before reading any row, rather than a KeyError, and a
-        # file with no header row at all is refused the same way (#532)
-        text = portrait_text()
-        review_csv = tmp_path / "review.csv"
-        export_review_csv(text, review_csv)
-        edit_columns(
-            review_csv,
-            drop_column("claim_id"),
-            lambda header, rows: (header, rows if body == "rows" else []),
-        )
-        if body == "empty":
-            review_csv.write_text("")
-        elif body == "bom-only":
-            review_csv.write_bytes(codecs.BOM_UTF8)
-
-        with pytest.raises(ValueError, match="no 'claim_id' column"):
-            apply_review(text, review_csv)
-
-    @pytest.mark.parametrize(
-        "name",
-        ["Claim_ID", "claim_id ", "claim" + ZWSP + "_id"],
-        ids=["capitalised", "trailing-space", "zero-width-inside"],
-    )
-    def test_apply_review_refuses_a_renamed_claim_id(self, tmp_path, name):
-        text = portrait_text()
-        review_csv = tmp_path / "review.csv"
-        export_review_csv(text, review_csv)
-        edit_columns(review_csv, rename_column("claim_id", name))
-        edit_rows(review_csv, lambda row: {**row, "decision": "approve"})
-
-        with pytest.raises(ValueError) as refusal:
-            apply_review(text, review_csv)
-
-        assert (
-            "has a column like 'claim_id' but none named exactly "
-            "'claim_id'" in str(refusal.value)
-        )
-
-    @pytest.mark.parametrize(
-        "edit",
-        [
-            drop_column("claim_id"),
-            rename_column("claim_id", "Claim_ID"),
-            None,  # a 0-byte file: no header row at all
-        ],
-        ids=["dropped", "renamed", "empty"],
-    )
-    def test_apply_review_cli_refuses_a_sheet_without_claim_id(
-        self, tmp_path, edit
-    ):
-        # one line naming the column, exit 1, and no --out written (#532)
-        text = portrait_text()
-        batch = tmp_path / "batch.json"
-        batch.write_text(text.model_dump_json(indent=2))
-        review_csv = tmp_path / "review.csv"
-        export_review_csv(text, review_csv)
-        if edit is None:
-            review_csv.write_text("")
-        else:
-            edit_columns(review_csv, edit)
-        approved = tmp_path / "approved.json"
-        args = build_parser().parse_args(
-            [
-                "ingest",
-                "apply-review",
-                "--batch",
-                str(batch),
-                "--csv",
-                str(review_csv),
-                "--out",
-                str(approved),
+def approved(batch: ClaimBatch) -> ClaimBatch:
+    """`batch` with each of its depicts claims approved on its own row.
+    Nothing in the package records such an approval, so the writer refuses
+    every depicts claim it is given; these tests build it to keep the gate
+    covered while the map-bound writer applies it (#893)."""
+    return batch.model_copy(
+        update={
+            "claims": [
+                approved_on_its_row(claim, batch)
+                if claim.property == "depicts"
+                else claim
+                for claim in batch.claims
             ]
-        )
-
-        with pytest.raises(SystemExit) as exit_:
-            args.func(args)
-
-        # sys.exit(message): the message goes to stderr, the status is 1
-        message = exit_.value.code
-        assert isinstance(message, str)
-        assert "\n" not in message
-        assert "'claim_id'" in message
-        assert not approved.exists()
-
-    @pytest.mark.parametrize(
-        "cell",
-        ["inception", "", "P180", ZWSP + "depicts"],
-        ids=["another-property", "blank", "wikidata-id", "zero-width-space"],
+        }
     )
-    def test_bulk_accept_on_a_hidden_depicts_claim_is_refused(
-        self, tmp_path, cell
-    ):
-        text = portrait_text()
-        _, *depicts = text.claims
-        review_csv = tmp_path / "review.csv"
-        export_review_csv(text, review_csv)
-        edit_rows(review_csv, set_depicts_cells(cell))
-        reviewed = review_csv
-        edit_rows(reviewed, lambda row: {**row, "decision": "bulk-accept"})
-
-        with pytest.raises(ValueError, match="bulk-accept") as refusal:
-            apply_review(text, reviewed)
-
-        for claim in depicts:
-            assert f"claim {claim_id(claim)}" in str(refusal.value)
-
-    @pytest.mark.parametrize(
-        "prior", [None, "decided earlier\n"], ids=["absent", "pre-existing"]
-    )
-    def test_cli_exits_non_zero_and_writes_no_approved_batch(
-        self, tmp_path, prior
-    ):
-        # the refusal is one line on stderr, not a traceback, and leaves
-        # --out as it was (#220)
-        text = portrait_text()
-        _, *depicts = text.claims
-        batch = tmp_path / "batch.json"
-        batch.write_text(text.model_dump_json(indent=2))
-        review_csv = tmp_path / "review.csv"
-        export_review_csv(text, review_csv)
-        edit_rows(review_csv, set_depicts_cells("inception"))
-        reviewed = review_csv
-        edit_rows(reviewed, lambda row: {**row, "decision": "bulk-accept"})
-        approved = tmp_path / "approved.json"
-        if prior is not None:
-            approved.write_text(prior)
-        args = build_parser().parse_args(
-            [
-                "ingest",
-                "apply-review",
-                "--batch",
-                str(batch),
-                "--csv",
-                str(reviewed),
-                "--out",
-                str(approved),
-            ]
-        )
-
-        with pytest.raises(SystemExit) as exit_:
-            args.func(args)
-
-        message = exit_.value.code
-        assert isinstance(message, str)
-        assert "\n" not in message
-        for claim in depicts:
-            assert f"claim {claim_id(claim)}" in message
-        if prior is None:
-            assert not approved.exists()
-        else:
-            assert approved.read_text() == prior
-
-    @pytest.mark.parametrize(
-        "columns",
-        [
-            {"entity_id": "e1"},
-            {"verdict": "same"},
-            {"entity_id": "e1", "qid": "Q26", "verdict": "same"},
-            {" Verdict": "same"},
-            {"verdict" + ZWSP: "same"},
-        ],
-        ids=["entity_id", "verdict", "all-three", "padded", "zero-width"],
-    )
-    def test_claims_sheet_with_equivalences_columns_is_refused(
-        self, tmp_path, columns
-    ):
-        # A claims sheet must not be mistaken for identity review.
-        text = portrait_text()
-        review_csv = tmp_path / "review.csv"
-        export_review_csv(text, review_csv)
-        edit_columns(review_csv, add_columns(**columns))
-        edit_rows(review_csv, lambda row: {**row, "decision": "approve"})
-
-        with pytest.raises(ValueError, match="equivalences sheet"):
-            apply_review(text, review_csv)
-
-    @pytest.mark.parametrize(
-        "token",
-        ["Bulk-Accept", " bulk-accept ", "BULK-ACCEPT"],
-        ids=["title-case", "padded", "upper-case"],
-    )
-    def test_bulk_accept_is_refused_however_it_is_written(
-        self, tmp_path, token
-    ):
-        text = portrait_text()
-        _, *depicts = text.claims
-        review_csv = tmp_path / "review.csv"
-        export_review_csv(text, review_csv)
-        edit_rows(review_csv, lambda row: {**row, "decision": token})
-
-        with pytest.raises(ValueError, match="bulk-accept") as refusal:
-            apply_review(text, review_csv)
-
-        for claim in depicts:
-            assert f"claim {claim_id(claim)}" in str(refusal.value)
-
-    @pytest.mark.parametrize("boms", [0, 1], ids=["plain", "bom"])
-    def test_per_row_approve_on_a_depicts_claim_passes(self, tmp_path, boms):
-        # Explicit decisions survive a spreadsheet's UTF-8 byte-order mark.
-        text = portrait_text()
-        review_csv = tmp_path / "review.csv"
-        export_review_csv(text, review_csv)
-        edit_rows(
-            review_csv,
-            lambda row: {
-                **row,
-                "decision": "approve",
-            },
-        )
-        add_boms(review_csv, boms)
-
-        approved, warnings = apply_review(text, review_csv)
-
-        # Face approvals bind their claim and local entity records.
-        date, *depicts = text.claims
-        assert approved.claims == [
-            date,
-            *(approved_on_its_row(claim, text) for claim in depicts),
-        ]
-        assert approved.claims[0].row_approval is None
-        assert warnings == []
-
-
-# The write path (#226): what apply_review records, the writer requires.
-
-
-def decide_by_hand(review_csv, decide=lambda row: "approve") -> None:
-    """A curator's decision typed on each row of a sheet: `decide(row)`."""
-    edit_rows(review_csv, lambda row: {**row, "decision": decide(row)})
-
-
-def reviewed(batch: ClaimBatch, tmp_path, decide=lambda row: "approve"):
-    """`batch` exported for review, decided row by row, and applied."""
-    review_csv = tmp_path / "review.csv"
-    export_review_csv(batch, review_csv)
-    decide_by_hand(review_csv, decide)
-    approved, warnings = apply_review(batch, review_csv)
-    assert warnings == []
-    return approved
 
 
 class PortraitWiki(FakeWiki):
@@ -809,43 +480,8 @@ def depicted(wiki: FakeWiki) -> dict[str, object]:
 
 
 class TestRowApprovalRecord:
-    """How apply_review records a per-row approval on a claim, and why the
-    record changes nothing for a claim without one."""
-
-    def test_apply_review_records_it_on_each_approved_depicts_claim(
-        self, tmp_path
-    ):
-        faces = portrait_faces()
-        approved = reviewed(faces, tmp_path)
-        assert approved.claims == [
-            approved_on_its_row(claim, faces) for claim in faces.claims
-        ]
-        assert unapproved_depicts(faces) == [
-            claim_id(claim) for claim in faces.claims
-        ]
-        assert unapproved_depicts(approved) == []
-
-    def test_edited_locator_cells_leave_approved_claims_as_batched(
-        self, tmp_path
-    ):
-        faces = portrait_faces()
-        review_csv = tmp_path / "review.csv"
-        export_review_csv(faces, review_csv)
-        edit_rows(
-            review_csv,
-            lambda row: {
-                **row,
-                "page": "5",
-                "printed_page": "17",
-                "region": "1%,2%,3%,4%",
-                "decision": "approve",
-            },
-        )
-        approved, warnings = apply_review(faces, review_csv)
-        assert warnings == []
-        assert approved.claims == [
-            approved_on_its_row(claim, faces) for claim in faces.claims
-        ]
+    """What a depicts claim's per-row approval binds, and why the record
+    changes nothing for a claim without one."""
 
     def test_record_is_not_content(self):
         faces = portrait_faces()
@@ -879,15 +515,15 @@ class TestRowApprovalRecord:
         [portrait_faces, lambda: portrait_faces_by_label(manifest=True)],
         ids=["qids", "local-refs-with-manifest"],
     )
-    def test_record_survives_the_approved_batch_file(self, tmp_path, batch):
-        approved = reviewed(batch(), tmp_path)
-        again = ClaimBatch.model_validate_json(approved.model_dump_json())
-        assert again == approved
+    def test_record_survives_the_batch_file(self, batch):
+        recorded = approved(batch())
+        again = ClaimBatch.model_validate_json(recorded.model_dump_json())
+        assert again == recorded
         assert unapproved_depicts(again) == []
 
     def test_unmarked_claims_serialise_as_without_the_field(self):
-        # batch.json, approved.json, content hashes and run-item labels of
-        # every batch without an approved depicts claim stay as they were
+        # batch.json, content hashes and run-item labels of every batch
+        # without an approved depicts claim stay as they were
         text = portrait_text()
         dumped = text.model_dump(mode="json")
         assert all("row_approval" not in claim for claim in dumped["claims"])
@@ -900,9 +536,9 @@ class TestRowApprovalRecord:
 
 class TestWriteRefusesUnapprovedDepicts:
     """ADR-0005 at the write path (#226): the writer writes a depicts claim
-    only with the per-row approval apply_review records on it, and refuses
-    a batch holding any other, before it reads or writes anything, naming
-    the claims. A batch without depicts claims is not affected."""
+    only with a per-row approval bound to it (review.approval_digest), and
+    refuses a batch holding any other, before it reads or writes anything,
+    naming the claims. A batch without depicts claims is not affected."""
 
     def test_raw_detect_faces_batch_is_refused(self):
         faces = portrait_faces()
@@ -935,11 +571,11 @@ class TestWriteRefusesUnapprovedDepicts:
         assert refusal.value.claim_ids == [claim_id(c) for c in depicts]
         assert claim_id(date) not in str(refusal.value)
 
-    def test_batch_from_an_approved_sheet_is_written(self, tmp_path):
-        approved = reviewed(portrait_faces(), tmp_path)
+    def test_a_batch_approved_row_by_row_is_written(self):
+        faces = approved(portrait_faces())
         wiki = wiki_with_portrait()
 
-        result = write_mapped(BatchWriter(wiki), approved)
+        result = write_mapped(BatchWriter(wiki), faces)
 
         assert result.written == 2
         statements = depicted(wiki)
@@ -958,30 +594,23 @@ class TestWriteRefusesUnapprovedDepicts:
                 result.run_qid
             ]
         # and re-writing it is the no-op it is for any reviewed batch
-        again = write_mapped(BatchWriter(wiki), approved)
+        again = write_mapped(BatchWriter(wiki), faces)
         assert (again.written, again.skipped) == (0, 2)
 
-    def test_mixed_sheet_writes_every_approved_claim(self, tmp_path):
-        # Each claim is approved, with a bound record for the face rows.
-        text = portrait_text()
-        review_csv = tmp_path / "review.csv"
-        export_review_csv(text, review_csv)
-        decide_by_hand(review_csv)
-        approved, _ = apply_review(text, review_csv)
+    def test_a_mixed_batch_writes_every_claim(self):
+        # the portrait's text: its date, and its depicts claims each with a
+        # bound record of approval
         wiki = wiki_with_portrait()
 
-        result = write_mapped(
-            BatchWriter(wiki),
-            approved,
-        )
+        result = write_mapped(BatchWriter(wiki), approved(portrait_text()))
 
         assert result.written == 3
         assert set(depicted(wiki)) == {"Q26", "Q28"}
 
-    def test_approval_does_not_survive_an_edit_to_the_claim(self, tmp_path):
-        # the second sitter re-identified in the approved batch after review
-        approved = reviewed(portrait_faces(), tmp_path)
-        eugen, sebastian = approved.claims
+    def test_approval_does_not_survive_an_edit_to_the_claim(self):
+        # the second sitter re-identified in the batch after its approval
+        faces = approved(portrait_faces())
+        eugen, sebastian = faces.claims
         edited = sebastian.model_copy(
             update={"value": ItemValue(value=QidRef(qid="Q28"))}
         )
@@ -990,7 +619,7 @@ class TestWriteRefusesUnapprovedDepicts:
         with pytest.raises(UnapprovedDepictsError) as refusal:
             write_mapped(
                 BatchWriter(wiki),
-                approved.model_copy(update={"claims": [eugen, edited]}),
+                faces.model_copy(update={"claims": [eugen, edited]}),
             )
 
         assert refusal.value.claim_ids == [claim_id(edited)]
@@ -999,11 +628,12 @@ class TestWriteRefusesUnapprovedDepicts:
     @pytest.mark.parametrize(
         "manifest", [False, True], ids=["refs", "records"]
     )
-    def test_sitters_named_by_local_ref_are_written(self, tmp_path, manifest):
-        approved = reviewed(portrait_faces_by_label(manifest), tmp_path)
+    def test_sitters_named_by_local_ref_are_written(self, manifest):
         wiki = wiki_with_portrait()
 
-        result = write_mapped(BatchWriter(wiki), approved)
+        result = write_mapped(
+            BatchWriter(wiki), approved(portrait_faces_by_label(manifest))
+        )
 
         assert result.written == 2
         sitters = {
@@ -1012,9 +642,9 @@ class TestWriteRefusesUnapprovedDepicts:
         }
         assert sitters == {EUGEN, SEBASTIAN}
 
-    # Edits to an approved batch's entity manifest, as a hand edit to
-    # approved.json's `entities` makes them: each retargets the first
-    # face's local ref without touching its claim (#226 review).
+    # Edits to an approved batch's entity manifest, as a hand edit to the
+    # batch file's `entities` makes them: each retargets the first face's
+    # local ref without touching its claim (#226 review).
     MANIFEST_EDITS = {
         # a record where there was none, resolving the ref to an item
         "record-added-with-qid": (
@@ -1056,12 +686,10 @@ class TestWriteRefusesUnapprovedDepicts:
         "manifest, edit", MANIFEST_EDITS.values(), ids=MANIFEST_EDITS.keys()
     )
     def test_approval_does_not_survive_an_edit_to_the_entity_manifest(
-        self, tmp_path, manifest, edit
+        self, manifest, edit
     ):
-        approved = reviewed(portrait_faces_by_label(manifest), tmp_path)
-        edited = approved.model_copy(
-            update={"entities": edit(approved.entities)}
-        )
+        faces = approved(portrait_faces_by_label(manifest))
+        edited = faces.model_copy(update={"entities": edit(faces.entities)})
         wiki = wiki_with_portrait()
         writes = wiki.wbi.item.writes
 
@@ -1070,7 +698,7 @@ class TestWriteRefusesUnapprovedDepicts:
 
         # the second sitter's claim, whose record is untouched, keeps its
         # approval; the batch is refused whole all the same
-        assert refusal.value.claim_ids == [claim_id(approved.claims[0])]
+        assert refusal.value.claim_ids == [claim_id(faces.claims[0])]
         assert wiki.wbi.item.writes == writes
         assert depicted(wiki) == {}
 
@@ -1092,11 +720,11 @@ class TestWriteRefusesUnapprovedDepicts:
         "differs", OTHER_REFS.values(), ids=OTHER_REFS.keys()
     )
     def test_approval_does_not_survive_another_ref_to_its_local_id(
-        self, tmp_path, differs
+        self, differs
     ):
-        approved = reviewed(portrait_faces_by_label(), tmp_path)
-        eugen, sebastian = approved.claims
-        retargeted = approved.model_copy(
+        faces = approved(portrait_faces_by_label())
+        eugen, sebastian = faces.claims
+        retargeted = faces.model_copy(
             update={"claims": [muckel(**differs), eugen, sebastian]}
         )
         wiki = wiki_with_portrait()
@@ -1107,17 +735,16 @@ class TestWriteRefusesUnapprovedDepicts:
         assert refusal.value.claim_ids == [claim_id(eugen)]
         assert depicted(wiki) == {}
 
-    def test_a_matching_ref_to_its_local_id_leaves_it_approved(self, tmp_path):
-        # the sheet names the first sitter twice by one local ref: once as
+    def test_a_matching_ref_to_its_local_id_leaves_it_approved(self):
+        # the batch names the first sitter twice by one local ref: once as
         # depicted, once by the name the portrait gives him
         faces = portrait_faces_by_label()
         both = faces.model_copy(
             update={"claims": [muckel(EUGEN), *faces.claims]}
         )
-        approved = reviewed(both, tmp_path)
         wiki = wiki_with_portrait()
 
-        result = write_mapped(BatchWriter(wiki), approved)
+        result = write_mapped(BatchWriter(wiki), approved(both))
 
         assert result.written == 3
         eugen = result.created_items["face-person-0"]
@@ -1131,17 +758,16 @@ class TestWriteRefusesUnapprovedDepicts:
     # portrait's sitters depicted at the studio's town, which the mount's
     # own claim about the studio names by the same local id (#258).
 
-    def test_a_qualifiers_local_ref_is_written_as_approved(self, tmp_path):
+    def test_a_qualifiers_local_ref_is_written_as_approved(self):
         faces = portrait_faces_in(town())
-        approved = reviewed(
+        with_studio = approved(
             faces.model_copy(
                 update={"claims": [studio_in(town()), *faces.claims]}
-            ),
-            tmp_path,
+            )
         )
         wiki = wiki_with_portrait()
 
-        result = write_mapped(BatchWriter(wiki), approved)
+        result = write_mapped(BatchWriter(wiki), with_studio)
 
         assert result.written == 3
         peiltal = result.created_items["studio-town"]
@@ -1151,14 +777,14 @@ class TestWriteRefusesUnapprovedDepicts:
             assert place.datavalue["value"]["id"] == peiltal
 
     def test_approval_does_not_survive_another_ref_to_its_qualifiers_local_id(
-        self, tmp_path
+        self,
     ):
         # the mount's claim, added ahead of the approved depicts claims,
         # names the studio's town by the same local id as another town:
         # the writer would place both sitters there
-        approved = reviewed(portrait_faces_in(town()), tmp_path)
-        retargeted = approved.model_copy(
-            update={"claims": [studio_in(town(KREDFELD)), *approved.claims]}
+        faces = approved(portrait_faces_in(town()))
+        retargeted = faces.model_copy(
+            update={"claims": [studio_in(town(KREDFELD)), *faces.claims]}
         )
         wiki = wiki_with_portrait()
 
@@ -1166,22 +792,21 @@ class TestWriteRefusesUnapprovedDepicts:
             write_mapped(BatchWriter(wiki), retargeted)
 
         assert refusal.value.claim_ids == [
-            claim_id(claim) for claim in approved.claims
+            claim_id(claim) for claim in faces.claims
         ]
         assert depicted(wiki) == {}
 
     def test_approval_covers_the_record_a_qualifiers_ref_resolves_through(
-        self, tmp_path
+        self,
     ):
         # with a manifest record for the town, the approval binds it: a
-        # record renamed to another town after review voids it
-        faces = portrait_faces_in(town())
+        # record renamed to another town after the approval voids it
         record = EntityRecord(id="studio-town", label=PEILTAL, kind="place")
-        approved = reviewed(
-            faces.model_copy(update={"entities": [record]}), tmp_path
+        faces = approved(
+            portrait_faces_in(town()).model_copy(update={"entities": [record]})
         )
-        assert unapproved_depicts(approved) == []
-        moved = approved.model_copy(
+        assert unapproved_depicts(faces) == []
+        moved = faces.model_copy(
             update={
                 "entities": [record.model_copy(update={"label": KREDFELD})]
             }
@@ -1191,7 +816,7 @@ class TestWriteRefusesUnapprovedDepicts:
             write_mapped(BatchWriter(wiki_with_portrait()), moved)
 
         assert refusal.value.claim_ids == [
-            claim_id(claim) for claim in approved.claims
+            claim_id(claim) for claim in faces.claims
         ]
 
     def test_batch_without_depicts_is_written_unreviewed(self):
@@ -1214,7 +839,7 @@ class TestOneEntityRecordLookup:
     whole."""
 
     @staticmethod
-    def two_records_for_the_first_face(tmp_path) -> ClaimBatch:
+    def two_records_for_the_first_face() -> ClaimBatch:
         """The portrait's faces approved row by row, with two manifest
         records under the first face's local id (which manifest
         validation would refuse), each naming a different item. The
@@ -1232,7 +857,7 @@ class TestOneEntityRecordLookup:
                 ]
             }
         )
-        return reviewed(doubled, tmp_path)
+        return approved(doubled)
 
     @staticmethod
     def wiki() -> FakeWiki:
@@ -1261,36 +886,36 @@ class TestOneEntityRecordLookup:
         )
 
     def test_the_approval_binds_the_record_the_writer_resolves_through(
-        self, tmp_path
+        self,
     ):
-        approved = self.two_records_for_the_first_face(tmp_path)
-        picked = entity_records(approved)["face-person-0"]
+        faces = self.two_records_for_the_first_face()
+        picked = entity_records(faces)["face-person-0"]
         wiki = self.wiki()
 
-        write_mapped(BatchWriter(wiki), approved)
+        write_mapped(BatchWriter(wiki), faces)
 
         assert picked.qid in depicted(wiki)
         # an edit to the picked record voids the approval
         with pytest.raises(UnapprovedDepictsError):
             write_mapped(
                 BatchWriter(self.wiki()),
-                self.edited(approved, picked, qid="Q27"),
+                self.edited(faces, picked, qid="Q27"),
             )
 
     def test_passed_over_record_resolves_no_local_ref_adds_no_alias_or_kind(
-        self, tmp_path
+        self,
     ):
-        approved = self.two_records_for_the_first_face(tmp_path)
-        picked = entity_records(approved)["face-person-0"]
+        faces = self.two_records_for_the_first_face()
+        picked = entity_records(faces)["face-person-0"]
         (passed_over,) = [
             record
-            for record in approved.entities
+            for record in faces.entities
             if record.id == "face-person-0" and record is not picked
         ]
         # were it read, it would name Rahel, and give her item its aliases
         # and a kind of its own
         edited = self.edited(
-            approved,
+            faces,
             passed_over,
             qid="Q28",
             aliases=["Muckel"],
@@ -1298,7 +923,7 @@ class TestOneEntityRecordLookup:
         )
         assert unapproved_depicts(edited) == []
         written, run_labels = {}, {}
-        for name, batch in (("approved", approved), ("edited", edited)):
+        for name, batch in (("approved", faces), ("edited", edited)):
             wiki = self.wiki()
             result = write_mapped(BatchWriter(wiki), batch)
             rahel = wiki.wbi.item.get("Q28")
@@ -1317,92 +942,3 @@ class TestOneEntityRecordLookup:
         # the run item's label carries the fingerprint of the whole batch
         # file, the record passed over included
         assert run_labels["edited"] != run_labels["approved"]
-
-
-class TestIngestWriteRefusesUnapprovedDepicts:
-    """The same gate through the CLI: `yizkr ingest write --batch`."""
-
-    @staticmethod
-    def run(monkeypatch, wiki: FakeWiki, *argv) -> None:
-        monkeypatch.setattr(cli, "_client", lambda args: wiki)
-        args = build_parser().parse_args([str(arg) for arg in argv])
-        args.func(args)
-
-    def test_raw_detect_faces_batch_is_refused(self, tmp_path, monkeypatch):
-        faces_json = tmp_path / "faces-batch.json"
-        faces_json.write_text(portrait_faces().model_dump_json(indent=2))
-        wiki = wiki_with_portrait()
-
-        with pytest.raises(
-            SystemExit, match="carry no per-row human approval"
-        ):
-            self.run(
-                monkeypatch, wiki, "ingest", "write", "--batch", faces_json
-            )
-
-        assert depicted(wiki) == {}
-
-    def approve_by_hand(self, monkeypatch, wiki, tmp_path, batch):
-        """`batch` as detect-faces writes it, exported for review, decided
-        row by row and applied, each step reading the file the one before
-        wrote: the path of the approved batch file."""
-        faces_json = tmp_path / "faces-batch.json"
-        faces_json.write_text(batch.model_dump_json(indent=2))
-        review_csv = tmp_path / "review.csv"
-        approved_json = tmp_path / "approved.json"
-        self.run(
-            monkeypatch,
-            wiki,
-            *("ingest", "export-review", "--batch", faces_json),
-            *("--out", review_csv),
-        )
-        decide_by_hand(review_csv)
-        self.run(
-            monkeypatch,
-            wiki,
-            *("ingest", "apply-review", "--batch", faces_json),
-            *("--csv", review_csv, "--out", approved_json),
-        )
-        return approved_json
-
-    def test_batch_apply_review_writes_is_written(self, tmp_path, monkeypatch):
-        wiki = wiki_with_portrait()
-        approved_json = self.approve_by_hand(
-            monkeypatch, wiki, tmp_path, portrait_faces()
-        )
-
-        self.run(
-            monkeypatch, wiki, "ingest", "write", "--batch", approved_json
-        )
-
-        assert set(depicted(wiki)) == {"Q26", "Q27"}
-
-    def test_approved_file_retargeted_by_its_entities_is_refused(
-        self, tmp_path, monkeypatch
-    ):
-        # only the approved file's top-level `entities` edited after
-        # review: a record, with the QID that records a resolution, for
-        # the first sitter's local ref (#226 review)
-        wiki = wiki_with_portrait()
-        approved_json = self.approve_by_hand(
-            monkeypatch, wiki, tmp_path, portrait_faces_by_label()
-        )
-        edited = json.loads(approved_json.read_text())
-        edited["entities"].append(
-            {
-                "id": "face-person-0",
-                "label": RAHEL,
-                "kind": "human",
-                "qid": "Q28",
-            }
-        )
-        approved_json.write_text(json.dumps(edited, indent=2))
-
-        with pytest.raises(
-            SystemExit, match="carry no per-row human approval"
-        ):
-            self.run(
-                monkeypatch, wiki, "ingest", "write", "--batch", approved_json
-            )
-
-        assert depicted(wiki) == {}

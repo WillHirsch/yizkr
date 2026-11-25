@@ -4,7 +4,8 @@
     yizkr smoke-test       verify a deployment end to end
     yizkr publish-queries  publish the SPARQL library to wiki pages
     yizkr claims           claim-contract utilities (JSON schema, validate)
-    yizkr ingest <step>    standalone preparation, review and write tools
+    yizkr ingest <step>    standalone steps: registration, reading,
+                           extraction, identity review, face proposals
     yizkr stages state     what a run did, from its run directory
     yizkr stages manifest  what shapes a run, from its run.json
     yizkr scratch run      the whole corpus through every stage, unattended;
@@ -67,10 +68,6 @@ DEFAULT_CACHE = Path("var/llm-cache")
 
 def _client(args) -> WikiClient:
     return WikiClient(Config.load(args.env_file))
-
-
-def _load_batch(path: Path) -> ClaimBatch:
-    return ClaimBatch.model_validate_json(path.read_text())
 
 
 _PLACED_PAIR = re.compile(
@@ -826,45 +823,6 @@ def cmd_extract(args) -> int:
     return 0
 
 
-def _identity_map(args):
-    """The identity map `--identity-map` names, or None."""
-    if args.identity_map is None:
-        return None
-    from yizkr.pipeline.clustering import ClusteringInputError, IdentityMap
-
-    try:
-        return IdentityMap.read(args.identity_map)
-    except ClusteringInputError as exc:
-        sys.exit(str(exc))
-
-
-def cmd_resolve(args) -> int:
-    from yizkr.pipeline.clustering import UnmappedMention
-    from yizkr.pipeline.resolve import resolve_batch
-
-    batch = _load_batch(args.batch)
-    if args.equivalences:
-        from yizkr.pipeline.reconcile import (
-            apply_equivalences,
-            read_approved_equivalences,
-            read_reviewed_aliases,
-        )
-
-        approved = read_approved_equivalences(args.equivalences)
-        batch = apply_equivalences(
-            batch, approved, read_reviewed_aliases(args.equivalences)
-        )
-        print(f"applied {len(approved)} approved equivalences")
-    try:
-        resolved = resolve_batch(batch, _identity_map(args))
-    except UnmappedMention as exc:
-        sys.exit(str(exc))
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(resolved.model_dump_json(indent=2))
-    print(f"wrote {args.out}")
-    return 0
-
-
 def cmd_gedcom(args) -> int:
     from yizkr.pipeline.gedcom import format_unsupported_tags
     from yizkr.pipeline.gedcom_stages import GedcomRequest, derive_gedcom
@@ -879,8 +837,7 @@ def cmd_gedcom(args) -> int:
     atomic_write_text(args.out, batch.model_dump_json(indent=2))
     print(
         f"wrote {args.out} ({len(result.batch.claims)} claims, "
-        f"{len(result.batch.entities)} entities) — deterministic, no LLM; "
-        f"flows through reconcile/review/write as usual"
+        f"{len(result.batch.entities)} entities) — deterministic, no LLM"
     )
     for warning in result.warnings:
         print(f"warning: {warning}", file=sys.stderr)
@@ -922,40 +879,6 @@ def cmd_identity_review(args) -> int:
     return 0
 
 
-def cmd_reconcile(args) -> int:
-    from yizkr.pipeline.llm import make_client
-    from yizkr.pipeline.reconcile import (
-        adjudicate,
-        block_candidates,
-        export_equivalences_csv,
-        fetch_roster,
-    )
-
-    batch = _load_batch(args.batch)
-    if not batch.entities:
-        sys.exit(
-            f"{args.batch} carries no entity manifest; reconcile needs a "
-            f"batch from entity-first extraction (ADR-0007)"
-        )
-    config = Config.load(args.env_file)
-    roster = fetch_roster(WikiClient(config), config)
-    candidates = block_candidates(batch.entities, roster, batch=batch)
-    print(
-        f"roster: {len(roster)} graph entities; candidates for "
-        f"{len(candidates)} of {len(batch.entities)} document entities"
-    )
-    proposals = adjudicate(
-        make_client(args.llm), batch.entities, candidates, batch
-    )
-    rows = export_equivalences_csv(proposals, batch.entities, roster, args.out)
-    print(
-        f"wrote {args.out} ({rows} proposals). Fill the 'decision' column "
-        f"with approve/reject, then pass --equivalences to resolve. "
-        f"Nothing takes effect without your approval."
-    )
-    return 0
-
-
 def cmd_reconcile_graph(args) -> int:
     from yizkr.pipeline.llm import make_client
     from yizkr.pipeline.reconcile import (
@@ -980,97 +903,6 @@ def cmd_reconcile_graph(args) -> int:
         f"itself a judgement, add a referenced 'said to be the same as' "
         f"statement."
     )
-    return 0
-
-
-def cmd_export_review(args) -> int:
-    from yizkr.pipeline.review import export_review_csv
-
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    rows = export_review_csv(_load_batch(args.batch), args.out)
-    print(
-        f"wrote {args.out} ({rows} rows). Fill 'decision' (approve/reject) "
-        f"and optionally 'correction' (unambiguous replacement value), then "
-        f"run apply-review."
-    )
-    return 0
-
-
-def cmd_apply_review(args) -> int:
-    from yizkr.pipeline.review import apply_review
-
-    try:
-        approved, warnings = apply_review(_load_batch(args.batch), args.csv)
-    except (OSError, ValueError) as exc:
-        sys.exit(str(exc))
-    for warning in warnings:
-        print(f"warning: {warning}", file=sys.stderr)
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(approved.model_dump_json(indent=2))
-    print(f"wrote {args.out} ({len(approved.claims)} approved claims)")
-    return 0
-
-
-def cmd_write(args) -> int:
-    from pydantic import ValidationError
-
-    from yizkr.claims import unplaced_claims, unplaced_hint
-    from yizkr.pipeline.clustering import UnmappedMention
-    from yizkr.pipeline.review import unapproved_depicts
-    from yizkr.pipeline.writer import (
-        BatchWriter,
-        OtherIdentityMap,
-        UnapprovedDepictsError,
-        UnregisteredArtifactError,
-        mapped_clusters,
-    )
-
-    # a batch file that does not load, a --placed that gives no placed
-    # media, or a local entity the identity map does not hold, is refused
-    # before the instance is contacted; an unapproved depicts claim is
-    # refused first, by the writer
-    placed = _placed(args)
-    try:
-        batch = _load_batch(args.batch)
-    except OSError as exc:
-        sys.exit(f"{args.batch}: {exc.strerror}")
-    except ValidationError as exc:
-        found = "; ".join(
-            f"{'.'.join(map(str, error['loc'])) or 'file'}: {error['msg']}"
-            for error in exc.errors()[:3]
-        )
-        sys.exit(
-            f"{args.batch.name} is not a claim batch this step writes "
-            f"({found}); nothing was written"
-        )
-    identity = _identity_map(args)
-    if not unapproved_depicts(batch):
-        try:
-            mapped_clusters(batch, identity)
-        except UnmappedMention as exc:
-            sys.exit(str(exc))
-    # the writer's refusals, each before its first write
-    try:
-        result = BatchWriter(
-            _client(args),
-            dry_run=args.dry_run,
-            record_dir=getattr(args, "process_records", None)
-            or args.batch.parent / "process-records",
-        ).write_batch(batch, identity=identity, placed=placed)
-    except (
-        UnapprovedDepictsError,
-        UnregisteredArtifactError,
-        OtherIdentityMap,
-        ValueError,
-        OSError,
-    ) as exc:
-        sys.exit(str(exc))
-    print(json.dumps(dataclasses.asdict(result), indent=2))
-    unplaced = unplaced_claims(batch, placed)
-    if unplaced:
-        print(unplaced_hint(unplaced), file=sys.stderr)
-    if args.dry_run:
-        print("(dry run: nothing written)")
     return 0
 
 
@@ -1929,72 +1761,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_gedcom)
 
     p = isub.add_parser(
-        "reconcile",
-        help="propose entity equivalences against the graph (ADR-0007)",
-    )
-    p.add_argument("--batch", type=Path, required=True)
-    p.add_argument(
-        "--llm", default="anthropic", choices=["anthropic", "claude-code"]
-    )
-    p.add_argument("--out", type=Path, default=Path("equivalences.csv"))
-    p.set_defaults(func=cmd_reconcile)
-
-    p = isub.add_parser(
-        "resolve",
-        help="apply approved equivalences; every other local ref stays "
-        "local, for the write to resolve through the identity map",
-    )
-    p.add_argument("--batch", type=Path, required=True)
-    p.add_argument(
-        "--equivalences",
-        type=Path,
-        help="reviewed equivalences CSV from `ingest reconcile`; approved "
-        "rows resolve to existing items",
-    )
-    p.add_argument(
-        "--identity-map",
-        type=Path,
-        help="the identity map the batch is to be written with "
-        "(identity-map.json); refuses a batch with a mention it lacks",
-    )
-    p.add_argument("--out", type=Path, default=Path("resolved.json"))
-    p.set_defaults(func=cmd_resolve)
-
-    p = isub.add_parser("export-review", help="batch -> CSV for OpenRefine")
-    p.add_argument("--batch", type=Path, required=True)
-    p.add_argument("--out", type=Path, default=Path("review.csv"))
-    p.set_defaults(func=cmd_export_review)
-
-    p = isub.add_parser(
-        "apply-review", help="filter batch by reviewed CSV decisions"
-    )
-    p.add_argument("--batch", type=Path, required=True)
-    p.add_argument("--csv", type=Path, required=True)
-    p.add_argument("--out", type=Path, default=Path("approved.json"))
-    p.set_defaults(func=cmd_apply_review)
-
-    p = isub.add_parser("write", help="write approved claims as statements")
-    p.add_argument(
-        "--process-records",
-        type=Path,
-        help="immutable provenance record directory; defaults to "
-        "process-records beside the supplied batch",
-    )
-    p.add_argument("--batch", type=Path, required=True)
-    p.add_argument(
-        "--identity-map",
-        type=Path,
-        help="the identity map (identity-map.json) every local entity of "
-        "the batch finds or mints its item through; required when the "
-        "batch names one, as a single batch written without a map, such "
-        "as a GEDCOM export's or a face batch's, is refused (the scratch "
-        "run's write is the write path)",
-    )
-    _add_placed(p)
-    p.add_argument("--dry-run", action="store_true")
-    p.set_defaults(func=cmd_write)
-
-    p = isub.add_parser(
         "detect-faces", help="detect faces in a photo -> depicts proposals"
     )
     p.add_argument(
@@ -2028,7 +1794,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--out",
         type=Path,
         default=Path("faces-batch.json"),
-        help="output: claim batch for the review flow",
+        help="output: claim batch of the depicts proposals",
     )
     p.set_defaults(func=cmd_detect_faces)
 

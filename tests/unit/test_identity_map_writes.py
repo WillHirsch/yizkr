@@ -25,6 +25,7 @@ import json
 
 import pytest
 
+from tests.fixtures.confirmed import confirmed
 from tests.fixtures.identity import corpus, mapped
 from tests.unit.test_pipeline import (
     ITEMS,
@@ -41,7 +42,6 @@ from yizkr.pipeline.clustering import (
     Manifest,
     UnmappedMention,
 )
-from yizkr.pipeline.reconcile import apply_equivalences
 from yizkr.pipeline.resolve import resolve_batch
 from yizkr.pipeline.writer import (
     BatchWriter,
@@ -586,9 +586,8 @@ class TestTheMapIsTheOnlyWay:
         identity = mapped(_eugens(), tree)
         history = BatchWriter(wiki).write_batch(_eugens(), identity=identity)
 
-        rejected = apply_equivalences(tree, {})
         written = BatchWriter(wiki).write_batch(
-            resolve_batch(rejected, identity), identity=identity
+            resolve_batch(tree, identity), identity=identity
         )
 
         assert (
@@ -971,8 +970,8 @@ class TestAnUnmappedMention:
             mapped_clusters(batch, mapped(batch))
 
     def test_a_batch_naming_no_local_entity_needs_no_map(self):
-        approved = apply_equivalences(_tree(), {"e1": "Q500"})
-        assert mapped_clusters(approved, None) == ({}, None, {})
+        named = confirmed(_tree(), {"e1": "Q500"})
+        assert mapped_clusters(named, None) == ({}, None, {})
 
 
 class TestTheRunItem:
@@ -1042,7 +1041,7 @@ class TestOneMapAnInstance:
             .write_batch(_eugens(), identity=mapped(_eugens()))
             .created_items["father"]
         )
-        approved = apply_equivalences(_tree(), {"e1": father})
+        approved = confirmed(_tree(), {"e1": father})
         written = BatchWriter(wiki).write_batch(approved)
         # the tree's birth year agrees with the history's: one more source
         assert written.referenced == 1

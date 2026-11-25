@@ -18,7 +18,6 @@ from yizkr.core.corpus import ExclusionList
 from yizkr.pipeline import text_stages
 from yizkr.pipeline.estimate import CHUNKS, Estimator, _keyed, _Made, _Tally
 from yizkr.pipeline.llm import cached_client, open_cache, read_cache
-from yizkr.pipeline.review import export_review_csv
 from yizkr.pipeline.scratch import ScratchDriver
 
 pytestmark = pytest.mark.usefixtures("fixed_capture")
@@ -326,7 +325,7 @@ def test_unchanged_claims_preserve_approval_after_context_refresh(
     target.derivations.record(target.batch)
     target.critique.write_text("[]")
     target.derivations.record(target.critique)
-    export_review_csv(batch, target.dir.joinpath("review.csv"))
+    target.dir.joinpath("review.csv").write_text("fictional review sheet\n")
     target.dir.joinpath("review.reviewed.csv").write_text(
         "fictional retained decision\n"
     )

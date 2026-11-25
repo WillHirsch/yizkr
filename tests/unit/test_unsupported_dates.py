@@ -4,8 +4,8 @@ fails explicitly, naming where, never converting or guessing (ADR-0034,
 #338).
 
 One refusal per layer: the shared check (yizkr.core.dates), the claim
-schema as extraction meets it, the GEDCOM adapter, the review sheet's
-correction path, the writer, and each reader of the graph: the
+schema as extraction meets it, the GEDCOM adapter, the writer, and each
+reader of the graph: the
 disagreement report, the site (format_time and its build), the
 possibly-living check and reconcile's roster. Each case beside a refusal
 shows that the same input with a supported date passes, so no refusal is
@@ -33,7 +33,7 @@ from tests.unit.test_pipeline import (
 )
 from yizkr import disagreement
 from yizkr.backup import exclusion_report
-from yizkr.claims import Claim, ClaimBatch, TimeValue
+from yizkr.claims import ClaimBatch, TimeValue
 from yizkr.core import dates, privacy
 from yizkr.core.dates import (
     GREGORIAN,
@@ -46,7 +46,7 @@ from yizkr.model.schema import read_manifest_data
 from yizkr.pipeline import reconcile
 from yizkr.pipeline.extract import salvage_valid_claims
 from yizkr.pipeline.gedcom import adapt_gedcom
-from yizkr.pipeline.review import _parse_correction, claim_id
+from yizkr.pipeline.review import claim_id
 from yizkr.pipeline.writer import BatchWriter
 from yizkr.queries.publish import load_templates
 from yizkr.staticsite import SiteBuilder, format_time
@@ -297,21 +297,6 @@ class TestTheGedcomAdapter:
     def test_the_same_file_with_a_supported_date_is_read(self, date):
         result = adapt_gedcom(GEDCOM.format(date=date), MEDIA_REF)
         assert result.batch.entities
-
-
-class TestTheReviewCorrection:
-    """A curator's correction to a year before the common era is refused."""
-
-    CLAIM = Claim.model_validate(birth({"type": "time", "year": 1836}))
-
-    @pytest.mark.parametrize("text", ["0", "0000", "-1836", "-1836-01-07"])
-    def test_a_correction_before_the_common_era_is_refused(self, text):
-        with pytest.raises(UnsupportedDate, match="unsupported: year"):
-            _parse_correction(self.CLAIM, text)
-
-    def test_a_supported_correction_is_taken(self):
-        corrected = _parse_correction(self.CLAIM, "1836-01-07")
-        assert corrected.value == TimeValue(year=1836, month=1, day=7)
 
 
 class TestTheWriter:

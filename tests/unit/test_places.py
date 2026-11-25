@@ -36,6 +36,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.fixtures.confirmed import confirmed
 from tests.unit.test_containment_claims import PlaceWiki
 from tests.unit.test_registrar import FakeWiki, WriteRefused
 from yizkr.claims import ClaimBatch
@@ -241,14 +242,12 @@ class TestStatedLinks:
         (link,) = stated_links(batch, {}, MARRIAGE)
         assert link.place == "Q20"
 
-    def test_an_approved_equivalence_keeps_each_claim_s_link(self):
-        """reconcile resolved Kaldovsky District to its item, so the
-        approved batch names it by QID, as the value of link 0 and the
-        subject of link 1: each link is still the claim's, with its
-        time."""
-        from yizkr.pipeline.reconcile import apply_equivalences
-
-        approved = apply_equivalences(
+    def test_a_confirmed_place_keeps_each_claim_s_link(self):
+        """A curator confirmed Kaldovsky District as its item, so the
+        batch names it by QID, as the value of link 0 and the subject of
+        link 1 (tests.fixtures.confirmed): each link is still the
+        claim's, with its time."""
+        approved = confirmed(
             koshnovka_batch(
                 _part_of(*IN_1941, DEATH, [_year("point_in_time", 1941)]),
                 _part_of(*FROM_1937, DEATH, [_year("start_time", 1937)]),

@@ -9,11 +9,11 @@ letter, and a hypothetical "der selige Felix".
 
 from __future__ import annotations
 
-import csv
 import json
 
 import pytest
 
+from tests.fixtures.confirmed import confirmed as confirmed_batch
 from tests.fixtures.widowhood import history_batch
 from tests.unit.test_pipeline import ITEMS, PROPERTIES, FakeWiki
 from tests.unit.test_writer_notes_unions import batch_of
@@ -40,7 +40,6 @@ from yizkr.pipeline.extract import (
     entity_kind_prompt_lines,
     salvage_valid_claims,
 )
-from yizkr.pipeline.review import export_review_csv
 from yizkr.pipeline.writer import BatchWriter, pre_plan_refusals
 
 RUN = {
@@ -315,12 +314,10 @@ class TestAQidSubject:
     of the mention it was confirmed from (Q11)."""
 
     def test_a_confirmed_wedding_takes_no_date_of_death(self):
-        from yizkr.pipeline.reconcile import apply_equivalences
-
         dated = claim(
             "wedding", "date_of_death", {"type": "time", "year": 1909}
         )
-        confirmed = apply_equivalences(batch(dated), {"wedding": "Q500"})
+        confirmed = confirmed_batch(batch(dated), {"wedding": "Q500"})
         assert confirmed.claims[0].subject.qid == "Q500"
         assert reject_reasons(validate_against_manifest(confirmed)) == [
             VITAL_SUBJECT
@@ -344,10 +341,8 @@ class TestAQidSubject:
         assert codes(dated, entities=[]) == [VITAL_SUBJECT]
 
     def test_a_confirmed_person_takes_one(self):
-        from yizkr.pipeline.reconcile import apply_equivalences
-
         dated = claim("eugen", "date_of_death", {"type": "time", "year": 1909})
-        confirmed = apply_equivalences(batch(dated), {"eugen": "Q501"})
+        confirmed = confirmed_batch(batch(dated), {"eugen": "Q501"})
         assert reject_reasons(validate_against_manifest(confirmed)) == []
 
     def test_a_qid_subject_of_an_entity_record_has_its_kind(self):
@@ -390,7 +385,7 @@ class TestAClassingClaim:
 class TestUnionEnds:
     @pytest.mark.parametrize("reverse", [False, True])
     def test_successive_unions_survive_with_reviewable_attribution(
-        self, reverse, tmp_path
+        self, reverse
     ):
         given = history_batch(include_misreading=True)
         if reverse:
@@ -403,18 +398,6 @@ class TestUnionEnds:
             "first_union",
             "second_union",
         }
-        sheet = tmp_path / "review.csv"
-        model_row = next(iter(notes))
-        export_review_csv(given, sheet, {model_row: "Existing model concern"})
-        with sheet.open() as stream:
-            rows = list(csv.DictReader(stream))
-        assert len(rows) == len(given.claims)
-        assert "Existing model concern" in rows[model_row]["critique_notes"]
-        for index, row in enumerate(rows):
-            assert (
-                "widowhood/death attribution" in row["critique_notes"]
-            ) == (index in notes)
-            assert row["decision"] == ""
 
     @pytest.mark.parametrize("role", ["spouse", "partner"])
     def test_a_witness_is_none_of_the_couple(self, role):
@@ -560,12 +543,10 @@ class TestALeftOutPerson:
 
     @pytest.mark.parametrize("prop", ["author", "residence", "relative"])
     def test_nor_once_a_curator_confirms_them_as_an_item(self, prop):
-        from yizkr.pipeline.reconcile import apply_equivalences
-
         named = claim("eugen", prop, item("pastor"))
         if prop == "author":
             named["subject"] = {"kind": "artifact", "sha1": BURIAL}
-        confirmed = apply_equivalences(batch(named), {"pastor": "Q600"})
+        confirmed = confirmed_batch(batch(named), {"pastor": "Q600"})
         assert confirmed.claims[0].value.value.qid == "Q600"
         assert LEFT_OUT_PERSON in reject_reasons(
             validate_against_manifest(confirmed)

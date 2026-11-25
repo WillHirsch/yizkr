@@ -32,6 +32,7 @@ from pathlib import Path
 import pytest
 from wikibaseintegrator.datatypes import String
 
+from tests.fixtures.confirmed import confirmed as confirmed_batch
 from tests.fixtures.identity import write_mapped
 from tests.unit.test_chunking import ScriptedLlm, ndjson
 from tests.unit.test_container_claims import (
@@ -80,7 +81,6 @@ from yizkr.pipeline.extract import (
     document_block,
     salvage_valid_claims,
 )
-from yizkr.pipeline.reconcile import apply_equivalences
 from yizkr.pipeline.review import claim_id
 from yizkr.pipeline.transcribe import Transcription
 from yizkr.pipeline.writer import BatchWriter, pre_plan_refusals
@@ -362,12 +362,13 @@ class TestAConfirmedMention:
     existing item: the letter's `main_subject` goes onto that item, cited
     to the letter with its passage (#670, ADR-0039 §10.1(c)). The same
     holds for the artifact a structured record makes, and for no other
-    entity."""
+    entity. The confirmed batch is built directly
+    (tests.fixtures.confirmed)."""
 
     HELD = "Q41"
 
     def confirmed(self, *claims: dict, entities, approved) -> ClaimBatch:
-        return apply_equivalences(batch(*claims, entities=entities), approved)
+        return confirmed_batch(batch(*claims, entities=entities), approved)
 
     def test_validation_and_the_writer_take_it(self):
         confirmed = self.confirmed(
@@ -408,8 +409,7 @@ class TestAConfirmedMention:
     def test_a_qid_named_outright_stays_refused_beside_a_confirmation(self):
         """A claim that named the item by its QID before any confirmation
         records no local subject, so another entity's confirmation as that
-        item does not make it a document subject, through a round trip
-        and a second pass."""
+        item does not make it a document subject, through a round trip."""
         outright = claim(
             "inception",
             JULY_28,
@@ -425,34 +425,24 @@ class TestAConfirmedMention:
             entities=[CERTIFICATE, RUDOLF],
             approved={"u1": "Q41"},
         )
-        again = apply_equivalences(
-            ClaimBatch.model_validate_json(confirmed.model_dump_json()),
-            {"u1": "Q41"},
-        )
+        again = ClaimBatch.model_validate_json(confirmed.model_dump_json())
         for resolved in (confirmed, again):
             (problem,) = validate_against_manifest(resolved)
             assert problem.startswith("claims[1].subject")
             assert problem.endswith("[document_subject]")
             assert list(pre_plan_refusals(resolved, {})) == [1]
 
-    def test_the_record_survives_a_round_trip_and_a_second_pass(self):
+    def test_the_record_survives_a_round_trip(self):
         confirmed = self.confirmed(
             enclosure(), entities=[CERTIFICATE, RUDOLF], approved={"u1": "Q41"}
         )
         (former,) = (claim.confirmed_from for claim in confirmed.claims)
-        assert (former.local_id, former.instance_of) == (
-            "u1",
-            "unclassified_entity",
-        )
-        again = apply_equivalences(
-            ClaimBatch.model_validate_json(confirmed.model_dump_json()),
-            {"u1": "Q41"},
-        )
+        again = ClaimBatch.model_validate_json(confirmed.model_dump_json())
         assert again.claims[0].confirmed_from == former
         assert validate_against_manifest(again) == []
         assert pre_plan_refusals(again, {}) == {}
 
-    def test_the_record_takes_the_entity_s_kind_from_its_record(self):
+    def test_the_record_says_what_the_subject_was_without_the_manifest(self):
         """A ref that gives no kind of its own is recorded with its
         manifest record's, so the record says what the subject was even
         once the batch is read without its manifest."""
@@ -462,9 +452,6 @@ class TestAConfirmedMention:
         }
         confirmed = self.confirmed(
             bare, entities=[CERTIFICATE, RUDOLF], approved={"u1": "Q41"}
-        )
-        assert confirmed.claims[0].confirmed_from.instance_of == (
-            "unclassified_entity"
         )
         manifest_free = confirmed.model_copy(
             update={
@@ -478,9 +465,6 @@ class TestAConfirmedMention:
         own `instance_of`, which the record keeps."""
         confirmed = self.confirmed(
             enclosure(), entities=(), approved={"u1": "Q41"}
-        )
-        assert confirmed.claims[0].confirmed_from.instance_of == (
-            "unclassified_entity"
         )
         assert validate_against_manifest(confirmed) == []
         assert pre_plan_refusals(confirmed, {}) == {}
@@ -518,21 +502,6 @@ class TestAConfirmedMention:
     def test_a_claim_without_the_record_serialises_as_before(self):
         (plain,) = batch(enclosure()).claims
         assert "confirmed_from" not in plain.model_dump_json()
-
-    def test_claims_two_confirmations_make_one_are_kept_once(self):
-        twin = {
-            **enclosure(),
-            "subject": local("u2", "death certificate", "unclassified_entity"),
-        }
-        second = {**CERTIFICATE, "id": "u2"}
-        confirmed = self.confirmed(
-            enclosure(),
-            twin,
-            entities=[CERTIFICATE, second, RUDOLF],
-            approved={"u1": "Q41", "u2": "Q41"},
-        )
-        (kept,) = confirmed.claims
-        assert kept.confirmed_from.local_id == "u1"
 
     def test_an_excerpt_the_instance_keeps_blank_is_refused(self):
         blank = {
@@ -584,11 +553,6 @@ class TestAConfirmedMention:
         assert "carries no excerpt" in warning
 
     @staticmethod
-    def outright() -> dict:
-        """The enclosure's claim, naming the held scan by its QID."""
-        return {**enclosure(), "subject": {"kind": "qid", "qid": "Q41"}}
-
-    @staticmethod
     def of_a_person() -> dict:
         """The enclosure's claim, on a person a curator confirms as the
         held scan's item too."""
@@ -596,32 +560,6 @@ class TestAConfirmedMention:
             **enclosure(),
             "subject": local("p1", "Rudolf Löbig", "human"),
         }
-
-    @pytest.mark.parametrize("other", ["outright", "of_a_person"])
-    @pytest.mark.parametrize("first", [True, False])
-    def test_a_collapse_keeps_the_confirmed_mention_s_claim(
-        self, other, first
-    ):
-        """A claim the same but for an ineligible subject, before or after
-        the confirmed mention's, never displaces it, through a round trip
-        and a second pass; the critique's replay of the collapse finds
-        both claims on the row kept."""
-        rival = getattr(self, other)()
-        pair = [rival, enclosure()] if first else [enclosure(), rival]
-        person = {"id": "p1", "label": "Rudolf Löbig", "kind": "human"}
-        extracted = batch(*pair, entities=[CERTIFICATE, RUDOLF, person])
-        approved = {"u1": "Q41", "p1": "Q41"}
-        confirmed = apply_equivalences(extracted, approved)
-        again = apply_equivalences(
-            ClaimBatch.model_validate_json(confirmed.model_dump_json()),
-            approved,
-        )
-        for resolved in (confirmed, again):
-            (kept,) = resolved.claims
-            assert kept.confirmed_from.local_id == "u1"
-            assert validate_against_manifest(resolved) == []
-            assert pre_plan_refusals(resolved, {}) == {}
-        assert critique.counterparts(extracted, confirmed) == [0, 0]
 
     def test_the_entity_s_record_governs_its_recorded_kind(self):
         """Where the batch holds the entity's record, its kind is what the

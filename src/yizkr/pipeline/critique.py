@@ -853,13 +853,13 @@ def _reject(client: LlmClient, response: str, reason: str) -> bool:
         return False
 
 
-# -- the review sheet -------------------------------------------------------
+# -- notes on reviewed claims ------------------------------------------------
 
 
 def note(finding: Finding) -> str:
-    """A finding as the review sheet's `critique_notes` column shows it:
-    its axis and category, the entity it concerns (and the alias), the
-    issue and the suggestion."""
+    """A finding as a note on a reviewed claim shows it: its axis and
+    category, the entity it concerns (and the alias), the issue and the
+    suggestion."""
     where = finding.entity
     if finding.alias is not None:
         where += f" alias {finding.alias!r}"
@@ -887,38 +887,17 @@ def counterparts(extracted: ClaimBatch, rows: ClaimBatch) -> list[int | None]:
     """For each claim of `extracted`, the index of the claim of `rows` it
     became, where `rows` is `extracted` resolved; all None when it is not.
 
-    Resolution has two steps. The approved equivalences replace each
-    local ref to an approved entity with its QID, and set that entity's
-    `qid`, and a claim they make identical to an earlier one, but for the
-    local subject each records it replaced, is dropped
-    (reconcile.apply_equivalences, reconcile.collapse). Then each
-    remaining local ref may be replaced with a QID by its entity's label
-    (resolve.resolve_batch).
-    The first step is replayed here exactly, from the entities whose
-    `qid` `rows` sets; the second is checked claim by claim, a local ref
-    against the ref at its place, so rows in which one local id became
-    different QIDs in different claims match too."""
-    from yizkr.pipeline.reconcile import apply_equivalences, collapse
-
-    before = {entity.id: entity.qid for entity in extracted.entities}
-    approved = {
-        entity.id: entity.qid
-        for entity in rows.entities
-        if entity.qid and before.get(entity.id) != entity.qid
-    }
-    merged, places = collapse(
-        apply_equivalences(
-            extracted.model_copy(update={"claims": [claim]}), approved
-        ).claims[0]
-        for claim in extracted.claims
-    )
-    found: list[int | None] = list(places)
-    if len(merged) != len(rows.claims) or not all(
+    `rows` is `extracted` resolved when it holds as many claims, each the
+    claim at its place with none or more of its local refs replaced by QID
+    references. The check is claim by claim, a local ref against the ref
+    at its place, so rows in which one local id became different QIDs in
+    different claims match too."""
+    if len(rows.claims) != len(extracted.claims) or not all(
         _resolved_as(claim, row)
-        for claim, row in zip(merged, rows.claims, strict=True)
+        for claim, row in zip(extracted.claims, rows.claims, strict=True)
     ):
         return [None] * len(extracted.claims)
-    return found
+    return list(range(len(extracted.claims)))
 
 
 def _resolved_as(claim: Claim, row: Claim) -> bool:
@@ -943,10 +922,10 @@ def attach(
     rows: ClaimBatch,
     places: Mapping[str, str] | None = None,
 ) -> dict[int, list[Finding]]:
-    """Each finding by the index of the review row it goes on, each on
-    exactly one row. `extracted` is the batch the critic reviewed, and
-    `rows` the batch the review sheet lists, `extracted` resolved
-    (`counterparts`), so that a finding reaches its row whichever of its
+    """Each finding by the index of the reviewed claim it goes on, each
+    on exactly one claim. `extracted` is the batch the critic reviewed,
+    and `rows` the batch whose claims are reviewed, `extracted` resolved
+    (`counterparts`), so that a finding reaches its claim whichever of its
     entities resolved to a QID. `places` names the images the document
     places, as the prompt listed them (artifact_places).
 
@@ -954,7 +933,7 @@ def attach(
     entity goes on the row of the first claim whose subject is the
     entity, else of the first claim that names it as a value or a
     qualifier's value. An entity no row names has no row of its own: its
-    finding goes on the sheet's first row, and the note names the entity.
+    finding goes on the first row, and the note names the entity.
     With no rows, nothing is attached."""
     if not rows.claims:
         return {}
@@ -985,8 +964,9 @@ def _entity_row(
 
 
 def unchecked(invalid: Invalid) -> str:
-    """A finding that failed its checks as the review sheet shows it:
-    marked unchecked, as the critic gave it, and why it failed."""
+    """A finding that failed its checks as a note on a reviewed claim
+    shows it: marked unchecked, as the critic gave it, and why it
+    failed."""
     given = json.dumps(invalid.invalid, ensure_ascii=False)
     return f"critique [unchecked] {given} (fails: {'; '.join(invalid.why)})"
 
@@ -997,10 +977,11 @@ def sheet_notes(
     rows: ClaimBatch,
     places: Mapping[str, str] | None = None,
 ) -> dict[int, str]:
-    """review row index -> the notes on that row, joined: each valid
-    finding on its row (`attach`, with `places`), and each finding that
-    failed its checks on the first row, marked unchecked, since it names
-    nothing a row can be matched by. With no rows, there are no notes."""
+    """row index (a claim's, in `rows`) -> the notes on that row, joined:
+    each valid finding on its row (`attach`, with `places`), and each
+    finding that failed its checks on the first row, marked unchecked,
+    since it names nothing a row can be matched by. With no rows, there
+    are no notes."""
     if not rows.claims:
         return {}
     entries = list(entries)

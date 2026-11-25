@@ -11,14 +11,11 @@ inputs without a wiki connection. Scratch document stages do not read
 the graph before writing. Roster reads refuse dates
 before the common era or outside the proleptic Gregorian calendar.
 
-The legacy CSV route collects explicit human approval.
-`apply_equivalences` applies approved matches by setting EntityRecord.qid
-and rewriting local references to existing items for the writer.
-
-`propose_graph_pairs` uses blocking and adjudication to suggest
-equivalences between existing items. Acting on those suggestions remains
-a separate curator operation: an item merge or a referenced
-`said to be the same as` statement for a contestable identity judgement.
+`propose_graph_pairs` uses blocking and adjudication to propose
+equivalences between existing items. The pairs are proposals: merging
+established entities is not supported. Where an equivalence is itself a
+judgement, a curator adds a referenced `said to be the same as`
+statement.
 """
 
 from __future__ import annotations
@@ -33,17 +30,14 @@ from pydantic import BaseModel, ConfigDict
 
 from yizkr import died_by
 from yizkr.claims import (
-    Claim,
     ClaimBatch,
     EntityRecord,
     ItemValue,
-    LocalRef,
     PersonStructure,
     PlaceStructure,
     QidRef,
     label_container,
     name_form_key,
-    takes_confirmed,
 )
 from yizkr.core import sparql
 from yizkr.core.config import Config
@@ -54,7 +48,6 @@ from yizkr.core.dates import (
 )
 from yizkr.core.wiki import WikiClient
 from yizkr.disagreement import followed
-from yizkr.model.schema import load_acceptance
 from yizkr.pipeline.birth_evidence import BirthEvidence, fetch_birth_evidence
 from yizkr.pipeline.extract import scan_json_objects
 from yizkr.pipeline.llm import CUT_OFF_AT_LIMIT, LlmClient, at_output_limit
@@ -976,219 +969,6 @@ def adjudicate(
     return proposals
 
 
-EQUIVALENCE_FIELDS = [
-    "entity_id",
-    "entity_label",
-    "aliases",
-    "qid",
-    "qid_label",
-    "verdict",
-    "confidence",
-    "evidence",
-    "decision",
-]
-
-
-def export_equivalences_csv(
-    proposals: list[Proposal],
-    entities: list[EntityRecord],
-    roster: list[RosterEntity],
-    path: Path,
-) -> int:
-    """Proposals -> review CSV. `distinct` verdicts are included (a
-    reviewer can overrule the machine in either direction).
-
-    The `aliases` column shows the document aliases that approval will
-    APPEND to the matched item — an approval is also an alias
-    contribution, so the reviewer must see (and may prune) it: delete
-    a bad entry from the cell and only the rest are appended.
-    """
-    entity_index = {entity.id: entity for entity in entities}
-    roster_labels = {
-        roster_entity.qid: roster_entity.label for roster_entity in roster
-    }
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=EQUIVALENCE_FIELDS)
-        writer.writeheader()
-        for proposal in proposals:
-            entity = entity_index.get(proposal.entity_id)
-            writer.writerow(
-                {
-                    "entity_id": proposal.entity_id,
-                    "entity_label": entity.label if entity else "",
-                    "aliases": "|".join(entity.aliases) if entity else "",
-                    "qid": proposal.qid,
-                    "qid_label": roster_labels.get(proposal.qid, ""),
-                    "verdict": proposal.verdict,
-                    "confidence": proposal.confidence,
-                    "evidence": proposal.evidence,
-                    "decision": "",
-                }
-            )
-    return len(proposals)
-
-
-def read_approved_equivalences(path: Path) -> dict[str, str]:
-    """entity_id -> QID for rows a human approved.
-
-    Only the human decision column grants effect; the machine verdict
-    alone never does. Approving two rows for one entity is a reviewer
-    error and raises.
-    """
-    approved: dict[str, str] = {}
-    with open(path, newline="") as handle:
-        for row in csv.DictReader(handle):
-            if row.get("decision", "").strip().lower() != "approve":
-                continue
-            entity_id = row["entity_id"]
-            if entity_id in approved and approved[entity_id] != row["qid"]:
-                raise ValueError(
-                    f"equivalences CSV approves {entity_id!r} to both "
-                    f"{approved[entity_id]} and {row['qid']}"
-                )
-            approved[entity_id] = row["qid"]
-    return approved
-
-
-def read_reviewed_aliases(path: Path) -> dict[str, list[str]]:
-    """entity_id -> the alias list as the reviewer left it, for approved
-    rows of a CSV that carries the `aliases` column.
-
-    The reviewer prunes bad machine aliases (a form's MOTHER label is a
-    role, not a name) by deleting them from the cell; the writer then
-    appends only what survived review. A CSV without the column yields
-    nothing — the batch's aliases apply unchanged.
-    """
-    reviewed: dict[str, list[str]] = {}
-    with open(path, newline="") as handle:
-        reader = csv.DictReader(handle)
-        if "aliases" not in (reader.fieldnames or []):
-            return {}
-        for row in reader:
-            if row.get("decision", "").strip().lower() != "approve":
-                continue
-            reviewed[row["entity_id"]] = [
-                alias.strip()
-                for alias in row.get("aliases", "").split("|")
-                if alias.strip()
-            ]
-    return reviewed
-
-
-def collapse(claims: Iterable[Claim]) -> tuple[list[Claim], list[int]]:
-    """`claims`, resolved, with each claim that is the same as an earlier
-    one but for the local subject each records it replaced
-    (`Claim.confirmed_from`) kept once, at the earlier one's place, and
-    for each claim the index of the claim it is kept as. Of claims so
-    kept once, the one kept is the first whose record makes its subject a
-    document subject (claims.takes_confirmed: a mention or a record's
-    artifact), else the first: a claim that named its QID outright, or
-    whose subject was a person, never displaces a confirmed mention's
-    claim, in either order."""
-    acceptance = load_acceptance()
-
-    def eligible(claim: Claim) -> bool:
-        former = claim.confirmed_from
-        return former is not None and takes_confirmed(
-            former.instance_of, acceptance
-        )
-
-    kept: list[Claim] = []
-    places: dict[str, int] = {}
-    found: list[int] = []
-    for claim in claims:
-        key = claim.model_copy(
-            update={"confirmed_from": None}
-        ).model_dump_json()
-        place = places.get(key)
-        if place is None:
-            places[key] = place = len(kept)
-            kept.append(claim)
-        elif eligible(claim) and not eligible(kept[place]):
-            kept[place] = claim
-        found.append(place)
-    return kept, found
-
-
-def apply_equivalences(
-    batch: ClaimBatch,
-    approved: dict[str, str],
-    reviewed_aliases: dict[str, list[str]] | None = None,
-) -> ClaimBatch:
-    """Rewrite approved entities to their existing items.
-
-    Sets EntityRecord.qid (the writer appends the document's aliases to
-    that item) and replaces local refs with qid refs in every claim. A
-    claim whose subject it replaces records that local subject as its
-    `confirmed_from`, its `instance_of` the entity's kind (its record's,
-    else the ref's own), so the subject rules can tell a confirmed
-    mention or record's artifact from a QID named outright (ADR-0039
-    §10.1(c)); a claim keeps one it already records.
-    `reviewed_aliases` (from the CSV's aliases column) overrides an
-    approved entity's alias list — what the reviewer pruned is never
-    appended.
-    """
-
-    def resolve_ref(ref):
-        if isinstance(ref, LocalRef) and ref.local_id in approved:
-            return QidRef(qid=approved[ref.local_id])
-        return ref
-
-    kinds = {entity.id: entity.kind for entity in batch.entities}
-
-    def resolve_claim(claim):
-        updates: dict = {"subject": resolve_ref(claim.subject)}
-        subject = claim.subject
-        if isinstance(subject, LocalRef) and subject.local_id in approved:
-            updates["confirmed_from"] = subject.model_copy(
-                update={
-                    "instance_of": kinds.get(
-                        subject.local_id, subject.instance_of
-                    )
-                }
-            )
-        if isinstance(claim.value, ItemValue):
-            updates["value"] = ItemValue(value=resolve_ref(claim.value.value))
-        updates["qualifiers"] = [
-            qualifier.model_copy(
-                update={
-                    "value": ItemValue(
-                        value=resolve_ref(qualifier.value.value)
-                    )
-                }
-            )
-            if isinstance(qualifier.value, ItemValue)
-            else qualifier
-            for qualifier in claim.qualifiers
-        ]
-        return claim.model_copy(update=updates)
-
-    # two document entities approved to the SAME item (a source with
-    # internally duplicated records) can leave byte-identical claims;
-    # collapse them here, where identity collapses (the ADR-0006 merge
-    # invariant, applied post-equivalence), keeping a confirmed
-    # mention's record of its local subject over another's (collapse)
-    resolved_claims, _ = collapse(
-        resolve_claim(claim) for claim in batch.claims
-    )
-
-    def updated_entity(entity):
-        if entity.id not in approved:
-            return entity
-        update: dict = {"qid": approved[entity.id]}
-        if reviewed_aliases is not None and entity.id in reviewed_aliases:
-            update["aliases"] = reviewed_aliases[entity.id]
-        return entity.model_copy(update=update)
-
-    return batch.model_copy(
-        update={
-            "claims": resolved_claims,
-            "entities": [updated_entity(entity) for entity in batch.entities],
-        }
-    )
-
-
 # -- graph-side pass (existing duplicates) -----------------------------------
 
 
@@ -1212,9 +992,10 @@ def propose_graph_pairs(
     Dates never prune a pair: contradictory dates go to adjudication and
     review (ADR-0017).
 
-    Executing an approved pair is a curator action (item merge, or a
-    referenced `said to be the same as` statement) — deliberately not
-    automated here.
+    The pairs are proposals: merging established entities is not
+    supported, and nothing here acts on a pair. Where an equivalence is
+    itself a judgement, a curator adds a referenced `said to be the same
+    as` statement.
     """
     pairs: list[tuple[RosterEntity, RosterEntity]] = []
     keys = [roster_name_keys(roster_entity) for roster_entity in roster]
