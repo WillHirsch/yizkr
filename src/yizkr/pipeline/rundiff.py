@@ -410,8 +410,11 @@ def _clean_on(code: Any, ref: str) -> bool:
 
 def on_main(run: Path, ref: str) -> bool:
     """Whether the run ran clean code (no difference from its commit) of
-    a commit on main (`ref`), and so did an invocation that took it past
-    its barrier on other code (its `scratch.code`), if one did."""
+    a commit on main (`ref`): its `code`, and its `scratch.code` when
+    run.json records one. `scratch.code` is the latest invocation's code,
+    recorded only when that invocation went past the barrier alone on
+    other code, so an earlier such invocation's code is neither recorded
+    nor checked."""
     manifest = _manifest(run)
     scratch = manifest.get("scratch")
     later = scratch.get("code") if isinstance(scratch, dict) else None
@@ -1329,10 +1332,13 @@ def compare_stages(
 
 def _run_record(path: Path, manifest: Mapping[str, Any], source: str) -> dict:
     """A run as the aggregates name it: its id, its commit and whether
-    the code differed from it, the same of the code an invocation took it
-    past its barrier on (`scratch.code`, none when no invocation did),
-    whether it went to the end, and whether its report was stored or
-    built."""
+    the code differed from it, the same of its `scratch.code`
+    (`past_barrier_commit`, `past_barrier_dirty`), whether it went to the
+    end, and whether its report was stored or built. `scratch.code` is
+    the latest invocation's code when that invocation went past the
+    barrier alone on other code, and there is none otherwise, including
+    when a later invocation on the run's own code followed such an
+    invocation: both are then none."""
     code = manifest.get("code")
     code = code if isinstance(code, dict) else {}
     scratch = manifest.get("scratch")
