@@ -9,8 +9,9 @@ face-region proposal becomes a statement only once a curator confirms
 it, and no route confirms and writes one until faces work resumes. The
 writer refuses a depicts claim that carries no such confirmation
 (yizkr.pipeline.review), and claim review does not take a face batch,
-which names its people by QID and locates its evidence by image region,
-with no excerpt.
+which names the photograph by QID, names an enrolled person by QID where
+the gallery has one (otherwise by a local ref), and locates its evidence
+by image region, with no excerpt.
 
 Workflow ("initial manual inputs", R5):
 

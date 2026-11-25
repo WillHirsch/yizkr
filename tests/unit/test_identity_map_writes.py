@@ -577,10 +577,9 @@ class TestTheMapIsTheOnlyWay:
         assert again.created_items == first.created_items
 
     def test_a_distinct_decision_is_never_overridden(self):
-        # the reviewer said the tree's Eugen is not the item a write of the
-        # family history made: no equivalence is applied, the map keeps
-        # them apart, and the tree's write never joins him by his label,
-        # whatever kind or source he shares with that item
+        # the map keeps the tree's Eugen apart from the item a write of the
+        # family history made, and the tree's write never joins him to it
+        # by his label, whatever kind or source he shares with that item
         wiki = _wiki()
         tree = _tree()
         identity = mapped(_eugens(), tree)

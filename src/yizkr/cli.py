@@ -1685,9 +1685,9 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         required=True,
         help="an `ingest transcribe` output: the llm engine's claims cite "
-        "the artifact it names by the SHA-1 of its media, which the write "
-        "resolves to the item `ingest register` made for it (a claims "
-        "file's claims cite their artifacts themselves)",
+        "the artifact it names by the SHA-1 of its media, which a writer "
+        "resolves to the artifact item registered for it (a claims file's "
+        "claims cite their artifacts themselves)",
     )
     p.add_argument(
         "--media",
@@ -1754,8 +1754,8 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         required=True,
         help="GEDCOM file (.ged); every claim cites it by the SHA-1 of its "
-        "bytes, which the write resolves to the item `ingest register` "
-        "made for it",
+        "bytes, which a writer resolves to the artifact item registered "
+        "for it",
     )
     p.add_argument("--out", type=Path, default=Path("batch.json"))
     p.set_defaults(func=cmd_gedcom)

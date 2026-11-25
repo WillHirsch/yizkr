@@ -424,7 +424,7 @@ def test_documentation_and_another_stages_prompt_do_not_refresh_extraction(
     assert fingerprint(package) == before
 
 
-# the claim writer, the review sheet and the place writer: the write path,
+# the claim writer, its depicts gate and the place writer: the write path,
 # which changes without recomputing the views of the stages before it
 WRITE_PATH = ("pipeline/writer.py", "pipeline/review.py", "pipeline/places.py")
 

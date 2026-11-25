@@ -1287,7 +1287,8 @@ def on_the_image() -> dict:
 
 class TestTheCriticWiring:
     """A finding that names a placed image's claim by its place resolves
-    to that claim when the critic runs and on the review sheet."""
+    to that claim when the critic runs and in the notes on its claim
+    (`critique.sheet_notes`)."""
 
     def claims(self) -> ClaimBatch:
         """The caption's claims after one of the booklet's own that names

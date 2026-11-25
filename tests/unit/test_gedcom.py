@@ -2196,8 +2196,7 @@ class TestRepeatedEvents:
 
     def test_a_restated_event_gives_its_claims_once(self):
         # (here) the export repeats Eugen's birth line for line: the batch
-        # holds each claim once, so each has a claim id of its own on the
-        # review sheet
+        # holds each claim once, so each has a claim id of its own
         from yizkr.pipeline.review import claim_id
 
         birth = [
