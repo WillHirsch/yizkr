@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from yizkr.claims import (
     ArtifactRef,
@@ -31,12 +31,9 @@ from yizkr.claims import (
     validate_against_manifest,
     widowhood_review_notes,
 )
-from yizkr.core.identity_assignments import (
-    AssignmentRevision,
-    AssignmentSnapshot,
-    RegistryBinding,
-    record_digest,
-)
+from yizkr.core.claim_applications import ClaimRole
+from yizkr.core.identity_assignments import AssignmentSnapshot, record_digest
+from yizkr.core.review_records import source_scope_data
 from yizkr.core.write_recovery import CreationRefused, CreationRegistry
 from yizkr.pipeline.assignment_stages import assignment_review_scope
 from yizkr.pipeline.identity_review import (
@@ -46,7 +43,6 @@ from yizkr.pipeline.identity_review import (
     ReviewRefused,
     ReviewStore,
 )
-from yizkr.pipeline.review_mentions import source_scope_data
 from yizkr.pipeline.review_stages import (
     PreparedReview,
     ReviewRequest,
@@ -133,32 +129,6 @@ class ClaimSelection(BaseModel):
     artifact_sha1: str = Field(pattern=r"^[0-9a-f]{40}$")
     index: int = Field(ge=0)
     warnings: tuple[str, ...] = ()
-
-
-class ClaimRole(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    role: str
-    mention_id: str
-    assignment: AssignmentRevision
-    binding: RegistryBinding
-
-    @model_validator(mode="after")
-    def consistent_assignment(self):
-        if (
-            self.mention_id != self.assignment.mention_id
-            or self.assignment.entity_id != self.binding.binding.entity_id
-            or self.assignment.binding_revision
-            != self.binding.binding_revision
-        ):
-            raise ValueError("claim role differs from its assignment binding")
-        payload = self.assignment.model_dump(
-            mode="json", exclude={"revision_id"}
-        )
-        if record_digest(payload) != self.assignment.revision_id:
-            raise ValueError(
-                "claim role assignment differs from its revision digest"
-            )
-        return self
 
 
 @dataclass(frozen=True)

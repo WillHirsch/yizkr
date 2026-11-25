@@ -11,8 +11,14 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from yizkr.core.identity_assignments import record_digest
+from yizkr.core.identity_assignments import (
+    AssignmentRevision,
+    RegistryBinding,
+    record_digest,
+)
 from yizkr.core.provenance import ProcessRecord
+from yizkr.core.provenance import record_digest as process_digest
+from yizkr.core.review_records import ClaimDecision, check_actor_time
 
 _HASH = r"^[0-9a-f]{64}$"
 _ID = r"^[0-9a-f]{32}$"
@@ -41,6 +47,34 @@ def claim_application_id(decision: dict) -> str:
     )
 
 
+class ClaimRole(BaseModel):
+    """A claim's reference to a mention, through its accepted assignment."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    role: str
+    mention_id: str
+    assignment: AssignmentRevision
+    binding: RegistryBinding
+
+    @model_validator(mode="after")
+    def consistent_assignment(self):
+        if (
+            self.mention_id != self.assignment.mention_id
+            or self.assignment.entity_id != self.binding.binding.entity_id
+            or self.assignment.binding_revision
+            != self.binding.binding_revision
+        ):
+            raise ValueError("claim role differs from its assignment binding")
+        payload = self.assignment.model_dump(
+            mode="json", exclude={"revision_id"}
+        )
+        if record_digest(payload) != self.assignment.revision_id:
+            raise ValueError(
+                "claim role assignment differs from its revision digest"
+            )
+        return self
+
+
 class PlannedClaim(_Record):
     claim_id: str = Field(pattern=_HASH)
     decision: dict[str, Any]
@@ -51,11 +85,9 @@ class PlannedClaim(_Record):
     @model_validator(mode="after")
     def identity(self):
         from yizkr.pipeline.assigned_support import SupportPayload
-        from yizkr.pipeline.claim_review import ClaimRole
-        from yizkr.pipeline.identity_review import ClaimDecision, _actor_time
 
         decision = ClaimDecision.model_validate(self.decision)
-        _actor_time(decision.actor, decision.time)
+        check_actor_time(decision.actor, decision.time)
         digest = record_digest(
             {"basis_version": 1, "basis": decision.proposal.basis}
         )
@@ -114,10 +146,6 @@ class ApplicationPlan(_Record):
 
     @model_validator(mode="after")
     def identity(self):
-        from yizkr.pipeline.run_provenance import (
-            record_digest as process_digest,
-        )
-
         keys = [claim.claim_id for claim in self.claims]
         if not keys or keys != sorted(set(keys)):
             raise ValueError("application plan must have unique sorted claims")

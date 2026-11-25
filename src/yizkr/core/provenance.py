@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime
 from typing import Any, Literal
 
@@ -82,3 +84,22 @@ class ProcessRecord(_Timed):
     run_manifest_hash: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     limitations: tuple[str, ...] = ()
+
+
+def record_bytes(record: ProcessRecord) -> bytes:
+    """A process record as frozen: compact sorted-key JSON and a newline."""
+    return (
+        json.dumps(
+            record.model_dump(mode="json"),
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+def record_digest(record: ProcessRecord) -> str:
+    """The SHA-256 of a process record's frozen bytes, its content address."""
+    return hashlib.sha256(record_bytes(record)).hexdigest()

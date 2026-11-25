@@ -35,14 +35,7 @@ CLI = "yizkr.cli"
 ALLOWED = {
     ("yizkr.core.instance", "yizkr.pipeline.rundir"),
     ("yizkr.core.write_recovery", "yizkr.pipeline.assigned_support"),
-    ("yizkr.core.write_recovery", "yizkr.pipeline.identity_review"),
-    ("yizkr.core.reviewed_creation", "yizkr.pipeline.identity_review"),
-    ("yizkr.core.reviewed_creation", "yizkr.pipeline.review_mentions"),
-    ("yizkr.core.identity_assignments", "yizkr.pipeline.identity_review"),
     ("yizkr.core.claim_applications", "yizkr.pipeline.assigned_support"),
-    ("yizkr.core.claim_applications", "yizkr.pipeline.claim_review"),
-    ("yizkr.core.claim_applications", "yizkr.pipeline.identity_review"),
-    ("yizkr.core.claim_applications", "yizkr.pipeline.run_provenance"),
 }
 
 

@@ -34,9 +34,9 @@ if TYPE_CHECKING:
         RegistryBinding,
     )
     from yizkr.core.identity_migration import MigrationReceipt
+    from yizkr.core.review_records import Decision, MentionRevision
     from yizkr.core.reviewed_creation import ReviewedCreationAuthorization
     from yizkr.core.wiki import WikiPage
-    from yizkr.pipeline.identity_review import Decision, MentionRevision
 
 PREFIX = "Project:Yizkr write recovery/"
 GENERATION_PAGE = PREFIX + "generation"

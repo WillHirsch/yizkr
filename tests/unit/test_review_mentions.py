@@ -16,10 +16,9 @@ from yizkr.claims import (
     PlaceStructure,
     SourceSupport,
 )
+from yizkr.core.review_records import OccurrenceAnchor, anchor_scope
 from yizkr.pipeline.review_mentions import (
     OBSERVATION_LIMITATIONS,
-    OccurrenceAnchor,
-    anchor_scope,
     canonical_basis,
     observe_mentions,
 )
