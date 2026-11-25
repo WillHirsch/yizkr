@@ -1030,6 +1030,115 @@ LANGUAGE_TABLE = (
 )
 LANGUAGES = ("ru", "fy")
 
+# Generated cohorts (tests/fixtures/assignment_cohort.py, #826) are
+# registers of the towns COHORT_TOWNS names, which list invented people of
+# those towns: a cohort of any size draws, with random.Random(COHORT_SEED),
+# each person's given name from COHORT_GIVEN_NAMES, a broad table of period
+# given names, and a surname made of a first and a last syllable of
+# COHORT_SURNAME_SYLLABLES, without drawing one full name twice. Years are
+# drawn with the same generator: a birth from COHORT_BIRTH_YEARS and a death
+# 20 to 89 years later, never after 1945. No drawn surname is a surname of
+# PEOPLE's, so none of a cohort's people is a Löbig or their kin.
+COHORT_SEED = 826
+COHORT_TOWNS = ("floerburg", "peiltal", "kredfeld", "rekau")
+COHORT_GIVEN_NAMES = (
+    "Adam",
+    "Adolf",
+    "Albert",
+    "Anna",
+    "Anton",
+    "August",
+    "Auguste",
+    "Barbara",
+    "Bernhard",
+    "Berta",
+    "Christian",
+    "Christine",
+    "Dorothea",
+    "Elisabeth",
+    "Emil",
+    "Emma",
+    "Ernst",
+    "Franz",
+    "Friedrich",
+    "Georg",
+    "Gertrud",
+    "Hedwig",
+    "Heinrich",
+    "Helene",
+    "Hermann",
+    "Jakob",
+    "Johann",
+    "Johanna",
+    "Josef",
+    "Julius",
+    "Karl",
+    "Karoline",
+    "Katharina",
+    "Konrad",
+    "Lina",
+    "Ludwig",
+    "Luise",
+    "Magdalena",
+    "Margarethe",
+    "Maria",
+    "Martha",
+    "Martin",
+    "Michael",
+    "Minna",
+    "Otto",
+    "Paul",
+    "Peter",
+    "Philipp",
+    "Sophie",
+    "Theodor",
+    "Wilhelm",
+    "Wilhelmine",
+)
+COHORT_SURNAME_SYLLABLES = (
+    (
+        "Bra",
+        "Bre",
+        "Dö",
+        "Dra",
+        "Fe",
+        "Fli",
+        "Gla",
+        "Gro",
+        "Ha",
+        "Kno",
+        "Kü",
+        "La",
+        "Mö",
+        "Nu",
+        "Plü",
+        "Pre",
+        "Rö",
+        "Sa",
+        "Schra",
+        "Stö",
+        "Tö",
+        "Trü",
+        "Wa",
+        "Zi",
+    ),
+    (
+        "bert",
+        "der",
+        "holt",
+        "ke",
+        "ler",
+        "mer",
+        "ner",
+        "rich",
+        "sel",
+        "tig",
+        "tner",
+        "wig",
+    ),
+)
+COHORT_BIRTH_YEARS = (1820, 1899)
+
 SOURCES = (
     Source(
         "studio-photo-1890s",
