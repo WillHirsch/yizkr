@@ -121,12 +121,24 @@ def summary(report: dict) -> str:
     return "\n".join(lines)
 
 
+def check_report(report) -> None:
+    """Refuse anything but a benchmark report of format 1, such as the
+    regression baseline, which records operations and no sizes."""
+    if (
+        not isinstance(report, dict)
+        or report.get("format") != 1
+        or not isinstance(report.get("sizes"), dict)
+    ):
+        raise ValueError("compare benchmark reports of format 1")
+
+
 def compare(baseline: dict, candidate: dict) -> str:
-    """The change of each size's per-identity and per-claim categories from
-    `baseline` to `candidate`, for the sizes both measured with the same
-    scale; refuses reports of another format."""
-    if baseline.get("format") != 1 or candidate.get("format") != 1:
-        raise ValueError("compare reports of format 1")
+    """The change of every per-identity and per-claim category of each
+    size from `baseline` to `candidate`, for the sizes both measured with
+    the same scale ("-" where the baseline has no such count or none);
+    refuses anything but benchmark reports of format 1."""
+    check_report(baseline)
+    check_report(candidate)
     lines = ["Change from the baseline (candidate / baseline):", ""]
     for name, size in candidate["sizes"].items():
         before = baseline["sizes"].get(name)
@@ -134,10 +146,10 @@ def compare(baseline: dict, candidate: dict) -> str:
             lines.append(f"- {name}: no comparable baseline size")
             continue
         for key in ("per_identity", "per_claim"):
+            old_counts = before[key].get("categories", {})
             parts = []
-            for category in SHOWN:
-                old = before[key]["categories"][category]
-                new = size[key]["categories"][category]
+            for category, new in size[key].get("categories", {}).items():
+                old = old_counts.get(category)
                 ratio = "-" if not old else f"{new / old:.2f}"
                 parts.append(f"{category} {ratio}")
             lines.append(f"- {name}, {key}: " + "; ".join(parts))
@@ -214,6 +226,8 @@ def main(argv=None) -> int:
         baseline = (
             json.loads(args.baseline.read_text()) if args.baseline else None
         )
+        if baseline is not None:
+            check_report(baseline)
         names = args.size or list(SIZES)
         report = measurement(names, trace=args.trace)
         with args.output.open("x") as output:

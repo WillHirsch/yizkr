@@ -12,18 +12,17 @@ docs/TESTING.md. No wall-clock time is read or asserted.
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import pytest
+from scripts import assignment_cost as benchmark
 
 from tests.fixtures import example_universe as universe
 from tests.fixtures.assignment_cohort import (
     REGRESSION,
     Scale,
     generate,
-    measure,
-    operation_counts,
     saved_products,
 )
 from tests.fixtures.fake_wikibase import (
@@ -49,6 +48,8 @@ def test_a_scale_draws_one_cohort_and_a_larger_one_extends_it():
     assert generate(SCALE) == cohort
     smaller = generate(Scale(sources=3, mentions=3, shared=1 / 3, claims=4))
     assert smaller.sources == cohort.sources[:3]
+    # the people already in the graph are drawn after every register's
+    assert generate(replace(SCALE, existing=7)).sources == cohort.sources
     seen = set()
     for source in cohort.sources:
         shared = {m.person for m in source.mentions if m.shared}
@@ -74,13 +75,14 @@ def test_a_cohort_draws_its_names_from_the_universe_tables():
         for name in person.names
         for word in name.text.split()
     }
+    # no surname the tables can give is a word of a universe person's name
+    assert surnames.isdisjoint(universe_words)
     people = (*cohort.people, *cohort.existing)
     assert len(cohort.existing) == 40
     assert len({person.name for person in people}) == len(people)
     for person in people:
         assert person.given in universe.COHORT_GIVEN_NAMES
         assert person.surname in surnames
-        assert person.surname not in universe_words
         first, last = universe.COHORT_BIRTH_YEARS
         assert first <= person.born <= last
         assert person.born + 20 <= person.died <= 1945
@@ -90,6 +92,19 @@ def test_a_cohort_draws_its_names_from_the_universe_tables():
         if place.key in universe.COHORT_TOWNS
     }
     assert {source.town for source in cohort.sources} <= towns
+
+
+def test_no_full_name_is_drawn_twice_until_the_tables_run_out():
+    starts, ends = universe.COHORT_SURNAME_SYLLABLES
+    names = len(universe.COHORT_GIVEN_NAMES) * len(starts) * len(ends)
+    every = Scale(
+        sources=1, mentions=1, shared=0, claims=0, existing=names - 1
+    )
+    cohort = generate(every)
+    people = (*cohort.people, *cohort.existing)
+    assert len({person.name for person in people}) == len(people) == names
+    with pytest.raises(ValueError):
+        generate(replace(every, existing=names))
 
 
 def test_every_mention_is_anchored_and_every_claim_located(tmp_path):
@@ -152,13 +167,117 @@ def _changes(recorded: list[dict], counted: list[dict]) -> str:
     )
 
 
-def test_the_regression_scenario_keeps_its_recorded_request_counts(tmp_path):
+@pytest.fixture
+def isolated(monkeypatch, tmp_path):
+    """Undo the settings file the benchmark points the environment at
+    when it measures, once the test ends."""
+    monkeypatch.setenv("YIZKR_ENV_FILE", str(tmp_path / "unused.env"))
+
+
+def test_the_regression_scenario_keeps_its_recorded_request_counts(
+    tmp_path, isolated
+):
     """A performance baseline, read through the benchmark's own report:
-    each operation's server requests by kind, review-store calls and
-    records written, for the smallest size."""
+    `--write-baseline` records each operation's server requests by kind,
+    review-store calls and records written, for the smallest size, as the
+    checked-in baseline holds them."""
+    path = tmp_path / "baseline.json"
+    assert benchmark.main(["--write-baseline", str(path)]) == 0
     recorded = json.loads(BASELINE.read_text())
-    assert recorded["scale"] == asdict(REGRESSION)
-    counted = operation_counts(measure(REGRESSION, tmp_path))
-    assert counted == recorded["operations"], _changes(
-        recorded["operations"], counted
+    counted = json.loads(path.read_text())
+    assert recorded["scale"] == counted["scale"] == asdict(REGRESSION)
+    assert counted["operations"] == recorded["operations"], _changes(
+        recorded["operations"], counted["operations"]
     )
+
+
+def _size(sources: int, **categories: float) -> dict:
+    per = {"count": 1, "categories": categories}
+    return {
+        "scale": {"sources": sources},
+        "per_identity": per,
+        "per_claim": per,
+    }
+
+
+def test_a_comparison_gives_every_category_of_each_comparable_size():
+    baseline = {
+        "format": 1,
+        "sizes": {
+            "small": _size(2, **{"writes": 10, "revision reads": 4}),
+            "medium": _size(10, writes=5),
+        },
+    }
+    candidate = {
+        "format": 1,
+        "sizes": {
+            "small": _size(
+                2, **{"writes": 15, "revision reads": 2, "other requests": 3}
+            ),
+            "medium": _size(20, writes=5),
+            "large": _size(50, writes=1),
+        },
+    }
+    lines = benchmark.compare(baseline, candidate).splitlines()
+    for key in ("per_identity", "per_claim"):
+        (line,) = [
+            line for line in lines if line.startswith(f"- small, {key}")
+        ]
+        ratios = dict(
+            part.rsplit(" ", 1) for part in line.split(": ", 1)[1].split("; ")
+        )
+        assert ratios == {
+            "writes": "1.50",
+            "revision reads": "0.50",
+            "other requests": "-",
+        }
+    # another scale, or a size the baseline lacks, gives no ratio
+    for name in ("medium", "large"):
+        assert (
+            len([line for line in lines if line.startswith(f"- {name}")]) == 1
+        )
+        assert not any(line.startswith(f"- {name},") for line in lines)
+
+
+@pytest.mark.parametrize(
+    "report", [{"format": 2, "sizes": {}}, {"format": 1}, [], "baseline"]
+)
+def test_a_comparison_refuses_anything_but_a_benchmark_report(report):
+    if report == "baseline":
+        report = json.loads(BASELINE.read_text())
+    with pytest.raises(ValueError):
+        benchmark.compare(report, {"format": 1, "sizes": {}})
+
+
+def test_an_existing_output_is_refused_before_anything_is_measured(
+    tmp_path, isolated, capsys
+):
+    output = tmp_path / "report.json"
+    output.write_text("earlier evidence\n")
+    argv = ["--size", "small", "--output", str(output)]
+    assert benchmark.main(argv) == 2
+    assert output.read_text() == "earlier evidence\n"
+    assert "measured" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("baseline", [None, "not json", "regression"])
+def test_a_baseline_that_is_not_a_report_is_refused_before_measuring(
+    tmp_path, isolated, capsys, baseline
+):
+    path = tmp_path / "baseline.json"
+    if baseline == "regression":
+        path.write_text(BASELINE.read_text())
+    elif baseline is not None:
+        path.write_text(baseline)
+    output = tmp_path / "report.json"
+    argv = [
+        "--size",
+        "small",
+        "--baseline",
+        str(path),
+        "--output",
+        str(output),
+    ]
+    assert benchmark.main(argv) == 2
+    assert not output.exists()
+    assert "measured" not in capsys.readouterr().out
