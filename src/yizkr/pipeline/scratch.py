@@ -198,7 +198,12 @@ from yizkr.pipeline.document_state import (
     route_transcription,
     validate_source_owners,
 )
-from yizkr.pipeline.run_resources import MODEL_VARIABLE, RunResources
+from yizkr.pipeline.run_resources import (
+    BORROWED,
+    MODEL_VARIABLE,
+    RoleSettings,
+    RunResources,
+)
 from yizkr.pipeline.rundir import (
     ABORT,
     CONTROL,
@@ -220,7 +225,6 @@ from yizkr.pipeline.rundir import (
     code_version,
     exclusions_record,
     fold_control,
-    model_alias,
     run_state,
     settings_conflicts,
     summarise,
@@ -286,8 +290,6 @@ MIN_FREE_BYTES = 2 * 1024**3
 RESUME_MARGIN = 60.0
 # `--resume` with no run named: the latest run
 LATEST = "latest"
-# the engine a run records whose engines its caller lends it
-BORROWED = "borrowed"
 
 
 # what a stage of a document came to in the dispatch loop: it ended (done
@@ -940,17 +942,10 @@ class ScratchDriver:
         self.language = language
         self.fallback_language = fallback_language
         self.chunk_concurrency = chunk_concurrency
-        # reasoning effort per phase: mechanical bulk steps (transcription,
-        # extraction) run low; the judgment step, the critique, runs high
-        # — where the thinking is cheap and the decision matters.
+        # the efforts and the extraction model the roles run with
+        # (RoleSettings, which role_settings builds from them as they stand)
         self.extract_effort = extract_effort
         self.review_effort = review_effort
-        # per-phase model: claim extraction is a high-volume, structured
-        # task where source discipline (extract only what the source
-        # asserts) matters more than raw capability, so it can run a
-        # distinct model from the run's main one — which stays on the
-        # critique. None inherits the main model. See inference configuration
-        # in docs/SOURCE_READING.md.
         self.extract_model = extract_model
         self.env_file = env_file
         self.log = log
@@ -1226,13 +1221,14 @@ class ScratchDriver:
         an alias, or a role that names none. The LLM cache's keys name
         each role's model, so every one must be a full model id."""
         roles = self._preflight_roles()
+        settings = self.role_settings
         problems = []
         try:
-            self._refuse_model_aliases(roles)
+            settings.refuse_model_aliases(roles)
         except ModelAliasRefused as exc:
             problems.append(str(exc))
         unnamed = [
-            role for role in roles if not self._configured_model(role)[0]
+            role for role in roles if not settings.configured_model(role)[0]
         ]
         if unnamed:
             problems.append(
@@ -1306,11 +1302,12 @@ class ScratchDriver:
         no run state: a stage whose view the invocation will reuse counts
         all the same."""
         roles = self._preflight_roles(past)
+        settings = self.role_settings
         pairs: dict[tuple[str | None, str | None], str] = {}
         for role in MODEL_ROLES:
             if role in roles:
-                effort, _model = self._engine_settings(role)
-                model = self._configured_model(role)[0]
+                effort, _model = settings.engine_settings(role)
+                model = settings.configured_model(role)[0]
                 pairs.setdefault((model, effort), role)
         return [(role, effort) for (_m, effort), role in pairs.items()]
 
@@ -1351,16 +1348,17 @@ class ScratchDriver:
             "cli_version"
         )
         problems: list[str] = []
+        settings = self.role_settings
         pairs = self._preflight_pairs(past)
         for index, (role, effort) in enumerate(pairs):
-            model = self._configured_model(role)[0]
+            model = settings.configured_model(role)[0]
             what = f"{model} ({role}, effort {effort or 'unset'})"
             try:
                 try:
                     engine = make_client(
                         self.llm,
                         effort=effort,
-                        model=self._engine_settings(role)[1],
+                        model=settings.engine_settings(role)[1],
                     )
                 except PassPaused as exc:
                     if isinstance(exc, UsageLimitReached):
@@ -1394,7 +1392,7 @@ class ScratchDriver:
                     f"the engine cannot run {what}: {exc.reason or exc}"
                 )
                 untried = [
-                    f"{self._configured_model(later)[0]} ({later})"
+                    f"{settings.configured_model(later)[0]} ({later})"
                     for later, _effort in pairs[index + 1 :]
                 ]
                 if untried:
@@ -1446,7 +1444,7 @@ class ScratchDriver:
             "mode": MODE,
             "project_stage": DEVELOPMENT_STAGE,
             "engine": {"name": self.llm, "cli_version": None},
-            "roles": self._roles(),
+            "roles": self.role_settings.manifest_roles(),
             "cache": None
             if self.cache_dir is None
             else os.path.abspath(self.cache_dir),
@@ -2355,7 +2353,7 @@ class ScratchDriver:
             if role not in self.borrowed_engines:
                 raise ScratchRefused(f"no {role} engine is lent to this run")
             return self.borrowed_engines[role]
-        effort, model = self._engine_settings(role)
+        effort, model = self.role_settings.engine_settings(role)
         return self.resources.engine(
             role,
             engine=self.llm,
@@ -2375,51 +2373,27 @@ class ScratchDriver:
     def _close_engines(self) -> None:
         self.resources.close()
 
+    @property
+    def role_settings(self) -> RoleSettings:
+        """The model roles' settings, built from the run's engine, efforts,
+        extraction model, epochs and refreshed roles as they stand at each
+        read."""
+        return RoleSettings(
+            engine=self.llm,
+            extract_effort=self.extract_effort,
+            review_effort=self.review_effort,
+            extract_model=self.extract_model,
+            epochs=self.epochs,
+            refresh=self.refresh,
+        )
+
+    # the place and adjudication stages read a role's settings through the
+    # driver (RoleSettings.engine_settings and configured_model)
     def _engine_settings(self, role: str) -> tuple[str, str | None]:
-        """(effort, model override) for a role: transcribe, extract,
-        critique."""
-        if role == "critique":
-            return self.review_effort, None
-        if role == "extract":
-            return self.extract_effort, self.extract_model
-        return self.extract_effort, None
+        return self.role_settings.engine_settings(role)
 
     def _configured_model(self, role: str) -> tuple[str | None, str]:
-        """(model, where it is configured) for a role: its own model (the
-        extraction model), else $YIZKR_LLM_MODEL; None when neither names
-        one and the engine runs a default of its own, and None for a
-        borrowed engine, whose model is its caller's."""
-        if self.borrowed_engines is not None:
-            return None, "the borrowed engine"
-        _effort, model = self._engine_settings(role)
-        if model:
-            return model, "the extraction model (--extract-model)"
-        return os.environ.get(MODEL_VARIABLE) or None, f"${MODEL_VARIABLE}"
-
-    def _refuse_model_aliases(
-        self, roles: Sequence[str] = MODEL_ROLES
-    ) -> None:
-        """Refuse a run whose configuration names a model by an alias
-        (rundir.model_alias): the engine would choose the model, and
-        neither the run manifest nor the LLM cache's keys could say
-        which."""
-        refused = {}
-        for role in roles:
-            model, where = self._configured_model(role)
-            if model_alias(model):
-                refused.setdefault((where, model), []).append(role)
-        if refused:
-            raise ModelAliasRefused(
-                "; ".join(
-                    f"{where} names the model {model!r} for "
-                    f"{', '.join(roles)}, an alias"
-                    for (where, model), roles in refused.items()
-                )
-                + ". The engine resolves an alias to a model of its own "
-                "choosing, which neither the run manifest nor the LLM "
-                "cache's keys can name. Configure the full model id "
-                "instead, such as claude-sonnet-5."
-            )
+        return self.role_settings.configured_model(role)
 
     def _llm(self, role: str, doc: DocumentRun):
         """The engine for one role, as one document's stages see it
@@ -2778,13 +2752,14 @@ class ScratchDriver:
                     )
             if stage != "transcription" or route in {"vision", PAGED}:
                 role = descriptor.role
-                effort, _ = self._engine_settings(role)
-                model, _ = self._configured_model(role)
+                settings = self.role_settings
+                effort, _ = settings.engine_settings(role)
+                model, _ = settings.configured_model(role)
                 configuration.update(
-                    engine=self.llm,
+                    engine=settings.engine,
                     model=model,
-                    effort=effort if self.llm != "anthropic" else None,
-                    epoch=self.epochs.get(role, 0),
+                    effort=effort if settings.engine != "anthropic" else None,
+                    epoch=settings.epoch(role),
                 )
             if stage == "extraction":
                 from yizkr.pipeline.text_stages import ExtractionRequest
@@ -4047,21 +4022,6 @@ class ScratchDriver:
             f"  {doc.source.name}: {why}; the old directory is kept as "
             f"{kept.name}; re-ingesting"
         )
-
-    def _roles(self) -> dict[str, dict[str, Any]]:
-        """Each role as the run configures it, for the run manifest; the
-        role's engine client adds what it applies when it starts."""
-        roles = {}
-        for role in MODEL_ROLES:
-            effort, _model = self._engine_settings(role)
-            roles[role] = {
-                "model": self._configured_model(role)[0],
-                "effort": effort,
-                "epoch": self.epochs.get(role, 0),
-                "refresh": role in self.refresh,
-                "client": None,
-            }
-        return roles
 
     def run(self) -> int:
         with self._cancellation_scope():
