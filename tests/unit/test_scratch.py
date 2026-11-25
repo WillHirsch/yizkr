@@ -35,9 +35,9 @@ from tests.unit.test_no_wiki_before_write import (  # noqa: F401
 )
 from yizkr import cli
 from yizkr.claims import ClaimBatch
+from yizkr.core.cancellation import current_cancellation
 from yizkr.core.corpus import ExclusionConfigError, ExclusionList
 from yizkr.pipeline import clustering, document_state, llm, monitor, scratch
-from yizkr.pipeline.cancellation import current_cancellation
 from yizkr.pipeline.document_state import directory_names
 from yizkr.pipeline.llm import CliVersionMismatch, UsageLimitReached
 from yizkr.pipeline.rundir import (

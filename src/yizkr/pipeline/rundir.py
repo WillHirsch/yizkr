@@ -72,6 +72,7 @@ from pathlib import Path
 from typing import Any
 
 from yizkr import __version__
+from yizkr.core.file_writes import atomic_write_text
 from yizkr.pipeline.run_liveness import (
     ABANDONED,
     UNKNOWN,
@@ -79,7 +80,6 @@ from yizkr.pipeline.run_liveness import (
     owner_liveness,
 )
 from yizkr.pipeline.stages import (
-    atomic_write_text,
     canonical_json,
     read_jsonl,
     sha256_text,

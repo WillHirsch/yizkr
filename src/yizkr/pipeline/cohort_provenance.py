@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from yizkr.core.cancellation import check_cancelled
 from yizkr.core.identity_assignments import AssignmentRevision
 from yizkr.core.provenance import ProcessRecord, StageProvenance
 from yizkr.core.reviewed_creation import ReviewedCreationAuthorization
@@ -30,7 +31,6 @@ from yizkr.pipeline.assignment_aliases import (
     alias_contribution,
     append_aliases,
 )
-from yizkr.pipeline.cancellation import check_cancelled
 from yizkr.pipeline.cohort_additions import MAP_METHODS, map_origin
 from yizkr.pipeline.identity_provenance import (
     IdentityProvenanceRefused,

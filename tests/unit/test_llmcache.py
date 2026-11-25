@@ -4498,7 +4498,7 @@ class TestExecutionSessionOwnership:
         assert again == answer and later.fork(context, "c1") == fork
 
     def test_close_defers_release_until_borrowed_fork_finishes(self, tmp_path):
-        from yizkr.pipeline.cancellation import RunCancelled
+        from yizkr.core.cancellation import RunCancelled
 
         cache = open_cache(tmp_path / "cache")
         started, finish = threading.Event(), threading.Event()
@@ -4544,7 +4544,7 @@ class TestExecutionSessionOwnership:
     def test_late_open_after_service_close_is_released_without_publication(
         self, tmp_path
     ):
-        from yizkr.pipeline.cancellation import RunCancelled
+        from yizkr.core.cancellation import RunCancelled
 
         cache = open_cache(tmp_path / "cache")
         engine = Engine()

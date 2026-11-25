@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from yizkr.claims import ArtifactRef
-from yizkr.pipeline.cancellation import check_cancelled
+from yizkr.core.cancellation import check_cancelled
 from yizkr.pipeline.container_inventory import _read_regular, read_inventory
 from yizkr.pipeline.container_sources import ContainerSources, project_sources
 from yizkr.pipeline.containers import ContainerPages

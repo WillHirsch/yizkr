@@ -147,6 +147,13 @@ from pathlib import Path
 from typing import Any
 
 from yizkr.claims import ArtifactRef, ClaimBatch
+from yizkr.core.cancellation import (
+    Cancellation,
+    RunCancelled,
+    cancellation_scope,
+    check_cancelled,
+    current_cancellation,
+)
 from yizkr.core.config import Config
 from yizkr.core.corpus import (
     MISSING_LIST,
@@ -162,15 +169,9 @@ from yizkr.core.exits import EXIT_FAILED as EXIT_FAILED
 from yizkr.core.exits import EXIT_INTERRUPTED as EXIT_INTERRUPTED
 from yizkr.core.exits import EXIT_OK as EXIT_OK
 from yizkr.core.exits import EXIT_STOPPED as EXIT_STOPPED
+from yizkr.core.file_writes import atomic_write_text
 from yizkr.core.wiki import WikiClient
 from yizkr.pipeline import stage_planning
-from yizkr.pipeline.cancellation import (
-    Cancellation,
-    RunCancelled,
-    cancellation_scope,
-    check_cancelled,
-    current_cancellation,
-)
 from yizkr.pipeline.document_state import (
     BATCH_VOLATILE,
     BATCHED,
@@ -240,7 +241,6 @@ from yizkr.pipeline.stage_planning import (
     stages_for,
 )
 from yizkr.pipeline.stages import (
-    atomic_write_text,
     content_hash,
     read_jsonl,
     sha1_file,

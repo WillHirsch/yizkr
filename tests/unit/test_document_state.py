@@ -254,7 +254,7 @@ class TestUnreadableDocuments:
         """state.json is replaced in one step, as the views are: a save cut
         short, by a kill say, leaves the old state whole and no other file
         beside it, where a plain write leaves it cut short."""
-        from yizkr.pipeline import stages
+        from yizkr.core import file_writes
 
         path = tmp_path / "letter" / "state.json"
         DocumentState(file="letter.txt", title="letter", status=BATCHED).save(
@@ -267,7 +267,7 @@ class TestUnreadableDocuments:
                 handle.write(text[: len(text) // 2])
             raise OSError("killed while writing")
 
-        monkeypatch.setattr(stages, "write_synced", cut_short)
+        monkeypatch.setattr(file_writes, "write_synced", cut_short)
         failed = DocumentState(
             file="letter.txt", title="letter", status=FAILED
         )

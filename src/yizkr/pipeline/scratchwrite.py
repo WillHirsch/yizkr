@@ -200,6 +200,7 @@ from pathlib import Path
 from typing import Any
 
 from yizkr.claims import ClaimBatch, ItemValue
+from yizkr.core.file_writes import atomic_write_text
 from yizkr.core.instance import (
     clear_contents,
     private_dir,
@@ -211,7 +212,6 @@ from yizkr.core.instance import (
 from yizkr.pipeline import anomalies
 from yizkr.pipeline.rundir import PROGRESS
 from yizkr.pipeline.stages import (
-    atomic_write_text,
     canonical_json,
     sha256_text,
 )

@@ -587,7 +587,7 @@ def cmd_transcribe(args) -> int:
 
         transcriber = HtrPlatformAdapter()
         transcription = transcriber.transcribe(args.file)
-    from yizkr.pipeline.stages import atomic_write_text
+    from yizkr.core.file_writes import atomic_write_text
 
     atomic_write_text(args.out, transcription.model_dump_json(indent=2))
     print(
@@ -721,8 +721,8 @@ def cmd_extract(args) -> int:
         sys.exit(f"--out {args.out} is a folder, not a batch file; refusing")
     if args.engine == "file" and not args.claims_file:
         sys.exit("--engine file requires --claims-file")
+    from yizkr.core.file_writes import atomic_write_text
     from yizkr.pipeline.extract import ExtractionFailed
-    from yizkr.pipeline.stages import atomic_write_text
     from yizkr.pipeline.text_stages import (
         ExtractionRequest,
         extract,
@@ -866,9 +866,9 @@ def cmd_resolve(args) -> int:
 
 
 def cmd_gedcom(args) -> int:
+    from yizkr.core.file_writes import atomic_write_text
     from yizkr.pipeline.gedcom import format_unsupported_tags
     from yizkr.pipeline.gedcom_stages import GedcomRequest, derive_gedcom
-    from yizkr.pipeline.stages import atomic_write_text
     from yizkr.pipeline.text_stages import validate_paths
 
     _refuse_if_excluded(args, args.file)
@@ -2529,13 +2529,13 @@ def main(argv: list[str] | None = None) -> int:
     (PassPaused) and Ctrl-C print their message alone, on stderr, and
     return their own status; a usage error returns the refusal's, not
     argparse's 2, which is a pause's."""
+    from yizkr.core.cancellation import RunCancelled
     from yizkr.core.exits import (
         EXIT_FAILED,
         EXIT_INTERRUPTED,
         EXIT_REFUSED,
         EXIT_STOPPED,
     )
-    from yizkr.pipeline.cancellation import RunCancelled
     from yizkr.pipeline.llm import PassPaused
     from yizkr.pipeline.rundir import RunSettingsConflict
 

@@ -24,6 +24,7 @@ from yizkr.claims import (
     container_problems,
     structure_problems,
 )
+from yizkr.core.file_writes import atomic_write_text
 from yizkr.core.write_recovery import EntityBinding
 from yizkr.pipeline.identity_review import (
     DecisionInput,
@@ -39,7 +40,6 @@ from yizkr.pipeline.review_mentions import (
     observe_mentions,
     source_scope_data,
 )
-from yizkr.pipeline.stages import atomic_write_text
 from yizkr.pipeline.text_stages import validate_paths
 from yizkr.pipeline.transcribe import Transcription
 

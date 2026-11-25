@@ -29,8 +29,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from yizkr.core.cancellation import check_cancelled
 from yizkr.pipeline import textlayer
-from yizkr.pipeline.cancellation import check_cancelled
 from yizkr.pipeline.llm import _run_process
 
 _PDF_OPTIONS = {

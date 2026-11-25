@@ -1,4 +1,4 @@
-"""Offline tests for the pipeline's atomic writes (yizkr.pipeline.stages).
+"""Offline tests for the durable and atomic writes (yizkr.core.file_writes).
 
 The unit tests skip fsync by default (tests/unit/conftest.py); the tests
 here that check durability are marked `real_fsync` and wrap the real
@@ -12,7 +12,7 @@ import os
 import pytest
 
 from tests.fixtures import example_universe as u
-from yizkr.pipeline.stages import atomic_write_text, write_synced
+from yizkr.core.file_writes import atomic_write_text, write_synced
 
 SOURCES = {source.key: source for source in u.SOURCES}
 # a transcription with non-ASCII text: its encoded size is not its length

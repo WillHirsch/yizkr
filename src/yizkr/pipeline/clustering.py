@@ -349,6 +349,7 @@ from yizkr.claims import (
     label_container,
     name_form_key,
 )
+from yizkr.core.file_writes import atomic_write_text
 from yizkr.died_by import When, died_by, from_batch
 from yizkr.pipeline.document_state import BATCH_VOLATILE
 from yizkr.pipeline.fingerprints import (
@@ -366,7 +367,6 @@ from yizkr.pipeline.reconcile import (
     impossible_pair,
 )
 from yizkr.pipeline.stages import (
-    atomic_write_text,
     canonical_json,
     content_hash,
     sha256_text,
@@ -387,8 +387,10 @@ DEFAULTS = PACKAGE / "clustering.yaml"
 # the modules whose source makes the identity map: a map another source
 # made is made again, whatever VERSION says. The other yizkr modules that
 # this one and fingerprints.py import reach the key through the batches'
-# hashes: yizkr.claims parses the batches, document_state says what a hash
-# leaves out, and stages makes it. text_storage.py gives the form the
+# hashes (yizkr.claims parses the batches, document_state says what a hash
+# leaves out, and stages makes it) or decide nothing in the map
+# (core.file_writes writes it out whole, and run_provenance describes the
+# run that made it). text_storage.py gives the form the
 # instance keeps a term in (stored_term), which names are compared in, and
 # names.py which forms are appellations (appellations_of).
 CODE = (

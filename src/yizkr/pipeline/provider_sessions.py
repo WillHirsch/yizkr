@@ -19,7 +19,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
-from yizkr.pipeline.cancellation import RunCancelled
+from yizkr.core.cancellation import RunCancelled
 from yizkr.pipeline.llm import (
     FORK,
     OPEN,

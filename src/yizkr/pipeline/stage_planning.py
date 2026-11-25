@@ -206,12 +206,16 @@ _READING = (
     "pipeline/transcription_record.py",
     "pipeline/transcription_check.py",
 )
-_SHARED = ("pipeline/text_stages.py", "pipeline/stages.py")
+_SHARED = (
+    "pipeline/text_stages.py",
+    "pipeline/stages.py",
+    "core/file_writes.py",
+)
 _EXTRACTION = (
     "pipeline/extract.py",
     "pipeline/chunking.py",
     "pipeline/workers.py",
-    "pipeline/cancellation.py",
+    "core/cancellation.py",
     "pipeline/interpretation_context.py",
     "pipeline/preparation.py",
     "pipeline/names.py",
@@ -271,7 +275,7 @@ SLIDE_VISION_RESOURCES = (
 )
 VISION_READING_RESOURCES = (
     "pipeline/llm.py",
-    "pipeline/cancellation.py",
+    "core/cancellation.py",
     "pipeline/prompts/__init__.py",
     "pipeline/prompts/transcription.md",
 )
@@ -297,7 +301,7 @@ PROCESSING_RESOURCES = {
                 "pipeline/critique.py",
                 "pipeline/chunking.py",
                 "pipeline/workers.py",
-                "pipeline/cancellation.py",
+                "core/cancellation.py",
                 "pipeline/extract.py",
                 "pipeline/interpretation_context.py",
                 "pipeline/claim_naming.py",
@@ -313,6 +317,7 @@ PROCESSING_RESOURCES = {
                 *_SCHEMA,
                 "pipeline/gedcom_stages.py",
                 "pipeline/stages.py",
+                "core/file_writes.py",
                 "pipeline/gedcom.py",
                 "pipeline/names.py",
                 "pipeline/text_storage.py",

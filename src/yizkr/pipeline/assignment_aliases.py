@@ -44,6 +44,7 @@ from typing import ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from yizkr.core.cancellation import check_cancelled
 from yizkr.core.identity_assignments import AssignmentRevision, record_json
 from yizkr.core.instance import require_retained_code
 from yizkr.core.write_recovery import (
@@ -52,7 +53,6 @@ from yizkr.core.write_recovery import (
     CreationRegistry,
     write_existing,
 )
-from yizkr.pipeline.cancellation import check_cancelled
 from yizkr.pipeline.identity_provenance import IdentityPublication
 from yizkr.pipeline.identity_review import Decision
 from yizkr.pipeline.writer import _terms, unknown_characters

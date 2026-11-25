@@ -236,6 +236,7 @@ def package(tmp_path, monkeypatch):
         ("presentation", "paged", "pipeline/pptx_inventory.py"),
         ("excerpt", "excerpt", "pipeline/container_sources.py"),
         ("excerpt", "excerpt", "pipeline/media_stages.py"),
+        ("media", "vision", "core/cancellation.py"),
     ],
 )
 def test_media_generation_observes_its_reader_resources(
@@ -392,6 +393,8 @@ def fingerprint(package, **configuration):
         "pipeline/text_storage.py",
         "pipeline/claim_naming.py",
         "pipeline/evidence_pages.py",
+        "core/file_writes.py",
+        "core/cancellation.py",
     ],
 )
 def test_changed_prompt_schema_and_transitive_code_require_reprocessing(
@@ -481,6 +484,8 @@ def test_write_path_changes_do_not_refresh_a_stage_before_write(
     [
         ("critique", "pipeline/claim_naming.py"),
         ("gedcom", "pipeline/text_storage.py"),
+        ("gedcom", "core/file_writes.py"),
+        ("critique", "core/cancellation.py"),
     ],
 )
 def test_shared_helpers_of_critique_and_gedcom_require_reprocessing(

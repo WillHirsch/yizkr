@@ -5,7 +5,7 @@ import threading
 
 import pytest
 
-from yizkr.pipeline.cancellation import (
+from yizkr.core.cancellation import (
     Cancellation,
     RunCancelled,
     cancellation_scope,
