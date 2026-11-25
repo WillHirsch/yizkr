@@ -483,24 +483,12 @@ def _counted(name: str):
     return counted
 
 
-# the public calls a CountingReviewStore counts
-STORE_CALLS = (
-    "get_mention",
-    "observe",
-    "remap",
-    "get_proposal",
-    "list_proposals",
-    "propose",
-    "get_decision",
-    "decide",
-    "decide_many",
-    "project",
-    "pin_projection",
-    "propose_claim",
-    "get_claim_proposal",
-    "get_claim_decision",
-    "decide_claims",
-    "pin_application",
+# the calls a CountingReviewStore counts: every public method of the review
+# store but `close`, which ends the run, so a new read or write is counted
+STORE_CALLS = tuple(
+    name
+    for name, value in vars(ReviewStore).items()
+    if callable(value) and not name.startswith("_") and name != "close"
 )
 for _name in STORE_CALLS:
     setattr(CountingReviewStore, _name, _counted(_name))

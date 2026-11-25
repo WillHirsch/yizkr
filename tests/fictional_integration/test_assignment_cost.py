@@ -5,11 +5,11 @@ never a required case, on a stack of its own: the benchmark's smallest
 cohort goes through the real Wikibase and query service, every request
 counted at the transport by the kinds the offline benchmark counts, each
 operation and each wait for the query service timed. The same cohort is
-then measured against the in-memory fake in this process. The JUnit
+then measured against the in-memory fake in this process. The JUnit suite
 property `assignment_cost` keeps both reports and, for each operation, the
-request kinds whose counts differ between them, so the offline counts can
-be checked and scaled (docs/TESTING.md, "Assignment path cost"). Readings
-are authored fiction; no model is called.
+request and write kinds whose counts differ between them, so the offline
+counts can be checked and scaled (docs/TESTING.md, "Assignment path
+cost"). Readings are authored fiction; no model is called.
 """
 
 from __future__ import annotations
@@ -92,7 +92,7 @@ def differences(live: dict, offline: dict) -> list[dict]:
 
 
 def test_assignment_path_cost_on_a_fresh_stack(
-    fictional_client, tmp_path, record_property
+    fictional_client, tmp_path, record_testsuite_property
 ):
     cohort = generate(REGRESSION)
     saved = saved_products(cohort, tmp_path / "products")
@@ -113,7 +113,7 @@ def test_assignment_path_cost_on_a_fresh_stack(
     run.setup = {"entities": entities}
     live = report(run)
     offline = measure(REGRESSION, tmp_path / "offline")
-    record_property(
+    record_testsuite_property(
         "assignment_cost",
         json.dumps(
             {
@@ -124,5 +124,7 @@ def test_assignment_path_cost_on_a_fresh_stack(
             sort_keys=True,
         ),
     )
-    assert len(live["operations"]) == len(offline["operations"])
+    # the wall times the measurement exists to give, waits apart
+    assert all("seconds" in operation for operation in live["operations"])
+    assert live["sync_seconds_per_identity"] >= 0
     assert live["phases"]["claim-apply"]["writes"].get("item-update")
