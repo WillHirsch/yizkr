@@ -156,7 +156,7 @@ Certificates come from Let's Encrypt via traefik (HTTP-01 challenge). Test again
 
   Renamed (#412, 2026-10-02): the export was named "public" though it is a non-privileged view, not a public copy. Backups made since write `nonprivileged.nt.gz` and `nonprivileged-exclusions.json`, record the export under `components.nonprivileged_export` and a refusal under `nonprivileged_export_refused` in `manifest.json`; an off-machine script that read `public.nt.gz` or the `public_export` keys must read the new names (the manifest's component entry names its file). Backups made earlier keep their `public.nt.gz` and `public-exclusions.json`, and pruning removes them as before. `--no-public-export` still works, as an alias of `--no-nonprivileged-export`, until the keeper run (#159), and says so on one stderr line each time it is used.
 
-When to take backups is set by the project's stage (ADR-0024, "Backup policy by stage"); each move to a later stage is an owner decision:
+When to take backups is set by the project's stage; each move to a later stage is an owner decision:
 
 - _Development stage_ (whole-corpus scratch runs, ADR-0025): no routine backups. The graph and run state are regenerated rather than restored; take a one-off backup only where a decision asks for one (as the archive-and-reset decision did at the first stack recovery, #16, docs/runbooks/stack-recovery.md), and never of a scratch graph (ADR-0025 §1).
 - _Kept-state stage_ (from the keeper run, #159): a backup at each milestone close.

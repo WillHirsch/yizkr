@@ -52,6 +52,7 @@ jobs:
           tests/unit/test_engine_limits.py::TestUtilizationDocs
           tests/unit/test_engine_limits.py::TestUnifiedWindowsDocs
           tests/unit/test_engine_limits.py::TestPinDocs
+          tests/unit/test_doc_references.py
 
   fictional-integration:
     # Spend database-runner minutes only after offline checks pass.

@@ -2,7 +2,7 @@
 
 When the Wikibase stack in `deploy/` has stopped uncleanly (containers killed, the host rebooted mid-write, a service stuck in a restart loop), recover it in this order. The order matters: the first step preserves the volumes exactly as they were before any container touches them again, so every later step can be undone by restoring them (step 1, item 3).
 
-This is the generic procedure from the first recovery (#16). It holds no instance-specific counts, hostnames or paths: archives go in your private area, outside the repository (CLAUDE.md, "Agent execution & data boundary"). The volume archives and the dump in steps 1 and 2 are one-off safety copies for this recovery, not a schedule. In the development stage no backup is taken unless a decision asks for one (ADR-0024, "Backup policy by stage"), and none is ever made of a scratch graph (ADR-0025 §1), so step 7 depends on the stage.
+This is the generic procedure from the first recovery (#16). It holds no instance-specific counts, hostnames or paths: archives go in your private area, outside the repository (CLAUDE.md, "Agent execution and data boundary"). The volume archives and the dump in steps 1 and 2 are one-off safety copies for this recovery, not a schedule. In the development stage no backup is taken unless a decision asks for one (deploy/README.md, "Backups and the non-privileged export"), and none is ever made of a scratch graph (ADR-0025 §1), so step 7 depends on the stage.
 
 All `docker compose` commands run from `deploy/`; `make` and `uv run yizkr` commands run from the repo root.
 
@@ -136,7 +136,7 @@ The `wikibase-item` count must equal `Q`, and `wikibase-property` must equal `P`
 
 ## 7. Back up only where the stage or a decision asks for one
 
-In the development stage, take no backup here unless an owner decision asks for one, as the archive-and-reset decision did at the first recovery (#16), and never of a scratch graph: nothing in one is kept, published or exported (ADR-0025 §1; CLAUDE.md, "Development stage"). A scratch graph is regenerated instead: `yizkr scratch reset` (docs/runbooks/scratch-run.md, Reset the instance), then the next run. From the kept-state stage on, take a one-off backup and verify it:
+In the development stage, take no backup here unless an owner decision asks for one, as the archive-and-reset decision did at the first recovery (#16), and never of a scratch graph: nothing in one is kept, published or exported (ADR-0025 §1; CLAUDE.md, "Disposable and retained operation"). A scratch graph is regenerated instead: `yizkr scratch reset` (docs/runbooks/scratch-run.md, Reset the instance), then the next run. From the kept-state stage on, take a one-off backup and verify it:
 
 ```sh
 uv run yizkr backup   # from the repo root
