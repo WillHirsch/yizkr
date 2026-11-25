@@ -25,7 +25,7 @@ Start here:
 - [Views and model-response reuse](docs/LLM_CACHE.md) – freshness, cache keys, retries and provider sessions
 - [Queries and disagreement comparison](src/yizkr/queries/README.md) – published reads, report scope and comparison limits
 - [Run provenance](docs/RUN_PROVENANCE.md) – structured stage metadata, immutable producer records and retained-code admission
-- `docs/adr/` – focused design guidance and rationale; remaining historical material is marked with open removal tasks and is not an authority for new policy
+- `docs/adr/` – seven accepted decision records giving rationale and, where relevant, implementation limits: the Wikibase core (0001), neutral coexistence (0002), evidence and provenance (0003), incremental architecture and companion services (0004), face-region identification (0005), planning and agent execution (0024) and disposable rebuilds with retained ingestion (0025); the current contract governs their policy
 - `docs/MODELING.md` – Wikibase modeling conventions
 - `docs/EXAMPLES.md` – the one fictional example universe every example comes from
 - `src/yizkr/pipeline/README.md` – **how ingestion works end to end**: disposable rebuilds, reviewed one-source additions and shared stage operations

@@ -30,7 +30,7 @@ The scratch write key and instance watermark guard reset/register/write reuse. T
 
 Run manifests, stage events, control requests, anomalies, reports and diffs make completed, failed and reused work inspectable. The [runbook](../runbooks/scratch-run.md), [report guide](../RUN_REPORT.md), [diff guide](../RUN_DIFF.md) and [monitor guide](../MONITOR.md) describe the current commands.
 
-Anomalies and model critique are advice, not human approval, source truth or permission to discard legitimate contradictions. Detailed outputs remain local-only; only approved aggregate summaries may be posted. Cancellation preserves completed work and stops owned calls and workers within the [execution ownership bounds](../ARCHITECTURE.md#cancellation-and-execution-ownership). Abandoned-run detection remains #725.
+Anomalies and model critique are advice, not human approval, source truth or permission to discard legitimate contradictions. Detailed outputs remain local-only; only approved aggregate summaries may be posted. Cancellation preserves completed work and stops owned calls and workers within the [execution ownership bounds](../ARCHITECTURE.md#cancellation-and-execution-ownership). An invocation whose recorded process has gone is reported as interrupted, and one whose owner cannot be verified as unknown (`run_liveness.owner_liveness`, `rundir.invocation_stage_state`; [monitor guide](../MONITOR.md#what-it-shows)).
 
 ### 4. Checking prompt, schema and model changes: `needs:scratch-diff`
 
@@ -52,13 +52,13 @@ Retained ingestion preserves existing identities, source evidence and human deci
 
 The owner authorizes designating an instance retained under #159 after readiness is demonstrated for supported workflows: reviewed admission, stable identity, safe retries, correction/recovery, privacy controls and workable backup/restore. No fixed number of unchanged runs or end to extraction development is required. Missing advanced operations can remain explicit refusals when the supported workflow is safe and useful.
 
-The code already reads both the `Project:Kept state` page and the host's `kept.json` marker, and `core.instance.mark_kept` can write both. Reset refuses if either marks the instance kept or the necessary state cannot be established. Writing these markers is not the designation of an instance as retained: that needs the owner's authorization under #159 and is to be one owner-invoked command (#904). Nor do these helpers implement increments onto a retained instance (#822). Current writes through a single identity map must not be treated as support for evolving retained identities; #723 is the narrow incremental addition milestone.
+The code already reads both the `Project:Kept state` page and the host's `kept.json` marker, and `core.instance.mark_kept` can write both. Reset refuses if either marks the instance kept or the necessary state cannot be established. Writing these markers is not the designation of an instance as retained: that needs the owner's authorization under #159 and is to be one owner-invoked command (#904). Nor do these helpers implement increments onto a retained instance (#822). Current writes through a single identity map must not be treated as support for evolving retained identities; the narrow reviewed addition is the [one-source workflow](../SOURCE_INGESTION.md).
 
 <a id="7-development-stage-code-may-run-ahead-of-the-proposed-drafts"></a>
 
 ### 7. Implementation and readiness boundaries
 
-The contract is agreed policy; future code is not assumed implemented. [Shared document operations](../ARCHITECTURE.md#shared-document-stage-operations) and their freshness planning are implemented; durable identity/review state and provider-session separation remain tracked work. Existing approval, exclusion, provenance and reset guards stay in force until replacements are implemented and verified. Approving policy neither designates an instance retained nor authorizes a migration of real data.
+The contract is agreed policy; future code is not assumed implemented. [Shared document operations](../ARCHITECTURE.md#shared-document-stage-operations) and their freshness planning are implemented, and so are [durable identity review](../IDENTITY_REVIEW.md) and [provider sessions owned apart from response storage](../ARCHITECTURE.md#provider-conversation-ownership). Existing approval, exclusion, provenance and reset guards stay in force until replacements are implemented and verified. Approving policy neither designates an instance retained nor authorizes a migration of real data.
 
 ### 8. Protocol consequences
 
