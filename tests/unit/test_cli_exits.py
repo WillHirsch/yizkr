@@ -9,13 +9,9 @@ from pathlib import Path
 
 import pytest
 
-from tests.fixtures.identity import mapped
-from tests.unit.test_faces import depicted, portrait_faces, wiki_with_portrait
 from tests.unit.test_pipeline import (
     MEDIA_REF,
     MEDIA_SHA1,
-    OTHER_SHA1,
-    FakeWiki,
     _citing,
 )
 from yizkr import cli
@@ -99,9 +95,9 @@ def test_the_module_docstring_documents_the_statuses():
 class TestUsage:
     def test_a_usage_error_is_a_refusal_not_a_pause(self, capsys):
         # argparse's own status, 2, is a pause's
-        assert cli.main(["ingest", "write"]) == EXIT_REFUSED
+        assert cli.main(["ingest", "extract"]) == EXIT_REFUSED
         err = capsys.readouterr().err
-        assert "the following arguments are required: --batch" in err
+        assert "the following arguments are required: --transcription" in err
 
     def test_help_exits_0(self, capsys):
         with pytest.raises(SystemExit) as raised:
@@ -129,6 +125,19 @@ class TestUsage:
         # a registered command would be refused too, for want of a host
         assert "invalid choice: 'merge-items'" in capsys.readouterr().err
 
+    @pytest.mark.parametrize(
+        "step",
+        ["reconcile", "resolve", "export-review", "apply-review", "write"],
+    )
+    def test_no_ingest_step_reviews_or_writes_a_batch(self, step):
+        """No `ingest` step reconciles, resolves, sheets, applies or writes
+        a single batch: asking for one's help is refused, where a step
+        that exists prints its help and exits 0."""
+        with pytest.raises(SystemExit) as raised:
+            cli.main(["ingest", "extract", "--help"])
+        assert raised.value.code == 0
+        assert cli.main(["ingest", step, "--help"]) == EXIT_REFUSED
+
 
 class TestScratch:
     """The scratch commands keep a failure's status for a refusal."""
@@ -141,135 +150,6 @@ class TestScratch:
 
 def _no_traceback(err: str) -> None:
     assert "Traceback" not in err
-
-
-class TestIngestWrite:
-    def test_unapproved_depicts_is_refused_in_its_message(
-        self, tmp_path, monkeypatch, capsys
-    ):
-        wiki = wiki_with_portrait()
-        monkeypatch.setattr(cli, "_client", lambda args: wiki)
-        batch = tmp_path / "faces-batch.json"
-        batch.write_text(portrait_faces().model_dump_json())
-
-        status = cli.main(["ingest", "write", "--batch", str(batch)])
-
-        err = capsys.readouterr().err
-        assert status == EXIT_REFUSED
-        _no_traceback(err)
-        assert err.startswith("2 depicts claim(s) carry no per-row human")
-        assert err.endswith("Nothing was written.\n")
-        assert err.count("\n") == 1
-        assert depicted(wiki) == {}
-
-    def test_an_unregistered_artifact_is_refused_in_its_message(
-        self, tmp_path, monkeypatch, capsys
-    ):
-        wiki = FakeWiki({MEDIA_SHA1: "Q23"})
-        monkeypatch.setattr(cli, "_client", lambda args: wiki)
-        claims = _citing(MEDIA_SHA1, OTHER_SHA1)
-        batch = tmp_path / "batch.json"
-        batch.write_text(claims.model_dump_json())
-        identity = tmp_path / "identity-map.json"
-        identity.write_text(json.dumps(mapped(claims).data))
-
-        status = cli.main(
-            [
-                *("ingest", "write", "--batch", str(batch)),
-                *("--identity-map", str(identity)),
-            ]
-        )
-
-        err = capsys.readouterr().err
-        assert status == EXIT_REFUSED
-        _no_traceback(err)
-        assert err == (
-            f"1 cited artifact(s) not registered on this instance: no item "
-            f"carries media SHA-1 {OTHER_SHA1[:12]}. Register the media "
-            f"before writing claims that cite it.\n"
-        )
-        assert wiki.wbi.item.writes == 0
-
-    def test_another_identity_map_is_refused_in_its_message(
-        self, tmp_path, monkeypatch, capsys
-    ):
-        from tests.unit.test_identity_map_writes import _eugens, _tree, _wiki
-        from yizkr.pipeline.writer import BatchWriter
-
-        # the family history written with its own map; the grown map of
-        # the history and the tree would place the Eugens anew
-        wiki = _wiki()
-        BatchWriter(wiki).write_batch(_eugens(), identity=mapped(_eugens()))
-        writes = wiki.wbi.item.writes
-        monkeypatch.setattr(cli, "_client", lambda args: wiki)
-        batch = tmp_path / "tree.json"
-        batch.write_text(_tree().model_dump_json())
-        identity = tmp_path / "identity-map.json"
-        identity.write_text(json.dumps(mapped(_eugens(), _tree()).data))
-
-        status = cli.main(
-            [
-                *("ingest", "write", "--batch", str(batch)),
-                *("--identity-map", str(identity)),
-            ]
-        )
-
-        err = capsys.readouterr().err
-        assert status == EXIT_REFUSED
-        _no_traceback(err)
-        assert err.startswith(
-            "the instance holds the writes of another identity map"
-        )
-        assert wiki.wbi.item.writes == writes
-
-    @pytest.mark.parametrize(
-        "text",
-        ["{not json", '{"claims": "none"}'],
-        ids=["not JSON", "not a batch"],
-    )
-    def test_a_batch_that_does_not_load_is_refused_in_one_line(
-        self, tmp_path, capsys, text
-    ):
-        batch = tmp_path / "batch.json"
-        batch.write_text(text)
-
-        status = cli.main(["ingest", "write", "--batch", str(batch)])
-
-        err = capsys.readouterr().err
-        assert status == EXIT_REFUSED
-        _no_traceback(err)
-        assert err.startswith("batch.json is not a claim batch this step ")
-        assert err.endswith("; nothing was written\n")
-        assert err.count("\n") == 1
-
-    def test_a_date_before_the_common_era_is_refused_in_one_line(
-        self, tmp_path, capsys
-    ):
-        # ADR-0034: the schema refuses it, so the batch does not load
-        data = json.loads(_citing(MEDIA_SHA1).model_dump_json())
-        data["claims"][0]["value"]["year"] = -1836
-        batch = tmp_path / "batch.json"
-        batch.write_text(json.dumps(data))
-
-        status = cli.main(["ingest", "write", "--batch", str(batch)])
-
-        err = capsys.readouterr().err
-        assert status == EXIT_REFUSED
-        _no_traceback(err)
-        assert err.startswith("batch.json is not a claim batch this step ")
-        assert "claims.0.value" in err
-        assert err.count("\n") == 1
-
-    def test_a_missing_batch_is_refused_in_one_line(self, tmp_path, capsys):
-        missing = tmp_path / "none.json"
-
-        status = cli.main(["ingest", "write", "--batch", str(missing)])
-
-        assert status == EXIT_REFUSED
-        assert (
-            capsys.readouterr().err
-            == f"{missing}: No such file or directory\n"
-        )
 
 
 class TestIngestExtract:

@@ -21,6 +21,7 @@ import unicodedata
 
 import pytest
 
+from tests.fixtures.confirmed import confirmed
 from tests.fixtures.identity import joined, mapped, write_mapped
 from tests.unit.test_pipeline import ITEMS, PROPERTIES, FakeWiki
 from yizkr.claims import ClaimBatch, validate_against_manifest
@@ -1090,9 +1091,7 @@ class TestCuratedAndOtherStatements:
             [(result.run_qid, "Q40", KIND_NOTE["text"])],
         ]
 
-    def test_an_approved_equivalences_note_goes_on_its_kind(self):
-        from yizkr.pipeline.reconcile import apply_equivalences
-
+    def test_a_confirmed_entity_s_note_goes_on_its_kind(self):
         wiki = NotedWiki()
         earlier = self.court()
         proposed = self.court(KIND_NOTE, sha1=BURIAL_SHA1)
@@ -1101,7 +1100,7 @@ class TestCuratedAndOtherStatements:
         )
         first = write_mapped(BatchWriter(wiki), earlier, identity=identity)
         court = first.created_items["e6"]
-        later = apply_equivalences(proposed, {"e6": court})
+        later = confirmed(proposed, {"e6": court})
         result = write_mapped(
             BatchWriter(wiki), later, identity=identity, mapped_from=proposed
         )
@@ -1427,9 +1426,9 @@ class TestMoreKinds:
         (kind,) = statements(wiki, office, "instance_of")
         assert (result.run_qid, "Q40", KIND_NOTE["text"]) in run_blocks(kind)
 
-    def test_an_equivalences_note_left_out_says_its_kind_is_recorded(self):
-        from yizkr.pipeline.reconcile import apply_equivalences
-
+    def test_a_confirmed_entity_s_note_left_out_says_its_kind_is_recorded(
+        self,
+    ):
         wiki = NotedWiki()
         court_of = TestCuratedAndOtherStatements().court
         earlier = court_of()
@@ -1439,7 +1438,7 @@ class TestMoreKinds:
         )
         first = write_mapped(BatchWriter(wiki), earlier, identity=identity)
         court = first.created_items["e6"]
-        later = apply_equivalences(proposed, {"e6": court})
+        later = confirmed(proposed, {"e6": court})
         result = write_mapped(
             BatchWriter(wiki), later, identity=identity, mapped_from=proposed
         )
@@ -1725,8 +1724,6 @@ class TestTheStateBeforeTheWrite:
         assert blocks(the_wedding_date(wiki, result)) == before
 
     def test_a_dry_run_records_no_kinds(self):
-        from yizkr.pipeline.reconcile import apply_equivalences
-
         wiki = NotedWiki()
         court_of = TestCuratedAndOtherStatements().court
         earlier = court_of()
@@ -1737,7 +1734,7 @@ class TestTheStateBeforeTheWrite:
         first = write_mapped(BatchWriter(wiki), earlier, identity=identity)
         court = first.created_items["e6"]
         writes = wiki.wbi.item.writes
-        later = apply_equivalences(proposed, {"e6": court})
+        later = confirmed(proposed, {"e6": court})
         write_mapped(
             BatchWriter(wiki, dry_run=True),
             later,

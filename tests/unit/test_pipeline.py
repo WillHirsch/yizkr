@@ -1,7 +1,6 @@
 """Offline tests for pipeline steps (pytest; no instance, no LLM)."""
 
 import copy
-import csv
 import errno
 import hashlib
 import itertools
@@ -17,6 +16,7 @@ from types import ModuleType, SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
+from tests.fixtures.confirmed import confirmed
 from tests.fixtures.identity import corpus, mapped, write_mapped
 from tests.fixtures.records import record_answer
 from tests.fixtures.write_recovery import RecoveryWiki
@@ -45,12 +45,7 @@ from yizkr.pipeline.llm import (
     OutputLimitReached,
 )
 from yizkr.pipeline.resolve import resolve_batch
-from yizkr.pipeline.review import (
-    CSV_COLUMNS,
-    apply_review,
-    claim_id,
-    export_review_csv,
-)
+from yizkr.pipeline.review import claim_id
 from yizkr.pipeline.transcribe import (
     HtrPlatformAdapter,
     LlmVisionTranscriber,
@@ -1193,337 +1188,13 @@ class TestResolve:
             assert claim.source.artifact == ArtifactRef(sha1=MEDIA_SHA1)
 
 
-class TestReviewRoundTrip:
-    def test_export_columns_and_content(self, tmp_path):
-        csv_path = tmp_path / "review.csv"
-        rows = export_review_csv(batch(), csv_path)
-        assert rows == 2
-        content = csv_path.read_text()
-        assert "claim_id" in content and "decision" in content
-        assert "NEW:person-1 (Person One)" in content
-        assert "1914-05" in content
-        assert "point_in_time=1947" in content
-        with open(csv_path, newline="") as f:
-            sources = {row["source_artifact"] for row in csv.DictReader(f)}
-        assert sources == {f"sha1:{MEDIA_SHA1}"}
-
-    @staticmethod
-    def edit_csv(path, transform):
-        """Edit the review CSV the way a reviewer tool would (by rows)."""
-        import csv as csv_module
-
-        with open(path, newline="") as f:
-            reader = csv_module.DictReader(f)
-            fieldnames = reader.fieldnames
-            rows = list(reader)
-        rows = transform(rows)
-        with open(path, "w", newline="") as f:
-            writer = csv_module.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(rows)
-
-    def test_only_explicit_approvals_pass(self, tmp_path):
-        source = batch()
-        csv_path = tmp_path / "review.csv"
-        export_review_csv(source, csv_path)
-        ids = [claim_id(c) for c in source.claims]
-
-        def approve_first_only(rows):
-            rows[0]["decision"] = "approve"  # second row left undecided
-            return rows
-
-        self.edit_csv(csv_path, approve_first_only)
-        approved, warnings = apply_review(source, csv_path)
-        assert [claim_id(c) for c in approved.claims] == [ids[0]]
-        assert any("no decision" in w for w in warnings)
-
-    @pytest.mark.parametrize("token", ["bulk-accept", " Bulk-Accept "])
-    def test_whole_sheet_token_cannot_approve_a_claim(self, tmp_path, token):
-        source = batch()
-        csv_path = tmp_path / "review.csv"
-        export_review_csv(source, csv_path)
-        self.edit_csv(
-            csv_path,
-            lambda rows: [{**row, "decision": token} for row in rows],
-        )
-        with pytest.raises(ValueError, match="unsupported bulk-accept"):
-            apply_review(source, csv_path)
-
-    def test_reordered_csv_still_applies_by_id(self, tmp_path):
-        source = batch()
-        csv_path = tmp_path / "review.csv"
-        export_review_csv(source, csv_path)
-
-        def sort_and_approve_all(rows):
-            for row in rows:
-                row["decision"] = "approve"
-            return list(reversed(rows))  # reviewer sorted the sheet
-
-        self.edit_csv(csv_path, sort_and_approve_all)
-        approved, warnings = apply_review(source, csv_path)
-        assert len(approved.claims) == 2
-        assert warnings == []
-
-    def test_edited_claim_content_is_detected(self, tmp_path):
-        source = batch()
-        csv_path = tmp_path / "review.csv"
-        export_review_csv(source, csv_path)
-        edited = batch()
-        edited.claims[0].source.page_number = "2"  # content drifted
-        approved, warnings = apply_review(edited, csv_path)
-        assert any("no row in the CSV" in w for w in warnings)
-        assert any("matches no claim" in w for w in warnings)
-
-    @staticmethod
-    def booklet_batch() -> ClaimBatch:
-        """`batch()`'s claims read from *Our Family from Germany*'s physical
-        page 6, printed as page 4 (docs/EXAMPLES.md), then `batch()`'s
-        own birth claim, which cites no page, and its sibling claim on a
-        page 2 the record gives no printed number."""
-        booklet = copy.deepcopy(CLAIMS)
-        for claim in booklet:
-            claim["source"]["page_number"] = "6"
-            claim["source"]["printed_page_number"] = "4"
-        unprinted = copy.deepcopy(CLAIMS[0])
-        unprinted["source"]["page_number"] = "2"
-        return ClaimBatch.model_validate(
-            {
-                "extraction_run": RUN,
-                "claims": [*booklet, CLAIMS[1], unprinted],
-            }
-        )
-
-    @staticmethod
-    def read_rows(path) -> tuple[list[str], list[dict]]:
-        with open(path, newline="") as f:
-            reader = csv.DictReader(f)
-            return list(reader.fieldnames or []), list(reader)
-
-    def test_printed_page_is_shown_beside_the_page(self, tmp_path):
-        csv_path = tmp_path / "review.csv"
-        export_review_csv(self.booklet_batch(), csv_path)
-        fieldnames, rows = self.read_rows(csv_path)
-        assert fieldnames.index("printed_page") == (
-            fieldnames.index("page") + 1
-        )
-        assert [(r["page"], r["printed_page"]) for r in rows] == [
-            ("6", "4"),  # the booklet's printed number for its page 6
-            ("6", "4"),
-            ("", ""),  # no page cited, so no printed number
-            ("2", ""),  # a page the record gives no printed number
-        ]
-
-    def test_edited_printed_page_cells_are_never_written(self, tmp_path):
-        source = self.booklet_batch()
-        csv_path = tmp_path / "review.csv"
-        export_review_csv(source, csv_path)
-
-        def edit_locators_and_approve(rows):
-            # a curator "fixes" the locators, then approves every row
-            for row in rows:
-                row["page"] = "5"
-                row["printed_page"] = "17"
-                row["decision"] = "approve"
-            return rows
-
-        self.edit_csv(csv_path, edit_locators_and_approve)
-        approved, warnings = apply_review(source, csv_path)
-        assert warnings == []
-        assert approved.claims == source.claims
-        assert [
-            (c.source.page_number, c.source.printed_page_number)
-            for c in approved.claims
-        ] == [("6", "4"), ("6", "4"), (None, None), ("2", None)]
-
-    def test_a_dropped_printed_page_column_changes_nothing(self, tmp_path):
-        source = self.booklet_batch()
-        csv_path = tmp_path / "review.csv"
-        export_review_csv(source, csv_path)
-        with open(csv_path, newline="") as f:
-            rows = list(csv.DictReader(f))
-        fieldnames = [n for n in CSV_COLUMNS if n != "printed_page"]
-        with open(csv_path, "w", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            for row in rows:
-                row.pop("printed_page")
-                writer.writerow({**row, "decision": "approve"})
-        approved, warnings = apply_review(source, csv_path)
-        assert warnings == []
-        assert approved.claims == source.claims
-
-    def test_a_corrected_claim_keeps_its_printed_page(self, tmp_path):
-        source = self.booklet_batch()
-        csv_path = tmp_path / "review.csv"
-        export_review_csv(source, csv_path)
-
-        def correct_the_booklet_row(rows):
-            for row in rows:
-                row["decision"] = "approve"
-                row["printed_page"] = ""  # cleared by the curator
-            rows[1]["correction"] = "1914-05-29"
-            rows[1]["page"] = "5"  # and edits the corrected row's locators
-            rows[1]["printed_page"] = "17"
-            return rows
-
-        self.edit_csv(csv_path, correct_the_booklet_row)
-        approved, warnings = apply_review(source, csv_path)
-        assert warnings == []
-        corrected = approved.claims[1]
-        assert corrected.curated and corrected.value.day == 29
-        assert corrected.source.page_number == "6"
-        assert corrected.source.printed_page_number == "4"
-
+class TestClaimId:
     def test_claim_id_stable_across_serialization(self):
         first = batch().claims[0]
         again = ClaimBatch.model_validate_json(
             batch().model_dump_json()
         ).claims[0]
         assert claim_id(first) == claim_id(again)
-
-
-def _write_equivalences_csv(path, rows):
-    """Write a minimal equivalences.csv (entity_id/qid/verdict/decision)."""
-    from yizkr.pipeline.reconcile import EQUIVALENCE_FIELDS
-
-    with open(path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=EQUIVALENCE_FIELDS)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(
-                {field: row.get(field, "") for field in EQUIVALENCE_FIELDS}
-            )
-
-
-class TestCritiqueNotes:
-    """ADR-0013 / ADR-0020: the review CSV carries the critic's concerns
-    in a single-role `critique_notes` column. There is no possibly-living
-    warning and no `living` column — privacy is a runtime determination,
-    never a review decision."""
-
-    def test_critique_notes_render_in_their_column(self, tmp_path):
-        csv_path = tmp_path / "review.csv"
-        # notes arrive already formatted, by row (critique.note, attach)
-        source = batch()
-        assert len(source.claims) > 1
-        export_review_csv(
-            source,
-            csv_path,
-            critique_notes={1: "critique: role label 'MOTHER' is not a name"},
-        )
-        with open(csv_path, newline="") as f:
-            reader = csv.DictReader(f)
-            fields = reader.fieldnames or []
-            rows = list(reader)
-        assert "critique_notes" in fields
-        assert "warning" not in fields  # renamed
-        assert "living" not in fields  # retired
-        # the note is on its own row alone (#113)
-        assert [bool(r["critique_notes"]) for r in rows] == [
-            index == 1 for index in range(len(rows))
-        ]
-        assert rows[1]["critique_notes"].startswith("critique:")
-
-    def test_no_critique_leaves_column_blank(self, tmp_path):
-        csv_path = tmp_path / "review.csv"
-        export_review_csv(batch(), csv_path)
-        with open(csv_path, newline="") as f:
-            rows = list(csv.DictReader(f))
-        assert rows
-        assert all(row["critique_notes"] == "" for row in rows)
-
-
-class TestCorrections:
-    """Review corrections: the correction column produces curator claims."""
-
-    @pytest.mark.parametrize(
-        ("correction", "expected"),
-        [
-            # a day above 12, which cannot be read as a month
-            ("1914-05-29", (1914, 5, 29)),
-            # day and month both 12 or less: in ISO order still one date,
-            # 1 July 1919, where the slash form below leaves two open
-            ("1919-07-01", (1919, 7, 1)),
-        ],
-        ids=["day-above-12", "day-and-month-both-12-or-less"],
-    )
-    def test_date_correction_replaces_value_and_marks_curated(
-        self, tmp_path, correction, expected
-    ):
-        source = batch()
-        csv_path = tmp_path / "review.csv"
-        export_review_csv(source, csv_path)
-
-        def correct_birth(rows):
-            for row in rows:
-                row["decision"] = "approve"
-                if row["property"] == "date_of_birth":
-                    row["correction"] = correction
-            return rows
-
-        TestReviewRoundTrip.edit_csv(csv_path, correct_birth)
-        approved, warnings = apply_review(source, csv_path)
-        assert warnings == []
-        (birth,) = [
-            c for c in approved.claims if c.property == "date_of_birth"
-        ]
-        value = birth.value
-        assert (value.year, value.month, value.day) == expected
-        assert birth.value.precision == "day"
-        assert birth.curated is True
-        (sibling,) = [c for c in approved.claims if c.property == "sibling"]
-        assert sibling.curated is False
-
-    def test_ambiguous_date_correction_is_refused(self, tmp_path):
-        source = batch()
-        csv_path = tmp_path / "review.csv"
-        export_review_csv(source, csv_path)
-
-        def correct_badly(rows):
-            for row in rows:
-                row["decision"] = "approve"
-                if row["property"] == "date_of_birth":
-                    # 7 January or 1 July? The universe's two sources for
-                    # Gustav's birth transpose exactly this day and month
-                    row["correction"] = "07/01/1919"
-            return rows
-
-        TestReviewRoundTrip.edit_csv(csv_path, correct_badly)
-        approved, warnings = apply_review(source, csv_path)
-        assert [c.property for c in approved.claims] == ["sibling"]
-        assert any("not an unambiguous date" in w for w in warnings)
-
-    def test_item_values_cannot_be_text_corrected(self, tmp_path):
-        source = batch()
-        csv_path = tmp_path / "review.csv"
-        export_review_csv(source, csv_path)
-
-        def correct_sibling(rows):
-            for row in rows:
-                row["decision"] = "approve"
-                if row["property"] == "sibling":
-                    row["correction"] = "Someone Else"
-            return rows
-
-        TestReviewRoundTrip.edit_csv(csv_path, correct_sibling)
-        approved, warnings = apply_review(source, csv_path)
-        assert [c.property for c in approved.claims] == ["date_of_birth"]
-        assert any("cannot be corrected as text" in w for w in warnings)
-
-    def test_quantity_correction_takes_plain_numbers_only(self):
-        from yizkr.pipeline.review import _parse_correction
-
-        data = batch().claims[1].model_dump(mode="json")
-        data["property"] = "number_of_children"
-        data["value"] = {"type": "quantity", "amount": 3}
-        count = ClaimBatch.model_validate(
-            {"extraction_run": RUN, "claims": [data]}
-        ).claims[0]
-        corrected = _parse_correction(count, "4")
-        assert corrected.value.amount == 4
-        assert corrected.curated is True
-        with pytest.raises(ValueError, match="not a number"):
-            _parse_correction(count, "several")
 
 
 # -- writer: cited artifacts resolve by media SHA-1 at write time (#102) ----
@@ -2157,39 +1828,27 @@ class TestWriterArtifactResolution:
         assert resolved == {MEDIA_SHA1: "Q23", OTHER_SHA1: "Q24"}
         assert wiki.index_reads == 2
 
-    def test_a_batch_citing_its_artifact_by_qid_writes_nothing(
-        self, tmp_path, monkeypatch
-    ):
+    def test_a_batch_citing_its_artifact_by_qid_does_not_load(self):
         """No dual format (#102): a batch file whose claim cites its
         artifact item by QID, as batches made before content addressing
-        did, does not load, so `ingest write` refuses it before it
-        contacts the instance: it reads and writes nothing."""
-        from yizkr import cli
-
-        batch_json = tmp_path / "batch.json"
-        batch_json.write_text(
-            json.dumps(
-                {
-                    "extraction_run": RUN,
-                    "claims": [
-                        dict(
-                            CLAIMS[1],
-                            source={"artifact": {"kind": "qid", "qid": "Q23"}},
-                        )
-                    ],
-                }
-            )
+        did, does not load, so nothing can write it."""
+        text = json.dumps(
+            {
+                "extraction_run": RUN,
+                "claims": [
+                    dict(
+                        CLAIMS[1],
+                        source={"artifact": {"kind": "qid", "qid": "Q23"}},
+                    )
+                ],
+            }
         )
-
-        def no_instance(args):
-            raise AssertionError("ingest write contacted the instance")
-
-        monkeypatch.setattr(cli, "_client", no_instance)
-        args = cli.build_parser().parse_args(
-            ["ingest", "write", "--batch", str(batch_json)]
+        with pytest.raises(ValidationError) as refused:
+            ClaimBatch.model_validate_json(text)
+        assert all(
+            error["loc"][:4] == ("claims", 0, "source", "artifact")
+            for error in refused.value.errors()
         )
-        with pytest.raises(SystemExit, match="artifact.*nothing was written"):
-            args.func(args)
 
 
 # -- writer: a minted item's type statements carry both references (#88) ---
@@ -2697,18 +2356,14 @@ class TestWriterLaterSourceTypes:
             ITEMS["unclassified_entity"]
         }
 
-    def test_approved_equivalence_records_its_kind(self):
-        from yizkr.pipeline.reconcile import apply_equivalences
-
+    def test_a_confirmed_entity_records_its_kind(self):
         # the directory's batch mints the firm; the interview's name for
-        # it, "the Blue Hat", matches no label, and a reviewer approves
-        # the equivalence
+        # it, "the Blue Hat", matches no label, and a curator confirms it
+        # as the firm's item
         wiki = _two_sources()
         directory = write_mapped(BatchWriter(wiki), _directory_batch())
         firm = directory.created_items["firm"]
-        approved = apply_equivalences(
-            _firm_batch(label="the Blue Hat"), {"firm": firm}
-        )
+        approved = confirmed(_firm_batch(label="the Blue Hat"), {"firm": firm})
         assert isinstance(approved.claims[0].subject, QidRef)
         interview = write_mapped(BatchWriter(wiki), approved)
         interview_sources = [(["Q25"], []), ([], [interview.run_qid])]
@@ -2911,13 +2566,11 @@ class TestWriterLaterSourceTypes:
         assert directory.type_statements_written == 1
         assert directory.type_statements_referenced == 0
 
-    def test_an_equivalence_no_claim_mentions_records_nothing(self):
-        # the reviewer approved the directory's firm as the interview's
-        # item, then rejected the firm's founding year: the claim left is
-        # the widow's address, so no claim cites a source that the firm's
-        # kind could be recorded from (rule 1)
-        from yizkr.pipeline.reconcile import apply_equivalences
-
+    def test_a_confirmation_no_claim_mentions_records_nothing(self):
+        # a curator confirmed the directory's firm as the interview's
+        # item, and the firm's founding year is not in the batch: the claim
+        # left is the widow's address, so no claim cites a source that the
+        # firm's kind could be recorded from (rule 1)
         wiki = _two_sources()
         firm = write_mapped(BatchWriter(wiki), _firm_batch()).created_items[
             "firm"
@@ -2967,7 +2620,7 @@ class TestWriterLaterSourceTypes:
                 ],
             }
         )
-        approved = apply_equivalences(reviewed, {"firm": firm})
+        approved = confirmed(reviewed, {"firm": firm})
         assert approved.entities[0].qid == firm
 
         directory = write_mapped(BatchWriter(wiki), approved)
@@ -3414,26 +3067,19 @@ def _aliases(wiki: FakeWiki, qid: str) -> list[str]:
     return [str(alias) for alias in aliases]
 
 
-def _approved(batch: ClaimBatch, approved: dict[str, str]) -> ClaimBatch:
-    """`batch` after a reviewer approved each local id's equivalence to
-    the item `approved` gives it (ADR-0007)."""
-    from yizkr.pipeline.reconcile import apply_equivalences
-
-    return apply_equivalences(batch, approved)
-
-
 class TestWriterAliases:
     """Every document adds its names for an entity to the item's aliases,
     append-only (ADR-0007), however its item was found: through the
     identity map, which puts the tree's Sebastian in the certificate's
-    cluster (#109), or by a reviewer's approved equivalence. The instance
+    cluster (#109), or by a curator's confirmation of it as that item
+    (tests.fixtures.confirmed). The instance
     here serves every read as a copy (DetachedItems), so an edit sent from
     a read taken before the aliases went on would take them off again."""
 
     # the tree's batch as the writer receives it, given Sebastian's QID
     FOUND_BY = {
         "identity map": lambda batch, qid: batch,
-        "equivalence": lambda batch, qid: _approved(batch, {"e03": qid}),
+        "confirmation": lambda batch, qid: confirmed(batch, {"e03": qid}),
     }
 
     @pytest.mark.parametrize(
@@ -4217,14 +3863,14 @@ class TestWriterTextInNfc:
         assert later.written == 1
         assert _not_in_nfc(wiki) == []
 
-    def test_an_equivalence_in_nfd_adds_no_alias_of_the_label(self):
-        # a reviewer approves the tree's Sebastian as the certificate's;
+    def test_a_confirmation_in_nfd_adds_no_alias_of_the_label(self):
+        # a curator confirms the tree's Sebastian as the certificate's;
         # the tree's batch gives his label decomposed. It is his label in
         # another form, never an alias of his
         wiki = FakeWiki({MEDIA_SHA1: "Q23", TREE_SHA1: "Q29"}, detached=True)
         certificate = write_mapped(BatchWriter(wiki), _certificate_batch())
         sebastian = certificate.created_items["e01"]
-        tree = _approved(
+        tree = confirmed(
             _in_form_batch(_tree_batch(), "NFD"), {"e03": sebastian}
         )
 

@@ -12,7 +12,7 @@ Start here:
 - [Requirements](docs/REQUIREMENTS.md) – intended user outcomes
 - [Current contract](docs/CONTRACT.md) – evidence, human authority, privacy, retained operation, verification and documentation policy
 - [Ingestion and identity contracts](docs/INGESTION_CONTRACT.md) – source ownership, durable assignments, review, stage products and recovery boundaries for implementation
-- [Architecture and workflow diagrams](docs/ARCHITECTURE.md) – Mermaid overviews of the implemented services, provenance, ingestion, scratch runs, cache, face review and exploration, with subsystem details
+- [Architecture and workflow diagrams](docs/ARCHITECTURE.md) – Mermaid overviews of the implemented services, provenance, ingestion, scratch runs, cache, face proposals and exploration, with subsystem details
 - [Scratch-run stages and data products](docs/SCRATCH_WORKFLOW.md) – detailed input/output contracts and process types for every stage
 - [Source reading](docs/SOURCE_READING.md) – reading records, source ownership, validation, language and inference settings
 - [Artifacts and container sources](docs/ARTIFACTS.md) – inner-source ownership, media registration and claims about artifacts

@@ -5,17 +5,13 @@ An entity's item is found or minted through the identity map alone
 (yizkr.pipeline.clustering, ADR-0035): the writer maps each mention of a
 batch to its cluster, and finds or makes the one item of that cluster
 (yizkr.pipeline.writer, step 2). Nothing is matched by its label, so this
-step reads nothing of the wiki and replaces no local ref: an approved
-equivalence, the one decision that names an existing item, has replaced
-its entity's refs with the item's QID before it (reconcile.
-apply_equivalences), and a curator's decision that two entities are
-distinct is never undone by a label they share. The review sheet so
-shows every local entity as NEW (yizkr.pipeline.review).
+step reads nothing of the wiki and replaces no local ref: two entities
+that share a label are never joined by it.
 
 Given the identity map the batch is to be written with, the step checks
 that the map holds every mention of the batch, so a batch the writer
-would refuse whole for an unmapped mention is refused here, before its
-review.
+would refuse whole for an unmapped mention is refused here, before the
+write.
 """
 
 from __future__ import annotations

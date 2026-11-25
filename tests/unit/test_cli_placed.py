@@ -2,10 +2,11 @@
 
 Validation and the writer take a `caption` only on an artifact its source
 places, so each needs the source's placed media. `yizkr claims
---validate` and `yizkr ingest write` take them with `--placed`: a
-container's inventory (`container-inventory.json`, or the document
-directory that keeps it) or a source's SHA-1 and theirs. Without it a
-caption is refused as before, and the command says how to give them.
+--validate` takes them with `--placed`: a container's inventory
+(`container-inventory.json`, or the document directory that keeps it) or
+a source's SHA-1 and theirs. Without it a caption is refused as before,
+and the command says how to give them. The writer's own refusal is
+tested with the writer (test_container_claims.TestTheWriter).
 
 The fixture is the fictional universe's (docs/EXAMPLES.md): *Our Family
 from Germany* (`family-booklet-2011`) places the top of Sebastian's letter
@@ -22,13 +23,10 @@ import yaml
 
 from tests.unit.test_container_claims import (
     BOOKLET_REF,
-    CAPTION,
     DECK_REF,
     JULY_28,
     LETTER_REF,
     STRAY_REF,
-    CaptionWiki,
-    artifacts,
     batch_of,
     caption,
     itself,
@@ -280,98 +278,3 @@ class TestValidate:
         status = cli.main([*validate, "--manifest", str(unmarked)])
         assert status != EXIT_OK
         assert unplaced_hint(1) not in capsys.readouterr().err
-
-
-class TestWrite:
-    def test_with_the_placed_media_the_caption_is_written(
-        self, tmp_path, monkeypatch, capsys
-    ):
-        wiki = CaptionWiki()
-        qids = artifacts(wiki, BOOKLET_REF, LETTER_REF)
-        monkeypatch.setattr(cli, "_client", lambda args: wiki)
-        status = cli.main(
-            [
-                *("ingest", "write", "--batch", str(batch_file(tmp_path))),
-                *("--placed", PLACED),
-            ]
-        )
-        out, err = capsys.readouterr()
-        assert status == EXIT_OK
-        assert '"written": 1' in out
-        assert "--placed" not in err
-        (statement,) = wiki.wbi.item.get(qids[LETTER_REF.sha1]).claims.get(
-            "P91"
-        )
-        assert statement.mainsnak.datavalue["value"] == {
-            "text": CAPTION,
-            "language": "en",
-        }
-        assert not wiki.wbi.item.get(qids[BOOKLET_REF.sha1]).claims.get("P91")
-
-    def test_without_them_the_caption_is_refused(
-        self, tmp_path, monkeypatch, capsys
-    ):
-        wiki = CaptionWiki()
-        qids = artifacts(wiki, BOOKLET_REF, LETTER_REF)
-        monkeypatch.setattr(cli, "_client", lambda args: wiki)
-        batch = batch_file(
-            tmp_path, caption(), caption(text="Wastl to Klara.", page="7")
-        )
-        status = cli.main(["ingest", "write", "--batch", str(batch)])
-        out, err = capsys.readouterr()
-        # each claim is refused alone, as the writer refuses it
-        assert status == EXIT_OK
-        result = json.loads(out)
-        assert result["written"] == 0
-        # counted under the subject rule's reason
-        assert result["refusal_reasons"] == ["subject_rule", "subject_rule"]
-        assert "is no artifact given as placed by its source" in out
-        assert unplaced_hint(2) in err
-        for qid in qids.values():
-            assert not wiki.wbi.item.get(qid).claims.get("P91")
-
-    def test_another_source_s_placed_media_leave_it_refused(
-        self, tmp_path, monkeypatch, capsys
-    ):
-        wiki = CaptionWiki()
-        qids = artifacts(wiki, BOOKLET_REF, LETTER_REF)
-        monkeypatch.setattr(cli, "_client", lambda args: wiki)
-        status = cli.main(
-            [
-                *("ingest", "write", "--batch", str(batch_file(tmp_path))),
-                *("--placed", f"{DECK_REF.sha1}={LETTER_REF.sha1}"),
-            ]
-        )
-        out, err = capsys.readouterr()
-        assert status == EXIT_OK
-        assert '"written": 0' in out
-        assert unplaced_hint(1) in err
-        for qid in qids.values():
-            assert not wiki.wbi.item.get(qid).claims.get("P91")
-
-    def test_a_bad_placed_is_refused_before_the_instance(
-        self, tmp_path, monkeypatch, capsys
-    ):
-        def contacted(args):
-            raise AssertionError("the instance was contacted")
-
-        monkeypatch.setattr(cli, "_client", contacted)
-        batch = batch_file(tmp_path)
-        status = cli.main(
-            ["ingest", "write", "--batch", str(batch), "--placed", str(batch)]
-        )
-        assert status != EXIT_OK
-        assert capsys.readouterr().err.startswith("--placed: ")
-
-    def test_a_bad_placed_is_refused_before_the_batch_is_read(
-        self, tmp_path, monkeypatch, capsys
-    ):
-        monkeypatch.setattr(cli, "_client", lambda args: CaptionWiki())
-        status = cli.main(
-            [
-                *("ingest", "write", "--batch", str(tmp_path / "none.json")),
-                *("--placed", str(tmp_path / "nothing")),
-            ]
-        )
-        assert status != EXIT_OK
-        assert capsys.readouterr().err.startswith("--placed: ")

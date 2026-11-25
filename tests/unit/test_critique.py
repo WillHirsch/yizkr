@@ -30,7 +30,6 @@ from yizkr.pipeline.critique import (
 )
 from yizkr.pipeline.extract import vocabulary_prompt_lines
 from yizkr.pipeline.llm import OutputLimitReached
-from yizkr.pipeline.reconcile import apply_equivalences
 
 # the bytes of a fictional scan, which the claims below cite by
 # their SHA-1 (#102)
@@ -873,22 +872,6 @@ def household() -> ClaimBatch:
     )
 
 
-def residence_finding(entity: str, issue: str) -> Finding:
-    return Finding.model_validate(
-        {
-            "entity": entity,
-            "claim": {
-                "subject": entity,
-                "property": "residence",
-                "value": "e09",
-            },
-            "axis": "value",
-            "category": "misapplied_property",
-            "issue": issue,
-        }
-    )
-
-
 def rendered(attached: dict[int, list[Finding]]) -> list[tuple[int, str]]:
     return sorted(
         (row, finding.issue)
@@ -940,43 +923,28 @@ class TestAttach:
         ]
 
     def test_resolved_entities_keep_their_rows(self):
-        """The firm and Sebastian resolved to QIDs: the review rows name
+        """The firm and Sebastian resolved to QIDs: the rows name them by
         no local id, and every finding still reaches its row."""
         extracted = resolved_batch()
-        # resolved by approved equivalences: nothing resolves by its label
-        # (#109)
-        rows = apply_equivalences(extracted, {"e01": "Q17", "e04": "Q23"})
+        data = extracted.model_dump(mode="json")
+        qids = {"e01": "Q17", "e04": "Q23"}
+        for claim in data["claims"]:
+            if claim["subject"].get("local_id") in qids:
+                claim["subject"] = {
+                    "kind": "qid",
+                    "qid": qids[claim["subject"]["local_id"]],
+                }
+        rows = ClaimBatch.model_validate(data)
         assert rows.claims[1].subject.qid == "Q23"
         assert counterparts(extracted, rows) == [0, 1, 2, 3]
         assert rendered(attach(self.FINDINGS, extracted, rows)) == rendered(
             attach(self.FINDINGS, extracted, extracted)
         )
 
-    def test_a_collapsed_claim_keeps_its_finding(self):
-        """Leopold is recorded twice in one source (e02, e03), both
-        approved to Q1, and Agnes (e04) to Q2: the equivalences collapse
-        the two Leopold residences into one row, and a finding on Agnes's
-        residence stays on her row, never Leopold's (review of #411)."""
-        extracted = household()
-        rows = apply_equivalences(
-            extracted, {"e02": "Q1", "e03": "Q1", "e04": "Q2"}
-        )
-        assert [claim.subject.qid for claim in rows.claims] == ["Q1", "Q2"]
-        assert counterparts(extracted, rows) == [0, 0, 1]
-        findings = [
-            residence_finding("e03", "the duplicate's residence"),
-            residence_finding("e04", "Agnes's residence"),
-        ]
-        assert rendered(attach(findings, extracted, rows)) == [
-            (0, "the duplicate's residence"),
-            (1, "Agnes's residence"),
-        ]
-
     def test_one_local_id_may_resolve_to_two_qids(self):
         """The match is checked claim by claim, so rows in which one local
         id became two QIDs in two claims still each find their claim
-        (review of #411). An approved equivalence gives a local id one
-        QID, its entity's; the rows are made by hand."""
+        (review of #411)."""
         extracted = resolved_batch()
         data = extracted.model_dump(mode="json")
         data["claims"][0]["subject"] = {"kind": "qid", "qid": "Q17"}
@@ -997,18 +965,29 @@ class TestAttach:
         rows = extracted.model_copy(update={"claims": extracted.claims[:1]})
         assert counterparts(extracted, rows) == [None, None, None]
 
-    def test_an_entity_resolved_before_is_not_an_equivalence(self):
-        """An entity whose qid the extraction already had is not replayed
-        as an approved equivalence (review of #411)."""
-        data = household().model_dump(mode="json")
-        data["entities"][3]["qid"] = "Q9"
-        extracted = ClaimBatch.model_validate(data)
-        assert counterparts(extracted, extracted) == [0, 1, 2]
-
     def test_rows_that_are_not_the_batch_resolved_match_none(self):
         extracted = resolved_batch()
         rows = extracted.model_copy(update={"claims": extracted.claims[1:]})
         assert counterparts(extracted, rows) == [None] * 4
+
+    def test_as_many_rows_with_one_claim_changed_match_none(self):
+        """A row for every claim, but Sebastian's birth year differs on
+        its row: the rows are not the batch resolved, so no claim is
+        matched, not even those whose rows are unchanged."""
+        extracted = resolved_batch()
+        data = extracted.model_dump(mode="json")
+        data["claims"][2]["value"]["year"] = 1943
+        rows = ClaimBatch.model_validate(data)
+        assert counterparts(extracted, rows) == [None] * 4
+
+    def test_a_claim_held_twice_keeps_a_row_for_each(self):
+        """A batch that holds Sebastian's birth twice, as its own rows:
+        each claim, both copies included, is matched to its own row."""
+        extracted = resolved_batch()
+        twice = extracted.model_copy(
+            update={"claims": [*extracted.claims, extracted.claims[2]]}
+        )
+        assert counterparts(twice, twice) == [0, 1, 2, 3, 4]
 
     def test_a_qualifier_value_names_its_entity(self):
         """A claim names an entity as a qualifier's value too: a finding

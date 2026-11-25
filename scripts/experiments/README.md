@@ -32,4 +32,4 @@ uv run python scripts/experiments/cluster_calibration.py \
     --out <private output dir>
 ```
 
-`--calls-per-window` sets the assumed adjudication calls per subscription usage window (default 50) and `--pairs-per-call` the pairs per adjudication call (default 40, as `reconcile.py`). The module docstring defines the strategies, constraints and the deterministic proxy used to size review.
+`--verdict-runs` reads archived run directories of an earlier per-artifact pass: no current command writes `equivalences.csv`. `--calls-per-window` sets the assumed adjudication calls per subscription usage window (default 50) and `--pairs-per-call` the pairs per adjudication call (default 40, as `reconcile.py`). The module docstring defines the strategies, constraints and the deterministic proxy used to size review.

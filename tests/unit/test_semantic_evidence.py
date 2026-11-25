@@ -8,22 +8,20 @@ claim review: it names its photograph and an enrolled person by QID and
 locates its evidence by image region, with no excerpt (ADR-0005). The face
 refusal case therefore checks only the depicts gates of claim decisions and
 claim application, on a face claim put in place of an approved birth claim;
-it is not a route for face claims. Only
-the face confirmed-write test still drives the review sheet and BatchWriter
-directly, over FakeWiki from test_pipeline, whose detached items retain the
-emitted WBI JSON. These checks establish transformation and gate behavior,
-not server acceptance, query results or model/detector quality. Known
-fictional QIDs keep identity matching outside the face scenario.
+it is not a route for face claims. The confirmed write of a face-region
+proposal has no implementation until faces work resumes (#160), so the
+scenario has no confirmed-write test. These checks establish
+transformation and gate behavior, not server acceptance, query results or
+model/detector quality. Known fictional QIDs keep identity matching
+outside the face scenario.
 """
 
 from __future__ import annotations
 
 import copy
-import csv
 from dataclasses import replace
 
 import pytest
-from wikibaseintegrator.datatypes import Item
 
 from tests.fixtures import example_universe as universe
 from tests.fixtures.semantic_acceptance import (
@@ -35,8 +33,6 @@ from tests.fixtures.semantic_acceptance import (
     source_case,
 )
 from tests.unit.test_identity_provenance import Wiki
-from tests.unit.test_pipeline import ITEMS, PROPERTIES, FakeWiki
-from yizkr.claims import ItemValue, QidRef, RegionPercent, StringValue
 from yizkr.core.write_recovery import CreationRegistry
 from yizkr.pipeline.assignment_stages import accept_reviewed_assignments
 from yizkr.pipeline.assignment_writes import apply_reviewed_claims
@@ -58,61 +54,10 @@ from yizkr.pipeline.identity_review import (
     ReviewRefused,
     ReviewStore,
 )
-from yizkr.pipeline.review import (
-    apply_review,
-    claim_id,
-    export_review_csv,
-)
 from yizkr.pipeline.review_stages import prepare_review
-from yizkr.pipeline.writer import BatchWriter, UnapprovedDepictsError
 
 WHEN = "2026-01-01T12:00:00Z"
 CURATOR = "fictional curator"
-
-
-def _recording_wiki(artifacts, people):
-    """Seed only the known sources and people supplied by each scenario."""
-    wiki = FakeWiki(
-        {source_case(key).sha1: qid for key, qid in artifacts.items()},
-        detached=True,
-    )
-    labels = {
-        qid: source_case(key).title for key, qid in artifacts.items()
-    } | people
-    for qid, label in labels.items():
-        item = wiki.wbi.item.new()
-        item.id = qid
-        item.labels.set("en", label)
-        if qid in people:
-            item.claims.add(
-                Item(prop_nr=PROPERTIES["instance_of"], value=ITEMS["human"])
-            )
-        item.write()
-    wiki.wbi.item.sent.clear()
-    return wiki
-
-
-def _approve(batch, path, selected=None):
-    """Enter decisions in an exported sheet; leave other rows undecided."""
-    export_review_csv(batch, path)
-    with path.open(newline="", encoding="utf-8") as stream:
-        reader = csv.DictReader(stream)
-        fields, rows = reader.fieldnames, list(reader)
-    for row in rows:
-        if selected is None or row["claim_id"] in selected:
-            row["decision"] = "approve"
-    with path.open("w", newline="", encoding="utf-8") as stream:
-        writer = csv.DictWriter(stream, fieldnames=fields)
-        writer.writeheader()
-        writer.writerows(rows)
-    return apply_review(batch, path)
-
-
-def _emitted_statements(wiki, qid, property_key):
-    """Inspect the last serialized edit for this item, not writer helpers."""
-    edits = [item for item in wiki.wbi.item.sent if item["id"] == qid]
-    assert edits, f"No item payload emitted for {qid}"
-    return edits[-1]["claims"].get(PROPERTIES[property_key], [])
 
 
 def _reference_items(statement, property_id):
@@ -398,66 +343,3 @@ def test_face_depicts_needs_its_confirmed_approval_to_apply(tmp_path):
             [approval.model_copy(update={"depicts_confirmed": True})],
         )
         assert confirmed.depicts_confirmed
-
-
-@pytest.mark.parametrize("changed", ["person", "region"])
-def test_face_confirmation_binds_the_displayed_person_and_region(
-    tmp_path, changed
-):
-    proposed = _face_proposals()
-    wiki = _recording_wiki(
-        {FACE_SOURCE: FACE_ARTIFACT_QID},
-        {
-            qid: universe.by_key()[key].label
-            for key, qid in zip(FACE_PEOPLE, FACE_PERSON_QIDS, strict=True)
-        },
-    )
-    sheet = tmp_path / "faces.csv"
-
-    # Confirm Wastl's association only; Hilde's remains a proposal.
-    (wastl,) = [
-        claim
-        for claim in proposed.claims
-        if claim.property == "depicts"
-        and claim.value == ItemValue(value=QidRef(qid=FACE_PERSON_QIDS[0]))
-    ]
-    approved, _ = _approve(proposed, sheet, selected={claim_id(wastl)})
-    assert len(approved.claims) == 1
-    result = BatchWriter(wiki).write_batch(approved)
-    (depicts,) = _emitted_statements(wiki, FACE_ARTIFACT_QID, "depicts")
-    assert (
-        depicts["mainsnak"]["datavalue"]["value"]["id"]
-        == (FACE_PERSON_QIDS[0])
-    )
-    assert depicts["rank"] == "normal"
-    (region,) = depicts["qualifiers"][
-        PROPERTIES["relative_position_within_image"]
-    ]
-    assert region["datavalue"]["value"] == "10%,10%,20%,50%"
-    assert _reference_items(depicts, PROPERTIES["stated_in"]) == {
-        FACE_ARTIFACT_QID
-    }
-    assert _reference_items(
-        depicts, PROPERTIES["inferred_from_extraction_run"]
-    ) == {result.run_qid}
-    (located,) = _source_block(depicts, PROPERTIES["stated_in"])[
-        PROPERTIES["relative_position_within_image"]
-    ]
-    assert located["datavalue"]["value"] == "10%,10%,20%,50%"
-
-    altered = approved.model_copy(deep=True)
-    claim = altered.claims[0]
-    if changed == "person":
-        claim.value = ItemValue(value=QidRef(qid=FACE_PERSON_QIDS[1]))
-    else:
-        claim.source.region = RegionPercent(x=15, y=10, width=20, height=50)
-        (region_qualifier,) = [
-            qualifier
-            for qualifier in claim.qualifiers
-            if qualifier.property == "relative_position_within_image"
-        ]
-        region_qualifier.value = StringValue(value="15%,10%,20%,50%")
-    before = list(wiki.wbi.item.sent)
-    with pytest.raises(UnapprovedDepictsError):
-        BatchWriter(wiki).write_batch(altered)
-    assert wiki.wbi.item.sent == before

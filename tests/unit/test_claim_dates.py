@@ -1,11 +1,12 @@
 """One date formatter for a claim's date (#617).
 
 `core.dates.claim_time_text` renders a claim's TimeValue as the site
-does, through `core.dates.time_text`; the review sheet (`sheet_value`),
-the reconcile batch facts (`entity_facts`) and the adjudication prompt
-(`adjudication.date_text`) all render a date with it, byte for byte as
-they did before, and the review sheet and reconcile render one without
-importing the adjudication stage.
+does, through `core.dates.time_text`; the reconcile batch facts
+(`entity_facts`) and the adjudication prompt (`adjudication.date_text`)
+both render a date with it, byte for byte as they did before, and
+reconcile renders one without importing the adjudication stage.
+`claim_naming.describe_value`, which the extraction critic renders values
+with, shows a date in a form of its own (#337), pinned byte for byte.
 """
 
 import subprocess
@@ -20,6 +21,7 @@ from yizkr.claims import (
     LocalRef,
     SourceReference,
     TimeValue,
+    UnknownValue,
 )
 from yizkr.core.dates import (
     UnsupportedDate,
@@ -28,9 +30,9 @@ from yizkr.core.dates import (
     time_text,
 )
 from yizkr.pipeline.adjudication import date_text
+from yizkr.pipeline.claim_naming import describe_value
 from yizkr.pipeline.extract import run_metadata
 from yizkr.pipeline.reconcile import entity_facts
-from yizkr.pipeline.review import sheet_value
 
 # the universe's birth register extract, fictional bytes
 REGISTER = ArtifactRef.from_bytes(b"fictional scan: a birth register extract")
@@ -157,7 +159,6 @@ def facts_of(value: TimeValue) -> str:
 def test_every_reader_renders_a_date_alike(time, stamp, precision, shown):
     value = TimeValue.model_validate(time)
     assert date_text(value) == shown
-    assert sheet_value(value) == shown
     assert facts_of(value) == f"date_of_birth: {shown}"
 
 
@@ -176,7 +177,6 @@ def test_each_reader_refuses_an_unsupported_date_naming_itself(fields, why):
     value = TimeValue.model_construct(**{"calendar": "gregorian", **fields})
     readers = [
         (date_text, "a date an adjudication prompt shows: "),
-        (sheet_value, "a date the review sheet shows: "),
         (facts_of, "a batch date: "),
         (lambda value: claim_time_text(value, "a date"), "a date: "),
     ]
@@ -187,20 +187,18 @@ def test_each_reader_refuses_an_unsupported_date_naming_itself(fields, why):
         assert why in str(refused.value)
 
 
-def test_the_sheet_and_reconcile_render_a_date_without_adjudication():
+def test_reconcile_renders_a_date_without_adjudication():
     # the adjudication stage imports clustering, scratch and llm; the
-    # review sheet and the reconcile roster need none of them for a date
+    # reconcile roster needs none of them for a date
     code = """
 import sys
 from yizkr.claims import TimeValue
-from yizkr.pipeline.review import sheet_value
 from yizkr.pipeline import reconcile
 from yizkr.claims import (
     ArtifactRef, Claim, ClaimBatch, LocalRef, SourceReference,
 )
 from yizkr.pipeline.extract import run_metadata
 value = TimeValue(year=1830, precision="decade")
-assert sheet_value(value) == "the 1830s"
 claim = Claim(
     subject=LocalRef(local_id="e1", label="Gustav Löbig"),
     property="date_of_birth",
@@ -228,3 +226,32 @@ print(loaded)
         check=True,
     ).stdout
     assert out.strip() == "[]"
+
+
+@pytest.mark.parametrize(
+    "value, shown",
+    [
+        (TimeValue(year=1801, precision="century"), "1801 (century)"),
+        (TimeValue(year=1890, precision="decade"), "1890 (decade)"),
+        (TimeValue(year=1833), "1833"),
+        (TimeValue(year=1938, month=8), "1938-08"),
+        (TimeValue(year=1939, month=7, day=28), "1939-07-28"),
+        (TimeValue(year=850, month=3, day=7), "850-03-07"),
+        (UnknownValue(), "unknown value"),
+    ],
+    ids=[
+        "century",
+        "decade",
+        "year",
+        "month",
+        "day",
+        "before-1000",
+        "unknown",
+    ],
+)
+def test_describe_value_is_unchanged(value, shown):
+    # the critic's prompt renders dates through describe_value, and the
+    # critic runs before the write in scratch runs: a changed rendering
+    # would change every critique call's cache key. The adjudication
+    # stage's code digest covers how an unknown value is shown
+    assert describe_value(value) == shown

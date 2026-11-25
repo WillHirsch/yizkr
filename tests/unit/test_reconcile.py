@@ -9,9 +9,7 @@ from yizkr.claims import (
     ArtifactRef,
     ClaimBatch,
     EntityRecord,
-    LocalRef,
     PlaceStructure,
-    QidRef,
 )
 from yizkr.core import sparql
 from yizkr.pipeline.birth_evidence import (
@@ -31,15 +29,12 @@ from yizkr.pipeline.reconcile import (
     _batch_pair_facts,
     _roster_pair_facts,
     adjudicate,
-    apply_equivalences,
     block_candidates,
     entity_facts,
     entity_name_keys,
-    export_equivalences_csv,
     fetch_place_containment,
     impossible_pair,
     propose_graph_pairs,
-    read_approved_equivalences,
     read_place_containment,
 )
 
@@ -125,26 +120,6 @@ def batch(claims=(), entity_list=None) -> ClaimBatch:
             "entities": [e.model_dump() for e in (entity_list or entities())],
         }
     )
-
-
-def spouse_claim() -> dict:
-    return {
-        "subject": {
-            "kind": "local",
-            "local_id": "e1",
-            "label": "Hildegard Löbig",
-        },
-        "property": "residence",
-        "value": {
-            "type": "item",
-            "value": {
-                "kind": "local",
-                "local_id": "e2",
-                "label": "Flörburg",
-            },
-        },
-        "source": {"artifact": SCAN.model_dump()},
-    }
 
 
 def post_only(rows: list[dict], queries: list[str]):
@@ -999,128 +974,6 @@ class TestTheSentinel:
             'final line:\n\n```text\n{"done": true}\n```\n' in llm.prompts[0]
         )
         assert "emitted" not in llm.prompts[0]
-
-
-class TestEquivalencesCsv:
-    def proposals(self):
-        return [
-            Proposal(
-                entity_id="e1",
-                qid="Q40",
-                verdict="same",
-                confidence=0.95,
-                evidence="same spouse",
-            ),
-            Proposal(
-                entity_id="e1", qid="Q77", verdict="distinct", confidence=0.9
-            ),
-        ]
-
-    def test_round_trip_only_approved_rows_take_effect(self, tmp_path):
-        path = tmp_path / "equivalences.csv"
-        export_equivalences_csv(self.proposals(), entities(), roster(), path)
-        content = path.read_text()
-        assert "Hildegard Laudler" in content and "same spouse" in content
-        # machine verdict alone grants nothing
-        assert read_approved_equivalences(path) == {}
-        text = content.replace("same spouse,", "same spouse,approve")
-        path.write_text(text)
-        assert read_approved_equivalences(path) == {"e1": "Q40"}
-
-    def test_aliases_visible_and_prunable_at_review(self, tmp_path):
-        """An approval is also an alias contribution (the writer appends
-        the document's aliases to the matched item), so the CSV must show
-        them and honor the reviewer's pruning — a form's MOTHER label
-        must be deletable before it pollutes the graph."""
-        from yizkr.pipeline.reconcile import read_reviewed_aliases
-
-        path = tmp_path / "equivalences.csv"
-        # a multi-word alias, which review must keep whole, and a role label
-        as_written = "Hildegard Löbig geborene Laudler"
-        noisy = [
-            EntityRecord(
-                id="e1",
-                label="Hildegard Löbig",
-                aliases=[as_written, "MOTHER"],
-                kind="human",
-            )
-        ]
-        export_equivalences_csv(self.proposals(), noisy, roster(), path)
-        content = path.read_text()
-        assert f"{as_written}|MOTHER" in content  # visible to reviewer
-        # the reviewer prunes the role label and approves
-        content = content.replace(f"{as_written}|MOTHER", as_written)
-        content = content.replace("same spouse,", "same spouse,approve")
-        path.write_text(content)
-        approved = read_approved_equivalences(path)
-        reviewed = read_reviewed_aliases(path)
-        assert reviewed == {"e1": [as_written]}
-        applied = apply_equivalences(
-            batch(entity_list=noisy), approved, reviewed
-        )
-        (entity,) = applied.entities
-        assert entity.qid == "Q40"
-        assert entity.aliases == [as_written]  # MOTHER pruned
-
-    def test_old_csvs_without_aliases_column_still_apply(self, tmp_path):
-        from yizkr.pipeline.reconcile import read_reviewed_aliases
-
-        path = tmp_path / "old.csv"
-        path.write_text(
-            "entity_id,qid,verdict,confidence,evidence,decision\n"
-            "e1,Q40,same,0.9,same spouse,approve\n"
-        )
-        assert read_approved_equivalences(path) == {"e1": "Q40"}
-        assert read_reviewed_aliases(path) == {}
-
-    def test_conflicting_approvals_raise(self, tmp_path):
-        path = tmp_path / "equivalences.csv"
-        export_equivalences_csv(self.proposals(), entities(), roster(), path)
-        lines = path.read_text().splitlines()
-        rows = [line + "approve" for line in lines[1:]]
-        path.write_text("\n".join([lines[0], *rows]))
-        with pytest.raises(ValueError, match="both"):
-            read_approved_equivalences(path)
-
-
-class TestApplyEquivalences:
-    def test_refs_rewritten_and_qid_recorded(self):
-        original = batch(claims=[spouse_claim()])
-        applied = apply_equivalences(original, {"e1": "Q40"})
-        claim = applied.claims[0]
-        assert claim.subject == QidRef(qid="Q40")
-        # e2 unapproved: stays local
-        assert isinstance(claim.value.value, LocalRef)
-        hildegard = next(e for e in applied.entities if e.id == "e1")
-        assert hildegard.qid == "Q40"
-        # original untouched
-        assert isinstance(original.claims[0].subject, LocalRef)
-        assert original.entities[0].qid is None
-
-    def test_identical_claims_collapse_after_equivalence(self):
-        # two document entities (duplicated records in the source) both
-        # approved to one item leave byte-identical claims: collapse
-        twin = dict(
-            spouse_claim(), subject={"kind": "local", "local_id": "e3"}
-        )
-        entity_list = [
-            *entities(),
-            EntityRecord(id="e3", label="Hildegard Löbig", kind="human"),
-        ]
-        original = batch(
-            claims=[spouse_claim(), twin], entity_list=entity_list
-        )
-        applied = apply_equivalences(original, {"e1": "Q40", "e3": "Q40"})
-        assert len(applied.claims) == 1
-        assert applied.claims[0].subject == QidRef(qid="Q40")
-
-    def test_distinct_claims_survive_equivalence(self):
-        # same subject item but different values must both remain
-        other = dict(spouse_claim(), value={"type": "string", "value": "x"})
-        applied = apply_equivalences(
-            batch(claims=[spouse_claim(), other]), {"e1": "Q40"}
-        )
-        assert len(applied.claims) == 2
 
 
 # -- impossibility filter (ADR-0017) -----------------------------------------
@@ -2140,40 +1993,6 @@ class TestDocumentAppellations:
         )
         (prompt,) = llm.prompts
         assert "- e1: Hildegard Löbig (aliases: Oma, Hilde); kind:" in prompt
-
-    def test_the_reconcile_command_blocks_with_its_batch(
-        self, tmp_path, monkeypatch, capsys
-    ):
-        """`yizkr reconcile` hands block_candidates its batch, so the
-        document's appellations reach the blocking."""
-        import argparse
-
-        from yizkr import cli
-        from yizkr.pipeline import llm, reconcile
-
-        path = tmp_path / "batch.json"
-        path.write_text(
-            batch(
-                [name_claim("referred_to_as", "Oma")], [self.hildegard()]
-            ).model_dump_json()
-        )
-        monkeypatch.setattr(cli.Config, "load", lambda env_file: None)
-        monkeypatch.setattr(cli, "WikiClient", lambda config: None)
-        monkeypatch.setattr(
-            reconcile, "fetch_roster", lambda client, config: self.sipkje()
-        )
-        monkeypatch.setattr(
-            llm,
-            "make_client",
-            lambda name: ScriptedLlm(json.dumps({"done": True})),
-        )
-        args = argparse.Namespace(
-            batch=path, env_file=None, llm="fake", out=tmp_path / "eq.csv"
-        )
-        assert cli.cmd_reconcile(args) == 0
-        assert "candidates for 0 of 1 document entities" in (
-            capsys.readouterr().out
-        )
 
     def test_an_entity_aliased_only_by_its_appellation_lists_no_aliases(
         self,

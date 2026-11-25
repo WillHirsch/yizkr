@@ -3,12 +3,13 @@ item, after the steps that put two refs on one item (#491; ADR-0035
 §3.5).
 
 Validation refuses a claim whose value names its own subject (#461), but
-it reads the extraction's batch, before the identity map, an approved
-equivalence or a curator's correction can put a claim's subject and its
-value on one item. The writer checks again before its first write: such
-a claim, or one whose qualifier's value is its subject's item, is a
-counted refusal with its reason, never a written self-loop, and the rest
-of the batch is written, in a dry run as in a write.
+it reads the extraction's batch, before the identity map, a curator's
+confirmation of an entity as an existing item or a curator's correction
+can put a claim's subject and its value on one item. The writer checks
+again before its first write: such a claim, or one whose qualifier's
+value is its subject's item, is a counted refusal with its reason, never
+a written self-loop, and the rest of the batch is written, in a dry run
+as in a write.
 
 The fixtures are fictional (docs/EXAMPLES.md): Eugen Löbig the master
 hatter, "Muckel", and a son of the same name, a homonym the identity-map
@@ -19,11 +20,11 @@ side; the 1984 family tree's Eugen; and Flörburg.
 
 from __future__ import annotations
 
-import csv
 import hashlib
 
 import pytest
 
+from tests.fixtures.confirmed import confirmed
 from tests.fixtures.identity import joined, mapped
 from tests.unit.test_identity_map_writes import (
     EUGEN,
@@ -34,11 +35,6 @@ from tests.unit.test_identity_map_writes import (
 )
 from tests.unit.test_pipeline import ITEMS, MEDIA_SHA1, PROPERTIES, RUN
 from yizkr.claims import ClaimBatch
-from yizkr.pipeline.reconcile import (
-    EQUIVALENCE_FIELDS,
-    apply_equivalences,
-    read_approved_equivalences,
-)
 from yizkr.pipeline.resolve import resolve_batch
 from yizkr.pipeline.review import claim_id
 from yizkr.pipeline.writer import BatchWriter, self_references
@@ -241,15 +237,16 @@ class TestOneClusterOfTheMap:
         assert _self_loops(wiki) == []
 
 
-class TestAnApprovedEquivalence:
-    def test_both_entities_approved_to_one_item(self):
+class TestAConfirmation:
+    """Entities a curator confirmed as existing items, built directly
+    (tests.fixtures.confirmed)."""
+
+    def test_both_entities_confirmed_as_one_item(self):
         wiki = _family_wiki()
         existing = wiki.wbi.item.new()
         existing.labels.set("en", EUGEN)
         eugen = existing.write().id
-        approved = apply_equivalences(
-            _history(), {"father": eugen, "son": eugen}
-        )
+        approved = confirmed(_history(), {"father": eugen, "son": eugen})
 
         written = BatchWriter(wiki).write_batch(approved)
 
@@ -262,16 +259,16 @@ class TestAnApprovedEquivalence:
         assert _self_loops(wiki) == []
         assert any(f"({eugen})" in w for w in written.warnings)
 
-    def test_one_approved_to_the_item_the_map_finds_for_the_other(self):
+    def test_one_confirmed_as_the_item_the_map_finds_for_the_other(self):
         # the first write made the father's and the son's items; a later
-        # equivalence approves the son to the father's item: the son's
-        # refs name it by QID, the father's reach it through his cluster,
-        # which the plan finds it for
+        # confirmation names the son as the father's item: the son's refs
+        # name it by QID, the father's reach it through his cluster, which
+        # the plan finds it for
         wiki = _family_wiki()
         identity = mapped(_history())
         first = BatchWriter(wiki).write_batch(_history(), identity=identity)
         father = first.created_items["father"]
-        approved = apply_equivalences(_history(), {"son": father})
+        approved = confirmed(_history(), {"son": father})
 
         again = BatchWriter(wiki).write_batch(
             approved, identity=identity, mapped_from=_history()
@@ -305,39 +302,6 @@ class TestAnApprovedEquivalence:
 
 
 class TestACuratorsCorrection:
-    def test_a_corrected_qid_on_the_equivalence_sheet(self, tmp_path):
-        # the curator approves the son's row and corrects the father's
-        # proposed item to the son's: a misreading the writer refuses
-        wiki = _family_wiki()
-        existing = wiki.wbi.item.new()
-        existing.labels.set("en", EUGEN)
-        eugen = existing.write().id
-        sheet = tmp_path / "equivalences.csv"
-        with open(sheet, "w", newline="") as handle:
-            rows = csv.DictWriter(handle, fieldnames=EQUIVALENCE_FIELDS)
-            rows.writeheader()
-            for entity_id, qid in (("son", eugen), ("father", eugen)):
-                rows.writerow(
-                    {
-                        "entity_id": entity_id,
-                        "entity_label": EUGEN,
-                        "qid": qid,
-                        "verdict": "same",
-                        "decision": "approve",
-                    }
-                )
-        approved = apply_equivalences(
-            _history(), read_approved_equivalences(sheet)
-        )
-
-        written = BatchWriter(wiki).write_batch(approved)
-
-        assert written.self_references == _ids(
-            approved, FATHER_CLAIM, MUCKEL_CLAIM
-        )
-        assert written.written == 2
-        assert _self_loops(wiki) == []
-
     def test_a_curated_claim_naming_its_subject_by_qid(self):
         # a curated claim (a curator's own write) whose subject and value
         # name one item is refused too, and a curated one that does not

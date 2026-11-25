@@ -29,7 +29,6 @@ Years before 1 CE and non-Gregorian calendars are unsupported. They are not conv
 | --- | --- |
 | Extraction / claim schema | An invalid date rejects its claim with diagnostics; other usable claims can survive. |
 | GEDCOM | A conservative DATE-line preflight refuses the file for an unsupported epoch/calendar. Parenthesized date phrases are free text; supported Gregorian markers are accepted. Other unparseable dates warn without a guessed value. |
-| CSV correction | An unsupported or unreadable correction is warned about and left out; the rest of the sheet can apply. The correction format supplies no alternative calendar. |
 | Batch writer | An unsupported value or qualifier date refuses the supplied batch before instance I/O, including dry runs. This also catches batches constructed around schema validation. |
 | Site, non-privileged export and graph reconciliation roster | A graph-wide check refuses unsupported time values, including deprecated statements, qualifiers and references. Export refusal preserves the full backup while withholding the filtered product. |
 | Disagreement and date-reading helpers | They check dates they consume; they do not all scan the whole graph. Raw published SPARQL pages run outside these Python guards. |
@@ -75,7 +74,7 @@ flowchart LR
 
 Validation checks that the named deceased belongs to the supplied union participants, preferring those marked spouse/partner and falling back to all participants when no couple roles are supplied. If the batch gives no participants, that check cannot establish membership. Validation also does not prove that the cited wording conveys the end; this remains a source-reading and review responsibility.
 
-If one source both calls a person widowed and names them as a union's deceased partner, the deterministic review advisory flags possible attribution confusion without rejecting the claims. Successive marriages or genuine source disagreement can explain both. CSV review, durable review and writer warnings expose the concern; unrelated source artifacts do not trigger it. The privacy reader separately limits that source's disclosure support. Accepting the history does not authorize disclosure.
+If one source both calls a person widowed and names them as a union's deceased partner, the deterministic review advisory flags possible attribution confusion without rejecting the claims. Successive marriages or genuine source disagreement can explain both. Durable claim review and writer warnings expose the concern; unrelated source artifacts do not trigger it. The privacy reader separately limits that source's disclosure support. Accepting the history does not authorize disclosure.
 
 ### Derived bounds and union endings
 

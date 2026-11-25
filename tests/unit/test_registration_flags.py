@@ -30,7 +30,7 @@ from argparse import Namespace
 
 import pytest
 
-from tests.fixtures.identity import corpus, mapped, write_mapped
+from tests.fixtures.identity import corpus, write_mapped
 from tests.fixtures.projected_media import project_media
 
 # the module, not its TestStepRegister, so pytest collects that class once
@@ -2894,48 +2894,6 @@ class TestTheSideRuleNamesTheLabel:
         assert label_of(wiki, written.created_items["md1"]) == TITLE
         assert written.flags == []
 
-    def test_resolve_matches_nothing_by_label(self, tmp_path):
-        """A registered artifact holds Sebastian's name and a person's item
-        Hildegard's: `yizkr ingest resolve` leaves every ref local and
-        reads nothing of the instance (#109)."""
-
-        from yizkr import cli
-        from yizkr.claims import ClaimBatch
-
-        wiki = WritingWiki()
-        Registrar(wiki).register_artifact(
-            scan(tmp_path, PORTRAIT), "photograph", "Sebastian Löbig"
-        )
-        wiki.item(
-            "Hildegard Löbig",
-            ("instance_of", WritingWiki.ITEMS["human"], None),
-        )
-        batch = family_gedcom(wiki, TWO_PEOPLE_GEDCOM)
-
-        path = tmp_path / "batch.json"
-        path.write_text(batch.model_dump_json())
-        identity_path = tmp_path / "identity-map.json"
-        identity_path.write_text(json.dumps(mapped(batch).data))
-        out = tmp_path / "out" / "resolved.json"
-        args = Namespace(
-            batch=path,
-            equivalences=None,
-            identity_map=identity_path,
-            out=out,
-            env_file=None,
-        )
-
-        def no_wiki(args):
-            raise AssertionError("the resolve step reads no wiki")
-
-        original = cli._client
-        cli._client = no_wiki
-        try:
-            assert cli.cmd_resolve(args) == 0
-        finally:
-            cli._client = original
-        assert ClaimBatch.model_validate_json(out.read_text()) == batch
-
     def test_a_sitter_named_by_another_persons_portrait_keeps_her_name(
         self, tmp_path
     ):
@@ -3484,39 +3442,8 @@ class TestTheWriteStepRaisesTheFlag:
         assert alert["others"] == [tagged]
         assert alert["medium"] == sha1(PORTRAIT)[:12]
 
-    def test_cmd_write_prints_the_flags(self, tmp_path, monkeypatch, capsys):
-        from yizkr import cli
 
-        wiki = WritingWiki()
-        artifact = (
-            Registrar(wiki)
-            .register_artifact(scan(tmp_path, PORTRAIT), "photograph", TITLE)
-            .artifact_qid
-        )
-        batch = family_gedcom(wiki)
-        path = tmp_path / "batch.json"
-        path.write_text(batch.model_dump_json())
-        identity = tmp_path / "identity-map.json"
-        identity.write_text(json.dumps(mapped(batch).data))
-        monkeypatch.setattr(cli, "_client", lambda args: wiki)
-        args = Namespace(
-            batch=path,
-            identity_map=identity,
-            dry_run=False,
-            env_file=None,
-            placed=[],
-        )
-
-        assert cli.cmd_write(args) == 0
-
-        printed = json.loads(capsys.readouterr().out)
-        (flag,) = printed["flags"]
-        assert flag["kind"] == UNHASHED_TITLE
-        assert flag["artifact"] == artifact
-        assert flag["others"] == [printed["created_items"]["md1"]]
-
-
-# -- what resolve and a write read of the instance ----------------------------
+# -- what a write reads of the instance ---------------------------------------
 
 
 class CountingWiki(WritingWiki):

@@ -2,6 +2,7 @@
 
 import pytest
 
+from tests.fixtures.confirmed import confirmed as confirmed_batch
 from tests.unit.test_container_claims import (
     BOOKLET_REF,
     JULY_28,
@@ -30,7 +31,6 @@ from yizkr.claims import (
     validate_against_manifest,
 )
 from yizkr.model.schema import load_acceptance
-from yizkr.pipeline.reconcile import apply_equivalences
 from yizkr.pipeline.writer import pre_plan_refusals, subject_refusal
 
 
@@ -130,7 +130,7 @@ def test_writer_requires_an_excerpt_that_survives_storage_normalization():
 
 
 def test_confirmation_belongs_to_the_claim_not_just_its_target_item():
-    given = apply_equivalences(
+    given = confirmed_batch(
         batch(enclosure(), entities=[CERTIFICATE, RUDOLF]), {"u1": "Q41"}
     )
     confirmed = given.claims[0]

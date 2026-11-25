@@ -1,15 +1,17 @@
-"""Face proposals (W1 minimal, ADR-0005): detection -> review -> depicts.
+"""Face proposals (W1 minimal, ADR-0005): detection -> depicts proposals.
 
 A face proposal is an ordinary claim — ``depicts`` on the photograph
 item, the person as value, a ``relative position within image``
 qualifier, and the photograph as its own source, cited by the SHA-1 of
 its bytes as every source is (an artifact asserts whom it depicts;
-docs/MODELING.md) — so proposals ride the SAME review flow as
-extracted claims: export-review -> human decision -> apply-review ->
-write. Detection output never touches the graph
-directly; only human-confirmed rows become statements, with dual
-provenance (stated in -> photograph + region; inferred from extraction
-run -> the detection run).
+docs/MODELING.md). Detection output never touches the graph directly: a
+face-region proposal becomes a statement only once a curator confirms
+it, and no route confirms and writes one until faces work resumes. The
+writer refuses a depicts claim that carries no such confirmation
+(yizkr.pipeline.review), and claim review does not take a face batch,
+which names the photograph by QID, names an enrolled person by QID where
+the gallery has one (otherwise by a local ref), and locates its evidence
+by image region, with no excerpt.
 
 Workflow ("initial manual inputs", R5):
 
@@ -21,7 +23,7 @@ Workflow ("initial manual inputs", R5):
    embedding joins the gallery. This is a curator act.
 3. ``match-faces`` re-matches saved detections against the grown
    gallery without recomputing embeddings.
-4. The batch joins the normal review flow.
+4. The batch is kept as proposals.
 
 Engines implement `FaceDetector`; `InsightFaceDetector` (InsightFace-
 class model, ADR-0005) is provided and entirely optional — everything
@@ -173,7 +175,7 @@ def best_match(
 
 
 # ---------------------------------------------------------------------------
-# Proposals -> claim batch (the bridge into the shared review flow)
+# Proposals -> claim batch
 # ---------------------------------------------------------------------------
 
 

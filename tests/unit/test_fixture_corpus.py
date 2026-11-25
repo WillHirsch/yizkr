@@ -40,7 +40,6 @@ recordless.
 
 from __future__ import annotations
 
-import csv
 import dataclasses
 import json
 import re
@@ -94,7 +93,6 @@ from yizkr.pipeline.report import (
     REPORT_DIR,
     REUSED,
 )
-from yizkr.pipeline.review import export_review_csv
 from yizkr.pipeline.rundir import (
     ALERTS,
     DONE,
@@ -978,22 +976,13 @@ class TestTheTraps:
         )
         assert finding["claim"]["property"] == "date_of_birth"
         assert finding["claim"]["value"].startswith("1850")
-        # and a review sheet of the batch shows it once, on that claim's
-        # row (#113)
+        # and its note goes once on that claim, as claim review shows it
+        # (#113)
         batch = runs.batch(run, fc.NARRATIVE)
-        sheet = run.parent / "narrative-review.csv"
-        export_review_csv(
-            batch,
-            sheet,
-            critique_notes=sheet_notes(entries(findings), batch, batch),
-        )
-        with open(sheet, newline="") as handle:
-            rows = list(csv.DictReader(handle))
-        noted = [row for row in rows if row["critique_notes"]]
-        (row,) = noted
-        assert row["critique_notes"].count("critique [") == 1
-        assert row["property"] == "date_of_birth"
-        assert row["value"].startswith("1850")
+        ((row, note),) = sheet_notes(entries(findings), batch, batch).items()
+        assert note.count("critique [") == 1
+        assert batch.claims[row].property == "date_of_birth"
+        assert batch.claims[row].value.year == 1850
         for name in (fc.DECK, fc.CERTIFICATE, fc.LETTER):
             assert json.loads(runs.views(run)[name].critique.read_text()) == []
 

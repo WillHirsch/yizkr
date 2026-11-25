@@ -64,7 +64,7 @@ Different values or qualifiers remain separate statements. Repeated property/val
 
 A citation is a passage read where it stands in the source, with its locator and language. A machine judgement note belongs in the process reference. When a document explicitly says its text was prepared with machine assistance, the pipeline marks the applicable claims and cites that statement in an additional source block; it does not infer the marker from how the text reads.
 
-Before writing, the writer resolves each source's media SHA-1 to its registered artifact item; a page is cited through its parent artifact and page locator. In the map-bound writer, entity mentions resolve through the run's identity map, or an explicit reviewed equivalence, rather than by label alone; the assignment writer resolves them through accepted assignments ([reviewed historical claims](IDENTITY_REVIEW.md#apply-reviewed-historical-claims)). The [clustering diagram](../src/yizkr/pipeline/README.md#corpus-clustering-clusteringpy-the-scratch-runs-identity-map) shows how the map is made.
+Before writing, the writer resolves each source's media SHA-1 to its registered artifact item; a page is cited through its parent artifact and page locator. In the map-bound writer, entity mentions resolve through the run's identity map rather than by label alone; the assignment writer resolves them through accepted assignments ([reviewed historical claims](IDENTITY_REVIEW.md#apply-reviewed-historical-claims)). The [clustering diagram](../src/yizkr/pipeline/README.md#corpus-clustering-clusteringpy-the-scratch-runs-identity-map) shows how the map is made.
 
 Extraction and GEDCOM record births and deaths as statements on the person, including an unknown-valued death date when the source gives no date. Documents can also assert facts about themselves, placed media, and documents they record or mention. See [birth and death assertions](LIFE_EVENTS.md#birth-and-death-assertions-adr-0040) and [claims about artifacts](ARTIFACTS.md#claims-about-artifacts-adr-0039).
 
@@ -80,7 +80,7 @@ A new stage or reading route of an admitted kind needs no change to this path's 
 
 The [reviewed assignment write route](IDENTITY_REVIEW.md#apply-reviewed-historical-claims) applies selected approved claims using verified assignments and source-support receipts. [Recorded graph matching](IDENTITY_REVIEW.md#record-graph-context-and-inspect-later-cohort-matches) supplies read-only candidate evidence for identity choices; [protected cohort application](IDENTITY_REVIEW.md#apply-later-cohort-identity-additions) refreshes relevant graph context under server exclusion before accepting identities. The current orchestration supports one supplied text source or standalone image; retained orchestration of containers and GEDCOM remains separate work: containers and the images they place ([#854](https://github.com/WillHirsch/yizkr/issues/854)), structured sources ([#859](https://github.com/WillHirsch/yizkr/issues/859), [#878](https://github.com/WillHirsch/yizkr/issues/878)) and many sources ([#876](https://github.com/WillHirsch/yizkr/issues/876)).
 
-The [pipeline guide](../src/yizkr/pipeline/README.md) describes the shared document operations and standalone CLI adapters. Map-bound writes retain their one-map and retained-state guards; CSV approval alone cannot supply durable identity authority. As policy, the assignment-aware route is the only writer of historical claims on a retained instance, and the map-bound writer is retired once scratch runs use the assignment writer ([#822](https://github.com/WillHirsch/yizkr/issues/822)).
+The [pipeline guide](../src/yizkr/pipeline/README.md) describes the shared document operations and standalone CLI adapters. Map-bound writes retain their one-map and retained-state guards. As policy, the assignment-aware route is the only writer of historical claims on a retained instance, and the map-bound writer is retired once scratch runs use the assignment writer ([#822](https://github.com/WillHirsch/yizkr/issues/822)).
 
 ## Item creation and interrupted-write recovery
 
@@ -314,7 +314,7 @@ flowchart TD
     basis -->|changed| review["Requeue affected review"]
 ```
 
-These driver comparisons use canonical hashes and whole-sheet CSV review bindings. The separate [durable review and application operations](IDENTITY_REVIEW.md) compare scoped identity and historical-claim decisions against current evidence and accepted assignments. They do not automatically import driver CSV consent. Recomputing the same canonical batch preserves its existing file and original producer provenance, and does not by itself revoke approvals. Changed batch content invalidates its dependent views and sets aside its reviewed CSVs; a changed re-exported review sheet requeues that sheet's decision. A view without required processing metadata is recomputed; its new dependency record then supports reuse. Publication remains caller-owned and is not an atomic multi-file generation commit.
+The driver makes the first two comparisons, generation freshness and canonical output, with canonical hashes. The third, the review basis comparison, belongs to the separate [durable review and application operations](IDENTITY_REVIEW.md), which compare scoped identity and historical-claim decisions against current evidence and accepted assignments. Recomputing the same canonical batch preserves its existing file and original producer provenance, and does not by itself revoke approvals. Changed batch content invalidates its dependent views. A view without required processing metadata is recomputed; its new dependency record then supports reuse. Publication remains caller-owned and is not an atomic multi-file generation commit.
 
 Call keys include prompt and file content hashes, engine/model/effort and configuration, call kind, conversation ancestry where applicable, attempt and role epoch. Input-file paths are replaced by content hashes in the key; sources are identified by media SHA-1 rather than artifact QID, and mtimes do not key calls. This allows reuse across fresh document directories and wiki resets while the engine configuration stays the same.
 
@@ -347,7 +347,7 @@ Implementation: [response storage](../src/yizkr/pipeline/llmcache.py), [session 
 
 ## Human-confirmed face links
 
-Face proposals join the ordinary claim-review and writer path. Detection and matching are local, using the optional face engine and a gallery of identities enrolled by a curator.
+Face detection and matching produce face-region proposals. Both are local, using the optional face engine and a gallery of identities enrolled by a curator. No route confirms and writes a face-region proposal until faces work resumes ([#160](https://github.com/WillHirsch/yizkr/issues/160)).
 
 ```mermaid
 flowchart TD
@@ -358,14 +358,12 @@ flowchart TD
     saved --> match["Match or re-match embeddings"]
     gallery --> match
     match --> batch["Depicts proposal batch"]
-    batch --> review["Per-row human review"]
-    review --> writer["Writer verifies row approval"]
-    writer --> statement["Depicts statement<br/>region and provenance"]
+    batch -.-> pending["Confirmation and write<br/>wait for faces work"]
 ```
 
-Unmatched faces remain in the detections file without a claim. Matching can rerun against saved embeddings after enrollment. A `depicts` claim requires its own row approval, including when it came from text extraction; bulk acceptance cannot supply that approval. The writer checks it before accessing the instance. Scratch runs exclude face detection and never write `depicts`.
+Unmatched faces remain in the detections file without a claim. Matching can rerun against saved embeddings after enrollment. A `depicts` association needs affirmative confirmation of that exact association, including when it came from text extraction; general approval cannot supply it. The map-bound writer writes a `depicts` claim only with a per-row approval bound to the claim and the manifest records it names, checked before it accesses the instance; nothing records that approval, so it refuses every `depicts` claim. Claim decisions require explicit `depicts_confirmed`, rechecked at application, but claim review does not take a face batch, which names the photograph by QID, names an enrolled person by QID where the gallery has one (otherwise by a local ref), and locates its evidence by image region, with no excerpt. Scratch runs exclude face detection and never write `depicts`.
 
-Implementation: [face detection and matching](../src/yizkr/pipeline/faces.py), [review](../src/yizkr/pipeline/review.py) and [writer](../src/yizkr/pipeline/writer.py). The [pipeline guide](../src/yizkr/pipeline/README.md) gives the face commands; [ADR-0005](adr/0005-faces-strategy.md) distinguishes this implementation from later media-service integrations.
+Implementation: [face detection and matching](../src/yizkr/pipeline/faces.py), [depicts gate](../src/yizkr/pipeline/review.py) and [writer](../src/yizkr/pipeline/writer.py). The [pipeline guide](../src/yizkr/pipeline/README.md) gives the face commands; [ADR-0005](adr/0005-faces-strategy.md) distinguishes this implementation from later media-service integrations.
 
 ## Queries and private exploration
 

@@ -44,7 +44,6 @@ Write preparation records its current code and configuration separately from the
 Process records are canonical UTF-8 JSON files named `<sha256>.json`. Publication is exclusive and verifies any existing file; reading verifies both its digest and canonical encoding. Application records carry references to separately preserved producer records as well as their stage summaries. Keep these directories with the graph/run backups: a digest is an integrity check and lookup key, not a network download location.
 
 - Reviewed and scratch drivers use `process-records/` in the run directory.
-- `yizkr ingest write` uses `process-records/` beside its supplied batch; `--process-records PATH` selects another directory.
 - Direct `BatchWriter` and place-application calls accept `record_dir`; their default is `var/process-records/`.
 
 These records are durable evidence, independent of the response cache. Saved readings, batches and identity maps retain their original producer when reused. Recomputing a map creates new execution evidence even when cached responses yield identical decisions; reusing a legacy map does not invent missing producer facts. Code/timing provenance is excluded from semantic comparisons used for clustering and review; a provenance-only change does not revoke an unchanged approval. Actual processing compatibility, content and review basis retain their separate checks.

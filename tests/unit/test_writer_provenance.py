@@ -1,16 +1,13 @@
 """Process enrichment preserves durable writes and retained admission."""
 
 import copy
-import json
 from datetime import UTC, datetime
 
 import pytest
 
 from tests.fixtures.identity import mapped
 from tests.unit.test_pipeline import MEDIA_SHA1, FakeWiki, _citing
-from yizkr import cli
 from yizkr.core import instance
-from yizkr.core.exits import EXIT_REFUSED
 from yizkr.core.provenance import (
     CodeProvenance,
     ProcessRecord,
@@ -194,42 +191,3 @@ def test_retained_refusal_precedes_generation_reservation_and_graph_changes(
     assert wiki.wbi.item.creation_history == []
     assert wiki.wbi.item.writes == 0
     assert not list(tmp_path.glob("*.json"))
-
-
-def test_cli_reports_retained_admission_as_refusal_without_mutation(
-    tmp_path, monkeypatch, capsys
-):
-    wiki = FakeWiki({MEDIA_SHA1: "Q23"}, detached=True)
-    marker = instance.kept_path(wiki.config)
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text("fictional retained target")
-    monkeypatch.setattr(
-        rundir,
-        "code_version",
-        lambda **kw: {"commit": "b" * 40, "dirty": True},
-    )
-    monkeypatch.setattr(cli, "_client", lambda args: wiki)
-    batch = _citing(MEDIA_SHA1)
-    batch_path, identity_path = (
-        tmp_path / "batch.json",
-        tmp_path / "identity.json",
-    )
-    batch_path.write_text(batch.model_dump_json())
-    identity_path.write_text(json.dumps(mapped(batch).data))
-    pages = dict(wiki._recovery_pages)
-    status = cli.main(
-        [
-            "ingest",
-            "write",
-            "--batch",
-            str(batch_path),
-            "--identity-map",
-            str(identity_path),
-        ]
-    )
-    assert status == EXIT_REFUSED
-    err = capsys.readouterr().err
-    assert "verified clean software" in err
-    assert "Traceback" not in err
-    assert wiki._recovery_pages == pages
-    assert wiki.wbi.item.writes == 0

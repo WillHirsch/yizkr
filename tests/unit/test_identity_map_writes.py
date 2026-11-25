@@ -25,6 +25,7 @@ import json
 
 import pytest
 
+from tests.fixtures.confirmed import confirmed
 from tests.fixtures.identity import corpus, mapped
 from tests.unit.test_pipeline import (
     ITEMS,
@@ -41,7 +42,6 @@ from yizkr.pipeline.clustering import (
     Manifest,
     UnmappedMention,
 )
-from yizkr.pipeline.reconcile import apply_equivalences
 from yizkr.pipeline.resolve import resolve_batch
 from yizkr.pipeline.writer import (
     BatchWriter,
@@ -577,18 +577,16 @@ class TestTheMapIsTheOnlyWay:
         assert again.created_items == first.created_items
 
     def test_a_distinct_decision_is_never_overridden(self):
-        # the reviewer said the tree's Eugen is not the item a write of the
-        # family history made: no equivalence is applied, the map keeps
-        # them apart, and the tree's write never joins him by his label,
-        # whatever kind or source he shares with that item
+        # the map keeps the tree's Eugen apart from the item a write of the
+        # family history made, and the tree's write never joins him to it
+        # by his label, whatever kind or source he shares with that item
         wiki = _wiki()
         tree = _tree()
         identity = mapped(_eugens(), tree)
         history = BatchWriter(wiki).write_batch(_eugens(), identity=identity)
 
-        rejected = apply_equivalences(tree, {})
         written = BatchWriter(wiki).write_batch(
-            resolve_batch(rejected, identity), identity=identity
+            resolve_batch(tree, identity), identity=identity
         )
 
         assert (
@@ -971,8 +969,8 @@ class TestAnUnmappedMention:
             mapped_clusters(batch, mapped(batch))
 
     def test_a_batch_naming_no_local_entity_needs_no_map(self):
-        approved = apply_equivalences(_tree(), {"e1": "Q500"})
-        assert mapped_clusters(approved, None) == ({}, None, {})
+        named = confirmed(_tree(), {"e1": "Q500"})
+        assert mapped_clusters(named, None) == ({}, None, {})
 
 
 class TestTheRunItem:
@@ -1042,7 +1040,7 @@ class TestOneMapAnInstance:
             .write_batch(_eugens(), identity=mapped(_eugens()))
             .created_items["father"]
         )
-        approved = apply_equivalences(_tree(), {"e1": father})
+        approved = confirmed(_tree(), {"e1": father})
         written = BatchWriter(wiki).write_batch(approved)
         # the tree's birth year agrees with the history's: one more source
         assert written.referenced == 1
