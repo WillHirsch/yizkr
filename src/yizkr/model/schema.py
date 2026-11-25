@@ -132,13 +132,23 @@ class ManifestItem(BaseModel):
     # what tells them apart, so the loader cannot check it there.
     entity_class: bool = False
     # False for an entity kind that only a curator makes and no extraction
-    # types an entity as (`birth`, `death`, ADR-0040 §3, §7): validation
-    # refuses an entity of it in a batch, and no prompt offers it.
+    # types an entity as (`birth`, `death`, ADR-0040 §3, §7): the kinds
+    # extract.entity_kind_prompt_lines gives the extraction prompts leave
+    # it out, batch validation refuses an entity of it or a value naming
+    # it, and a chunk's entity manifest drops an entity of it. The item
+    # lists of the prompts read `offered`, not this mark. The loader
+    # refuses `offered` false on an entity kind this leaves true, and
+    # allows it on one marked false, which no prompt then lists.
     extracted: bool = True
-    # Whether the prompts rendered from the manifest offer the item. An
-    # item the pipeline sets from what a source says of itself, and no
-    # extractor sets claim by claim (`machine_assisted`, ADR-0008), is
-    # held back.
+    # Whether the item lists of the prompts offer the item: the item keys
+    # extract.vocabulary_prompt_lines gives the extraction prompts, and
+    # those critique.prompt_vocabulary gives the critique prompt. No other
+    # prompt list reads it. An item the pipeline sets from what a source
+    # says of itself, and no extractor sets claim by claim
+    # (`machine_assisted`, ADR-0008), is held back. The extraction prompts
+    # list an entity kind extraction makes (`extracted`), and the
+    # transcription prompt an artifact class, whatever this says, so the
+    # loader refuses it false on either.
     offered: bool = True
 
 
@@ -206,6 +216,22 @@ class Manifest(BaseModel):
                 raise ValueError(
                     f"items.{key} is marked extracted false, which only an "
                     f"entity kind is"
+                )
+        for key, item in self.items.items():
+            if item.offered:
+                continue
+            if item.subclass_of == "artifact":
+                raise ValueError(
+                    f"items.{key} is marked offered false, but it is an "
+                    f"artifact class, which the transcription prompt lists "
+                    f"whatever the mark says"
+                )
+            if item.entity_kind and item.extracted:
+                raise ValueError(
+                    f"items.{key} is marked offered false, but it is an "
+                    f"entity kind extraction makes, which the extraction "
+                    f"prompts list whatever the mark says: only a kind marked "
+                    f"extracted false is held back"
                 )
         for key, spec in self.properties.items():
             if spec.document_subject and spec.placed_subject:

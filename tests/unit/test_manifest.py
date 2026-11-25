@@ -58,6 +58,11 @@ def minimal_raw() -> dict:
     }
 
 
+def guild_kind(**marks) -> dict:
+    """An entity kind to add to `minimal_raw()`, with `marks` set on it."""
+    return {"label": "guild", "description": "d", "entity_kind": True} | marks
+
+
 class TestRealManifest:
     def test_loads_and_validates(self, manifest):
         assert manifest.version == 1
@@ -282,6 +287,48 @@ class TestValidators:
         raw["items"]["artifact"]["entity_kind"] = True
         with pytest.raises(ValidationError, match="not also marked"):
             Manifest.model_validate(raw)
+
+    def test_offered_false_is_refused_where_a_prompt_ignores_it(self):
+        """The transcription prompt lists every artifact class, and the
+        extraction prompts every entity kind extraction makes, whatever
+        `offered` says, so the loader refuses the mark on either and names
+        the item."""
+        artifact_class = minimal_raw()
+        artifact_class["items"]["photograph"]["offered"] = False
+        extracted_kind = minimal_raw()
+        extracted_kind["items"]["guild"] = guild_kind(offered=False)
+        for key, raw in (
+            ("photograph", artifact_class),
+            ("guild", extracted_kind),
+        ):
+            with pytest.raises(ValidationError) as refusal:
+                Manifest.model_validate(raw)
+            assert f"items.{key} " in str(refusal.value), key
+
+    def test_offered_false_holds_back_any_other_item(self):
+        """A vocabulary value, an entity kind no extraction makes,
+        `artifact` itself and a subclass of an artifact class are each
+        listed only by the prompts' item lists, so each may be held back
+        from them."""
+        raw = minimal_raw()
+        raw["items"]["blue_hat_stamp"] = {
+            "label": "Blue Hat stamp",
+            "description": "d",
+            "offered": False,
+        }
+        raw["items"]["guild"] = guild_kind(extracted=False, offered=False)
+        raw["items"]["artifact"]["offered"] = False
+        raw["items"]["studio_portrait"] = {
+            "label": "studio portrait",
+            "description": "d",
+            "subclass_of": "photograph",
+            "entity_class": True,
+            "offered": False,
+        }
+        manifest = Manifest.model_validate(raw)
+        assert {
+            key for key, item in manifest.items.items() if not item.offered
+        } == {"blue_hat_stamp", "guild", "artifact", "studio_portrait"}
 
     def test_the_kind_keys(self, manifest):
         """The classes of entities that are no entity kind: the artifact
