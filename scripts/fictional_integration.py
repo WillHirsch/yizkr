@@ -6,7 +6,9 @@ repository files enter the image; runtime containers have an internal network,
 no published ports and project-specific volumes. Each group of required cases
 runs on its own fresh stack, and every run tears down its own stacks, including
 on failure. `down` recovers resources after a hard kill; `list` prints the
-declared groups and cases.
+declared groups and cases. With `--measure`, `run` and `down` take the opt-in
+measurement cases instead of the required ones, and `run` writes the report
+each records.
 """
 
 from __future__ import annotations
@@ -212,9 +214,11 @@ GROUPS = case_groups(REQUIRED_CASES)
 
 # Opt-in measurements, never required and never run by CI: `run --measure`
 # runs these cases instead of the required ones, each group on a fresh
-# stack of its own, and `down` recovers their groups too. A measurement
-# case records its report as a JUnit property, which the run writes to
-# <state>/<property>.json (docs/TESTING.md, "Assignment path cost").
+# stack of its own, and `down --measure` recovers them with their evidence.
+# Either mode's `run` and `down` also tear down the other mode's stacks. A
+# measurement case records its report as a JUnit property, which the run
+# writes to <state>/<property>.json (docs/TESTING.md, "Assignment path
+# cost").
 MEASUREMENT_CASES = (
     Case(
         "assignment-cost",
@@ -883,7 +887,12 @@ def execute(
     *,
     stacks: int = DEFAULT_STACKS,
     cases=REQUIRED_CASES,
+    recover=(),
+    invocation: str = "make test-integration",
 ) -> None:
+    """Run or recover the groups of `cases`. The groups of `recover` that
+    `cases` lacks are torn down too, before a run and by `down`, but are
+    neither run nor reported. `invocation` names the run in its evidence."""
     check_declaration(cases)
     if stacks < 1:
         raise LaneError("the lane needs at least one stack at a time")
@@ -920,17 +929,29 @@ def execute(
             )
             for name, members in case_groups(cases).items()
         ]
-        # The unsuffixed project is cleanup-only recovery for older
-        # launchers; its folder is the state directory itself.
+        # Cleanup-only recovery: the groups of `recover` that `cases` lacks,
+        # and the unsuffixed project of older launchers. Their folder is the
+        # state directory itself, and the evidence does not list them.
         groups = [
             *active,
+            *(
+                Group(
+                    name,
+                    (),
+                    f"{project}-{name}",
+                    state,
+                    compose(f"{project}-{name}"),
+                )
+                for name in case_groups(recover)
+                if name not in case_groups(cases)
+            ),
             Group("legacy", (), project, state, compose(project)),
         ]
         for group in groups:
             group.state.mkdir(parents=True, exist_ok=True)
         evidence = {
             "project": project,
-            "command": "make test-integration",
+            "command": invocation,
             "status": "failed",
             "teardown": "pending",
             "stacks": stacks,
@@ -1176,13 +1197,19 @@ def main() -> int:
     parser.add_argument(
         "--measure",
         action="store_true",
-        help="run the opt-in measurement cases instead of the required "
-        "ones, each group on a fresh stack; CI never passes it",
+        help="run or recover the opt-in measurement cases instead of the "
+        "required ones, each group on a fresh stack; CI never passes it",
     )
     args = parser.parse_args()
-    cases = MEASUREMENT_CASES if args.measure else REQUIRED_CASES
-    if args.command == "down":
-        cases = REQUIRED_CASES + MEASUREMENT_CASES
+    # Each mode runs and reports its own cases and also tears down the
+    # other's stacks, which a killed run on the same state can leave.
+    cases, recover = REQUIRED_CASES, MEASUREMENT_CASES
+    invocation = "make test-integration"
+    title = "Required fictional integration"
+    if args.measure:
+        cases, recover = recover, cases
+        invocation = 'make test-integration ARGS="--measure"'
+        title = "Fictional measurement"
     if args.command == "list":
         try:
             check_declaration(REQUIRED_CASES)
@@ -1194,7 +1221,12 @@ def main() -> int:
     signal.signal(signal.SIGTERM, stopped)
     try:
         execute(
-            args.command, args.state.resolve(), stacks=args.stacks, cases=cases
+            args.command,
+            args.state.resolve(),
+            stacks=args.stacks,
+            cases=cases,
+            recover=recover,
+            invocation=invocation,
         )
         if args.measure and args.command == "run":
             for path in measurement_reports(args.state.resolve()):
@@ -1205,7 +1237,7 @@ def main() -> int:
         subprocess.SubprocessError,
         KeyboardInterrupt,
     ) as exc:
-        print(f"Required fictional integration failed: {exc}", flush=True)
+        print(f"{title} failed: {exc}", flush=True)
         return 1
     return 0
 
