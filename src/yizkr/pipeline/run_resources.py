@@ -13,7 +13,7 @@ from collections.abc import Callable, Collection, Mapping
 from pathlib import Path
 from typing import Any
 
-from yizkr.pipeline.cancellation import Cancellation, check_cancelled
+from yizkr.core.cancellation import Cancellation, check_cancelled
 from yizkr.pipeline.rundir import RunDir
 
 MODEL_VARIABLE = "YIZKR_LLM_MODEL"

@@ -103,6 +103,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from yizkr.core.config import Config, resolve_env_file
+from yizkr.core.file_writes import atomic_write_text
 from yizkr.core.instance import (
     KEPT_STATE_PAGE,
     carries_kept_marker,
@@ -112,7 +113,6 @@ from yizkr.core.instance import (
     private_dir,
     write_state_dir,
 )
-from yizkr.pipeline.stages import atomic_write_text
 
 # the stack's volumes the reset removes: each one's key in the compose
 # files, and what it holds

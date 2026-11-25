@@ -15,7 +15,7 @@ from tests.unit.test_llmcache import (
 )
 from tests.unit.test_registrar import PORTRAIT, FakeWiki
 from tests.unit.test_registrar import TestStepRegister as RegisterScenario
-from yizkr.pipeline.cancellation import (
+from yizkr.core.cancellation import (
     Cancellation,
     RunCancelled,
     cancellation_scope,

@@ -51,8 +51,9 @@ from yizkr.claims import (
     validate_against_manifest,
     vital_problems,
 )
+from yizkr.core.cancellation import check_cancelled
+from yizkr.core.file_writes import atomic_write_text
 from yizkr.model.schema import load_acceptance, load_manifest
-from yizkr.pipeline.cancellation import check_cancelled
 from yizkr.pipeline.interpretation_context import InterpretationContext
 from yizkr.pipeline.llm import (
     CUT_OFF_AT_LIMIT,
@@ -73,7 +74,6 @@ from yizkr.pipeline.source_context import (
     primary_evidence_reject,
     support_failure,
 )
-from yizkr.pipeline.stages import atomic_write_text
 from yizkr.pipeline.transcribe import Transcription
 
 EXTRACTION_PROMPT = load_prompt("extraction.md")

@@ -24,7 +24,9 @@ from typing import Literal, Protocol
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from yizkr.claims import ArtifactRef, ClaimBatch
+from yizkr.core.cancellation import check_cancelled
 from yizkr.core.corpus import is_excluded, read_exclusions
+from yizkr.core.file_writes import atomic_write_text
 from yizkr.core.instance import require_retained_code
 from yizkr.core.mutation_guard import protected_mutation
 from yizkr.core.wiki import WikiClient
@@ -33,7 +35,6 @@ from yizkr.pipeline.assignment_writes import (
     ApplicationResult,
     apply_reviewed_claims,
 )
-from yizkr.pipeline.cancellation import check_cancelled
 from yizkr.pipeline.claim_review import (
     ClaimSelection,
     PreparedClaimReview,
@@ -69,7 +70,7 @@ from yizkr.pipeline.rundir import RunDir, RunSettingsConflict
 from yizkr.pipeline.scratch import ScratchDriver
 from yizkr.pipeline.source_bindings import unique_source_qids
 from yizkr.pipeline.stage_planning import PHASES
-from yizkr.pipeline.stages import atomic_write_text, content_hash
+from yizkr.pipeline.stages import content_hash
 from yizkr.pipeline.text_stages import validate_paths
 from yizkr.pipeline.transcribe import Transcription
 from yizkr.pipeline.writer import artifact_kinds

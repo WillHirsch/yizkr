@@ -138,10 +138,10 @@ from yizkr.claims import (
     SourceSupport,
     source_support_locators,
 )
+from yizkr.core.cancellation import check_cancelled
 from yizkr.core.corpus import ExclusionList, file_sha1, is_excluded
 from yizkr.core.wiki import WikiClient
 from yizkr.core.write_recovery import CreationRegistry, write_existing
-from yizkr.pipeline.cancellation import check_cancelled
 from yizkr.pipeline.presentation import IMAGE_SUFFIXES
 
 # a title is compared with the instance's labels, and set, in the form

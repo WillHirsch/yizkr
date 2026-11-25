@@ -15,7 +15,7 @@ from collections.abc import Callable, Iterable
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from typing import TypeVar
 
-from yizkr.pipeline.cancellation import (
+from yizkr.core.cancellation import (
     Cancellation,
     cancellation_scope,
     current_cancellation,

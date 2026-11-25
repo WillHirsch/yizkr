@@ -175,7 +175,7 @@ def test_legacy_unplaced_owner_reuses_reading_without_inventing_a_placement(
     for _ in range(2):
         again = run(tmp_path, corpus, RefusingReader({}))
         current = document(again, source.name)
-        sources = again._container_sources(current)
+        sources = again.containers.container_sources(current)
         assert LETTER_SHA1 in sources.sources
         assert sources.sources[LETTER_SHA1].readable
         assert sources.sources[LETTER_SHA1].placements == []
@@ -692,7 +692,7 @@ def test_surviving_reading_context_recovers_owner_after_inventory_loss(
     monkeypatch.setattr(textlayer, "image_bytes", changed_encoding)
     again = run(tmp_path, corpus, Reader({LETTER_SHA1: EXCERPT}))
     restored = document(again, name)
-    sources = again._container_sources(restored)
+    sources = again.containers.container_sources(restored)
     assert sources is not None
     if missing_owner:
         assert sources.sources == {}

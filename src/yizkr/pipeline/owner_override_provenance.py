@@ -13,6 +13,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
+from yizkr.core.cancellation import check_cancelled
 from yizkr.core.provenance import ProcessRecord, StageProvenance
 from yizkr.core.write_recovery import CreationRegistry
 from yizkr.pipeline.assignment_aliases import (
@@ -20,7 +21,6 @@ from yizkr.pipeline.assignment_aliases import (
     alias_contribution,
     append_aliases,
 )
-from yizkr.pipeline.cancellation import check_cancelled
 from yizkr.pipeline.identity_origins import verified_owner_override
 from yizkr.pipeline.identity_provenance import (
     IdentityProvenanceRefused,

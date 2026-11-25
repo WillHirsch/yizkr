@@ -9,12 +9,12 @@ from pathlib import Path
 import pytest
 
 from tests.fixtures import pdfs
-from yizkr.pipeline import slide_renderer as renderer
-from yizkr.pipeline.cancellation import (
+from yizkr.core.cancellation import (
     Cancellation,
     RunCancelled,
     cancellation_scope,
 )
+from yizkr.pipeline import slide_renderer as renderer
 
 
 def _pdf() -> bytes:

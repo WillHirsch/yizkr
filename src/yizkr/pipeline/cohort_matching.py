@@ -16,6 +16,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from yizkr.claims import container_problems, structure_problems
+from yizkr.core.file_writes import atomic_write_text
 from yizkr.core.identity_assignments import (
     AssignmentRevision,
     RegistryBinding,
@@ -33,7 +34,7 @@ from yizkr.pipeline.reconcile import (
 )
 from yizkr.pipeline.review_mentions import observe_mentions
 from yizkr.pipeline.review_stages import PreparedReview, ReviewSource
-from yizkr.pipeline.stages import atomic_write_text, sha256_text
+from yizkr.pipeline.stages import sha256_text
 from yizkr.pipeline.transcribe import reading_digest
 
 _HASH = r"^[0-9a-f]{64}$"

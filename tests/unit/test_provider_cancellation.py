@@ -16,12 +16,12 @@ from pathlib import Path
 
 import pytest
 
-from yizkr.pipeline import llm
-from yizkr.pipeline.cancellation import (
+from yizkr.core.cancellation import (
     Cancellation,
     RunCancelled,
     cancellation_scope,
 )
+from yizkr.pipeline import llm
 
 # The unit suite refuses unmocked provider processes. Only these tests restore
 # the process runner, using Python scripts created in their temporary folder.

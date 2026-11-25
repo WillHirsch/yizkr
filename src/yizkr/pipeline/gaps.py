@@ -60,8 +60,8 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from yizkr.core.file_writes import atomic_write_text
 from yizkr.pipeline.document_state import DUPLICATE, EXCERPTS_DIR
-from yizkr.pipeline.stages import atomic_write_text
 
 ROLLUP_FILE = "gaps-rollup.csv"
 # the chunked extractor's state directory in a document's directory

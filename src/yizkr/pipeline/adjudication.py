@@ -143,6 +143,7 @@ from yizkr.claims import (
     VocabRef,
 )
 from yizkr.core import dates
+from yizkr.core.file_writes import atomic_write_text
 from yizkr.pipeline import clustering
 from yizkr.pipeline.clustering import (
     AMBIGUOUS,
@@ -175,7 +176,6 @@ from yizkr.pipeline.prompts import load_prompt
 from yizkr.pipeline.review import UNKNOWN_SHOWN
 from yizkr.pipeline.rundir import DEVELOPMENT_STAGE
 from yizkr.pipeline.stages import (
-    atomic_write_text,
     canonical_json,
     sha256_text,
 )

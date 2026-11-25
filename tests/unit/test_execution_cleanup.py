@@ -2,8 +2,8 @@
 
 import pytest
 
+from yizkr.core.cancellation import RunCancelled
 from yizkr.core.corpus import ExclusionList
-from yizkr.pipeline.cancellation import RunCancelled
 from yizkr.pipeline.estimate import Estimator
 from yizkr.pipeline.scratch import ScratchDriver
 

@@ -1561,7 +1561,7 @@ class TestTheEstimate:
 def test_cancelled_import_keeps_completed_adoption_and_resumes(
     tmp_path, engine, monkeypatch
 ):
-    from yizkr.pipeline.cancellation import (
+    from yizkr.core.cancellation import (
         Cancellation,
         RunCancelled,
         cancellation_scope,

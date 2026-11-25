@@ -22,9 +22,9 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from yizkr.core.cancellation import check_cancelled
 from yizkr.core.smoke_marker import is_smoke_marker
 from yizkr.core.wiki import RecoveryEvidenceError
-from yizkr.pipeline.cancellation import check_cancelled
 
 if TYPE_CHECKING:
     from yizkr.core.claim_applications import ApplicationPlan

@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from yizkr.claims import ArtifactRef, LocalRef, VocabRef
+from yizkr.core.cancellation import check_cancelled
 from yizkr.core.claim_applications import (
     ApplicationPlan,
     ApplicationRefused,
@@ -33,7 +34,6 @@ from yizkr.pipeline.assigned_support import (
     inspect_support,
     prepare_support,
 )
-from yizkr.pipeline.cancellation import check_cancelled
 from yizkr.pipeline.claim_review import (
     PreparedClaimReview,
     pin_claim_review,

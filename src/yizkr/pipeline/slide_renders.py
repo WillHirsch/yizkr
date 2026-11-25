@@ -18,8 +18,8 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 from yizkr.claims import ArtifactRef
+from yizkr.core.cancellation import check_cancelled
 from yizkr.pipeline import slide_renderer
-from yizkr.pipeline.cancellation import check_cancelled
 from yizkr.pipeline.container_inventory import (
     CONTAINER_INVENTORY,
     Eligibility,

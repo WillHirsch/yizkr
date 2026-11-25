@@ -46,6 +46,14 @@ DATING = {
     "latest_start_date": 1938,
     "earliest_end_date": 1956,
 }
+# the period's end that each of a period's own bounds dates: each case
+# gives a bound that end, since a claim with neither a start_time nor an
+# end_time qualifier takes no period bound (docs/LIFE_EVENTS.md, "Dates
+# and bounds")
+BOUNDED_END = {
+    "latest_start_date": "start_time",
+    "earliest_end_date": "end_time",
+}
 CIRCA = {
     "property": "sourcing_circumstances",
     "value": {"type": "item", "value": {"kind": "vocab", "key": "circa"}},
@@ -128,11 +136,14 @@ class TestTheSchemaTakesAContainmentsTime:
     @pytest.mark.parametrize("prop", ["part_of", "location"])
     @pytest.mark.parametrize("qualifier", sorted(DATING))
     def test_each_dating_qualifier(self, prop, qualifier):
+        dated = [qualifier]
+        if qualifier in BOUNDED_END:
+            dated.append(BOUNDED_END[qualifier])
         claim = _contained(
             KOSHNOVKA,
             DISTRICT,
             "in 1941 Koshnovka belonged to Kaldovsky District",
-            [{"property": qualifier, "value": _time(DATING[qualifier])}],
+            [{"property": key, "value": _time(DATING[key])} for key in dated],
             prop=prop,
         )
         assert validate_against_manifest(_batch(claim)) == []

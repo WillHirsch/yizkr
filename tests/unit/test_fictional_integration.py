@@ -1308,3 +1308,122 @@ def test_distinct_state_directories_control_disjoint_projects(
     assert all(
         project.startswith("yizkr-fictional-") for project in first | second
     )
+
+
+def test_measurement_cases_run_apart_from_the_required_lane():
+    measured = lane.case_groups(lane.MEASUREMENT_CASES)
+    lane.check_declaration(lane.MEASUREMENT_CASES)
+    lane.check_declaration(lane.REQUIRED_CASES + lane.MEASUREMENT_CASES)
+    assert measured.keys().isdisjoint(lane.GROUPS)
+    required = {case.result for case in lane.REQUIRED_CASES}
+    assert required.isdisjoint(c.result for c in lane.MEASUREMENT_CASES)
+
+
+def launch(monkeypatch, *argv: str) -> int:
+    """The launcher's exit status for `argv`, its SIGTERM handler kept."""
+    monkeypatch.setattr(sys, "argv", [str(SCRIPT), *argv])
+    previous_handler = signal.getsignal(signal.SIGTERM)
+    try:
+        return lane.main()
+    finally:
+        signal.signal(signal.SIGTERM, previous_handler)
+
+
+def record_reports(docker, monkeypatch) -> None:
+    """Give each group's copied results a suite property, where pytest's
+    `record_testsuite_property` puts a measurement case's report."""
+    copy = docker.run
+
+    def run(args, **kwargs):
+        done = copy(args, **kwargs)
+        if "cp" in args and not done.returncode:
+            tree = ET.parse(args[-1])
+            listed = ET.Element("properties")
+            ET.SubElement(
+                listed, "property", name="fictional_cost", value='{"n": 1}'
+            )
+            tree.getroot().find("testsuite").insert(0, listed)
+            tree.write(args[-1])
+        return done
+
+    monkeypatch.setattr(lane, "run", run)
+
+
+def test_measure_runs_only_its_cases_and_writes_their_reports(
+    docker, monkeypatch
+):
+    record_reports(docker, monkeypatch)
+    assert (
+        launch(monkeypatch, "run", "--measure", "--state", str(docker.state))
+        == 0
+    )
+
+    measured = list(lane.case_groups(lane.MEASUREMENT_CASES))
+    assert [docker.group(project) for project in docker.up] == measured
+    observed = lane.verify_results(
+        docker.state / "results.xml", lane.MEASUREMENT_CASES
+    )
+    assert ran(observed) == [case.result for case in lane.MEASUREMENT_CASES]
+    report = json.loads((docker.state / "fictional_cost.json").read_text())
+    assert report == {"n": 1}
+    docker.assert_clean()
+
+
+def test_a_measurement_without_its_report_fails_after_cleaning_up(
+    docker, monkeypatch
+):
+    assert (
+        launch(monkeypatch, "run", "--measure", "--state", str(docker.state))
+        == 1
+    )
+
+    # The cases passed; the run fails for the report they did not record.
+    assert docker.evidence()["status"] == "passed"
+    docker.assert_clean()
+
+
+def test_down_recovers_the_measurement_groups_too(docker, monkeypatch):
+    assert launch(monkeypatch, "down", "--state", str(docker.state)) == 0
+
+    measured = lane.case_groups(lane.MEASUREMENT_CASES)
+    assert {docker.group(p) for p in docker.down} == {
+        *NAMES,
+        *measured,
+        "legacy",
+    }
+    assert docker.active == set()
+
+
+@pytest.mark.parametrize("measure", [False, True])
+def test_each_mode_reports_its_own_groups_and_removes_the_others_stacks(
+    docker, monkeypatch, measure
+):
+    own, other = lane.REQUIRED_CASES, lane.MEASUREMENT_CASES
+    flags = ("--state", str(docker.state))
+    if measure:
+        own, other = other, own
+        flags = ("--measure", *flags)
+        record_reports(docker, monkeypatch)
+    assert launch(monkeypatch, "down", *flags) == 0
+    # A hard-killed run of the other mode left its stacks on this state.
+    names = lane.case_groups(other)
+    left = {p for p in docker.down if docker.group(p) in names}
+    assert left
+    docker.active |= left
+    docker.down.clear()
+
+    assert launch(monkeypatch, "run", *flags) == 0
+    docker.assert_clean()
+    assert left <= set(docker.down)
+    groups = list(lane.case_groups(own))
+    assert [docker.group(project) for project in docker.up] == groups
+    assert list(docker.evidence()["groups"]) == groups
+    assert ("--measure" in docker.evidence()["command"]) is measure
+
+    assert launch(monkeypatch, "down", *flags) == 0
+    evidence = docker.evidence()
+    assert list(evidence["groups"]) == groups
+    assert evidence["status"] == "passed"
+    assert all(g["status"] == "passed" for g in evidence["groups"].values())
+    folders = {path.name for path in docker.state.iterdir() if path.is_dir()}
+    assert folders == set(groups)

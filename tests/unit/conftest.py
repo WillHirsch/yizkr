@@ -13,8 +13,8 @@ changing what they check:
   imported (by a plugin, say), the default comes too late, and a
   warning says so.
 - **No fsync.** `os.fsync`, `os.fdatasync` and `os.sync` are no-ops in
-  every unit test (the `_no_fsync` fixture). The pipeline's atomic
-  writes (yizkr.pipeline.stages) fsync every file they stage, at
+  every unit test (the `_no_fsync` fixture). The atomic writes of core
+  and the pipeline (yizkr.core.file_writes) fsync every file they stage, at
   several milliseconds a call, and the unit tests stage thousands of
   files. Files are still written, read and replaced as before; only
   the flush to the disk is skipped, and that matters only if the
@@ -23,7 +23,7 @@ changing what they check:
   `os.fstat`, so a call on one that is not open fails, as the real call
   does. A test that needs the real calls is marked `real_fsync` (the
   marker is registered in pyproject.toml), as the durability tests in
-  test_stages.py and test_llmcache.py are. The live tests under
+  test_file_writes.py and test_llmcache.py are. The live tests under
   tests/integration always make the real calls.
 - **No pause timer, and the default anomaly thresholds.** A fail-fast
   anomaly check that pauses a slice starts a timer to time the pause

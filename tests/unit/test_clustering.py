@@ -5671,6 +5671,8 @@ class TestTheStage:
             "yizkr.pipeline.stages",
         }
         metadata_only = {"yizkr.pipeline.run_provenance"}
+        # writes the map out whole; it decides nothing in it
+        file_writes = {"yizkr.core.file_writes"}
         in_code = {
             f"yizkr.pipeline.{name.removesuffix('.py')}"
             for name in clustering.CODE
@@ -5691,7 +5693,9 @@ class TestTheStage:
                     imported.update(alias.name for alias in node.names)
             ours = {m for m in imported if m.split(".")[0] == "yizkr"}
             assert ours, name
-            assert ours <= in_code | through_the_batches | metadata_only, (
+            assert ours <= (
+                in_code | through_the_batches | metadata_only | file_writes
+            ), (
                 name,
                 ours,
             )

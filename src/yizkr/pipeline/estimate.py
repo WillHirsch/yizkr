@@ -961,9 +961,9 @@ class Estimator(ScratchDriver):
         try:
             selected, _report = resolve_slide_vision(
                 doc.source,
-                self._presentation(doc),
+                self.containers.presentation(doc),
                 request,
-                excluded=self._excluded_image,
+                excluded=self.containers.excluded,
             )
         except (OSError, ValueError) as exc:
             raise ScratchRefused(
@@ -992,9 +992,9 @@ class Estimator(ScratchDriver):
 
         selected, _report = resolve_slide_vision(
             doc.source,
-            self._presentation(doc),
+            self.containers.presentation(doc),
             request,
-            excluded=self._excluded_image,
+            excluded=self.containers.excluded,
         )
         if selected is None:
             return super()._transcribe(doc, method)

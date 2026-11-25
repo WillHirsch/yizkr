@@ -47,14 +47,15 @@ from yizkr.claims import (
     set_aside_structure,
     structure_problems,
 )
-from yizkr.core.verbatim import Transcript, words
-from yizkr.model.schema import load_acceptance
-from yizkr.pipeline import preparation
-from yizkr.pipeline.cancellation import (
+from yizkr.core.cancellation import (
     Cancellation,
     cancellation_scope,
     check_cancelled,
 )
+from yizkr.core.file_writes import atomic_write_text
+from yizkr.core.verbatim import Transcript, words
+from yizkr.model.schema import load_acceptance
+from yizkr.pipeline import preparation
 from yizkr.pipeline.claim_naming import claim_id
 from yizkr.pipeline.extract import (
     ExtractionFailed,
@@ -86,7 +87,6 @@ from yizkr.pipeline.llm import (
 )
 from yizkr.pipeline.prompts import load_prompt
 from yizkr.pipeline.source_context import bind_source_support, support_failure
-from yizkr.pipeline.stages import atomic_write_text
 from yizkr.pipeline.transcribe import Transcription
 from yizkr.pipeline.workers import map_workers
 

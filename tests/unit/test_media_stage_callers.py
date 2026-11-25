@@ -12,6 +12,7 @@ from tests.unit.test_run_provenance import fixed_capture  # noqa: F401
 from yizkr.core.corpus import ExclusionList
 from yizkr.pipeline import media_stages, scratch
 from yizkr.pipeline.llm import PassPaused
+from yizkr.pipeline.presentation import DERIVED_MEDIA_DIR
 from yizkr.pipeline.scratch import ScratchDriver
 
 pytestmark = pytest.mark.usefixtures("fixed_capture")
@@ -57,12 +58,19 @@ def test_media_products_close_when_publication_fails(
 
     monkeypatch.setattr(media_stages, "read_media", read)
 
+    class PublicationFailure(OSError):
+        """The fault the transcription case injects."""
+
     def fail(*_args, **_kwargs):
-        raise OSError("fictional publication failure")
+        raise PublicationFailure("fictional publication failure")
 
     if publication == "images":
-        monkeypatch.setattr(driver, "_keep_reading", fail)
+        # a file where the folder of the image readings goes, so that the
+        # page's image reading cannot be published
+        (doc.dir / DERIVED_MEDIA_DIR).write_text("")
+        expected = FileExistsError
     else:
+        expected = PublicationFailure
         write = scratch._write_view
 
         def write_view(path, value):
@@ -71,7 +79,7 @@ def test_media_products_close_when_publication_fails(
             return write(path, value)
 
         monkeypatch.setattr(scratch, "_write_view", write_view)
-    with pytest.raises(OSError, match="fictional publication failure"):
+    with pytest.raises(expected):
         driver._step_transcribe(doc)
     (result,) = results
     assert not Path(result.products.folder.name).exists()

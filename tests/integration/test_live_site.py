@@ -24,7 +24,13 @@ that is both markers ("the widow of your late brother Rudolf"): their marriage
 statement (ADR-0040 §2.5, Q5). His page and the timeline show the union's end
 with the letter, and his "died by 25 December 1958", labelled as derived; hers
 never shows her to have died (#354, #687). test_live_deaths.py shows a date of
-death of unknown value.
+death of unknown value. The places page shows each place under every container
+a source gives it, labelled by that source: the 1905 marriage certificate,
+which states its own date, puts Fläckfeld in Kreis Mockburg, and the tree puts
+it in Kreis Peiltal. A misreading of the tree's words that puts Kreis Peiltal
+in Fläckfeld, and a misreading of the certificate's date, each carry a
+curator's deprecated rank. A worked row gives the letter's placing of Kaldovsky
+District in Chadsk Oblast a start time of its own, 1937 (docs/EXAMPLES.md).
 
 Every label, title and image carries a marker, eight hex digits of a hash
 over the fixture, over the writer's and the site generator's source and
@@ -47,10 +53,12 @@ import shutil
 import struct
 import urllib.parse
 import zlib
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+from wikibaseintegrator.wbi_enums import WikibaseRank
 
 from tests.fixtures import example_universe as u
 from tests.fixtures.identity import write_mapped
@@ -82,15 +90,20 @@ PHOTO = "gravestone-photo-1956"
 TREE = "family-tree-1984"
 CARD = "registration-card-1945"
 LETTER = "letter-to-leopold-1958"
+CERTIFICATE = "marriage-cert-1905"
 # what the fixture is; a change to it gives the fixture new items
 FIXTURE = (
     "Gustav Löbig's birth as the 1938 extract and the 1952 naturalisation "
     "give it, the family gravestone's photograph, Rahel's death after "
     "1945 and Cäcilie's birth circa 1833 as the 1984 family tree gives "
     "them, Leopold's imprisonment from its start to its end as the "
-    "1945 registration card dates it, and Rudolf and Nina's marriage "
+    "1945 registration card dates it, Rudolf and Nina's marriage "
     "ended by his death, with Nina widowed, as the dated 1958 letter "
-    "states it"
+    "states it, Fläckfeld in Kreis Mockburg as the dated 1905 marriage "
+    "certificate gives it and in Kreis Peiltal as the tree gives it, "
+    "beside a deprecated misreading of the tree and one of the "
+    "certificate's date, and Kaldovsky District in Chadsk Oblast from "
+    "1937 as a worked row gives the letter's"
 )
 MARK = f"(site test {fixture_mark(FIXTURE, writer, staticsite)})"
 
@@ -106,6 +119,11 @@ PERSON = marked("gustav-loebig")
 ADDRESS = marked("brunnenring-35")
 STREET = marked("brunnenring")
 TOWN = marked("floerburg")
+FLAECKFELD = marked("flaeckfeld")
+MOCKBURG = marked("kreis-mockburg")
+PEILTAL = marked("kreis-peiltal")
+DISTRICT = marked("kaldovsky-district")
+OBLAST = marked("chadsk-oblast")
 
 
 def said(
@@ -129,6 +147,22 @@ HELD = {
     for prop in ("start_time", "end_time")
 }
 HELD_BY = said(CARD, "participant", "imprisonment-1939")  # Leopold
+# the certificate's own date, 15 December 1905, and the container it and
+# the tree each give Fläckfeld, Kreis Mockburg and Kreis Peiltal; neither
+# states a time
+CERTIFICATE_DATED = said(CERTIFICATE, "inception", CERTIFICATE)
+# a misreading of the certificate's "1905" as 1903, which the fixture
+# deprecates
+MISREAD_DAY = {"type": "time", "year": 1903, "month": 12, "day": 15}
+PLACED = {
+    source: said(source, "part_of", "flaeckfeld")
+    for source in (CERTIFICATE, TREE)
+}
+# the letter's "Kaldovsky district, Chadsk oblast"
+DISTRICT_PLACED = said(LETTER, "part_of", "kaldovsky-district")
+# the worked row's start time for it (docs/EXAMPLES.md), which no source
+# in the universe states
+DISTRICT_FROM = {"type": "time", "year": 1937}
 # the letter's own words for Rudolf's death, which give it no date: "the
 # widow of your late brother Rudolf"
 LATE = "вдова Вашего покойного брата Рудольфа"
@@ -265,12 +299,20 @@ def fixture_batch(sources: dict[str, ArtifactRef]) -> ClaimBatch:
     the address in the town, the tree's claims about Rahel's death and
     Cäcilie's birth, and the card's dating of Leopold's imprisonment by
     its own start and end time, and the letter's own date, its union end
-    by Rudolf's death and Nina's widowhood, each citing its source by the
-    SHA-1 of its media (#102)."""
+    by Rudolf's death and Nina's widowhood, the certificate's own date and
+    a misreading of it, its and the tree's containers for Fläckfeld, the
+    tree's misread containment of Kreis Peiltal, and the letter's
+    containment of Kaldovsky District, with the worked row's start time,
+    each citing its source by the SHA-1 of its media (#102)."""
     person = local("person", PERSON, "human")
     address = local("address", ADDRESS, "place")
     street = local("street", STREET, "place")
     town = local("town", TOWN, "place")
+    flaeckfeld = local("flaeckfeld", FLAECKFELD, "place")
+    mockburg = local("mockburg", MOCKBURG, "place")
+    peiltal = local("peiltal", PEILTAL, "place")
+    district = local("district", DISTRICT, "place")
+    oblast = local("oblast", OBLAST, "place")
     rahel = local("rahel", RAHEL, "human")
     caecilie = local("caecilie", CAECILIE, "human")
     leopold = local("leopold", LEOPOLD, "human")
@@ -304,6 +346,7 @@ def fixture_batch(sources: dict[str, ArtifactRef]) -> ClaimBatch:
 
     extract_birth = BIRTHS[EXTRACT]
     naturalised_birth = BIRTHS[NATURALISATION]
+    in_peiltal = PLACED[TREE].excerpt  # "Fläckfeld (Kr. Peiltal)"
     claims = [
         claim(
             person,
@@ -372,8 +415,60 @@ def fixture_batch(sources: dict[str, ArtifactRef]) -> ClaimBatch:
             LATE,
             [{"property": "point_in_time", "value": letter_day}],
         ),
+        claim(
+            sources[CERTIFICATE].model_dump(mode="json"),
+            "inception",
+            time_value(CERTIFICATE_DATED.value),
+            CERTIFICATE,
+            CERTIFICATE_DATED.excerpt,
+        ),
+        # the misread date, which the fixture deprecates
+        claim(
+            sources[CERTIFICATE].model_dump(mode="json"),
+            "inception",
+            MISREAD_DAY,
+            CERTIFICATE,
+            CERTIFICATE_DATED.excerpt,
+        ),
+        claim(
+            flaeckfeld,
+            "part_of",
+            item(mockburg),
+            CERTIFICATE,
+            PLACED[CERTIFICATE].excerpt,
+        ),
+        claim(flaeckfeld, "part_of", item(peiltal), TREE, in_peiltal),
+        # the misreading, which the fixture deprecates
+        claim(peiltal, "part_of", item(flaeckfeld), TREE, in_peiltal),
+        claim(
+            district,
+            "part_of",
+            item(oblast),
+            LETTER,
+            DISTRICT_PLACED.excerpt,
+            [{"property": "start_time", "value": DISTRICT_FROM}],
+        ),
     ]
     return ClaimBatch.model_validate({"extraction_run": RUN, "claims": claims})
+
+
+def deprecate(
+    client, qid: str, prop: str, misread: Callable[[dict], bool]
+) -> None:
+    """A curator's deprecated rank on the one `prop` statement of `qid`
+    whose value (its datavalue's) `misread` picks: an overlay on a
+    misreading (docs/PLACES.md, "Containment as an assertion").
+    Idempotent."""
+    properties, _ = client.vocabulary()
+    entity = client.wbi.item.get(qid)
+    (statement,) = [
+        statement
+        for statement in entity.claims.get(properties[prop])
+        if misread((statement.mainsnak.datavalue or {}).get("value") or {})
+    ]
+    if statement.rank != WikibaseRank.DEPRECATED:
+        statement.rank = WikibaseRank.DEPRECATED
+        entity.write(summary="integration test: curator rank on a fixture")
 
 
 @dataclass(frozen=True)
@@ -402,6 +497,8 @@ def site(client, config, tmp_path_factory):
         assert held.excerpt in UNIVERSE[CARD].text
     assert LATE in UNIVERSE[LETTER].text
     assert LETTER_DATED in UNIVERSE[LETTER].text
+    for stated in (CERTIFICATE_DATED, *PLACED.values(), DISTRICT_PLACED):
+        assert stated.excerpt in UNIVERSE[stated.source].text
     media = tmp_path_factory.mktemp("media")
     registered, cited = {}, {}
     for key, kind in (
@@ -411,6 +508,7 @@ def site(client, config, tmp_path_factory):
         (TREE, UNIVERSE[TREE].artifact_class),
         (CARD, UNIVERSE[CARD].artifact_class),
         (LETTER, UNIVERSE[LETTER].artifact_class),
+        (CERTIFICATE, UNIVERSE[CERTIFICATE].artifact_class),
     ):
         path = media / f"site-test-{key}.png"
         path.write_bytes(png(f"yizkr live site test: {key} {MARK}"))
@@ -438,8 +536,27 @@ def site(client, config, tmp_path_factory):
             "rudolf",
             "nina",
             "marriage",
+            "flaeckfeld",
+            "mockburg",
+            "peiltal",
+            "district",
+            "oblast",
         )
     ]
+    flaeckfeld = written.created_items["flaeckfeld"]
+    deprecate(
+        client,
+        written.created_items["peiltal"],
+        "part_of",
+        lambda value: value.get("id") == flaeckfeld,
+    )
+    misread = "+{year:04d}-{month:02d}-{day:02d}T".format(**MISREAD_DAY)
+    deprecate(
+        client,
+        sources[CERTIFICATE],
+        "inception",
+        lambda value: value.get("time", "").startswith(misread),
+    )
     wait_for_query_service(config, client, [*seeded, *sources.values()])
 
     out = tmp_path_factory.mktemp("site")
@@ -808,14 +925,58 @@ def test_inconsistencies_suppress_recorded_containment(site, client, config):
     places = frozenset((address, town))
     assert places in compared
 
-    # and the places page shows the recorded containment
-    chain = "".join(
-        (
-            f"<li>{html.escape(TOWN)}<ul>",
-            f"<li>{html.escape(STREET)}<ul>",
-            f"<li>{html.escape(ADDRESS)}</li>",
-            "</ul></li></ul></li>",
-        )
+
+def containers(page: str) -> dict[tuple[str, str], str]:
+    """The places page's containment tree as a reader meets it, for the
+    places this module seeds only: by each (container, place) pair of
+    labels, the markup shown beside the place where it stands under that
+    container."""
+    tree = page[page.index("<h2>Containment</h2>") :]
+    found: dict[tuple[str, str], str] = {}
+    path: list[str] = []
+    for entry in re.finditer(r"<li>(.*?)(?=<ul>|</li>)|</li>", tree):
+        if entry.group(0) == "</li>":
+            path.pop()
+            continue
+        label, span, beside = entry.group(1).partition("<span")
+        label = staticsite.visible(label)
+        if path and MARK in label:
+            found[path[-1], label] = span + beside
+        path.append(label)
+    return found
+
+
+def test_the_places_page_labels_each_container_by_its_source(site):
+    # the certificate, which states its own date, and the tree, which
+    # states none, give Fläckfeld two containers: it stands under each,
+    # the certificate's read as of the certificate's date and the tree's
+    # labelled by the tree alone, and neither is picked; the misread
+    # date's statement is deprecated, so the certificate is read as of
+    # its one date
+    tree = containers(site.read("places.html"))
+    certificate = tree[MOCKBURG, FLAECKFELD]
+    assert source_link(site, CERTIFICATE, root="") in certificate
+    assert staticsite.visible(certificate) == (
+        f"{marked(CERTIFICATE)}, as of {shown(CERTIFICATE_DATED.value)}"
     )
-    recorded = chain in site.read("places.html")
-    assert recorded, "the places page does not show the seeded containment"
+    family_tree = tree[PEILTAL, FLAECKFELD]
+    assert source_link(site, TREE, root="") in family_tree
+    assert staticsite.visible(family_tree) == marked(TREE)
+    # the misreading's statement is deprecated, so it gives Kreis Peiltal
+    # no container, and Kreis Peiltal, which contains Fläckfeld, heads the
+    # tree
+    assert (FLAECKFELD, PEILTAL) not in tree
+    assert PEILTAL not in {place for _, place in tree}
+    # the letter's statement carries a start time of its own: that time
+    # shows, and the letter's date is not used
+    district = tree[OBLAST, DISTRICT]
+    assert source_link(site, LETTER, root="") in district
+    assert staticsite.visible(district) == (
+        f"{marked(LETTER)} (start time: {DISTRICT_FROM['year']})"
+    )
+    # the extract, which states no date of its own, places the address in
+    # the street and the street in the town
+    for container, place in ((TOWN, STREET), (STREET, ADDRESS)):
+        entry = tree[container, place]
+        assert source_link(site, EXTRACT, root="") in entry
+        assert staticsite.visible(entry) == marked(EXTRACT)

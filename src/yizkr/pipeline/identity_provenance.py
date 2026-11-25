@@ -19,11 +19,11 @@ from wikibaseintegrator.datatypes import Item, String
 from wikibaseintegrator.models import Reference
 from wikibaseintegrator.wbi_enums import ActionIfExists
 
+from yizkr.core.cancellation import check_cancelled
 from yizkr.core.identity_assignments import RegistryBinding, record_digest
 from yizkr.core.instance import require_retained_code
 from yizkr.core.provenance import ProcessRecord, RecordRef
 from yizkr.core.write_recovery import CreationRegistry, write_existing
-from yizkr.pipeline.cancellation import check_cancelled
 from yizkr.pipeline.identity_review import Decision
 from yizkr.pipeline.run_provenance import read_record
 from yizkr.pipeline.run_provenance import record_digest as process_digest

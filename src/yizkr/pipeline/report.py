@@ -149,6 +149,7 @@ from yizkr.claims import (
     PlaceStructure,
     load_vocabulary,
 )
+from yizkr.core.file_writes import staging_path
 from yizkr.model.schema import load_acceptance
 from yizkr.pipeline.anomalies import (
     ERROR_EVENT,
@@ -220,7 +221,7 @@ from yizkr.pipeline.stage_planning import (
     STAGES,
     VIEWS,
 )
-from yizkr.pipeline.stages import read_jsonl, staging_path
+from yizkr.pipeline.stages import read_jsonl
 from yizkr.pipeline.transcribe import Transcription
 from yizkr.pipeline.writer import REFUSAL_REASONS
 from yizkr.staticsite import RELEASE_CAUSES, UNSTATED_KIND
@@ -5617,7 +5618,7 @@ def _private_folder(folder: Path) -> int:
 
 def _write_in(folder: int, name: str, text: str) -> None:
     """Replace the file `name` in the folder open as `folder` with `text`,
-    whole: it is written under a fresh name beside it (stages.
+    whole: it is written under a fresh name beside it (file_writes.
     staging_path's), private to its owner (mode 600), and then moved into
     place, all through the folder's descriptor. A reader sees the old file
     or the new one, and a write cut short leaves the file as it was."""

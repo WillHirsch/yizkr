@@ -34,7 +34,7 @@ Before any source processing, the driver checks the explicit exclusion policy an
 
 A scratch invocation keeps its declared settings. It may reuse valid products, resume unfinished work, or continue past a completed document barrier under the documented code-change rules. Changed source bytes or missing state/derivation records cause the affected directory to be set aside before fresh processing. Malformed or unreadable state instead fails the document and remains untouched for recovery. Original files remain available for inspection. Reset and write-side operations refuse a retained target.
 
-Implementation: [scratch driver](scratch.py), [document state and discovery](document_state.py), [run resources](run_resources.py), [stage planning](stage_planning.py), [scratch writer](scratchwrite.py).
+Implementation: [scratch driver](scratch.py), [container preparation and inventory publication](container_lifecycle.py), [document state and discovery](document_state.py), [run resources](run_resources.py), [stage planning](stage_planning.py), [scratch writer](scratchwrite.py).
 
 ## Document preparation and products
 
