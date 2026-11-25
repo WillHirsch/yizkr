@@ -30,7 +30,7 @@ from argparse import Namespace
 
 import pytest
 
-from tests.fixtures.identity import corpus, mapped, write_mapped
+from tests.fixtures.identity import corpus, write_mapped
 from tests.fixtures.projected_media import project_media
 
 # the module, not its TestStepRegister, so pytest collects that class once
@@ -2894,24 +2894,6 @@ class TestTheSideRuleNamesTheLabel:
         assert label_of(wiki, written.created_items["md1"]) == TITLE
         assert written.flags == []
 
-    def test_resolve_matches_nothing_by_label(self, tmp_path):
-        """A registered artifact holds Sebastian's name and a person's item
-        Hildegard's: resolving the batch leaves every ref local, and it
-        reads nothing of the instance (#109)."""
-        from yizkr.pipeline.resolve import resolve_batch
-
-        wiki = WritingWiki()
-        Registrar(wiki).register_artifact(
-            scan(tmp_path, PORTRAIT), "photograph", "Sebastian Löbig"
-        )
-        wiki.item(
-            "Hildegard Löbig",
-            ("instance_of", WritingWiki.ITEMS["human"], None),
-        )
-        batch = family_gedcom(wiki, TWO_PEOPLE_GEDCOM)
-
-        assert resolve_batch(batch, mapped(batch)) == batch
-
     def test_a_sitter_named_by_another_persons_portrait_keeps_her_name(
         self, tmp_path
     ):
@@ -3461,7 +3443,7 @@ class TestTheWriteStepRaisesTheFlag:
         assert alert["medium"] == sha1(PORTRAIT)[:12]
 
 
-# -- what resolve and a write read of the instance ----------------------------
+# -- what a write reads of the instance ---------------------------------------
 
 
 class CountingWiki(WritingWiki):

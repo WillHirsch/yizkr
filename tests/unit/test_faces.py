@@ -21,7 +21,9 @@ from yizkr.claims import (
     MonolingualValue,
     QidRef,
     Qualifier,
+    RegionPercent,
     SourceReference,
+    StringValue,
     TimeValue,
     validate_against_manifest,
 )
@@ -607,13 +609,34 @@ class TestWriteRefusesUnapprovedDepicts:
         assert result.written == 3
         assert set(depicted(wiki)) == {"Q26", "Q28"}
 
-    def test_approval_does_not_survive_an_edit_to_the_claim(self):
-        # the second sitter re-identified in the batch after its approval
+    @pytest.mark.parametrize(
+        "edit",
+        [
+            # the second sitter re-identified after its approval
+            lambda claim: {"value": ItemValue(value=QidRef(qid="Q28"))},
+            # or the face's region moved, on its qualifier and its source
+            lambda claim: {
+                "source": claim.source.model_copy(
+                    update={
+                        "region": RegionPercent(
+                            x=15, y=10, width=20, height=50
+                        )
+                    }
+                ),
+                "qualifiers": [
+                    Qualifier(
+                        property="relative_position_within_image",
+                        value=StringValue(value="15%,10%,20%,50%"),
+                    )
+                ],
+            },
+        ],
+        ids=["person", "region"],
+    )
+    def test_approval_does_not_survive_an_edit_to_the_claim(self, edit):
         faces = approved(portrait_faces())
         eugen, sebastian = faces.claims
-        edited = sebastian.model_copy(
-            update={"value": ItemValue(value=QidRef(qid="Q28"))}
-        )
+        edited = sebastian.model_copy(update=edit(sebastian))
         wiki = wiki_with_portrait()
 
         with pytest.raises(UnapprovedDepictsError) as refusal:

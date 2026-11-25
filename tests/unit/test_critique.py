@@ -970,6 +970,25 @@ class TestAttach:
         rows = extracted.model_copy(update={"claims": extracted.claims[1:]})
         assert counterparts(extracted, rows) == [None] * 4
 
+    def test_as_many_rows_with_one_claim_changed_match_none(self):
+        """A row for every claim, but Sebastian's birth year differs on
+        its row: the rows are not the batch resolved, so no claim is
+        matched, not even those whose rows are unchanged."""
+        extracted = resolved_batch()
+        data = extracted.model_dump(mode="json")
+        data["claims"][2]["value"]["year"] = 1943
+        rows = ClaimBatch.model_validate(data)
+        assert counterparts(extracted, rows) == [None] * 4
+
+    def test_a_claim_held_twice_keeps_a_row_for_each(self):
+        """A batch that holds Sebastian's birth twice, as its own rows:
+        each claim, both copies included, is matched to its own row."""
+        extracted = resolved_batch()
+        twice = extracted.model_copy(
+            update={"claims": [*extracted.claims, extracted.claims[2]]}
+        )
+        assert counterparts(twice, twice) == [0, 1, 2, 3, 4]
+
     def test_a_qualifier_value_names_its_entity(self):
         """A claim names an entity as a qualifier's value too: a finding
         on that entity goes on that claim's row, and a finding may name

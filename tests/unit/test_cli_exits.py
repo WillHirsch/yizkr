@@ -125,6 +125,19 @@ class TestUsage:
         # a registered command would be refused too, for want of a host
         assert "invalid choice: 'merge-items'" in capsys.readouterr().err
 
+    @pytest.mark.parametrize(
+        "step",
+        ["reconcile", "resolve", "export-review", "apply-review", "write"],
+    )
+    def test_no_ingest_step_reviews_or_writes_a_batch(self, step):
+        """No `ingest` step reconciles, resolves, sheets, applies or writes
+        a single batch: asking for one's help is refused, where a step
+        that exists prints its help and exits 0."""
+        with pytest.raises(SystemExit) as raised:
+            cli.main(["ingest", "extract", "--help"])
+        assert raised.value.code == 0
+        assert cli.main(["ingest", step, "--help"]) == EXIT_REFUSED
+
 
 class TestScratch:
     """The scratch commands keep a failure's status for a refusal."""
