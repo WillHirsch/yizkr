@@ -1020,6 +1020,13 @@ def validate_against_manifest(
       places (from a reading's source context, `extract.placed_by`); a
       source it does not name places none, so without it every claim
       about an artifact it places is refused;
+    * `latest_start_date` and `earliest_end_date` (PERIOD_END_BOUNDS)
+      bound a period's `start_time` and `end_time` qualifiers, so a claim
+      with neither qualifier (PERIOD_ENDS) carries neither bound: an
+      entity's own start or end, a point in time and a date of birth or
+      death take `earliest_date` and `latest_date` (docs/LIFE_EVENTS.md,
+      "Dates and bounds"), and each such bound is a problem ending in
+      PERIOD_BOUND;
     * a `name` claim, a name form of no stated type, is a person's or an
       unclassified entity's, never a vocabulary item's, and never
       restates its subject's label (ADR-0011): both are compared by
@@ -1218,6 +1225,19 @@ def validate_against_manifest(
                 qualifier.value,
                 subject_key,
                 f"{where}.qualifiers[{q_index}]",
+            )
+        if not any(
+            qualifier.property in PERIOD_ENDS for qualifier in claim.qualifiers
+        ):
+            errors.extend(
+                f"{where}.qualifiers[{q_index}]: {qualifier.property!r} "
+                f"bounds a period's start_time or end_time qualifier, and "
+                f"the claim has neither; an entity's own start or end, a "
+                f"point in time and a date of birth or death take "
+                f"earliest_date and latest_date (docs/LIFE_EVENTS.md, "
+                f'"Dates and bounds") [{PERIOD_BOUND}]'
+                for q_index, qualifier in enumerate(claim.qualifiers)
+                if qualifier.property in PERIOD_END_BOUNDS
             )
     for index, problems in vital_problems(batch, acceptance).items():
         errors.extend(f"claims[{index}]{problem}" for problem in problems)
@@ -1529,12 +1549,21 @@ VITAL_REASONS = (
     END_NOT_PARTNER,
     LEFT_OUT_PERSON,
 )
+# the qualifiers that date the ends of a period (a residence, an
+# occupation), and the bounds that only those ends take: a start's latest
+# start date and an end's earliest end date. A claim that carries one of
+# those bounds but neither end is refused under PERIOD_BOUND
+# (validate_against_manifest; docs/LIFE_EVENTS.md, "Dates and bounds")
+PERIOD_ENDS = frozenset({"start_time", "end_time"})
+PERIOD_END_BOUNDS = frozenset({"latest_start_date", "earliest_end_date"})
+PERIOD_BOUND = "period_bound"
 # the codes a problem ends in, so reject_reasons reads them back
 SOURCE_SUPPORT = "source_support"
 CODED_REASONS = (
     *SUBJECT_REASONS,
     ARTIFACT_KIND,
     *VITAL_REASONS,
+    PERIOD_BOUND,
     SOURCE_SUPPORT,
 )
 # a reject's other reasons: its JSON did not parse as a claim, or the

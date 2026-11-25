@@ -17,6 +17,8 @@ Preserve source precision, explicit bounds and `circa`; do not narrow a range to
 
 The outer bounds of a period are therefore its earliest possible start and latest possible end. A `point_in_time` beside start/end qualifiers has no separately encoded range: those bounds already describe the period. `sourcing_circumstances = circa` qualifies the whole statement, so a period with an approximate endpoint does not encode which endpoint is approximate. Views show circa beside both.
 
+Validation refuses a claim that carries `latest_start_date` or `earliest_end_date` but neither a `start_time` nor an `end_time` qualifier, such as an imprisonment's own `start_time` with a latest start date, and extraction lists it among its rejects under its own reason code, `period_bound`. A period with either end stated may carry either end's bound: a latest start date beside an `end_time` alone bounds a start the source does not date. The batch writer does not apply this check, so a batch given to `yizkr write` without validation can still carry such a bound.
+
 An event's own dates and a statement's date qualifiers are different. A residence's start can describe moving in; a residence's point in time describes an observation. The document's creation date does not automatically date a residence, marriage observation, place containment or burial. Where a source gives only an early or late bound, preserve that open range rather than inventing the missing end.
 
 ### Unsupported dates and reader limits
