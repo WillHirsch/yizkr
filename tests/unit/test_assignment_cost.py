@@ -260,6 +260,17 @@ def test_an_existing_output_is_refused_before_anything_is_measured(
     assert "measured" not in capsys.readouterr().out
 
 
+def test_a_failure_once_measuring_has_begun_keeps_its_traceback(
+    tmp_path, isolated, capsys
+):
+    """Only the checks before measuring end in exit 2. The report's
+    folder is missing here, which shows only when the report is written."""
+    output = tmp_path / "missing" / "report.json"
+    with pytest.raises(FileNotFoundError):
+        benchmark.main(["--size", "small", "--output", str(output)])
+    assert "measured" in capsys.readouterr().out
+
+
 @pytest.mark.parametrize("baseline", [None, "not json", "regression"])
 def test_a_baseline_that_is_not_a_report_is_refused_before_measuring(
     tmp_path, isolated, capsys, baseline

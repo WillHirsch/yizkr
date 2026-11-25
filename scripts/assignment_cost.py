@@ -212,13 +212,16 @@ def main(argv=None) -> int:
         "checked-in baseline) and measure nothing else",
     )
     args = parser.parse_args(argv)
+    if args.write_baseline is not None:
+        write_baseline(args.write_baseline)
+        print(f"Regression baseline written: {args.write_baseline}")
+        return 0
+    if args.output is None:
+        parser.error("--output is required")
+    # Only these checks, made before anything is measured, end in a
+    # message and exit 2; a failure once measuring has begun, such as a
+    # refusal by the path, keeps its traceback.
     try:
-        if args.write_baseline is not None:
-            write_baseline(args.write_baseline)
-            print(f"Regression baseline written: {args.write_baseline}")
-            return 0
-        if args.output is None:
-            parser.error("--output is required")
         if args.output.exists():
             raise ValueError(
                 "--output must be a new file; reports are not overwritten"
@@ -228,17 +231,16 @@ def main(argv=None) -> int:
         )
         if baseline is not None:
             check_report(baseline)
-        names = args.size or list(SIZES)
-        report = measurement(names, trace=args.trace)
-        with args.output.open("x") as output:
-            output.write(json.dumps(report, indent=1) + "\n")
-        print(summary(report))
-        if baseline is not None:
-            print(compare(baseline, report))
-        return 0
-    except (OSError, ValueError, KeyError) as exc:
-        print(f"Measurement could not complete: {exc}", file=sys.stderr)
+    except (OSError, ValueError) as exc:
+        print(f"Nothing measured: {exc}", file=sys.stderr)
         return 2
+    report = measurement(args.size or list(SIZES), trace=args.trace)
+    with args.output.open("x") as output:
+        output.write(json.dumps(report, indent=1) + "\n")
+    print(summary(report))
+    if baseline is not None:
+        print(compare(baseline, report))
+    return 0
 
 
 if __name__ == "__main__":
