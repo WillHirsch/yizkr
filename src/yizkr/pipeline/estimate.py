@@ -713,7 +713,7 @@ class Estimator(ScratchDriver):
         code, whose failures are the stage's."""
         if role in self._keyed:
             return
-        effort, model = self._engine_settings(role)
+        effort, model = self.role_settings.engine_settings(role)
         try:
             client = llm.make_client(self.llm, effort=effort, model=model)
         except (RuntimeError, ValueError) as exc:

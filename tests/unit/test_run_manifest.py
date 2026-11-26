@@ -186,6 +186,25 @@ class TestModelAliases:
         assert not model_alias(name)
 
 
+def test_a_run_records_each_roles_refresh_and_epoch(tmp_path, factory):
+    orchestrator = Run(
+        a_folder(tmp_path),
+        tmp_path / "state",
+        refresh=["extract"],
+        epochs={"critique": 2},
+    )
+    orchestrator.run()
+    roles = orchestrator.rundir.manifest()["roles"]
+    assert {
+        role: (recorded["refresh"], recorded["epoch"])
+        for role, recorded in roles.items()
+    } == {
+        "transcribe": (False, 0),
+        "extract": (True, 0),
+        "critique": (False, 2),
+    }
+
+
 # -- a run keeps its settings -------------------------------------------------
 
 
