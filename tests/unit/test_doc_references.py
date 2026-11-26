@@ -556,7 +556,8 @@ def repository() -> tuple[Tree, list[Finding]]:
 def test_the_citations_match_the_baseline(repository):
     tree, found = repository
     baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
-    assert empty(baseline) == [], "remove each empty kind and entry"
+    unused = empty(baseline)
+    assert unused == [], f"remove these empty kinds and entries: {unused}"
     differences = drift(counts(found), baseline)
     assert differences == [], (
         f"design citations differ from {BASELINE.relative_to(ROOT)}. A "
