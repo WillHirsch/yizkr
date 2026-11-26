@@ -14,10 +14,10 @@ an item found without its kind that kind, stated in the item itself
 (#368; its use for the place-hierarchy pass's run item is tested in
 tests/unit/test_places.py). The orchestrator's write-time registration
 of a document runs here too, through its real `_step_register`. The flow
-is also verified live
-(tests/integration/test_live_write_time_registration.py,
-test_live_registrar.py, test_live_pipeline.py,
-test_live_presentation.py and test_live_upload_names.py).
+is also verified on a real stack: by the required lane's
+tests/fictional_integration/test_media_uploads.py, which checks what
+MediaWiki does with registration's uploads, and by the configured-stack
+tests/integration/test_live_write_time_registration.py.
 """
 
 from __future__ import annotations
