@@ -1419,7 +1419,7 @@ def test_a_person_page_shows_every_attributed_value_and_picks_none(site):
     assert site.cited("order") in father
 
 
-def checks_the_roster_and_badges_agree_with_the_privacy_check(site):
+def test_the_roster_and_badges_agree_with_the_privacy_check(site):
     graph, report = site.graph, site.report
     # the site lists exactly whom the check assesses: every item with
     # person evidence, a `human` type at any rank, a birth without a type
@@ -1877,60 +1877,3 @@ def test_the_gallery_and_the_disagreement_report_show_the_fixture(
         if row.entity == iri("gustav")
     }
     assert frozenset((iri("address"), iri("town"))) in compared
-
-
-# -- TEETH (temporary, reverted after one CI run) ---------------------------
-
-
-@pytest.fixture(scope="module")
-def broken(site, fictional_client, tmp_path_factory):
-    """The site and the check run again under each behaviour broken by
-    hand."""
-    import dataclasses
-
-    from yizkr.core import privacy
-
-    config = fictional_client.config
-    allowed = privacy.years_allowed
-
-    def stored_year(literal, precision):
-        if precision == privacy.DECADE:
-            year = privacy.year_of(literal)
-            return year, year
-        return allowed(literal, precision)
-
-    patches = {
-        "decade read by its stored year": (
-            privacy,
-            "years_allowed",
-            stored_year,
-        ),
-        "religion taken for person evidence": (
-            privacy,
-            "PERSON_SUBJECT_PROPERTIES",
-            (*privacy.PERSON_SUBJECT_PROPERTIES, "religion"),
-        ),
-    }
-    built = {}
-    for name, (target, attribute, value) in patches.items():
-        out = tmp_path_factory.mktemp("broken")
-        with pytest.MonkeyPatch.context() as patch:
-            patch.setattr(target, attribute, value)
-            summary = publish_site(config, out)
-            report = exclusion_report(config)
-        built[name] = dataclasses.replace(
-            site, out=out, summary=summary, report=report
-        )
-    return built
-
-
-def test_the_roster_and_badges_agree_with_the_privacy_check(
-    site, broken, record_testsuite_property
-):
-    checks_the_roster_and_badges_agree_with_the_privacy_check(site)
-    for name, broken_site in broken.items():
-        with pytest.raises(AssertionError) as caught:
-            checks_the_roster_and_badges_agree_with_the_privacy_check(
-                broken_site
-            )
-        record_testsuite_property(f"teeth: {name}", repr(caught.value)[:400])
