@@ -1,18 +1,15 @@
 """Design citations and relative links in the tracked tree resolve.
 
-docs/TESTING.md, "Design citations and links", states the convention: a
-rule is cited by the path of the document that states it and the quoted
-heading, or in a Markdown document by a relative link to the heading; an
-ADR that has a file in docs/adr is cited by its number, with a section
-number only where the file has that numbered heading; a number whose
-file was removed is not cited.
+docs/TESTING.md, "Design citations and links", states the convention
+this checks.
 
 The check reads every tracked file that is text, as `git ls-files` lists
-them, and never the rest of the checkout. It leaves out a file deleted
-from the working tree, a file holding a NUL byte or invalid UTF-8, this
-module and its baseline. A citation wrapped across comment, docstring or
-YAML lines, or split between adjacent string literals, is joined into one
-line before it is read.
+them, and never the rest of the checkout. It leaves out a symlink, a file
+deleted from the working tree, a file holding a NUL byte or invalid
+UTF-8, this module and its baseline. A citation wrapped across comment,
+docstring or YAML lines, or split between adjacent string literals, is
+joined into one line before it is read; a finding keeps the number of
+the original line where it starts.
 
 Four kinds of finding are counted for each file against the baseline:
 
@@ -23,8 +20,10 @@ Four kinds of finding are counted for each file against the baseline:
   number or AGENT_PROTOCOL, outside docs/AGENT_PROTOCOL.md and docs/adr,
   which number their own sections, and outside EXEMPT_SIGNS;
 - section-name: the path or name of a tracked Markdown document followed
-  by a quoted name that begins none of its headings or bold paragraph
-  labels.
+  by a quoted name, with or without parentheses, that begins none of its
+  headings or bold paragraph labels; or a Markdown path or name that
+  resolves to no tracked Markdown file, followed by a quoted name without
+  parentheses.
 
 A key list is "§3", "§3, §7", "§2 and §6", "§8.5-8.7", "§8.5 to §8.7",
 "§A" or "§10.1(c)", and may hold "Q" keys. A section sign in other words,
@@ -32,12 +31,14 @@ as in "§5 before §8", stands alone.
 
 The baseline, doc_references_baseline.json, records for each file the
 number of findings of each kind it held when the check was added. The
-test fails when a file holds more findings of a kind than its entry and
-when an entry is higher than what the file holds, so a change that
-removes a citation lowers its entry in the same change, and the baseline
-only shrinks. The change that removes the last entry deletes the
-baseline, the code that reads it and the sentences of docs/TESTING.md
-that describe it.
+test fails when a file holds more or fewer findings of a kind than its
+entry, and when an entry records zero or no kind, so a change that
+removes a citation lowers its entry in the same change. It compares the
+tree with the baseline alone, not with the baseline before the change,
+so an entry raised or added together with a new citation passes; review
+reads every baseline diff. The change that removes the last entry
+deletes the baseline, the code that reads it and the sentences of
+docs/TESTING.md that describe it.
 
 Two checks need no baseline. Every relative link in a tracked Markdown
 document resolves to a tracked file or folder, and its fragment to a
@@ -122,12 +123,15 @@ class Tree:
         }
 
     @cached_property
+    def markdown(self) -> frozenset[str]:
+        """Every tracked *.md file, prompt templates included."""
+        return frozenset(path for path in self.texts if path.endswith(".md"))
+
+    @cached_property
     def documents(self) -> frozenset[str]:
         """The tracked Markdown documents: every *.md file but prompts."""
         return frozenset(
-            path
-            for path in self.texts
-            if path.endswith(".md") and not path.startswith(PROMPTS)
+            path for path in self.markdown if not path.startswith(PROMPTS)
         )
 
     @cached_property
@@ -167,6 +171,10 @@ HEADING = re.compile(r" {0,3}#{1,6}[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*")
 LABEL = re.compile(r"[ \t]*(?:[-*+][ \t]+|\d+[.)][ \t]+)?\*\*([^*\n]+)\*\*")
 ANCHOR = re.compile(r"<a\s[^>]*?\b(?:id|name)=[\"']([^\"']+)[\"']")
 HEADING_KEY = re.compile(r"(\d+(?:\.\d+)*)\.?\s|([A-Z])\.\s")
+CODE_SPAN = re.compile(r"(`+)(.+?)\1")
+# A run of asterisks, or of underscores not inside a word: what
+# CommonMark can read as emphasis.
+EMPHASIS = re.compile(r"\*+|(?<![^\W_])_+|_+(?![^\W_])")
 
 
 def prose_lines(text: str) -> Iterator[tuple[int, str]]:
@@ -187,9 +195,12 @@ def rendered(markdown: str) -> str:
     no emphasis markers or HTML tags."""
     text = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", markdown)
     text = re.sub(r"<[^>]*>", "", text)
-    text = text.replace("`", "")
-    text = re.sub(r"\*+", "", text)
-    return text.strip()
+    pieces, last = [], 0
+    for code in CODE_SPAN.finditer(text):
+        pieces += [EMPHASIS.sub("", text[last : code.start()]), code[2]]
+        last = code.end()
+    pieces.append(EMPHASIS.sub("", text[last:]))
+    return "".join(pieces).strip()
 
 
 def slug(heading: str) -> str:
@@ -283,6 +294,7 @@ CITED_KEY = re.compile(rf"§§?[ \t]?({KEY}){POINTS}(?:{UNTIL}({NUMBER}))?")
 SIGN = re.compile("§+")
 SECTION_NAME = re.compile(
     r"(?<![\w/.\-])(?P<document>(?:[\w.\-]+/)*[\w\-]+\.md)`?,?[ \t]+"
+    r"(?P<parenthesised>\()?"
     r"(?:\"(?P<double>[^\"\n]{1,120})\""
     r"|“(?P<curly>[^”\n]{1,120})”"
     r"|'(?P<single>[^'\n]{1,120})')"
@@ -306,30 +318,33 @@ def cited_keys(keys: str) -> Iterator[str]:
         yield from filter(None, match.groups())
 
 
-def document_named(tree: Tree, citing: str, name: str) -> str | None:
-    """The tracked document `name` means in `citing`: beside the citing
-    file, else from the repository root, else the one document whose
-    path ends in it."""
+def markdown_named(tree: Tree, citing: str, name: str) -> str | None:
+    """The tracked Markdown file `name` means in `citing`: beside the
+    citing file, else from the repository root, else the one Markdown
+    file whose path ends in it."""
     for candidate in (
         posixpath.normpath(posixpath.join(posixpath.dirname(citing), name)),
         posixpath.normpath(name),
     ):
-        if candidate in tree.documents:
+        if candidate in tree.markdown:
             return candidate
-    ending = [d for d in tree.documents if d.endswith(f"/{name}")]
+    ending = [d for d in tree.markdown if d.endswith(f"/{name}")]
     return ending[0] if len(ending) == 1 else None
 
 
-def exempt(path: str, text: str, at: int) -> bool:
-    return any(
-        path == exempt_path and text.endswith(prefix, 0, at + 1)
-        for exempt_path, prefix in EXEMPT_SIGNS
-    )
+def exemption(path: str, text: str, at: int) -> tuple[str, str] | None:
+    """The entry of EXEMPT_SIGNS that exempts the sign at offset `at`."""
+    for entry in EXEMPT_SIGNS:
+        exempt_path, prefix = entry
+        if path == exempt_path and text.endswith(prefix, 0, at + 1):
+            return entry
+    return None
 
 
 def citation_findings(tree: Tree, path: str) -> Iterator[Finding]:
-    """The findings of the four baseline kinds in one file, and of
-    "protocol-key", an AGENT_PROTOCOL key with no numbered heading."""
+    """The findings of the four baseline kinds in one file, of
+    "protocol-key", an AGENT_PROTOCOL key with no numbered heading, and
+    of "exempt-sign", a sign that an entry of EXEMPT_SIGNS exempts."""
     raw = tree.texts[path]
     if "ADR-" not in raw and "§" not in raw and ".md" not in raw:
         return
@@ -366,7 +381,8 @@ def citation_findings(tree: Tree, path: str) -> Iterator[Finding]:
             index = bisect.bisect_right(starts, at) - 1
             if index >= 0 and at < attributed[index][1]:
                 continue
-            if exempt(path, text.text, at):
+            if entry := exemption(path, text.text, at):
+                yield Finding(path, text.line(at), "exempt-sign", entry[1])
                 continue
             yield Finding(
                 path,
@@ -377,14 +393,20 @@ def citation_findings(tree: Tree, path: str) -> Iterator[Finding]:
     for match in SECTION_NAME.finditer(text.text):
         name = match.group("double") or match.group("curly")
         name = name or match.group("single")
-        document = document_named(tree, path, match.group("document"))
+        document = markdown_named(tree, path, match.group("document"))
         line = text.line(match.start())
+        if document is not None and document not in tree.documents:
+            continue  # a prompt template
+        if document is None and match.group("parenthesised"):
+            # a quoted name in parentheses after a file that is not
+            # tracked, such as a report a run writes, cites no document
+            continue
         if document is None:
             yield Finding(
                 path,
                 line,
                 "section-name",
-                f"{match.group('document')} is no tracked document",
+                f"{match.group('document')} is no tracked Markdown file",
             )
         elif not begins(name, tree.outlines[document]):
             yield Finding(
@@ -397,7 +419,6 @@ def citation_findings(tree: Tree, path: str) -> Iterator[Finding]:
 
 # -- links -------------------------------------------------------------------
 
-CODE_SPAN = re.compile(r"(`+).+?\1")
 LINK = re.compile(
     r"!?\[(?:[^\[\]\n]|\[[^\[\]\n]*\])*\]"
     r"\([ \t]*(?:<([^>\n]*)>|([^()\s]+))(?:[ \t]+(?:\"[^\"\n]*\"|'[^'\n]*'))?"
@@ -428,9 +449,13 @@ def unresolved(tree: Tree, path: str, target: str) -> str | None:
     location, _, fragment = target.partition("#")
     location, fragment = unquote(location), unquote(fragment)
     resolved = path
-    if location:
+    if location.startswith("/"):  # from the repository root
+        resolved = posixpath.normpath(location.lstrip("/"))
+    elif location:
         resolved = posixpath.join(posixpath.dirname(path), location)
         resolved = posixpath.normpath(resolved)
+    if resolved == ".":
+        return None  # the repository root
     if resolved not in tree.paths and resolved not in tree.folders:
         return f"{target}: {resolved} is not tracked"
     if (
@@ -484,6 +509,19 @@ def drift(
     return differences
 
 
+def empty(
+    baseline: Mapping[str, Mapping[str, int]],
+) -> list[tuple[str, str | None]]:
+    """Each (file, kind) that the baseline records as zero, and (file,
+    None) for a file that it records with no kind."""
+    entries = []
+    for path, recorded in sorted(baseline.items()):
+        if not recorded:
+            entries.append((path, None))
+        entries += [(path, k) for k, n in sorted(recorded.items()) if not n]
+    return entries
+
+
 def explained(
     differences: list[tuple[str, str, int, int]], found: list[Finding]
 ) -> str:
@@ -518,6 +556,7 @@ def repository() -> tuple[Tree, list[Finding]]:
 def test_the_citations_match_the_baseline(repository):
     tree, found = repository
     baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
+    assert empty(baseline) == [], "remove each empty kind and entry"
     differences = drift(counts(found), baseline)
     assert differences == [], (
         f"design citations differ from {BASELINE.relative_to(ROOT)}. A "
@@ -535,14 +574,11 @@ def test_links_and_protocol_sections_resolve(repository):
     assert broken == [], "\n".join(map(str, broken))
 
 
-def test_each_exempt_sign_still_occurs(repository):
-    tree, _ = repository
-    gone = [
-        (path, prefix)
-        for path, prefix in EXEMPT_SIGNS
-        if prefix not in tree.texts.get(path, "")
-    ]
-    assert gone == [], "an exempt section sign no longer occurs: remove it"
+def test_each_exemption_is_used(repository):
+    _, found = repository
+    used = {(f.path, f.detail) for f in found if f.kind == "exempt-sign"}
+    unused = sorted(EXEMPT_SIGNS - used)
+    assert unused == [], f"remove the unused entries of EXEMPT_SIGNS: {unused}"
 
 
 # -- planted trees -----------------------------------------------------------
@@ -556,7 +592,8 @@ TREE = {
         "### 1. Scope\n\n"
         "Text that cites its own §2.\n\n"
         "### 2. Placement\n\n"
-        "### 2.1 Detail\n"
+        "### 2.1 Detail\n\n"
+        "### A. Lettered\n"
     ),
     "docs/AGENT_PROTOCOL.md": (
         "# Agent protocol\n\n## 1. Plan\n\n## 2. Labels\n\nSee §1.\n"
@@ -594,36 +631,57 @@ def kinds(tree: Tree) -> Counter:
 PASSING = {
     "src/yizkr/rules.py": (
         "# ADR-0801 §1, §2 and §2.1, ADR-0801 §1-2 and ADR-0801 §1 to §2\n"
+        "# ADR-0801's §1, ADR-0801, §2, ADR-0801 (§1) and ADR-0801 §§1-2\n"
+        "# ADR-0801 §2.1(c), §1; ADR-0801 §1 or §2; ADR-0801 §1, Q4 and §2\n"
+        "# ADR-0801 §A\n"
         '"""A rule (ADR-0801\n'
         "§1, §2), a range wrapped across a\n"
         'comment (docs/AGENT_PROTOCOL.md §1 and §2)."""\n'
         'TEXT = ("the record (ADR-0801 "\n'
         '        "§2) holds it")\n'
+        'NOTE = ("see docs/GUIDE.md, "\n'
+        "        '\"Bold label\"')\n"
         '# docs/GUIDE.md, "Unions and their events"; GUIDE.md "Bold label"\n'
-        "# docs/GUIDE.md, 'Unions and their'\n"
+        "# docs/GUIDE.md, 'Unions and their'; AGENT_PROTOCOL.md, \"Labels\"\n"
+        '# deploy/README.md ("Resetting"); report.md ("Totals")\n'
+        '# prompts/reading.md, "Not a heading"; '
+        'src/yizkr/pipeline/prompts/reading.md, "Not a heading"\n'
         'PATH = ROOT / "docs" / "GUIDE.md", "Not a section"\n'
     ),
+    "src/yizkr/static/site.js": (
+        "// as ADR-0801\n// §1 says\n/* as ADR-0801\n * §2 says */\n"
+    ),
+    "deploy/init.sql": "-- as ADR-0801\n-- §1 says\n",
     "src/yizkr/pipeline/gedcom.py": "# GEDCOM NAME TYPE (5.5.1 §, other)\n",
     "deploy/.env.example": '# README.md, "Resetting"\n',
+    "tests/unit/test_doc_references.py": "# ADR-0802 §9\n",
+    "tests/unit/doc_references_baseline.json": '{"ADR-0802": 1}\n',
     "docs/LINKS.md": (
         "# Links\n\n"
         "[a](GUIDE.md#unions-and-their-events) "
         "[b](GUIDE.md#unions-and-their-events-1) "
         "[c](GUIDE.md#kept-anchor) [d](#links) [e](../assets/scan.png) "
-        "[f](adr/) [g](https://example.org/x.md) [h](<OTHER.md>)\n\n"
+        "[f](adr/) [g](https://example.org/x.md) [h](<OTHER.md>) "
+        "[i](../) [j](/docs/GUIDE.md#unions-and-their-events) "
+        "[k](#the-emphasis-case) [l](#the-_private-name)\n\n"
         "`[not a link](missing.md)`\n\n"
         "[ref]: ../README.md\n\n"
         "```md\n[fenced](missing.md)\n```\n\n"
         'A rule (ADR-0801 §2; docs/GUIDE.md, "Bold label"), as '
         "[AGENT_PROTOCOL §2](AGENT_PROTOCOL.md#2-labels) and "
-        "`docs/AGENT_PROTOCOL.md` §1 say.\n"
+        "`docs/AGENT_PROTOCOL.md` §1 say, and as "
+        "[ADR-0801](adr/0801-planted-record.md) §1 states.\n\n"
+        "## The _emphasis_ case\n\n"
+        "## The `_private` name\n"
     ),
 }
 
 
 def test_citations_and_links_that_resolve_pass():
     # TREE's prompt template links to a missing file: it is no document
-    assert kinds(planted(PASSING)) == Counter()
+    assert kinds(planted(PASSING)) == Counter(
+        {("src/yizkr/pipeline/gedcom.py", "exempt-sign"): 1}
+    )
 
 
 @pytest.mark.parametrize(
@@ -647,21 +705,6 @@ def test_citations_and_links_that_resolve_pass():
         pytest.param(
             {
                 "src/yizkr/rules.py": (
-                    "# A rule (ADR-0801\n"
-                    "# §3).\n"
-                    'TEXT = ("a rule (ADR-0801 "\n'
-                    '        f"§4)")\n'
-                    "description: >-\n"
-                    "  as ADR-0801\n"
-                    "  §5 says\n"
-                )
-            },
-            {("src/yizkr/rules.py", "section-key"): 3},
-            id="wrapped-citation",
-        ),
-        pytest.param(
-            {
-                "src/yizkr/rules.py": (
                     '"""ADR-0801 §1 says so.\n\nThe rule (§2) holds.\n'
                     'Checked first (ADR-0801 §1 before §2)."""\n'
                     "# as ADR-0801\n#\n# §2, a paragraph later, says\n"
@@ -677,15 +720,38 @@ def test_citations_and_links_that_resolve_pass():
         ),
         pytest.param(
             {
+                "src/yizkr/pipeline/gedcom.py": (
+                    "# GEDCOM NAME TYPE (5.5.1 §, other) (§5)\n"
+                )
+            },
+            {
+                ("src/yizkr/pipeline/gedcom.py", "exempt-sign"): 1,
+                ("src/yizkr/pipeline/gedcom.py", "stand-alone-sign"): 1,
+            },
+            id="exemption-is-for-its-sign-only",
+        ),
+        pytest.param(
+            {
                 "tests/unit/test_rules.py": (
                     '# docs/GUIDE.md, "Marriages and periods"; GUIDE.md '
                     "“Unions of”\n"
                     "# docs/MISSING.md, 'Names'\n"
                     '# docs/GUIDE.md, "Unions and their even"\n'
+                    '# docs/GUIDE.md ("Gone")\n'
                 )
             },
-            {("tests/unit/test_rules.py", "section-name"): 4},
+            {("tests/unit/test_rules.py", "section-name"): 5},
             id="unresolved-section-name",
+        ),
+        pytest.param(
+            {
+                "docs/runbooks/GUIDE.md": (
+                    "# Runbook\n\n## Unions and their events\n"
+                ),
+                "src/yizkr/rules.py": '# GUIDE.md, "Unions and their"\n',
+            },
+            {("src/yizkr/rules.py", "section-name"): 1},
+            id="name-that-two-documents-end-in",
         ),
         pytest.param(
             {"docs/NOTES.md": "Cited in docs/AGENT_PROTOCOL.md §2 and §3.\n"},
@@ -695,11 +761,12 @@ def test_citations_and_links_that_resolve_pass():
         pytest.param(
             {
                 "docs/NOTES.md": (
-                    "[a](MISSING.md) [b](../../outside.md) [c](adr/09/)\n\n"
+                    "[a](MISSING.md) [b](../../outside.md) [c](adr/09/) "
+                    "[e](/docs/MISSING.md)\n\n"
                     "[d]: GONE.md\n"
                 )
             },
-            {("docs/NOTES.md", "link"): 4},
+            {("docs/NOTES.md", "link"): 5},
             id="broken-link",
         ),
         pytest.param(
@@ -719,8 +786,31 @@ def test_a_planted_reference_that_does_not_resolve_fails(files, expected):
     assert kinds(planted(files)) == Counter(expected)
 
 
+# A key list wrapped across comment lines, between a double-quoted and a
+# single-quoted literal, and across YAML continuation lines.
+WRAPPED = (
+    "# A rule (ADR-0801\n"
+    "# §3).\n"
+    'TEXT = ("a rule (ADR-0801 "\n'
+    "        f'§4)')\n"
+    "description: >-\n"
+    "  as ADR-0801\n"
+    "  §5 says\n"
+)
+
+
+def test_a_wrapped_citation_is_read_as_one_at_its_first_line():
+    found = findings(planted({"src/yizkr/rules.py": WRAPPED}))
+    assert [(f.kind, f.line) for f in found] == [
+        ("section-key", 1),
+        ("section-key", 3),
+        ("section-key", 6),
+    ]
+
+
 def test_a_file_above_its_entry_fails():
-    held = {"src/yizkr/rules.py": {"removed-number": 2}}
+    tree = planted({"src/yizkr/rules.py": "# ADR-0802, ADR-0803\n"})
+    held = counts(findings(tree))
     baseline = {"src/yizkr/rules.py": {"removed-number": 1}}
     assert drift(held, baseline) == [
         ("src/yizkr/rules.py", "removed-number", 2, 1)
@@ -729,12 +819,12 @@ def test_a_file_above_its_entry_fails():
 
 
 def test_an_entry_above_its_file_fails():
-    held = {"src/yizkr/rules.py": {"removed-number": 1}}
+    tree = planted({"src/yizkr/rules.py": "# ADR-0802\n"})
     baseline = {
         "src/yizkr/rules.py": {"removed-number": 3, "section-name": 1},
         "src/yizkr/gone.py": {"stand-alone-sign": 2},
     }
-    assert drift(held, baseline) == [
+    assert drift(counts(findings(tree)), baseline) == [
         ("src/yizkr/gone.py", "stand-alone-sign", 0, 2),
         ("src/yizkr/rules.py", "removed-number", 1, 3),
         ("src/yizkr/rules.py", "section-name", 0, 1),
@@ -755,6 +845,42 @@ def test_a_tree_at_its_entries_passes():
     assert drift(counts(findings(tree)), baseline) == []
 
 
+def test_the_failure_names_each_file_and_what_to_record():
+    tree = planted(
+        {
+            "src/yizkr/rules.py": "# ADR-0802\n# ADR-0803\n",
+            "docs/NOTES.md": "ADR-0804\n",
+        }
+    )
+    found = findings(tree)
+    baseline = {
+        "src/yizkr/rules.py": {"removed-number": 1},
+        "docs/NOTES.md": {"removed-number": 3},
+        "src/yizkr/gone.py": {"section-name": 1},
+    }
+    lines = explained(drift(counts(found), baseline), found).splitlines()
+    by_file = {
+        line.split(":")[0]: line for line in lines if not line[0].isspace()
+    }
+    assert "record 1" in by_file["docs/NOTES.md"]
+    assert "remove the kind" in by_file["src/yizkr/gone.py"]
+    assert "src/yizkr/rules.py" in by_file
+    listed = [line.split()[0] for line in lines if line[0].isspace()]
+    assert listed == ["src/yizkr/rules.py:1:", "src/yizkr/rules.py:2:"]
+
+
+def test_an_entry_of_zero_or_no_kind_is_found():
+    baseline = {
+        "src/yizkr/rules.py": {"removed-number": 0, "section-name": 1},
+        "src/yizkr/gone.py": {},
+        "docs/NOTES.md": {"stand-alone-sign": 2},
+    }
+    assert empty(baseline) == [
+        ("src/yizkr/gone.py", None),
+        ("src/yizkr/rules.py", "removed-number"),
+    ]
+
+
 def test_only_tracked_text_files_are_read(tmp_path):
     def git(*args):
         subprocess.run(["git", *args], cwd=tmp_path, check=True)
@@ -764,6 +890,7 @@ def test_only_tracked_text_files_are_read(tmp_path):
     (tmp_path / "deleted.md").write_text("ADR-0803\n", encoding="utf-8")
     (tmp_path / "scan.bin").write_bytes(b"ADR-0804\0")
     (tmp_path / "latin.txt").write_bytes("ADR-0805 caf\xe9".encode("latin-1"))
+    (tmp_path / "link.md").symlink_to("kept.md")
     git("add", ".")
     (tmp_path / "deleted.md").unlink()
     (tmp_path / "untracked.md").write_text("ADR-0806\n", encoding="utf-8")
