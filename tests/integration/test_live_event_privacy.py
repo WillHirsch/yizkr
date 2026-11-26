@@ -20,8 +20,9 @@ export's exclusions back through the stack, with the cutoff pinned at
   possibly living;
 * a birth event in 1850 releases its principal, who has no other birth.
 
-The static site's badge marks exactly the fixture people the export
-drops, at the same cutoff.
+That the static site's badge marks exactly the people the check leaves
+out, these shapes among them, is checked in the required lane
+(tests/fictional_integration/test_static_site.py).
 
 Each source is registered with a fictional PNG of its own
 (register_fictional), and every item's label carries the session's marker
@@ -42,7 +43,6 @@ from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.core import privacy
 from yizkr.pipeline import writer
 from yizkr.pipeline.writer import BatchWriter
-from yizkr.staticsite import PEOPLE_QUERY, SiteBuilder
 
 from .conftest import (
     curator_event_writes,
@@ -227,28 +227,3 @@ def test_the_export_releases_only_each_events_principal(config, fixture_graph):
     assert report.reasons[qids["born twice"]] == (
         "born as late as 1990, with no death evidence"
     )
-
-
-def test_the_site_badges_whom_the_export_drops(
-    config, fixture_graph, tmp_path
-):
-    qids = fixture_graph
-    fixture = set(qids.values())
-    cutoff_years = datetime.now(UTC).year - CUTOFF
-    report = exclusion_report(config, cutoff_years=cutoff_years)
-    builder = SiteBuilder(config, tmp_path / "site")
-    builder._cutoff_year = CUTOFF
-    people = {
-        row["person"]["value"].rsplit("/", 1)[-1]: row
-        for row in builder.run(builder._instance_query(PEOPLE_QUERY))
-    }
-    badged = {
-        qid
-        for qid in fixture
-        if "possibly living — never in the non-privileged export"
-        in builder.person_page(people[qid], [])
-    }
-    assert badged == report.excluded & fixture
-    assert {role for role, qid in qids.items() if qid in badged} == {
-        role for role, excluded in EXCLUDED.items() if excluded
-    }

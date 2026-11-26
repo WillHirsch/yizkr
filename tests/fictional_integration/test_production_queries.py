@@ -8,14 +8,15 @@ lane's WDQS and check their rows for a fictional fixture
 (docs/EXAMPLES.md).
 
 The fixture is written once a stack, straight to the wiki through
-WikibaseIntegrator, in the shapes an instance holds: a source's reading
-carries a `stated in` block with its page and excerpt, and a machine
-reading also the block of its source's extraction run; a curator's
-statement carries the `stated in` block alone; an artifact's own kind cites
-the artifact, and a page fragment's or an embedded photograph's kind and
-`part of` cite its whole; a curator's rank is the rank the statement holds.
-Legacy `spouse` statements and the curator-made birth and death events the
-readers still read are written in the same way.
+WikibaseIntegrator (tests/fixtures/instance_shapes.py), in the shapes an
+instance holds: a source's reading carries a `stated in` block with its
+page and excerpt, and a machine reading also the block of its source's
+extraction run; a curator's statement carries the `stated in` block alone;
+an artifact's own kind cites the artifact, and a page fragment's or an
+embedded photograph's kind and `part of` cite its whole; a curator's rank
+is the rank the statement holds. Legacy `spouse` statements and the
+curator-made birth and death events the readers still read are written in
+the same way.
 
 Every case but the last asserts about the fixture's own items alone, so
 they share a stack with other required cases. The unclassified-entities
@@ -24,7 +25,9 @@ hint, so their one row a hint and their order hold over any data, the
 counts of the fixture's own hints assume that no other case on the stack
 states them, and the empty hint's count is a lower bound. The last case
 asserts over its whole stack, which holds the vocabulary and this fixture
-only, and runs in a group of its own (scripts/fictional_integration.py).
+only, and runs first in a group of its own
+(scripts/fictional_integration.py); the static-site cases that follow it
+there (test_static_site.py) write their own fixture once it has run.
 
 An exclusion is checked against the statements the API holds, read back
 first, so that none passes by being absent, and rows are compared as
@@ -34,30 +37,25 @@ row is one statement or hint makes them one.
 
 from __future__ import annotations
 
-import time
 import urllib.parse
-from collections import Counter, defaultdict
+from collections import Counter
 from collections.abc import Callable
 
 import pytest
-from wikibaseintegrator.datatypes import (
-    GlobeCoordinate,
-    Item,
-    MonolingualText,
-    String,
-    Time,
-)
-from wikibaseintegrator.models import Reference, References
-from wikibaseintegrator.wbi_enums import (
-    ActionIfExists,
-    WikibaseRank,
-    WikibaseSnakType,
-)
+from wikibaseintegrator.wbi_enums import WikibaseRank
 
 from tests.fixtures import example_universe as u
-from yizkr.claims import TimeValue
+from tests.fixtures.instance_shapes import (
+    Fixture,
+    between,
+    coordinate,
+    string,
+    synchronize,
+    text,
+    time_value,
+    unknown_time,
+)
 from yizkr.core import sparql
-from yizkr.core.write_recovery import write_existing
 from yizkr.disagreement import (
     CONTAINMENT,
     disagreements,
@@ -72,223 +70,9 @@ from yizkr.pipeline.reconcile import (
 from yizkr.queries.publish import load_templates, render_for_instance
 
 pytestmark = pytest.mark.live
-HANG_GUARD = 240
 PREFERRED = WikibaseRank.PREFERRED
 DEPRECATED = WikibaseRank.DEPRECATED
 UNIVERSE = u.by_key()
-
-Value = Callable[[str], object]
-
-
-def time_value(
-    year: int,
-    month: int | None = None,
-    day: int | None = None,
-    precision: str | None = None,
-) -> Value:
-    """A time as the writer stores it (`TimeValue.to_wikibase`)."""
-    stored = TimeValue(
-        year=year, month=month, day=day, precision=precision
-    ).to_wikibase()
-    return lambda pid: Time(prop_nr=pid, **stored)
-
-
-def text(value: str, language: str = "en") -> Value:
-    return lambda pid: MonolingualText(
-        prop_nr=pid, text=value, language=language
-    )
-
-
-def string(value: str) -> Value:
-    return lambda pid: String(prop_nr=pid, value=value)
-
-
-def unknown_time(pid: str):
-    """A time its source states without giving it: an unknown value."""
-    return Time(prop_nr=pid, snaktype=WikibaseSnakType.UNKNOWN_VALUE)
-
-
-def coordinate(latitude: float, longitude: float) -> Value:
-    return lambda pid: GlobeCoordinate(
-        prop_nr=pid, latitude=latitude, longitude=longitude, precision=0.0001
-    )
-
-
-def between(start: Value, end: Value) -> tuple:
-    """The earliest and latest dates a source gives a value."""
-    return (("earliest_date", start), ("latest_date", end))
-
-
-class Fixture:
-    """The fixture's items: each made under its label, then given all its
-    statements in one further write, so no statement is ever held without
-    its references."""
-
-    def __init__(self, client) -> None:
-        self.client = client
-        self.properties, self.items = client.vocabulary()
-        self.qids: dict[str, str] = {}
-        self.labels: dict[str, str] = {}
-        self._entities: dict[str, object] = {}
-        self._statements: defaultdict[str, list] = defaultdict(list)
-        self.sources: list[str] = []
-        self.run_keys: list[str] = []
-        self._runs: dict[str, str] = {}
-        self._whole: dict[str, str] = {}
-
-    def make(self, key: str, label: str, scene: str, aliases=()) -> None:
-        item = self.client.wbi.item.new()
-        item.labels.set("en", label)
-        # a label and a description are one item's alone
-        item.descriptions.set("en", f"fictional {scene} fixture")
-        if aliases:
-            item.aliases.set("en", list(aliases))
-        self._entities[key] = item.write(
-            summary="fictional production-query fixture"
-        )
-        self.qids[key] = self._entities[key].id
-        self.labels[key] = label
-
-    def source(self, key: str, title: str, kind: str, whole=None) -> None:
-        """An artifact whose own kind cites itself, or a part of `whole`
-        (a page fragment, an embedded photograph) whose kind and `part of`
-        cite its whole, as the registrar writes them."""
-        self.make(key, title, "source")
-        self.sources.append(key)
-        self.state(key, "instance_of", self.vocab(kind), whole or key)
-        if whole:
-            self._whole[key] = whole
-            self.state(key, "part_of", self.item(whole), whole)
-
-    def entity(
-        self, key, label, scene, kind, *sources, aliases=(), kind_rank=None
-    ) -> None:
-        """An item and the kind a machine reading of `sources` gives it."""
-        self.make(key, label, scene, aliases)
-        self.state(
-            key,
-            "instance_of",
-            self.vocab(kind),
-            *sources,
-            run=True,
-            rank=kind_rank,
-        )
-
-    def item(self, key: str) -> Value:
-        qid = self.qids[key]
-        return lambda pid: Item(prop_nr=pid, value=qid)
-
-    def vocab(self, key: str) -> Value:
-        qid = self.items[key]
-        return lambda pid: Item(prop_nr=pid, value=qid)
-
-    def state(
-        self,
-        subject: str,
-        prop: str,
-        value: Value,
-        *sources: str,
-        run: bool = False,
-        run_only: str | None = None,
-        page: str | None = None,
-        excerpt: str | None = None,
-        language: str = "en",
-        qualifiers: tuple = (),
-        rank: WikibaseRank | None = None,
-    ):
-        """One statement of `subject`, stated in each of `sources`, each
-        block with `page` and `excerpt`, and, with `run`, each followed by
-        the block of its source's extraction run. `run_only` names the
-        source whose run alone the statement cites. Returns the statement,
-        which `write` sends."""
-        properties = self.properties
-        references = References()
-        for source in sources:
-            block = Reference()
-            block.add(
-                Item(prop_nr=properties["stated_in"], value=self.qids[source])
-            )
-            if page:
-                block.add(
-                    String(prop_nr=properties["page_number"], value=page)
-                )
-            if excerpt:
-                block.add(
-                    MonolingualText(
-                        prop_nr=properties["transcription_excerpt"],
-                        text=excerpt,
-                        language=language,
-                    )
-                )
-            references.add(block)
-            if run:
-                references.add(self._run_block(source))
-        if run_only:
-            references.add(self._run_block(run_only))
-        claim = value(properties[prop])
-        claim.references = references
-        for key, qualifier in qualifiers:
-            claim.qualifiers.add(qualifier(properties[key]))
-        if rank is not None:
-            claim.rank = rank
-        self._statements[subject].append(claim)
-        return claim
-
-    def reading(self, subject, prop, value, *sources, **options):
-        """A machine reading of page 1 of each of `sources`."""
-        return self.state(
-            subject, prop, value, *sources, run=True, page="1", **options
-        )
-
-    def curated(self, subject, prop, value, *sources, **options):
-        """A curator's statement citing page 1 of each of `sources`."""
-        return self.state(subject, prop, value, *sources, page="1", **options)
-
-    def cite(self, claim, source: str) -> None:
-        """A curator's further `stated in` block on `claim`."""
-        block = Reference()
-        block.add(
-            Item(prop_nr=self.properties["stated_in"], value=self.qids[source])
-        )
-        claim.references.add(block)
-
-    def _run_block(self, source: str) -> Reference:
-        whole = self._whole.get(source, source)
-        if whole not in self._runs:
-            key = f"run of {whole}"
-            self.make(key, f"Extraction run over {self.labels[whole]}", "run")
-            self.run_keys.append(key)
-            self.state(key, "instance_of", self.vocab("extraction_run"), key)
-            self._runs[whole] = self.qids[key]
-        block = Reference()
-        block.add(
-            Item(
-                prop_nr=self.properties["inferred_from_extraction_run"],
-                value=self._runs[whole],
-            )
-        )
-        return block
-
-    def write(self) -> None:
-        for key, statements in self._statements.items():
-            entity = self._entities[key]
-            for statement in statements:
-                entity.claims.add(
-                    statement, action_if_exists=ActionIfExists.FORCE_APPEND
-                )
-            self._entities[key] = write_existing(
-                entity, summary="fictional production-query fixture"
-            )
-        self._statements.clear()
-
-    def key_of(self, iri_or_qid: str) -> str:
-        """The fixture key of an item, given by its IRI or QID."""
-        qid = iri_or_qid.rsplit("/", 1)[-1]
-        found = [key for key, value in self.qids.items() if value == qid]
-        return found[0] if found else qid
-
-    def iri(self, key: str) -> str:
-        return f"{self.client.config.concept_uri}/entity/{self.qids[key]}"
 
 
 # -- the sources ---------------------------------------------------------
@@ -1162,7 +946,7 @@ def write_gallery_and_map(f: Fixture) -> None:
 
 
 def write_fixture(client) -> Fixture:
-    f = Fixture(client)
+    f = Fixture(client, "production-query")
     write_sources(f)
     write_report(f)
     write_century_and_period(f)
@@ -1174,39 +958,6 @@ def write_fixture(client) -> Fixture:
     write_gallery_and_map(f)
     f.write()
     return f
-
-
-def synchronize(client) -> None:
-    """Wait until WDQS holds every entity's current API revision, the
-    query vocabulary's included."""
-    wanted = client.entity_revisions(client.list_entity_ids())
-    entity = client.config.concept_uri + "/entity/"
-    query = (
-        "SELECT ?entity ?version WHERE "
-        "{ ?entity <http://schema.org/version> ?version . }"
-    )
-    deadline = time.monotonic() + HANG_GUARD
-    while True:
-        seen = {
-            row["entity"]["value"].removeprefix(entity): int(
-                row["version"]["value"]
-            )
-            for row in sparql.select(client.config.sparql_url, query)
-        }
-        stale = [
-            qid
-            for qid, revision in wanted.items()
-            if seen.get(qid, -1) < revision
-        ]
-        if not stale:
-            return
-        if time.monotonic() >= deadline:
-            pytest.fail(
-                f"{len(stale)} entities have not reached their API revision "
-                f"in WDQS after {HANG_GUARD}s; check the fictional "
-                "wdqs-updater logs"
-            )
-        time.sleep(2)
 
 
 @pytest.fixture(scope="module")

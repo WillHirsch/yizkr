@@ -186,11 +186,55 @@ REQUIRED_CASES = (
         "test_cluster_proposals",
         "test_cluster_choices_reach_review_application_and_graph_origins",
     ),
-    # It asserts over its whole stack, so it has a stack of its own.
+    # It asserts over its whole stack, so it runs first on a stack of its
+    # own.
     Case(
         "queries",
         "test_production_queries",
         "test_every_production_query_runs_and_no_statement_is_unreferenced",
+    ),
+    # The static site and the privacy check read the whole stack, so these
+    # assert about their own fixture's entries alone, and follow the case
+    # above.
+    Case(
+        "queries",
+        "test_static_site",
+        "test_a_person_page_shows_every_attributed_value_and_picks_none",
+    ),
+    Case(
+        "queries",
+        "test_static_site",
+        "test_the_roster_and_badges_agree_with_the_privacy_check",
+    ),
+    Case(
+        "queries",
+        "test_static_site",
+        "test_the_timeline_dates_each_assertion_with_its_range_and_source",
+    ),
+    Case(
+        "queries",
+        "test_static_site",
+        "test_a_person_page_shows_each_death_as_its_source_states_it",
+    ),
+    Case(
+        "queries",
+        "test_static_site",
+        "test_an_artifact_page_lists_what_it_asserts_and_where",
+    ),
+    Case(
+        "queries",
+        "test_static_site",
+        "test_an_artifact_page_shows_what_sources_say_of_it",
+    ),
+    Case(
+        "queries",
+        "test_static_site",
+        "test_the_places_page_labels_each_container_by_its_source",
+    ),
+    Case(
+        "queries",
+        "test_static_site",
+        "test_the_gallery_and_the_disagreement_report_show_the_fixture",
     ),
 )
 # Group names become Compose project suffixes and evidence folder names.

@@ -25,8 +25,9 @@ export's exclusions back through the stack, with the cutoff pinned at
 * a person with no birth is excluded: unknown means excluded;
 * death evidence releases a person whatever their birth.
 
-The static site's badge marks exactly the fixture people the export
-drops, at the default cutoff both use.
+That the static site's badge marks exactly the people the check leaves
+out, births of these shapes among them, is checked in the required lane
+(tests/fictional_integration/test_static_site.py).
 
 Each source is registered with a fictional PNG of its own
 (register_fictional). Like every live test it writes fictional data to
@@ -48,7 +49,6 @@ from yizkr.backup import exclusion_report
 from yizkr.claims import ArtifactRef, ClaimBatch
 from yizkr.pipeline import writer
 from yizkr.pipeline.writer import BatchWriter
-from yizkr.staticsite import PEOPLE_QUERY, SiteBuilder
 
 from .conftest import (
     fixture_mark,
@@ -332,23 +332,3 @@ def test_the_export_excludes_whom_no_birth_releases(config, fixture_graph):
     assert {role: qid in report.excluded for role, qid in qids.items()} == (
         EXCLUDED
     )
-
-
-def test_the_site_badges_whom_the_export_drops(
-    config, fixture_graph, tmp_path
-):
-    qids = fixture_graph
-    fixture = set(qids.values())
-    report = exclusion_report(config)
-    builder = SiteBuilder(config, tmp_path / "site")
-    people = {
-        row["person"]["value"].rsplit("/", 1)[-1]: row
-        for row in builder.run(builder._instance_query(PEOPLE_QUERY))
-    }
-    badged = {
-        qid
-        for qid in fixture
-        if "possibly living — never in the non-privileged export"
-        in builder.person_page(people[qid], [])
-    }
-    assert badged == report.excluded & fixture
