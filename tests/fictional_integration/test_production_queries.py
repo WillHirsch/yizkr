@@ -25,9 +25,10 @@ hint, so their one row a hint and their order hold over any data, the
 counts of the fixture's own hints assume that no other case on the stack
 states them, and the empty hint's count is a lower bound. The last case
 asserts over its whole stack, which holds the vocabulary and this fixture
-only, and runs first in a group of its own
-(scripts/fictional_integration.py); the static-site cases that follow it
-there (test_static_site.py) write their own fixture once it has run.
+only: it runs first in the `queries` group
+(scripts/fictional_integration.py), before any other case writes to that
+group's stack, and the static-site cases that follow it there
+(test_static_site.py) write their own fixture once it has run.
 
 An exclusion is checked against the statements the API holds, read back
 first, so that none passes by being absent, and rows are compared as

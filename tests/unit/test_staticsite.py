@@ -1515,10 +1515,10 @@ class TestArtifactPage:
     def test_a_direct_call_links_a_subject_only_by_the_roster_it_is_given(
         self, tmp_path, vocabulary
     ):
-        # #701: the locators live test calls artifact_page without a build.
-        # The table and its heading need no build-time state; the subject's
-        # link needs the roster, which build() reads first, so a direct
-        # call shows the subject unlinked until it is given the roster
+        # artifact_page's table and its heading need no build-time state;
+        # the subject's link needs the roster, which build() reads first,
+        # so a direct call shows the subject unlinked until it is given
+        # the roster
         builder = SiteBuilder(
             config(),
             tmp_path / "site",

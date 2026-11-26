@@ -186,8 +186,8 @@ REQUIRED_CASES = (
         "test_cluster_proposals",
         "test_cluster_choices_reach_review_application_and_graph_origins",
     ),
-    # It asserts over its whole stack, so it runs first on a stack of its
-    # own.
+    # It asserts over its whole stack, so it runs first in the `queries`
+    # group, before any other case writes to that group's stack.
     Case(
         "queries",
         "test_production_queries",

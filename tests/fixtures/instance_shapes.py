@@ -96,11 +96,11 @@ class Fixture:
         self.qids: dict[str, str] = {}
         self.labels: dict[str, str] = {}
         self._entities: dict[str, object] = {}
-        self._statements: defaultdict[str, list] = defaultdict(list)
+        self._pending: defaultdict[str, list] = defaultdict(list)
         self.sources: list[str] = []
         self.run_keys: list[str] = []
         self._runs: dict[str, str] = {}
-        self._whole: dict[str, str] = {}
+        self._whole_of: dict[str, str] = {}
 
     def make(
         self,
@@ -133,7 +133,7 @@ class Fixture:
         self.sources.append(key)
         self.state(key, "instance_of", self.vocab(kind), whole or key)
         if whole:
-            self._whole[key] = whole
+            self._whole_of[key] = whole
             self.state(key, "part_of", self.item(whole), whole)
 
     def entity(
@@ -232,7 +232,7 @@ class Fixture:
             claim.qualifiers.add(qualifier(self.properties[key]))
         if rank is not None:
             claim.rank = rank
-        self._statements[subject].append(claim)
+        self._pending[subject].append(claim)
         return claim
 
     def reading(self, subject, prop, value, *sources, **options):
@@ -251,7 +251,7 @@ class Fixture:
         claim.references.add(self.block(source, **locators))
 
     def _run_block(self, source: str) -> Reference:
-        whole = self._whole.get(source, source)
+        whole = self._whole_of.get(source, source)
         if whole not in self._runs:
             key = f"run of {whole}"
             self.make(key, f"Extraction run over {self.labels[whole]}", "run")
@@ -268,14 +268,14 @@ class Fixture:
         return block
 
     def write(self) -> None:
-        for key, statements in self._statements.items():
+        for key, statements in self._pending.items():
             entity = self._entities[key]
             for statement in statements:
                 entity.claims.add(
                     statement, action_if_exists=ActionIfExists.FORCE_APPEND
                 )
             self._entities[key] = write_existing(entity, summary=self.summary)
-        self._statements.clear()
+        self._pending.clear()
 
     def key_of(self, iri_or_qid: str) -> str:
         """The fixture key of an item, given by its IRI or QID."""
