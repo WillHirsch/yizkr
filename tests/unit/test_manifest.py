@@ -59,8 +59,13 @@ def minimal_raw() -> dict:
 
 
 def guild_kind(**marks) -> dict:
-    """An entity kind to add to `minimal_raw()`, with `marks` set on it."""
-    return {"label": "guild", "description": "d", "entity_kind": True} | marks
+    """An entity kind to add to `minimal_raw()` as `guild`, with `marks`
+    set on it. Its label is not its key, so a test can tell them apart."""
+    return {
+        "label": "hatters' guild",
+        "description": "d",
+        "entity_kind": True,
+    } | marks
 
 
 class TestRealManifest:
@@ -291,25 +296,39 @@ class TestValidators:
     def test_offered_false_is_refused_where_a_prompt_ignores_it(self):
         """The transcription prompt lists every artifact class, and the
         extraction prompts every entity kind extraction makes, whatever
-        `offered` says, so the loader refuses the mark on either and names
-        the item."""
+        `offered` says, so the loader refuses the mark on either, an
+        artifact class that is an entity kind no extraction makes
+        included. Each manifest loads without the mark, and the refusal
+        names the item by its key, which is not its label."""
         artifact_class = minimal_raw()
-        artifact_class["items"]["photograph"]["offered"] = False
+        artifact_class["items"]["photograph"]["label"] = "photographic print"
         extracted_kind = minimal_raw()
-        extracted_kind["items"]["guild"] = guild_kind(offered=False)
+        extracted_kind["items"]["guild"] = guild_kind()
+        unextracted_artifact_kind = minimal_raw()
+        unextracted_artifact_kind["items"]["hat_box"] = {
+            "label": "hat box",
+            "description": "d",
+            "subclass_of": "artifact",
+            "entity_kind": True,
+            "extracted": False,
+        }
         for key, raw in (
             ("photograph", artifact_class),
             ("guild", extracted_kind),
+            ("hat_box", unextracted_artifact_kind),
         ):
+            Manifest.model_validate(raw)
+            raw["items"][key]["offered"] = False
             with pytest.raises(ValidationError) as refusal:
                 Manifest.model_validate(raw)
             assert f"items.{key} " in str(refusal.value), key
 
     def test_offered_false_holds_back_any_other_item(self):
-        """A vocabulary value, an entity kind no extraction makes,
-        `artifact` itself and a subclass of an artifact class are each
-        listed only by the prompts' item lists, so each may be held back
-        from them."""
+        """An item that is neither an artifact class nor an entity kind
+        extraction makes is listed only by the prompts' item lists, so it
+        may be held back from them: a vocabulary value, an entity kind no
+        extraction makes, `artifact` itself and a class beneath an
+        artifact class."""
         raw = minimal_raw()
         raw["items"]["blue_hat_stamp"] = {
             "label": "Blue Hat stamp",

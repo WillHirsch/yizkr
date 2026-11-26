@@ -119,7 +119,8 @@ class ManifestItem(BaseModel):
     # manifest pass). False for artifact types, controlled-vocabulary
     # values, and infrastructure classes: real classes the extractor
     # never types a *document-mentioned* entity as. The manifest is the
-    # one place this set is declared — the prompt renders it from here.
+    # one place this set is declared — the prompt renders it from here,
+    # less the kinds marked `extracted` false.
     entity_kind: bool = False
     # A class of entities that is no entity kind: an artifact type, a
     # time period, an infrastructure class. With the entity kinds, these
@@ -138,7 +139,8 @@ class ManifestItem(BaseModel):
     # it, and a chunk's entity manifest drops an entity of it. The item
     # lists of the prompts read `offered`, not this mark. The loader
     # refuses `offered` false on an entity kind this leaves true, and
-    # allows it on one marked false, which no prompt then lists.
+    # allows it on one marked false that is no artifact class, which no
+    # prompt then lists.
     extracted: bool = True
     # Whether the item lists of the prompts offer the item: the item keys
     # extract.vocabulary_prompt_lines gives the extraction prompts, and
