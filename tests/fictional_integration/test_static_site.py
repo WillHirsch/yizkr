@@ -46,16 +46,17 @@ file, which the site links to. It holds:
 * Sebastian's birth as the certificate gives it twice, on its first page
   and on its back, each with an excerpt of its own (docs/MODELING.md,
   "Reference pattern");
-* people whose births take each shape the privacy check reads but a
-  birth in the cutoff year or the year after: years before or after it,
-  a decade's and a century's precision, ranges and ranks, an unknown
-  value, or none; deaths by a curator's death event, as its principal or
-  in another role, and births by a curator's birth event; and items
-  whose person evidence is a `human` type at any rank, a birth without a
-  type, or none, as a vessel's part in a migration, a death event's own
-  death evidence, a family's religion, a label alone, an event of no
-  person kind, a birth with no participant and the redirect a merge
-  leaves (docs/PRIVACY.md, "Private site and filtered export");
+* people whose births are years before or after the privacy check's
+  cutoff, at a decade's or a century's precision (a century by its first
+  year), with stated ranges and ranks, of unknown value, or none, but
+  not in the cutoff year or the year after; deaths by a curator's death
+  event, as its principal or in another role, and births by a curator's
+  birth event; and items whose person evidence is a `human` type at any
+  rank, a birth without a type, or none, as a vessel's part in a
+  migration, a death event's own death evidence, a family's religion, a
+  label alone, an event of no person kind, a birth with no participant
+  and the redirect a merge leaves (docs/PRIVACY.md, "Private site and
+  filtered export");
 * and two Eugen Löbigs, father and son, under one label.
 
 The site and the check read the whole stack. These cases run on the
@@ -845,8 +846,10 @@ def write_event_privacy(f: Fixture) -> None:
             f.curated(key, "point_in_time", time_value(year), "hypothetical")
 
 
-# People whose births take each shape the check reads but a birth in the
-# cutoff year or the year after, and whether it leaves them out: a birth
+# People whose births are years before or after the cutoff, at a decade's
+# or a century's precision (a century by its first year), with stated
+# ranges and ranks, of unknown value or none, but not in the cutoff year
+# or the year after, and whether the check leaves them out: a birth
 # releases only at the latest year it allows, a decade's or a century's
 # last, every statement counts but a deprecated one, a range its source
 # states bounds it, and no birth at all keeps a person possibly living.
