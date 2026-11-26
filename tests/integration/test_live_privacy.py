@@ -26,8 +26,9 @@ export's exclusions back through the stack, with the cutoff pinned at
 * death evidence releases a person whatever their birth.
 
 That the static site's badge marks exactly the people the check leaves
-out, births of these shapes among them, is checked in the required lane
-(tests/fictional_integration/test_static_site.py).
+out, births of these shapes among them but a birth in the cutoff year or
+the year after, is checked in the required lane
+(tests/fictional_integration/test_static_site.py), at the default cutoff.
 
 Each source is registered with a fictional PNG of its own
 (register_fictional). Like every live test it writes fictional data to

@@ -46,14 +46,16 @@ file, which the site links to. It holds:
 * Sebastian's birth as the certificate gives it twice, on its first page
   and on its back, each with an excerpt of its own (docs/MODELING.md,
   "Reference pattern");
-* people whose births and deaths take each shape the privacy check reads:
-  births before or after the cutoff, at a century's precision, with
-  ranges and ranks, of unknown value, or none; deaths by a curator's
-  death event, as its principal or in another role, and births by a
-  curator's birth event; and items whose person evidence is a `human`
-  type at any rank, a birth without a type, or none, as a vessel's part
-  in a migration and a death event's own death evidence
-  (docs/PRIVACY.md, "Private site and filtered export");
+* people whose births take each shape the privacy check reads but a
+  birth in the cutoff year or the year after: years before or after it,
+  a decade's and a century's precision, ranges and ranks, an unknown
+  value, or none; deaths by a curator's death event, as its principal or
+  in another role, and births by a curator's birth event; and items
+  whose person evidence is a `human` type at any rank, a birth without a
+  type, or none, as a vessel's part in a migration, a death event's own
+  death evidence, a family's religion, a label alone, an event of no
+  person kind, a birth with no participant and the redirect a merge
+  leaves (docs/PRIVACY.md, "Private site and filtered export");
 * and two Eugen Löbigs, father and son, under one label.
 
 The site and the check read the whole stack. These cases run on the
@@ -62,11 +64,13 @@ The site and the check read the whole stack. These cases run on the
 so every label here carries SUFFIX, and pages that list the whole stack
 (the index, the timeline and its feed, the gallery, the places tree and the
 disagreement report) are read for this fixture's entries alone; a count
-of the whole site is checked only against what the fixture adds to it.
-Births are dated from the cutoff the site and the check share
-(`core.privacy.DEFAULT_CUTOFF_YEARS`), well clear of it. The fixture
-bypasses the writer, so these cases establish what the site builds from
-what an instance holds, not that the writer produces it.
+of the whole site is compared with the fixture only as a floor, what the
+fixture adds to it, and otherwise only with the site's own pages and
+counts. Births are dated from the cutoff the site and the check share
+(`core.privacy.DEFAULT_CUTOFF_YEARS`): a year well clear of it, and a
+decade or a century by the last year it allows, on either side of it.
+The fixture bypasses the writer, so these cases establish what the site
+builds from what an instance holds, not that the writer produces it.
 """
 
 from __future__ import annotations
@@ -124,12 +128,27 @@ RECENT = CUTOFF + 87
 # before it
 SPANNING = (CUTOFF - 1) // 100 * 100 + 1
 PASSED = SPANNING - 100
+# the first year of the decade that holds the second year after the
+# cutoff, so that it ends two years or more after the cutoff and, unless
+# the cutoff is in its own decade's last two years, starts by it; and the
+# first year of the decade before the cutoff's own, which ends before it
+LATE_DECADE = (CUTOFF + 2) // 10 * 10
+PASSED_DECADE = (CUTOFF // 10 - 1) * 10
 # how a page marks whom the non-privileged export would drop
 BADGE = '<span class="badge">'
 
 
+MANIFEST = load_manifest()
+
+
 def named(label: str) -> str:
     return f"{label} {SUFFIX}"
+
+
+def qualified(value: object, prop: str, shown: object) -> str:
+    """A value as a page shows it beside a qualifier `prop`, which it
+    names by the manifest's label."""
+    return f"{value} ({MANIFEST.properties[prop].label}: {shown})"
 
 
 def label_of(key: str) -> str:
@@ -306,6 +325,13 @@ HELD = {
     for prop in ("start_time", "end_time")
 }
 HELD_BY = said("imprisonment-1939", "participant", "registration-card-1945")
+# "after 1945" and "c. 1833" as a page shows them, each beside the
+# qualifier the query reads its range or circumstance from
+AFTER = qualified(
+    RAHEL_DIED.value.year, "earliest_date", RAHEL_DIED.value.year
+)
+CIRCA = MANIFEST.items["circa"].label
+ABOUT = qualified(CAECILIE_BORN.value.year, "sourcing_circumstances", CIRCA)
 
 
 def write_timeline(f: Fixture) -> None:
@@ -819,13 +845,22 @@ def write_event_privacy(f: Fixture) -> None:
             f.curated(key, "point_in_time", time_value(year), "hypothetical")
 
 
-# People whose births take each shape the check reads, and whether it
-# leaves them out: a birth releases only at the latest year it allows,
-# every statement counts but a deprecated one, a range its source states
-# bounds it, and no birth at all keeps a person possibly living.
+# People whose births take each shape the check reads but a birth in the
+# cutoff year or the year after, and whether it leaves them out: a birth
+# releases only at the latest year it allows, a decade's or a century's
+# last, every statement counts but a deprecated one, a range its source
+# states bounds it, and no birth at all keeps a person possibly living.
 BORN = {
     "early": (((time_value(EARLY), (), None),), False),
     "recent": (((time_value(RECENT), (), None),), True),
+    "late decade": (
+        ((time_value(LATE_DECADE, precision="decade"), (), None),),
+        True,
+    ),
+    "passed decade": (
+        ((time_value(PASSED_DECADE, precision="decade"), (), None),),
+        False,
+    ),
     "spanning century": (
         ((time_value(SPANNING, precision="century"), (), None),),
         True,
@@ -939,7 +974,13 @@ def write_births(f: Fixture) -> None:
 # reads it: a `human` type at any rank, a birth whatever the type, or
 # none. A vessel's part in a migration makes it no person, but a `human`
 # type a curator deprecated beside its own does. A religion is no person
-# evidence, so beside a type it leaves the type all that marks a person.
+# evidence, so beside a type it leaves the type all that marks a person,
+# and a family with a religion alone is none, nor is an item with a label
+# alone, an event of no person kind (a talk) or a birth a curator makes
+# with no participant, as a claim refused or cut short leaves one. A
+# duplicate a curator merges into a person once the fixture is written
+# (`merge_duplicate`) leaves a redirect, which is no person: its death
+# goes with its statements to the person, whom it releases.
 
 
 def evidence(role: str) -> str:
@@ -986,6 +1027,27 @@ def write_person_evidence(f: Fixture) -> None:
     )
     for vessel in vessels:
         f.reading(migration, "participant", f.item(vessel), "hypothetical")
+    family = kind("family", "family")
+    f.reading(family, "religion", text("lutherisch", "de"), "hypothetical")
+    kind("label only")
+    talk = kind("talk", "event")
+    f.reading(talk, "participant", f.item(released), "hypothetical")
+    unrecorded = kind("unrecorded birth")
+    f.curated(unrecorded, "instance_of", f.vocab("birth"), "hypothetical")
+    target = kind("merge target", "human")
+    f.reading(target, "date_of_birth", time_value(RECENT), "hypothetical")
+    duplicate = kind("merged away", "human")
+    f.reading(duplicate, "date_of_death", time_value(RECENT), "hypothetical")
+
+
+def merge_duplicate(f: Fixture) -> None:
+    """A curator's merge of the duplicate into the person it repeats
+    (`WikiClient.merge_items`): its item becomes a redirect to them."""
+    f.client.merge_items(
+        f.qids[evidence("merged away")],
+        f.qids[evidence("merge target")],
+        f.summary,
+    )
 
 
 # -- two people under one label --------------------------------------------
@@ -1019,8 +1081,12 @@ def write_homonyms(f: Fixture) -> None:
 
 
 # the fixture's items with person evidence, which the site lists and the
-# check assesses; none of its events, vessels, places, organizations or
-# artifacts is one
+# check assesses: a death event that states a birth or only a deprecated
+# cause of death, an organization with a birth and a vessel typed human
+# among them; no other event is one (Eugen's death event is set aside on
+# the death it states, and the talk is of no person kind), nor the plain
+# vessel, the family, the item with a label alone, the redirect, a place,
+# the studio or an artifact
 PEOPLE = {
     "gustav",
     "century",
@@ -1052,6 +1118,7 @@ PEOPLE = {
             "organization born",
             "released",
             "vessel typed human",
+            "merge target",
         ),
     ),
 }
@@ -1087,6 +1154,7 @@ BADGED = {
         evidence("organization born"): True,
         evidence("released"): False,
         evidence("vessel typed human"): True,
+        evidence("merge target"): False,
     },
 }
 
@@ -1107,6 +1175,7 @@ def write_fixture(client) -> Fixture:
     write_person_evidence(f)
     write_homonyms(f)
     f.write()
+    merge_duplicate(f)
     return f
 
 
@@ -1336,14 +1405,14 @@ def test_a_person_page_shows_every_attributed_value_and_picks_none(site):
     # a date's own range shows beside it, at its own precision, under its
     # qualifier's label: "after 1945" names its one bound
     (death,) = described(site.person("rahel"))["date of death"]
-    assert visible(death) == f"1945 (earliest date: 1945){site.label('tree')}"
+    assert visible(death) == f"{AFTER}{site.label('tree')}"
     assert site.cited("tree") in death
 
     # an adoptive father, with the kind of parenthood and the word the
     # order gives him
     (father,) = described(site.person("alfred"))["father"]
     stated = dict(ADOPTED.qualifiers)
-    adoptive = load_manifest().items[stated["parentage"]].label
+    adoptive = MANIFEST.items[stated["parentage"]].label
     assert f'href="{site.graph.qids["leopold"]}.html"' in father
     assert f"parentage: {adoptive}" in visible(father)
     assert f"kinship type: {stated['kinship_type']}" in visible(father)
@@ -1355,7 +1424,9 @@ def test_the_roster_and_badges_agree_with_the_privacy_check(site):
     # the site lists exactly whom the check assesses: every item with
     # person evidence, a `human` type at any rank, a birth without a type
     # and a death event that states a birth among them, and none of the
-    # events on the death they state, the vessel or the migration
+    # events on the death they state, the vessel, the migration, the
+    # family, the item with a label alone, the talk, the birth with no
+    # participant or the merge's redirect
     listed = {key for key in graph.qids if site.listed(key)}
     assessed = {
         key
@@ -1363,8 +1434,11 @@ def test_the_roster_and_badges_agree_with_the_privacy_check(site):
         if qid in report.included | report.excluded
     }
     assert listed == assessed == PEOPLE
-    # a page for each person, and the index links each
+    # a page for each person, and the index links each; the run record
+    # counts the statements of every person on the stack, at least one of
+    # each of the fixture's
     assert site.summary["people"] == len(list((site.out / "people").iterdir()))
+    assert site.summary["statements"] >= len(PEOPLE)
     index = dict(
         re.findall(
             r'<li><a href="people/(Q[1-9][0-9]*)\.html">.*?</a>(.*?)</li>',
@@ -1410,20 +1484,19 @@ def test_the_timeline_dates_each_assertion_with_its_range_and_source(site):
     # query read it from, on the page and in the feed
     (entry,) = entries_of(site, "rahel")
     assert visible(entry) == (
-        f"1945 (earliest date: 1945) — {site.label('rahel')}, date of death"
-        f"{site.label('tree')}"
+        f"{AFTER} — {site.label('rahel')}, date of death{site.label('tree')}"
     )
     (event,) = feed_of(site, "rahel")
     assert event["start_date"] == {
         "year": "1945",
-        "display_date": "1945 (earliest date: 1945)",
+        "display_date": AFTER,
     }
     assert event["text"]["text"] == html.escape(f"per {site.label('tree')}")
 
     # "c. 1833" says it is circa, on the page and in the feed
     (entry,) = [e for e in entries_of(site, "caecilie") if "1833" in e]
     assert visible(entry) == (
-        f"1833 (sourcing circumstances: circa) — {site.label('caecilie')}, "
+        f"{ABOUT} — {site.label('caecilie')}, "
         f"date of birth{site.label('tree')}"
     )
     (event,) = [
@@ -1431,28 +1504,35 @@ def test_the_timeline_dates_each_assertion_with_its_range_and_source(site):
         for event in feed_of(site, "caecilie")
         if event["start_date"]["year"] == "1833"
     ]
-    assert event["start_date"]["display_date"] == (
-        "1833 (sourcing circumstances: circa)"
-    )
+    assert event["start_date"]["display_date"] == ABOUT
 
     # an event dated by its own start and end time: a row for each, named
     # by the time beside the event's type, under the card
     held = entries_of(site, "leopold")
     assert shown(held) == sorted(
         f"{day(stated.value)} — {site.label('leopold')}, imprisonment "
-        f"({prop.replace('_', ' ')}){site.label('card')}"
+        f"({MANIFEST.properties[prop].label}){site.label('card')}"
         for prop, stated in HELD.items()
     )
     assert all(site.cited("card", root="") in entry for entry in held)
+    events = feed_of(site, "leopold")
+    assert len(events) == len(HELD)
     assert {
-        event["text"]["headline"]: event["start_date"]
-        for event in feed_of(site, "leopold")
+        event["text"]["headline"]: event["start_date"] for event in events
     } == {
         html.escape(
-            f"{site.label('leopold')}: imprisonment ({prop.replace('_', ' ')})"
+            f"{site.label('leopold')}: imprisonment "
+            f"({MANIFEST.properties[prop].label})"
         ): starting(stated.value)
         for prop, stated in HELD.items()
     }
+    assert {event["text"]["text"] for event in events} == {
+        html.escape(f"per {site.label('card')}")
+    }
+    # the run record counts the timeline's rows, each dated one an event of
+    # the feed, the fixture's above among them
+    feed = json.loads(site.read("timeline.json"))["events"]
+    assert site.summary["timeline_rows"] >= len(feed)
 
     # a death its source states with no date stands beside the dated one,
     # and one dated by nothing under "No date stated"
@@ -1543,9 +1623,10 @@ def test_a_person_page_shows_each_death_as_its_source_states_it(site):
     for role in ("informant", "witness"):
         assert "date of death" not in described(site.person(taking_part(role)))
 
-    # the run record counts the releases by cause, the fixture's among
-    # them: two deaths of unknown date, an age at death, a union's end and
-    # two death events
+    # the run record counts the releases by cause over the whole stack, so
+    # each count's floor is what this fixture adds: two deaths of unknown
+    # date, an age at death, a union's end and the principals of two death
+    # events; the roster case checks by the badge whom each releases
     assert site.summary["unknown_deaths"] >= 2
     derived = site.summary["derived_died_by"]
     assert derived["undated death"] >= 1
@@ -1558,8 +1639,10 @@ def test_a_person_page_shows_each_death_as_its_source_states_it(site):
 
 
 def test_an_artifact_page_lists_what_it_asserts_and_where(site):
-    # every artifact has a page, which links its original file
+    # every artifact has a page, which links its original file, and the run
+    # record counts the fixture's among the stack's artifacts
     wiki = site.graph.client.config.wikibase_url
+    assert site.summary["artifacts"] >= len(site.graph.sources)
     for key in site.graph.sources:
         file = urllib.parse.quote(media(key))
         assert f'href="{wiki}/wiki/Special:FilePath/{file}"' in (
@@ -1584,7 +1667,7 @@ def test_an_artifact_page_lists_what_it_asserts_and_where(site):
         for row in about(site, asserted(site, "tree"), "rahel")
         if row[1] == "date of death"
     ]
-    assert visible(row[2]) == "1945 (earliest date: 1945)"
+    assert visible(row[2]) == AFTER
     assert row[3] == place("1", RAHEL_DIED.excerpt, "en")
 
     # a value the certificate gives on its first page and on its back is
@@ -1672,7 +1755,7 @@ def test_an_artifact_page_shows_what_sources_say_of_it(site):
     says = described(site.artifact("rahels portrait"))
     assert sorted(says) == ["inception"]
     assert shown(says["inception"]) == [
-        f"{MADE.value.year} (sourcing circumstances: circa){ITSELF}"
+        qualified(MADE.value.year, "sourcing_circumstances", CIRCA) + ITSELF
     ]
 
     # the caption is the image's, never the booklet's
@@ -1722,7 +1805,7 @@ def test_the_places_page_labels_each_container_by_its_source(site):
     district = tree[label("oblast"), label("district")]
     assert site.cited("letter", root="") in district
     assert visible(district) == (
-        f"{label('letter')} (start time: {DISTRICT_FROM})"
+        qualified(label("letter"), "start_time", DISTRICT_FROM)
     )
     # the extract, which states no date of its own, places the address in
     # the street and the street in the town
