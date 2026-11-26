@@ -21,6 +21,7 @@ Add entries to `manifest.yaml` (at the end of their section, so id numbering sta
 - A property's datatype can never change (Wikibase limitation); the bootstrap aborts if the manifest disagrees with the instance. Mint a new property instead.
 - Map to a Wikidata equivalent (`wikidata:` field) only when the semantics genuinely match; verify the id against wikidata.org.
 - A class is marked: an item in the subclass hierarchy (one with `subclass_of`, or another's superclass) is `entity_kind: true` or `entity_class: true`, or the manifest does not load. Mark any other class of entities `entity_class` too (a time period, an infrastructure class): validation reads the mark to refuse the class named as a value (docs/MODELING.md, "The relation decides the kind").
+- `offered: false` holds an item back from the item keys the extraction and critique prompts list, and from no other prompt list. The manifest does not load if it marks an artifact class, or an entity kind not marked `extracted: false` (docs/MODELING.md, "Entities, statements and vocabulary").
 
 ## Tests
 
