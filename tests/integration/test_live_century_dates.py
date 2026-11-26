@@ -4,15 +4,14 @@
 Centuries are counted as Wikibase counts them: the 19th century runs from
 1801 to 1900, and a claim gives it by its first year. A fictional fixture
 writes one person's birth as three sources date it, in the 19th century,
-in 1900 and in 1800, and reads them back through the stack:
+in 1900 and in 1800, and reads them back through the API: the writer
+stores the 19th century as 1801 at century precision, and Wikibase shows
+it as "19. century".
 
-* the writer stores the 19th century as 1801 at century precision, and
-  Wikibase shows it as "19. century";
-* the query service serves the century's year as stored, and the static
-  site's format_time names the century Wikibase shows.
-
-The disagreement report's span for a century is checked in the required
-lane (tests/fictional_integration/test_production_queries.py).
+The required lane checks the rest: the disagreement report's span for a
+century (tests/fictional_integration/test_production_queries.py), and the
+static site's name for the century the query service serves
+(tests/fictional_integration/test_static_site.py).
 
 A date before the common era is unsupported (ADR-0034, #338):
 tests/unit/test_unsupported_dates.py checks that the writer refuses one.
@@ -36,15 +35,8 @@ from tests.fixtures.identity import write_mapped
 from yizkr.claims import ArtifactRef, ClaimBatch, TimeValue
 from yizkr.pipeline import writer
 from yizkr.pipeline.writer import BatchWriter
-from yizkr.queries.publish import prefix_block
-from yizkr.staticsite import format_time
 
-from .conftest import (
-    fixture_mark,
-    register_fictional,
-    run_sparql,
-    wait_for_query_service,
-)
+from .conftest import fixture_mark, register_fictional
 
 pytestmark = pytest.mark.live
 
@@ -157,10 +149,9 @@ def write_fixture(client, artifacts: dict[str, str], claims: list[dict]):
 
 
 @pytest.fixture(scope="module")
-def fixture_graph(client, config):
+def fixture_graph(client):
     """Write the fixture under its marked labels (write_fixture;
-    idempotent: a re-run within the session reuses and skips everything)
-    and wait until the query service holds each subject's latest revision.
+    idempotent: a re-run within the session reuses and skips everything).
     Returns (QIDs by role, source QIDs by letter)."""
     registered = {
         letter: register_fictional(
@@ -184,21 +175,13 @@ def fixture_graph(client, config):
     assert (again.written, again.referenced) == (0, 0)
     assert again.created_items == written.created_items
     qids = {"person": written.created_items[PERSON["local_id"]]}
-    wait_for_query_service(config, client, list(qids.values()))
     return qids, {letter: registered[letter].qid for letter in "ABC"}
 
 
 # each subject's century: the property that dates it, its value as the
-# writer stores it, as Wikibase shows it, as the query service serves it
-# and as the site shows it
+# writer stores it and as Wikibase shows it
 CENTURIES = {
-    "person": (
-        "date_of_birth",
-        "+1801-00-00T00:00:00Z",
-        "19. century",
-        "1801-01-01T00:00:00Z",
-        "19th century",
-    ),
+    "person": ("date_of_birth", "+1801-00-00T00:00:00Z", "19. century"),
 }
 
 
@@ -219,7 +202,7 @@ def centuries(client, qid: str, pid: str) -> list[dict]:
 def test_wikibase_shows_the_intended_century(client, fixture_graph, role):
     qids, _ = fixture_graph
     properties, _ = client.vocabulary()
-    prop, stored, shown, _, _ = CENTURIES[role]
+    prop, stored, shown = CENTURIES[role]
     (value,) = centuries(client, qids[role], properties[prop])
     assert value["time"] == stored
     # as Wikibase's own formatter shows the value on the item's page
@@ -233,27 +216,3 @@ def test_wikibase_shows_the_intended_century(client, fixture_graph, role):
         }
     )
     assert formatted["result"] == shown
-
-
-@pytest.mark.parametrize("role", sorted(CENTURIES))
-def test_the_site_names_the_century_wikibase_shows(
-    client, config, fixture_graph, role
-):
-    qids, _ = fixture_graph
-    properties, _ = client.vocabulary()
-    prop, _, _, served, shown = CENTURIES[role]
-    query = prefix_block(config.concept_uri) + (
-        "SELECT ?value ?precision WHERE {\n"
-        f"  wd:{properties[prop]} wikibase:claim ?p ;\n"
-        "    wikibase:statementValue ?psv .\n"
-        f"  wd:{qids[role]} ?p ?statement .\n"
-        "  ?statement ?psv ?node .\n"
-        "  ?node wikibase:timeValue ?value ;\n"
-        "    wikibase:timePrecision ?precision .\n"
-        "  FILTER(?precision = 7)\n"
-        "}"
-    )
-    (row,) = run_sparql(config, query)
-    value, precision = row["value"]["value"], row["precision"]["value"]
-    assert (value, precision) == (served, "7")
-    assert format_time(value, precision) == shown

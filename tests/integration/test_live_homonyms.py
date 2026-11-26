@@ -1,6 +1,7 @@
 """Live check that two items under one English label break no command
-(#94): the backup and the site run with two same-labelled people on the
-instance.
+(#94): the backup runs with two same-labelled people on the instance. The
+static site's page for each of two such people is checked in the required
+lane (tests/fictional_integration/test_static_site.py).
 
 Two people of one name are two items under one label. The fixture is
 two Eugen Löbigs, father and son: the master hatter (1836-1909) of the
@@ -20,7 +21,6 @@ session meets the pair as a first write.
 from __future__ import annotations
 
 import gzip
-import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -33,7 +33,6 @@ from yizkr.core import wiki
 from yizkr.core.wiki import WikiClient
 from yizkr.pipeline import writer
 from yizkr.pipeline.writer import BatchWriter
-from yizkr.staticsite import publish_site
 
 from .conftest import (
     Registered,
@@ -124,16 +123,6 @@ def homonyms(client: WikiClient, config) -> Homonyms:
     write_mapped(BatchWriter(client), batch_son)
     wait_for_query_service(config, client, [father, son.id])
     return Homonyms(father=father, son=son.id)
-
-
-def test_the_site_builds_a_page_for_each(config, homonyms, tmp_path):
-    out = tmp_path / "site"
-    try:
-        publish_site(config, out)
-        for qid in (homonyms.father, homonyms.son):
-            assert EUGEN in (out / "people" / f"{qid}.html").read_text()
-    finally:
-        shutil.rmtree(out, ignore_errors=True)
 
 
 def test_the_backup_runs(config, homonyms, tmp_path):

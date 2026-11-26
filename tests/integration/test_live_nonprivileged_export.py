@@ -94,8 +94,9 @@ both births, and the family's description, do not; and the vocabulary
 keeps its terms. The export first waits for the query service to hold
 the dump's revision of every item and property, a redirect's aside, so
 on a stack at rest, a merge included, the export must run, not refuse.
-The site lists the eight that have person evidence, and badges the seven
-the export drops.
+That the static site lists the people with person evidence these types
+give and badges exactly those the privacy check leaves out is checked in
+the required lane (tests/fictional_integration/test_static_site.py).
 
 The query service's own munger (munge.sh from wikibase/wdqs:2, the image
 the stack runs, in a container with no network) reads the export as it
@@ -142,7 +143,6 @@ from yizkr.backup import (
     export_nonprivileged,
 )
 from yizkr.pipeline import writer
-from yizkr.staticsite import PEOPLE_QUERY, SiteBuilder
 
 from .conftest import (
     curator_event_writes,
@@ -243,17 +243,6 @@ CALLED = "the export fixture's father, as his child called him"
 # the roles nonprivileged.nt.gz mentions; every other one (the item with a
 # label only, and the redirect a merge leaves, too) it leaves out
 PRESENT = {"released", "vessel", "letter", "letter page"}
-# the roles with person evidence, which the site lists
-PEOPLE = {
-    "deprecated type",
-    "outranked type",
-    "no type",
-    "organization born",
-    "released",
-    "vessel typed human",
-    "merge target",
-    "named in text",
-}
 
 
 def claim(
@@ -899,27 +888,6 @@ def test_a_truthy_triple_of_unknown_value_goes_with_every_one(
         assert any(line.endswith(f" {node} .") for line in lines) is not goes
     assert len([line for line in full if line.startswith(truthy)]) == 2
     assert not [line for line in lines if line.startswith(truthy)]
-
-
-def test_the_site_badges_whom_the_export_drops(
-    config, fixture_graph, exported, tmp_path
-):
-    exclusions = exclusions_of(exported)
-    builder = SiteBuilder(config, tmp_path / "site")
-    people = {
-        row["person"]["value"].rsplit("/", 1)[-1]: row
-        for row in builder.run(builder._instance_query(PEOPLE_QUERY))
-    }
-    assert {
-        role for role, qid in fixture_graph.items() if qid in people
-    } == PEOPLE
-    for role in PEOPLE:
-        qid = fixture_graph[role]
-        badged = (
-            "possibly living — never in the non-privileged export"
-            in builder.person_page(people[qid], [])
-        )
-        assert badged == (qid in exclusions["excluded"])
 
 
 # -- the query service's munger reads the export (#412) ----------------------

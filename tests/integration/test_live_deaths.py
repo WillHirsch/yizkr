@@ -1,6 +1,7 @@
 """Live validation of deaths and births on the person (ADR-0040; #687),
-through the write path, the privacy check, the site and the
-non-privileged export.
+through the write path, the privacy check and the non-privileged export.
+The static site's reading of them is checked in the required lane
+(tests/fictional_integration/test_static_site.py).
 
 A fictional fixture from the example universe (docs/EXAMPLES.md) writes:
 
@@ -16,9 +17,7 @@ A fictional fixture from the example universe (docs/EXAMPLES.md) writes:
 * the 1958 letter's "вдова Вашего покойного брата Рудольфа": Nina
   widowed and her marriage to Rudolf `ended_by_death_of` him, which
   releases Rudolf alone (Q9): the export leaves the union out, since Nina
-  is possibly living, and keeps Rudolf;
-* the 1950 adoption order's Alfred, `father` → Leopold with `parentage`
-  → `parentage_adoptive` and "Adoptivvater" its word.
+  is possibly living, and keeps Rudolf.
 
 The first write is made again and writes no copy: the writer compares
 snak types, so an unknown value finds its own statement and never a
@@ -37,7 +36,6 @@ from __future__ import annotations
 import gzip
 import json
 import re
-import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -45,13 +43,11 @@ import pytest
 from wikibaseintegrator.wbi_enums import WikibaseRank, WikibaseSnakType
 
 from tests.fixtures.identity import write_mapped
-from yizkr import staticsite
 from yizkr.backup import dump_rdf, exclusion_report, export_nonprivileged
 from yizkr.claims import ClaimBatch
 from yizkr.core import privacy
 from yizkr.pipeline import writer
 from yizkr.pipeline.writer import BatchWriter
-from yizkr.staticsite import PEOPLE_QUERY, SiteBuilder, publish_site
 
 from .conftest import fixture_mark, register_fictional, wait_for_query_service
 
@@ -62,9 +58,9 @@ FIXTURE = (
     "#687: Cäcilie's death of unknown date beside her dated one; Felix's "
     "alone; one a curator deprecated; a curator's no value; Eugen's age "
     "at death alone; Nina widowed and her marriage ended by Rudolf's "
-    "death; Alfred's adoptive father"
+    "death"
 )
-MARK = fixture_mark(FIXTURE, writer, privacy, staticsite)
+MARK = fixture_mark(FIXTURE, writer, privacy)
 DEPLOY = Path("deploy")
 
 # the sources' own words (docs/EXAMPLES.md)
@@ -73,7 +69,6 @@ REGISTER = "Ehefrau des Hutmachermeisters Eugen Löbig"
 LATE_FELIX = "der selige Felix"
 AGED = "73 Jahre"
 WIDOW = "вдова Вашего покойного брата Рудольфа"
-ADOPTED = "Adoptivvater"
 
 
 def local(key: str, label: str, kind: str = "human") -> dict:
@@ -94,8 +89,6 @@ ENTITIES = {
     "nina": local("nina", "Nina Löbig"),
     "rudolf": local("rudolf", "Rudolf Löbig"),
     "marriage": local("marriage", "Marriage of Rudolf and Nina", "marriage"),
-    "alfred": local("alfred", "Alfred Löbig"),
-    "leopold": local("leopold", "Leopold Löbig"),
 }
 UNKNOWN = {"type": "unknown"}
 
@@ -123,7 +116,7 @@ def claim(subject, prop, value, source, excerpt, language, qualifiers=()):
 
 
 def batch(sources) -> ClaimBatch:
-    certificate, register, burial, letter, order = sources
+    certificate, register, burial, letter = sources
     spouse = [{"property": "object_has_role", "value": vocab("spouse")}]
     claims = [
         claim(
@@ -188,24 +181,6 @@ def batch(sources) -> ClaimBatch:
             letter,
             WIDOW,
             "ru",
-        ),
-        claim(
-            "alfred",
-            "father",
-            item(ENTITIES["leopold"]),
-            order,
-            ADOPTED,
-            "de",
-            [
-                {
-                    "property": "parentage",
-                    "value": vocab("parentage_adoptive"),
-                },
-                {
-                    "property": "kinship_type",
-                    "value": {"type": "string", "value": ADOPTED},
-                },
-            ],
         ),
     ]
     return ClaimBatch.model_validate(
@@ -274,7 +249,7 @@ def fixture_graph(client, config):
     """Write the fixture, again (which must write nothing), and the
     curator's overlays, and wait until the query service holds every
     fixture item's latest revision. Returns the QIDs by key, the sources'
-    under "certificate", "register", "burial", "letter" and "order"."""
+    under "certificate", "register", "burial" and "letter"."""
     registered = {
         key: register_fictional(client, f"Deaths fixture {key} {MARK}", kind)
         for key, kind in (
@@ -282,7 +257,6 @@ def fixture_graph(client, config):
             ("register", "certificate"),
             ("burial", "certificate"),
             ("letter", "letter"),
-            ("order", "certificate"),
         )
     }
     sources = [each.ref for each in registered.values()]
@@ -406,93 +380,6 @@ def test_the_check_releases_by_an_unknown_value_and_an_age(
     # one; nor does a widowhood
     for key in ("deprecated", "no value", "nina"):
         assert fixture_graph[key] in report.excluded, key
-
-
-def roster(config, tmp_path) -> tuple[SiteBuilder, dict[str, dict]]:
-    builder = SiteBuilder(config, tmp_path / "roster")
-    people = {
-        row["person"]["value"].rsplit("/", 1)[-1]: row
-        for row in builder.run(builder._instance_query(PEOPLE_QUERY))
-    }
-    return builder, people
-
-
-def test_the_site_reads_them_as_the_check_does(
-    config, fixture_graph, tmp_path
-):
-    builder, people = roster(config, tmp_path)
-    # ?deceased reads an unknown value and an age at death alike (Q1)
-    for key in ("caecilie", "felix", "eugen"):
-        assert people[fixture_graph[key]]["deceased"]["value"] == "true", key
-    for key in ("deprecated", "no value", "rudolf", "nina"):
-        assert people[fixture_graph[key]]["deceased"]["value"] == "false", key
-    report = exclusion_report(config)
-    badge = "possibly living — never in the non-privileged export"
-    for key in ("caecilie", "felix", "deprecated", "no value", "eugen"):
-        qid = fixture_graph[key]
-        badged = badge in builder.person_page(people[qid], [])
-        assert badged == (qid in report.excluded), key
-    # Rudolf, released by the union's end alone, in the badge too (Q9)
-    assert badge not in builder.person_page(
-        people[fixture_graph["rudolf"]], []
-    )
-    assert badge in builder.person_page(people[fixture_graph["nina"]], [])
-
-
-@pytest.fixture(scope="module")
-def site(config, fixture_graph, tmp_path_factory):
-    out = tmp_path_factory.mktemp("deaths-site")
-    try:
-        yield out, publish_site(config, out)
-    finally:
-        # the site renders the whole instance, not only this fixture
-        shutil.rmtree(out, ignore_errors=True)
-
-
-def test_the_person_page_shows_it_beside_the_dated_one(fixture_graph, site):
-    out, summary = site
-    qid = fixture_graph["caecilie"]
-    page = (out / f"people/{qid}.html").read_text()
-    (deaths,) = re.findall(r"<dt>date of death</dt>((?:<dd>.*?</dd>)+)", page)
-    unknown = (
-        'died (date not stated)<span class="source">'
-        f'<a href="../artifacts/{fixture_graph["certificate"]}.html">'
-    )
-    assert unknown in deaths
-    assert "1902-12-13" in deaths
-    assert f"../artifacts/{fixture_graph['register']}.html" in deaths
-    assert "genid" not in page
-    assert summary["unknown_deaths"] >= 2
-    # the run record's releases by cause count them (ADR-0040 §7)
-    releases = summary["privacy"]["releases"]
-    assert releases["unknown_date_of_death"] >= 2
-    assert releases["age_at_death"] >= 1
-    assert releases["ended_by_death_of"] >= 1
-
-
-def test_the_timeline_shows_it_beside_the_dated_one(fixture_graph, site):
-    out, _ = site
-    timeline = (out / "timeline.html").read_text()
-    person = f'href="people/{fixture_graph["caecilie"]}.html"'
-    entries = [
-        entry
-        for entry in re.findall(r'<div class="entry">(.*?)</div>', timeline)
-        if person in entry
-    ]
-    (beside,) = [e for e in entries if "died (date not stated)" in e]
-    (dated,) = [e for e in entries if "1902-12-13" in e]
-    assert entries.index(beside) == entries.index(dated) + 1
-    # Felix's, dated by nothing, stands under "No date stated"
-    foot = timeline[timeline.index("<h2>No date stated</h2>") :]
-    assert f'href="people/{fixture_graph["felix"]}.html"' in foot
-    assert person not in foot
-
-
-def test_an_adoptive_father_shows_its_kind(fixture_graph, site):
-    out, _ = site
-    page = (out / f"people/{fixture_graph['alfred']}.html").read_text()
-    assert "parentage: adoptive" in page
-    assert f"kinship type: {ADOPTED}" in page
 
 
 @pytest.fixture(scope="module")
