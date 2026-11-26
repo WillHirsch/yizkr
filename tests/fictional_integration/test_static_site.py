@@ -1301,7 +1301,7 @@ def value(row: dict, name: str) -> str | None:
 # -- the cases -------------------------------------------------------------
 
 
-def checks_a_person_page_shows_every_attributed_value_and_picks_none(site):
+def test_a_person_page_shows_every_attributed_value_and_picks_none(site):
     # the extract and the naturalisation disagree on Gustav's day of birth
     # and give his birthplace at two resolutions: the page shows every
     # value, each with the source that states it, and picks none
@@ -1350,7 +1350,7 @@ def checks_a_person_page_shows_every_attributed_value_and_picks_none(site):
     assert site.cited("order") in father
 
 
-def checks_the_roster_and_badges_agree_with_the_privacy_check(site):
+def test_the_roster_and_badges_agree_with_the_privacy_check(site):
     graph, report = site.graph, site.report
     # the site lists exactly whom the check assesses: every item with
     # person evidence, a `human` type at any rank, a birth without a type
@@ -1695,7 +1695,7 @@ def test_an_artifact_page_shows_what_sources_say_of_it(site):
         assert site.cited(artifact) in entry
 
 
-def checks_the_places_page_labels_each_container_by_its_source(site):
+def test_the_places_page_labels_each_container_by_its_source(site):
     # the certificate, which states its own date, and the tree, which
     # states none, give Fläckfeld two containers: it stands under each,
     # the certificate's read as of the certificate's date and the tree's
@@ -1794,101 +1794,3 @@ def test_the_gallery_and_the_disagreement_report_show_the_fixture(
         if row.entity == iri("gustav")
     }
     assert frozenset((iri("address"), iri("town"))) in compared
-
-
-# -- TEETH (temporary, reverted after one CI run) ---------------------------
-
-
-@pytest.fixture(scope="module")
-def broken(site, fictional_client, tmp_path_factory):
-    """The site built again under each behaviour broken by hand."""
-    import dataclasses
-
-    from yizkr import staticsite
-
-    config = fictional_client.config
-    person_page = staticsite.SiteBuilder.person_page
-
-    def picking(self, person, statements, *args, **kwargs):
-        seen, kept = set(), []
-        for row in statements:
-            prop = row.get("prop", {}).get("value")
-            if prop not in seen:
-                seen.add(prop)
-                kept.append(row)
-        return person_page(self, person, kept, *args, **kwargs)
-
-    def ignoring_births(self, person):
-        qid = staticsite.qid_of(person, "person")
-        return not (
-            staticsite.cell(person, "deceased") == "true"
-            or qid in self._evidence.died
-        )
-
-    deprecated = "    FILTER(?containmentRank != wikibase:DeprecatedRank)\n"
-    assert deprecated in staticsite.PLACE_TREE_QUERY
-    patches = {
-        "picks one": (staticsite.SiteBuilder, "person_page", picking),
-        "badge ignores births": (
-            staticsite.SiteBuilder,
-            "_possibly_living",
-            ignoring_births,
-        ),
-        "deprecated containment shown": (
-            staticsite,
-            "PLACE_TREE_QUERY",
-            staticsite.PLACE_TREE_QUERY.replace(deprecated, ""),
-        ),
-    }
-    built = {}
-    for name, (target, attribute, value) in patches.items():
-        out = tmp_path_factory.mktemp("broken")
-        with pytest.MonkeyPatch.context() as patch:
-            patch.setattr(target, attribute, value)
-            summary = publish_site(config, out)
-        built[name] = dataclasses.replace(site, out=out, summary=summary)
-    return built
-
-
-def teeth(checks, site, broken, name, record):
-    checks(site)
-    # an assertion, a missing entry or a missing row is the case failing
-    with pytest.raises((AssertionError, KeyError, ValueError)) as caught:
-        checks(broken[name])
-    record(f"teeth: {name}", repr(caught.value)[:400])
-
-
-def test_a_person_page_shows_every_attributed_value_and_picks_none(
-    site, broken, record_testsuite_property
-):
-    teeth(
-        checks_a_person_page_shows_every_attributed_value_and_picks_none,
-        site,
-        broken,
-        "picks one",
-        record_testsuite_property,
-    )
-
-
-def test_the_roster_and_badges_agree_with_the_privacy_check(
-    site, broken, record_testsuite_property
-):
-    teeth(
-        checks_the_roster_and_badges_agree_with_the_privacy_check,
-        site,
-        broken,
-        "badge ignores births",
-        record_testsuite_property,
-    )
-
-
-def test_the_places_page_labels_each_container_by_its_source(
-    site, broken, record_testsuite_property
-):
-    teeth(
-        checks_the_places_page_labels_each_container_by_its_source,
-        site,
-        broken,
-        "deprecated containment shown",
-        record_testsuite_property,
-    )
