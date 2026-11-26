@@ -23,16 +23,16 @@ items.
   its byte limits, and its description, made from its file name, fits the
   250 characters Wikibase takes.
 * Bytes that two files hold, the second stored by an upload that overrides
-  MediaWiki's warnings as registration's never does, are flagged
+  MediaWiki's duplicate warning as registration's never does, are flagged
   `shared-file` against both items that name those files, from MediaWiki's
   list of the files that hold them, on a first registration and again on a
   re-run.
 
 Each case registers again through a fresh client that counts the uploads
-asked of it: the repeat uploads nothing and makes no revision anywhere on
-the stack. The cases share their stack with another required case, so their
-bytes, titles and file names are this module's own, and the last, which
-leaves items with no hash behind, runs last on its stack
+asked of it: the repeat uploads nothing and changes no entity's revision.
+The cases share their stack with another required case, so their bytes,
+titles and file names are this module's own, and the last, which leaves
+items with no hash behind, runs last on its stack
 (scripts/fictional_integration.py). The media and their names are fictional
 (docs/EXAMPLES.md); no model is called.
 """
@@ -99,8 +99,9 @@ def wiki(fictional_client):
         pytest.fail(
             "The lane's wiki refuses the uploads these cases make: "
             + "; ".join(missing)
-            + ". The lane mounts its upload settings from "
-            "deploy/config/Uploads.php.",
+            + ". The lane adds its file types in deploy/config/Uploads.php; "
+            "uploads are on by the Wikibase image's own settings, which that "
+            "file can override.",
             pytrace=False,
         )
     return fictional_client
@@ -287,7 +288,8 @@ def holders(client: WikiClient, data: bytes) -> set[str]:
 
 
 def watermark(client: WikiClient) -> dict[str, int]:
-    """The revision of every entity on the stack."""
+    """The revision of every entity on the stack. The wiki's other pages,
+    such as the creation registry's, are not read."""
     return client.entity_revisions(client.list_entity_ids())
 
 
@@ -396,7 +398,7 @@ def test_a_file_is_never_overwritten_and_bytes_are_stored_once(wiki, tmp_path):
         assert sorted(result.fragment_qids) == [1, 2]
 
     # registered again through a fresh client: every artifact and fragment
-    # is found, nothing is uploaded and nothing is written
+    # is found, nothing is uploaded and no entity is revised
     before = watermark(client)
     fresh = CountingClient(wiki.config)
     again = register(fresh)
@@ -516,7 +518,7 @@ def test_two_decks_placing_one_image_share_its_file_and_its_item(
         assert cited(claim, stated_in) == both
 
     # both decks registered again through a fresh client: the same items,
-    # no upload and no revision
+    # no upload and no entity revised
     before = watermark(client)
     fresh = CountingClient(wiki.config)
     again = [register(fresh, *entry, "again") for entry in decks]
@@ -598,12 +600,18 @@ def test_a_decks_long_file_name_takes_forms_mediawiki_takes(wiki, tmp_path):
 
     deck_bytes, qid, media = written(tmp_path / "first", shop_front, client)
 
-    # the deck's file and its image's, under their names in the form
-    # MediaWiki takes: each refused character and sequence made "-", every
-    # letter kept, cut, ending in "…", within the bytes a name may take,
-    # and their extensions kept; the image's after the deck's title
+    # the deck's file and its image's, under names in the form MediaWiki
+    # takes, every letter kept and each refused character, and the first
+    # character of each refused sequence, made "-": the deck's file under
+    # its name cut and ending in "…" before its extension, and its image's
+    # under the deck's title so cut, then "…" and the image's own name
+    # whole. Each keeps as much of the title as the bytes a name may take
+    # leave room for, short of them by no more than a few where the cut
+    # keeps whole letters, so each holds the title's first part, which has
+    # every refused form.
     (deck_file,) = holders(client, deck_bytes)
     (image_file,) = holders(client, shop_front)
+    first_part = TITLE_NAME_FORM.split("; ")[0]
     for page, end in (
         (deck_file, "….pptx"),
         (image_file, f"… {IMAGE_NAME_FORM}"),
@@ -611,13 +619,20 @@ def test_a_decks_long_file_name_takes_forms_mediawiki_takes(wiki, tmp_path):
         name = page.removeprefix("File:")
         assert name.endswith(end), name
         assert TITLE_NAME_FORM.startswith(name.removesuffix(end)), name
-        assert len(name.encode()) <= PLAIN_NAME_BYTES, name
-    # the description made from the deck's file name, cut to fit
+        assert name.startswith(first_part), name
+        size = len(name.encode())
+        assert PLAIN_NAME_BYTES - 8 < size <= PLAIN_NAME_BYTES, name
+    # the description made from the deck's file name, longer than Wikibase
+    # takes, cut to fit: within its 250 characters, and short of them by no
+    # more than a few, it ends in the file name's start, to the cut, then
+    # "…"
     ((_, entity),) = WikiClient(wiki.config).entity_data([qid])
     description = entity["descriptions"]["en"]["value"]
-    made = f"ingested by `{ScratchDriver.command}` from {DECK_NAME}"
-    assert len(made) > TERM_CHARACTERS
-    assert description == made[: TERM_CHARACTERS - 1].rstrip() + "…"
+    at = description.find(DECK_NAME[:40])
+    shown = description[at:].removesuffix("…")
+    assert at >= 0 and description.endswith("…"), description
+    assert DECK_NAME.startswith(shown) and shown != DECK_NAME, description
+    assert TERM_CHARACTERS - 8 < len(description) <= TERM_CHARACTERS
 
     # the deck revised under the same name: both its file and its image's
     # take the content-tagged form of the names the first deck's files
@@ -638,7 +653,7 @@ def test_a_decks_long_file_name_takes_forms_mediawiki_takes(wiki, tmp_path):
         assert history(client, plain) == [sha1(held)]
 
     # a third write, through a fresh client, finds both files and every
-    # item: it uploads nothing and writes nothing
+    # item: it uploads nothing and revises no entity
     before = watermark(client)
     fresh = CountingClient(wiki.config)
     assert written(tmp_path / "third", rescanned, fresh)[1:] == (
@@ -653,9 +668,10 @@ def test_a_decks_long_file_name_takes_forms_mediawiki_takes(wiki, tmp_path):
 
 
 def stored_again(client: WikiClient, path: Path) -> str:
-    """Upload `path` with MediaWiki's warnings overridden, as no
-    registration does, so that MediaWiki stores bytes it holds already under
-    a second name; returns the page of the file it stored."""
+    """Upload `path` with every MediaWiki warning ignored, so that MediaWiki
+    stores bytes it holds already under a second name: registration's upload
+    never overrides that duplicate warning. Returns the page of the file it
+    stored."""
     with path.open("rb") as handle:
         response = client.login.get_session().post(
             client.api_url,
@@ -766,7 +782,7 @@ def test_bytes_two_files_hold_are_flagged_against_both_items(wiki, tmp_path):
             by_number(old, listed),
         )
     ]
-    # the new item has the hash and the file; nothing else is written
+    # the new item has the hash and the file; no other entity is revised
     new = reader.fetch_claims([result.artifact_qid])[result.artifact_qid]
     assert values(new, properties["media_sha1"]) == [sha1(portrait)]
     assert values(new, properties["media_file"]) == [result.file_page]
@@ -774,7 +790,7 @@ def test_bytes_two_files_hold_are_flagged_against_both_items(wiki, tmp_path):
     assert after == {**before, result.artifact_qid: after[result.artifact_qid]}
 
     # registered again through a fresh client: found by its hash and flagged
-    # again as it was, with no upload and no revision
+    # again as it was, with no upload and no entity revised
     fresh = CountingClient(wiki.config)
     registrar = Registrar(fresh)
     again = registrar.register_artifact(copy, "photograph", title, DESCRIPTION)
