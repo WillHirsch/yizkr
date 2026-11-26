@@ -180,11 +180,33 @@ REQUIRED_CASES = (
         "test_recorded_graph_projection_replays_and_refuses_stale_capture",
     ),
     # Its first increment needs a stack with no entity but its registered
-    # source, so it has a stack of its own.
+    # source, so it runs first in its group.
     Case(
         "clusters",
         "test_cluster_proposals",
         "test_cluster_choices_reach_review_application_and_graph_origins",
+    ),
+    Case(
+        "clusters",
+        "test_media_uploads",
+        "test_a_file_is_never_overwritten_and_bytes_are_stored_once",
+    ),
+    Case(
+        "clusters",
+        "test_media_uploads",
+        "test_two_decks_placing_one_image_share_its_file_and_its_item",
+    ),
+    Case(
+        "clusters",
+        "test_media_uploads",
+        "test_a_decks_long_file_name_takes_forms_mediawiki_takes",
+    ),
+    # Last on its stack: it leaves items with no hash, which flag any later
+    # registration under their labels or of the bytes their files hold.
+    Case(
+        "clusters",
+        "test_media_uploads",
+        "test_bytes_two_files_hold_are_flagged_against_both_items",
     ),
     # It asserts over its whole stack, so it has a stack of its own.
     Case(

@@ -1,25 +1,17 @@
-"""Live write-time registration (#103): artifacts, page fragments and a
-deck's derived media, each found or made by the SHA-1 of its media.
+"""Live write-time registration (#103): the write's registration of a
+deck (`ScratchDriver._step_register`) registers the deck, its slides as
+page fragments, and its image from the record the stages before the write
+keep of it, each found or made by the SHA-1 of its media; a second write
+registers nothing new.
 
-* Two files that share a title and a file name, but not their bytes, are
-  registered with their page fragments. Registering them again, by a
-  registrar that reads the instance afresh, finds every item by its
-  media's SHA-1: it makes no item, writes no statement and uploads no
-  file.
-* The write's registration of a deck (`ScratchDriver._step_register`)
-  registers the deck, its slides as page fragments, and its image from
-  the record the stages before the write keep of it; a second write
-  registers nothing new.
-
-Fictional synthetic media only (docs/EXAMPLES.md). The fixture's bytes
-carry a marker of the session's own (conftest.fixture_mark), and every
-title, file name and deck the SHA-1 prefix of those bytes: each session
-makes items of its own, so what an earlier session wrote, a live
-mutant's run included, never meets it, and a re-run within the session
-finds its own items again and writes nothing. Like every live
-test it writes fictional data to the one instance, so the session that
-runs it ends by clearing the recorded instance-contents key
-(docs/AGENT_PROTOCOL.md §5).
+Fictional synthetic media only (docs/EXAMPLES.md). The deck's image
+carries a marker of the session's own (conftest.fixture_mark), and the
+deck's title the SHA-1 prefix of the image's bytes: each session makes
+items of its own, so what an earlier session wrote, a live mutant's run
+included, never meets it, and a re-run within the session finds its own
+items again and writes nothing. Like every live test it writes fictional
+data to the one instance, so the session that runs it ends by clearing the
+recorded instance-contents key (docs/AGENT_PROTOCOL.md §5).
 """
 
 from __future__ import annotations
@@ -29,7 +21,6 @@ import zipfile
 
 import pytest
 
-from tests.integration.test_live_presentation import files_with_bytes
 from tests.unit.test_presentation import (
     IMAGE_REL,
     SLIDE_REL,
@@ -38,26 +29,19 @@ from tests.unit.test_presentation import (
 )
 from yizkr.core.corpus import ExclusionList
 from yizkr.pipeline import registrar, scratch
-from yizkr.pipeline.registrar import Registrar
 from yizkr.pipeline.scratch import ScratchDriver
 
 from .conftest import fictional_png, fixture_mark
 
 pytestmark = pytest.mark.live
 
-DESCRIPTION = "written by tests/integration; safe to delete"
 # what the fixture is; a change to it gives the fixture new bytes
 FIXTURE = (
-    "#103: two copies of Gustav's birth register extract under one title "
-    "and file name, two pages each; the family firm's deck of three "
-    "slides, the shop front on the first two"
+    "#103: the family firm's deck of three slides, the shop front on the "
+    "first two"
 )
 SESSION = fixture_mark(FIXTURE, registrar, scratch)
 
-# two copies of Gustav's birth register extract, scanned into two folders
-# under one file name: two artifacts that share a title
-FIRST = fictional_png(f"yizkr live test #103: the extract, first {SESSION}")
-SECOND = fictional_png(f"yizkr live test #103: the extract, 2nd {SESSION}")
 # the shop front at Brunnenring 35, on two slides of the family firm's deck
 SHOP_FRONT = fictional_png(f"yizkr live test #103: the shop front {SESSION}")
 FIXED_TIME = (2020, 1, 1, 0, 0, 0)  # deterministic ZIP bytes across runs
@@ -67,19 +51,8 @@ def sha1(data: bytes) -> str:
     return hashlib.sha1(data).hexdigest()
 
 
-MARK = sha1(FIRST + SECOND)[:8]
-TITLE = f"Integration-test birth extract {MARK}"
-FILE_NAME = f"integration-test-birth-extract-{MARK}.png"
 DECK_TITLE = f"Integration-test Hutmacherei deck {sha1(SHOP_FRONT)[:8]}"
-PAGES = 2
 SLIDES = 3
-
-
-def write(tmp_path, folder: str, name: str, data: bytes):
-    path = tmp_path / folder / name
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(data)
-    return path
 
 
 def build_deck(path):
@@ -180,50 +153,17 @@ def cited(client, claim) -> set[str]:
     }
 
 
-def register_both(client, tmp_path):
-    """The two copies, by one registrar that reads the instance once."""
-    registrar = Registrar(client)
-    return [
-        registrar.register_artifact(
-            write(tmp_path, folder, FILE_NAME, data),
-            "certificate",
-            TITLE,
-            DESCRIPTION,
-            pages=PAGES,
-        )
-        for folder, data in (("emigration", FIRST), ("copies", SECOND))
-    ]
-
-
-def test_re_registration_creates_no_duplicates(client, tmp_path):
-    first, second = register_both(client, tmp_path / "before")
-    items = [
-        qid
-        for result in (first, second)
-        for qid in (result.artifact_qid, *result.fragment_qids.values())
-    ]
-    before = revisions(client, *items)
-    blobs = {
-        data: files_with_bytes(client, sha1(data)) for data in (FIRST, SECOND)
-    }
-    assert all(blobs.values())
-
-    # a later write's registrar, reading the instance afresh
-    again = register_both(client, tmp_path / "again")
-
-    assert [r.artifact_qid for r in again] == [
-        first.artifact_qid,
-        second.artifact_qid,
-    ]
-    assert [r.fragment_qids for r in again] == [
-        first.fragment_qids,
-        second.fragment_qids,
-    ]
-    assert not any(r.created for r in again)
-    assert revisions(client, *items) == before  # nothing written
-    assert {
-        data: files_with_bytes(client, sha1(data)) for data in (FIRST, SECOND)
-    } == blobs  # nothing uploaded
+def files_with_bytes(client, content_sha1: str) -> set[str]:
+    """Every wiki file whose current bytes have this SHA-1."""
+    data = client.api_get(
+        {
+            "action": "query",
+            "list": "allimages",
+            "aisha1": content_sha1,
+            "ailimit": "max",
+        }
+    )
+    return {image["name"] for image in data["query"]["allimages"]}
 
 
 def test_the_write_registers_a_deck_its_slides_and_its_image(client, tmp_path):

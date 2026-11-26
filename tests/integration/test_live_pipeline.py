@@ -1,6 +1,6 @@
-"""Live pipeline flow: registration, a second source agreeing with the
-first, whose reference joins the one statement, and the item-10
-vocabulary. Every claim cites its artifact by the SHA-1 of the
+"""Live pipeline flow over a registered certificate: a second source
+agreeing with the first, whose reference joins the one statement, and the
+item-10 vocabulary. Every claim cites its artifact by the SHA-1 of the
 artifact's media (#102), which the writer resolves to the registered
 item.
 
@@ -89,12 +89,6 @@ def artifact(client, tmp_path_factory):
         description="written by tests/integration; safe to delete",
         pages=1,
     )
-
-
-def test_register_creates_artifact_fragment_and_media(client, artifact):
-    assert artifact.artifact_qid.startswith("Q")
-    assert artifact.fragment_qids[1].startswith("Q")
-    assert artifact.file_page.startswith("File:")
 
 
 def stated_in_values(

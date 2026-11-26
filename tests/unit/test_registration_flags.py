@@ -16,8 +16,10 @@ and unhashed-title only for a scan or derived medium registered under
 exactly a GEDCOM media object's label.
 
 The in-memory wiki, its fictional media and the helpers come from
-tests/unit/test_registrar.py. The flow is verified live too
-(tests/integration/test_live_registration_flags.py).
+tests/unit/test_registrar.py. The required lane verifies on a real stack
+that bytes two files hold are flagged `shared-file` from MediaWiki's list
+of those files, on a first registration and on a re-run
+(tests/fictional_integration/test_media_uploads.py).
 """
 
 from __future__ import annotations
