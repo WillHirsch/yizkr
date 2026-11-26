@@ -28,8 +28,19 @@ def test_the_critique_alone_runs_the_review_effort():
     assert {
         role: settings.engine_settings(role)[0] for role in MODEL_ROLES
     } == {"transcribe": "medium", "extract": "medium", "critique": "max"}
-    with pytest.raises(KeyError):
-        settings.engine_settings("summary")
+
+
+@pytest.mark.parametrize("engine", ["claude-code", BORROWED])
+def test_a_role_outside_the_model_roles_is_refused(engine):
+    settings = RoleSettings(engine, epochs={"summary": 1})
+    for operation in (
+        settings.engine_settings,
+        settings.configured_model,
+        settings.epoch,
+        lambda role: settings.refuse_model_aliases([role]),
+    ):
+        with pytest.raises(KeyError):
+            operation("summary")
 
 
 def test_extraction_alone_takes_the_extraction_model():
@@ -42,9 +53,8 @@ def test_extraction_alone_takes_the_extraction_model():
         "extract": EXTRACTION,
         "critique": MAIN,
     }
-    own, main = settings.configured_model("extract")[1], f"${MODEL_VARIABLE}"
-    assert own != main
-    assert settings.configured_model("critique")[1] == main
+    where = {role: settings.configured_model(role)[1] for role in MODEL_ROLES}
+    assert where["transcribe"] == where["critique"] != where["extract"]
 
 
 def test_the_main_model_is_read_at_each_call(monkeypatch):
@@ -88,9 +98,17 @@ def test_a_refusal_names_each_alias_once_with_its_roles(monkeypatch):
     with pytest.raises(ModelAliasRefused) as refused:
         settings.refuse_model_aliases()
     reason = str(refused.value)
-    assert reason.count("'opus'") == 1
-    assert reason.count("'sonnet'") == 1
-    assert "transcribe, critique" in reason
+    for alias, served in (
+        ("opus", ["transcribe", "critique"]),
+        ("sonnet", ["extract"]),
+    ):
+        assert reason.count(repr(alias)) == 1
+        (clause,) = [
+            clause for clause in reason.split("; ") if repr(alias) in clause
+        ]
+        # the clause names the setting that holds the alias
+        assert settings.configured_model(served[0])[1] in clause
+        assert ", ".join(served) in clause
 
 
 def test_a_borrowed_engine_configures_no_model(monkeypatch):
@@ -100,6 +118,15 @@ def test_a_borrowed_engine_configures_no_model(monkeypatch):
     settings.refuse_model_aliases()
     recorded = settings.manifest_roles()
     assert {record["model"] for record in recorded.values()} == {None}
+
+
+def test_the_value_keeps_the_epochs_and_refreshed_roles_it_was_given():
+    epochs, refresh = {"critique": 2}, ["extract"]
+    settings = RoleSettings("claude-code", epochs=epochs, refresh=refresh)
+    epochs["critique"] = 3
+    refresh.append("critique")
+    assert settings.epoch("critique") == 2
+    assert not settings.manifest_roles()["critique"]["refresh"]
 
 
 def test_the_manifest_records_every_role():

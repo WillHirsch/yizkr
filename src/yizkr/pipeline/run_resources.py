@@ -18,6 +18,7 @@ import threading
 from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, NamedTuple
 
 from yizkr.core.cancellation import Cancellation, check_cancelled
@@ -58,9 +59,11 @@ class RoleSettings:
     """What each model role (MODEL_ROLES) runs with in one execution: the
     engine, the extraction and review efforts, the extraction model (None
     inherits the main model), each role's epoch and the roles refreshed.
+    The value holds copies of the epochs and refreshed roles it is given.
     The main model is the one $YIZKR_LLM_MODEL names, read at each call.
-    Under the BORROWED engine no role has a model of its own: the clients
-    the caller lends choose theirs. Any other role raises KeyError."""
+    Under the BORROWED engine configured_model names no model: the clients
+    the caller lends choose theirs. Every operation that takes a role
+    raises KeyError for a role outside MODEL_ROLES, under any engine."""
 
     engine: str
     extract_effort: str = "low"
@@ -68,6 +71,10 @@ class RoleSettings:
     extract_model: str | None = None
     epochs: Mapping[str, int] = field(default_factory=dict)
     refresh: Collection[str] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "epochs", MappingProxyType(dict(self.epochs)))
+        object.__setattr__(self, "refresh", tuple(self.refresh))
 
     def engine_settings(self, role: str) -> tuple[str, str | None]:
         """(effort, model override) for a role's engine client: the
@@ -82,9 +89,9 @@ class RoleSettings:
         extraction model), else $YIZKR_LLM_MODEL; None when neither names
         one and the engine runs a default of its own, and None for a
         borrowed engine, whose model is its caller's."""
+        _effort, model = self.engine_settings(role)
         if self.engine == BORROWED:
             return None, "the borrowed engine"
-        _effort, model = self.engine_settings(role)
         if model:
             return model, "the extraction model (--extract-model)"
         return os.environ.get(MODEL_VARIABLE) or None, f"${MODEL_VARIABLE}"
@@ -92,6 +99,8 @@ class RoleSettings:
     def epoch(self, role: str) -> int:
         """The role's epoch, which its LLM cache keys carry: 0 unless
         configured."""
+        if role not in _RULES:
+            raise KeyError(role)
         return self.epochs.get(role, 0)
 
     def refuse_model_aliases(self, roles: Iterable[str] = MODEL_ROLES) -> None:
